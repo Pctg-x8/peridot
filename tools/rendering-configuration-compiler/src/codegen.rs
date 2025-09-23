@@ -69,6 +69,7 @@ impl RenderingConfiguration {
                     passes.insert(
                         name.as_str().into(),
                         PassData {
+                            option_overrides: None,
                             deriving: Some(org_name.as_str().into()),
                             vertex_bindings: Vec::new(),
                             shader_code: None,
@@ -82,6 +83,7 @@ impl RenderingConfiguration {
                 }) => {
                     let mut vertex_bindings = None;
                     let mut shader_code = None;
+                    let mut option_overrides = None::<prc::RenderingOptionOverrides>;
 
                     for c in contents {
                         match c {
@@ -110,12 +112,75 @@ impl RenderingConfiguration {
 
                                 shader_code = Some(content.into());
                             }
+                            syntax::PassBlockContent::RenderOptions { entries, .. } => {
+                                let o = option_overrides.get_or_insert_default();
+                                for (e, _) in entries {
+                                    if e.as_str() == "PointPolygon" {
+                                        if let Some(m) = o.mode {
+                                            panic!("conflicting PolygonRasterizationMode: {m:?}");
+                                        }
+
+                                        o.mode = Some(prc::PolygonRasterizationMode::Point);
+                                    } else if e.as_str() == "LinedPolygon" {
+                                        if let Some(m) = o.mode {
+                                            panic!("conflicting PolygonRasterizationMode: {m:?}");
+                                        }
+
+                                        o.mode = Some(prc::PolygonRasterizationMode::Line);
+                                    } else if e.as_str() == "FilledPolygon" {
+                                        if let Some(m) = o.mode {
+                                            panic!("conflicting PolygonRasterizationMode: {m:?}");
+                                        }
+
+                                        o.mode = Some(prc::PolygonRasterizationMode::Fill);
+                                    } else if e.as_str() == "NoCulling" {
+                                        if let Some(x) = o.culling {
+                                            panic!("conflicting FaceCulling: {x:?}");
+                                        }
+
+                                        o.culling = Some(prc::FaceCulling::None);
+                                    } else if e.as_str() == "CullFront" {
+                                        if let Some(x) = o.culling {
+                                            panic!("conflicting FaceCulling: {x:?}");
+                                        }
+
+                                        o.culling = Some(prc::FaceCulling::Front);
+                                    } else if e.as_str() == "CullBack" {
+                                        if let Some(x) = o.culling {
+                                            panic!("conflicting FaceCulling: {x:?}");
+                                        }
+
+                                        o.culling = Some(prc::FaceCulling::Back);
+                                    } else if e.as_str() == "CullBoth" {
+                                        if let Some(x) = o.culling {
+                                            panic!("conflicting FaceCulling: {x:?}");
+                                        }
+
+                                        o.culling = Some(prc::FaceCulling::Both);
+                                    } else if e.as_str() == "CounterClockwiseAsFront" {
+                                        if let Some(x) = o.front_face {
+                                            panic!("conflicting FrontFace: {x:?}");
+                                        }
+
+                                        o.front_face = Some(prc::FrontFace::CounterClockwise);
+                                    } else if e.as_str() == "ClockwiseAsFront" {
+                                        if let Some(x) = o.front_face {
+                                            panic!("conflicting FrontFace: {x:?}");
+                                        }
+
+                                        o.front_face = Some(prc::FrontFace::Clockwise);
+                                    } else {
+                                        panic!("unknown option: {}", e.as_str());
+                                    }
+                                }
+                            }
                         }
                     }
 
                     passes.insert(
                         name.as_str().into(),
                         PassData {
+                            option_overrides,
                             deriving: None,
                             vertex_bindings: vertex_bindings.unwrap_or_else(Vec::new),
                             shader_code,
@@ -417,6 +482,7 @@ impl Default for PropertyUpdateFrequency {
 
 #[derive(Debug)]
 pub struct PassData {
+    pub option_overrides: Option<prc::RenderingOptionOverrides>,
     pub deriving: Option<String>,
     pub vertex_bindings: Vec<PassVertexBindingData>,
     pub shader_code: Option<String>,

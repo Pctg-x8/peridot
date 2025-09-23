@@ -1,6 +1,7 @@
 use crate::tokenizer::{
     self, CloseBracket, CloseParen, Colon, Comma, Equal, Identifier, Keyword, KwEnd, KwPass,
-    KwProperties, KwShader, KwUse, KwVertexBindings, NumLit, OpenBracket, OpenParen, StrLit, Token,
+    KwProperties, KwRenderOption, KwShader, KwUse, KwVertexBindings, NumLit, OpenBracket,
+    OpenParen, StrLit, Token,
 };
 
 pub struct ParserState<'s> {
@@ -237,6 +238,10 @@ impl<'s> PropertiesBlock<'s> {
 
 #[derive(Debug)]
 pub enum PassBlockContent<'s> {
+    RenderOptions {
+        render_option: KwRenderOption,
+        entries: Vec<(Identifier<'s>, Option<Comma>)>,
+    },
     VertexBindingsBlock {
         vertex_bindings: KwVertexBindings,
         entries: Vec<(
@@ -258,6 +263,37 @@ pub enum PassBlockContent<'s> {
 impl<'s> PassBlockContent<'s> {
     pub fn parse(state: &mut ParserState<'s>) -> Self {
         match state.next() {
+            Some(Token::Keyword(Keyword::RenderOption(render_option))) => {
+                let mut entries = Vec::new();
+                loop {
+                    let st = state.tok.save();
+                    let ident = match state.next() {
+                        Some(Token::Identifier(ident)) => ident,
+                        _ => {
+                            state.tok.restore(st);
+                            break;
+                        }
+                    };
+
+                    let sp = state.tok.save();
+                    match state.next() {
+                        Some(Token::Comma(c)) => {
+                            entries.push((ident, Some(c)));
+                        }
+                        _ => {
+                            state.tok.restore(sp);
+                            entries.push((ident, None));
+                            // no further elements allowed
+                            break;
+                        }
+                    };
+                }
+
+                PassBlockContent::RenderOptions {
+                    render_option,
+                    entries,
+                }
+            }
             Some(Token::Keyword(Keyword::VertexBindings(vertex_bindings))) => {
                 let mut entries = Vec::new();
                 loop {

@@ -395,6 +395,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             todo!("using builtin pass: {name}");
         }
         prc::ShadingPassVk::Custom {
+            ref option_overrides,
             ref vertex_semantic_to_location,
             ref vertex_entry_point_name,
             ref fragment_entry_point_name,
@@ -459,9 +460,21 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         ),
                         &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
                         &br::PipelineRasterizationStateCreateInfo::new(
-                            br::PolygonMode::Fill,
-                            br::CullModeFlags::NONE,
-                            br::FrontFace::CounterClockwise,
+                            match option_overrides.mode.unwrap_or_default() {
+                                prc::PolygonRasterizationMode::Point => br::PolygonMode::Point,
+                                prc::PolygonRasterizationMode::Line => br::PolygonMode::Line,
+                                prc::PolygonRasterizationMode::Fill => br::PolygonMode::Fill,
+                            },
+                            match option_overrides.culling.unwrap_or_default() {
+                                prc::FaceCulling::None => br::CullModeFlags::NONE,
+                                prc::FaceCulling::Front => br::CullModeFlags::FRONT,
+                                prc::FaceCulling::Back => br::CullModeFlags::BACK,
+                                prc::FaceCulling::Both => br::CullModeFlags::FRONT_AND_BACK,
+                            },
+                            match option_overrides.front_face.unwrap_or_default() {
+                                prc::FrontFace::CounterClockwise => br::FrontFace::CounterClockwise,
+                                prc::FrontFace::Clockwise => br::FrontFace::Clockwise,
+                            },
                         ),
                         &br::PipelineColorBlendStateCreateInfo::new(&[
                             ColorAttachmentBlending::Disabled.into_vk(),

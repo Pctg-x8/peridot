@@ -7,11 +7,35 @@ pub use peridot_semantic_shader::VertexInputSemantic;
 
 mod file;
 
+/// converted asset data
+pub struct CompiledRenderingConfigurationVk {
+    pub property_mappings: HashMap<String, (PropertyType, PropertyMappingVk)>,
+    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
+    pub push_constant_buffer_size_bytes: usize,
+    pub passes: HashMap<String, ShadingPassVk>,
+}
+
+#[cfg(feature = "with-loader-impl")]
+impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
+    const EXT: &'static str = "prcc";
+}
+#[cfg(feature = "with-loader-impl")]
+impl peridot::FromAsset for CompiledRenderingConfigurationVk {
+    type Error = std::io::Error;
+
+    fn from_asset<Asset: std::io::Read + Seek + 'static>(
+        asset: Asset,
+    ) -> Result<Self, Self::Error> {
+        read(&mut std::io::BufReader::new(asset))
+    }
+}
+
 pub enum ShadingPassVk {
     SimpleDeriveBuiltinPass {
         name: String,
     },
     Custom {
+        option_overrides: RenderingOptionOverrides,
         vertex_semantic_to_location: HashMap<VertexInputSemantic, u32>,
         vertex_entry_point_name: Option<String>,
         fragment_entry_point_name: Option<String>,
@@ -39,26 +63,59 @@ pub enum DescriptorTypeVk {
     CombinedImageSampler,
 }
 
-/// converted asset data
-pub struct CompiledRenderingConfigurationVk {
-    pub property_mappings: HashMap<String, (PropertyType, PropertyMappingVk)>,
-    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
-    pub push_constant_buffer_size_bytes: usize,
-    pub passes: HashMap<String, ShadingPassVk>,
+#[derive(Debug, Clone)]
+pub struct RenderingOptionOverrides {
+    pub mode: Option<PolygonRasterizationMode>,
+    pub culling: Option<FaceCulling>,
+    pub front_face: Option<FrontFace>,
+}
+impl Default for RenderingOptionOverrides {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            mode: None,
+            culling: None,
+            front_face: None,
+        }
+    }
 }
 
-#[cfg(feature = "with-loader-impl")]
-impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
-    const EXT: &'static str = "prcc";
+#[derive(Debug, Clone, Copy)]
+pub enum PolygonRasterizationMode {
+    Point,
+    Line,
+    Fill,
 }
-#[cfg(feature = "with-loader-impl")]
-impl peridot::FromAsset for CompiledRenderingConfigurationVk {
-    type Error = std::io::Error;
+impl Default for PolygonRasterizationMode {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::Fill
+    }
+}
 
-    fn from_asset<Asset: std::io::Read + Seek + 'static>(
-        asset: Asset,
-    ) -> Result<Self, Self::Error> {
-        read(&mut std::io::BufReader::new(asset))
+#[derive(Debug, Clone, Copy)]
+pub enum FaceCulling {
+    None,
+    Front,
+    Back,
+    Both,
+}
+impl Default for FaceCulling {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::Back
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FrontFace {
+    Clockwise,
+    CounterClockwise,
+}
+impl Default for FrontFace {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::CounterClockwise
     }
 }
 
@@ -106,6 +163,7 @@ pub fn write(
                 ));
             }
             ShadingPassVk::Custom {
+                option_overrides,
                 vertex_semantic_to_location,
                 vertex_entry_point_name,
                 fragment_entry_point_name,
@@ -115,6 +173,7 @@ pub fn write(
                     .entries
                     .push((n, file::ShadingPassDirectoryEntry::Located(writes as _)));
                 writes += file::ShadingPassVk {
+                    option_overrides,
                     vertex_semantic_to_location: vertex_semantic_to_location
                         .into_iter()
                         .map(|(n, l)| (n, l))
@@ -184,6 +243,7 @@ pub fn read(
                     }
 
                     x.insert(ShadingPassVk::Custom {
+                        option_overrides: pass_data.option_overrides,
                         vertex_semantic_to_location,
                         vertex_entry_point_name: pass_data.vertex_entry_point_name,
                         fragment_entry_point_name: pass_data.fragment_entry_point_name,

@@ -3,7 +3,10 @@ use std::io::{BufRead, IoSlice, IoSliceMut, Read, SeekFrom, Write};
 use peridot_semantic_shader::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt};
 
-use crate::{DescriptorTypeVk, PropertyDestinationVk, PropertyMappingVk, PropertyType};
+use crate::{
+    DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
+    PropertyMappingVk, PropertyType, RenderingOptionOverrides,
+};
 
 #[inline(always)]
 fn b32<'x>(v: &'x u32) -> &'x [u8] {
@@ -188,6 +191,7 @@ impl ShadingPassDirectoryEntry {
 }
 
 pub struct ShadingPassVk {
+    pub option_overrides: RenderingOptionOverrides,
     pub vertex_semantic_to_location: Vec<(VertexInputSemantic, u32)>,
     pub vertex_entry_point_name: Option<String>,
     pub fragment_entry_point_name: Option<String>,
@@ -195,7 +199,9 @@ pub struct ShadingPassVk {
 }
 impl ShadingPassVk {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
-        let mut writes = VariableUInt(self.vertex_semantic_to_location.len() as _).write(sink)?;
+        let mut writes = self.option_overrides.write(sink)?;
+
+        writes += VariableUInt(self.vertex_semantic_to_location.len() as _).write(sink)?;
         for (n, l) in self.vertex_semantic_to_location.iter() {
             writes += n.write(sink)?;
             writes += VariableUInt(*l).write(sink)?;
@@ -226,6 +232,8 @@ impl ShadingPassVk {
     }
 
     pub fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
+        let option_overrides = RenderingOptionOverrides::read(source)?;
+
         let vertex_semantic_to_location_count = VariableUInt::read(source)?.0 as usize;
         let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
         for _ in 0..vertex_semantic_to_location_count {
@@ -260,10 +268,60 @@ impl ShadingPassVk {
         }
 
         Ok(Self {
+            option_overrides,
             vertex_semantic_to_location,
             vertex_entry_point_name,
             fragment_entry_point_name,
             code,
+        })
+    }
+}
+
+impl RenderingOptionOverrides {
+    fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        let existential_bitmap: u32 = if self.mode.is_some() { 0x01 } else { 0 }
+            | if self.culling.is_some() { 0x02 } else { 0 }
+            | if self.front_face.is_some() { 0x04 } else { 0 };
+        sink.write_all(b32(&existential_bitmap))?;
+        let mut writes = 4;
+
+        if let Some(ref x) = self.mode {
+            writes += x.write(sink)?;
+        }
+        if let Some(ref x) = self.culling {
+            writes += x.write(sink)?;
+        }
+        if let Some(ref x) = self.front_face {
+            writes += x.write(sink)?;
+        }
+
+        Ok(writes)
+    }
+
+    fn read(source: &mut impl Read) -> std::io::Result<Self> {
+        let mut existential_bitmap = 0u32;
+        source.read_exact(b32m(&mut existential_bitmap))?;
+
+        let mode = if (existential_bitmap & 0x01) == 0x01 {
+            Some(PolygonRasterizationMode::read(source)?)
+        } else {
+            None
+        };
+        let culling = if (existential_bitmap & 0x02) == 0x02 {
+            Some(FaceCulling::read(source)?)
+        } else {
+            None
+        };
+        let front_face = if (existential_bitmap & 0x04) == 0x04 {
+            Some(FrontFace::read(source)?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            mode,
+            culling,
+            front_face,
         })
     }
 }
@@ -397,6 +455,72 @@ impl DescriptorTypeVk {
             }),
             1 => Ok(Self::CombinedImageSampler),
             x => panic!("invalid DescriptorTypeVk first byte: 0x{x:02x}"),
+        }
+    }
+}
+
+impl PolygonRasterizationMode {
+    fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        match self {
+            Self::Point => sink.write_all(&[0]).map(|_| 1),
+            Self::Line => sink.write_all(&[1]).map(|_| 1),
+            Self::Fill => sink.write_all(&[2]).map(|_| 1),
+        }
+    }
+
+    fn read(source: &mut impl Read) -> std::io::Result<Self> {
+        let mut first_byte = [0u8];
+        source.read_exact(&mut first_byte)?;
+
+        match first_byte[0] {
+            0 => Ok(Self::Point),
+            1 => Ok(Self::Line),
+            2 => Ok(Self::Fill),
+            x => panic!("invalid PolygonRasterizationMode first byte: 0x{x:02x}"),
+        }
+    }
+}
+
+impl FaceCulling {
+    fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        match self {
+            Self::None => sink.write_all(&[0]).map(|_| 1),
+            Self::Front => sink.write_all(&[1]).map(|_| 1),
+            Self::Back => sink.write_all(&[2]).map(|_| 1),
+            Self::Both => sink.write_all(&[3]).map(|_| 1),
+        }
+    }
+
+    fn read(source: &mut impl Read) -> std::io::Result<Self> {
+        let mut first_byte = [0u8];
+        source.read_exact(&mut first_byte)?;
+
+        match first_byte[0] {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Front),
+            2 => Ok(Self::Back),
+            3 => Ok(Self::Both),
+            x => panic!("invalid FaceCulling first byte: 0x{x:02x}"),
+        }
+    }
+}
+
+impl FrontFace {
+    fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        match self {
+            Self::CounterClockwise => sink.write_all(&[0]).map(|_| 1),
+            Self::Clockwise => sink.write_all(&[1]).map(|_| 1),
+        }
+    }
+
+    fn read(source: &mut impl Read) -> std::io::Result<Self> {
+        let mut first_byte = [0u8];
+        source.read_exact(&mut first_byte)?;
+
+        match first_byte[0] {
+            0 => Ok(Self::CounterClockwise),
+            1 => Ok(Self::Clockwise),
+            x => panic!("invalid FrontFace first byte: 0x{x:02x}"),
         }
     }
 }

@@ -48,6 +48,10 @@ pub struct KwVertexBindings(Location);
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
+pub struct KwRenderOption(Location);
+
+#[derive(Debug, Clone)]
+#[repr(transparent)]
 pub struct OpenBracket(Location);
 
 #[derive(Debug, Clone)]
@@ -98,6 +102,7 @@ pub enum Keyword {
     Use(KwUse),
     Shader(KwShader),
     VertexBindings(KwVertexBindings),
+    RenderOption(KwRenderOption),
 }
 
 #[derive(Debug, Clone)]
@@ -350,6 +355,7 @@ pub fn next_token<'s>(ctx: &mut Context<'s>) -> Option<Token<'s>> {
         "VertexBindings" => {
             Token::Keyword(Keyword::VertexBindings(KwVertexBindings(ctx.loc.clone())))
         }
+        "RenderOption" => Token::Keyword(Keyword::RenderOption(KwRenderOption(ctx.loc.clone()))),
         t => Token::Identifier(Identifier(t, ctx.loc.clone())),
     };
 

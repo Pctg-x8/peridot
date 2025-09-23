@@ -57,7 +57,7 @@ fn main() {
     asset.property_mappings = property_mapping;
     asset.descriptor_set_bindings = descriptor_set_bindings;
     for (n, p) in rc.passes {
-        if p.shader_code.is_none() && p.vertex_bindings.is_empty() {
+        if p.shader_code.is_none() && p.vertex_bindings.is_empty() && p.option_overrides.is_none() {
             // simple derive
             let deriving = p
                 .deriving
@@ -193,6 +193,7 @@ fn main() {
         asset.passes.insert(
             n,
             prc::ShadingPassVk::Custom {
+                option_overrides: p.option_overrides.unwrap_or_default(),
                 vertex_semantic_to_location: semantic_to_location,
                 vertex_entry_point_name,
                 fragment_entry_point_name,

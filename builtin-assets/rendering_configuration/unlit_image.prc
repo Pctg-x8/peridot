@@ -3,6 +3,7 @@ Properties
 End
 
 Pass "Unlit"
+  RenderOption NoCulling
   VertexBindings
     pos: Float4 [POSITION0]
     uv: Float4 [TEXCOORD0]
