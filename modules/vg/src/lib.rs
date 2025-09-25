@@ -71,7 +71,7 @@ pub struct FigureContext<'c> {
     fill_rule: FillRule,
 }
 impl Context {
-    pub fn begin_figure(&mut self, fill_rule: FillRule) -> FigureContext {
+    pub fn begin_figure<'x>(&'x mut self, fill_rule: FillRule) -> FigureContext<'x> {
         FigureContext {
             ctx: self,
             partitioner: Partitioner::new(),

@@ -123,7 +123,7 @@ impl CommandBundle<VulkanGfx> {
                     count as _,
                     br::CommandBufferLevel::Primary,
                 ),
-                core::mem::transmute(buffers.spare_capacity_mut()),
+                buffers.spare_capacity_mut(),
             )
         } {
             Ok(_) => (),

@@ -3,7 +3,7 @@
 use std::fs::File;
 use std::io::prelude::{BufRead, Read};
 use std::io::Result as IOResult;
-use std::io::{BufReader, Cursor, IoSliceMut, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Seek, SeekFrom};
 
 mod entry;
 mod utils;
@@ -43,10 +43,11 @@ impl WhereArchive {
         if let Some(b) = replace_buf {
             *self = WhereArchive::OnMemory(b);
         }
-        match self {
-            WhereArchive::OnMemory(ref b) => Ok(b),
-            _ => unreachable!(),
-        }
+        let Self::OnMemory(ref b) = self else {
+            unreachable!();
+        };
+
+        Ok(b)
     }
 }
 
@@ -70,11 +71,11 @@ impl WhereArchiveAsync {
         if let Some(b) = replace_buf {
             *self = Self::OnMemory(b);
         }
+        let Self::OnMemory(ref b) = self else {
+            unreachable!();
+        };
 
-        match self {
-            Self::OnMemory(ref b) => Ok(b),
-            _ => unreachable!(),
-        }
+        Ok(b)
     }
 }
 
@@ -175,7 +176,7 @@ impl async_std::io::Read for EitherArchiveReaderAsync {
     fn poll_read_vectored(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-        bufs: &mut [IoSliceMut<'_>],
+        bufs: &mut [std::io::IoSliceMut<'_>],
     ) -> std::task::Poll<IOResult<usize>> {
         match self.get_mut() {
             Self::IO(ref mut r) => {

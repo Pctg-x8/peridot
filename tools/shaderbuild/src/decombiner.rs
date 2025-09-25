@@ -44,12 +44,14 @@ impl DeclarationOps {
 pub type ParseResult<T> = Result<T, ()>;
 
 trait CharIterationExt: Iterator<Item = char> + Sized {
+    #[inline]
     fn count_with_bytes(self) -> (usize, usize) {
         self.fold((0, 0), |(c, b), cc| (c + 1, b + cc.len_utf8()))
     }
+
+    #[inline]
     fn count_with_bytes_while<P: Fn(char) -> bool>(self, pred: P) -> (usize, usize) {
-        self.take_while(|&c| pred(c))
-            .fold((0, 0), |(c, b), cc| (c + 1, b + cc.len_utf8()))
+        self.take_while(|&c| pred(c)).count_with_bytes()
     }
 }
 impl<I: Iterator<Item = char>> CharIterationExt for I {}

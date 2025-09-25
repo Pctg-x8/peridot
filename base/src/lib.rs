@@ -17,7 +17,6 @@ pub use self::graphics::{
     CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
     MemoryTypeManager, VulkanExtension, VulkanGfx,
 };
-mod state_track;
 mod window;
 pub use self::window::SurfaceInfo;
 mod resource;
@@ -43,9 +42,6 @@ pub mod mthelper;
 #[allow(unused_imports)]
 use mthelper::DynamicMutabilityProvider;
 use mthelper::{DynamicMut, MappableGuardObject, MappableMutGuardObject};
-
-#[cfg(feature = "derive")]
-pub use peridot_derive::*;
 
 pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
@@ -85,9 +81,7 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
 }
 
 impl<PL: NativeLinker> EngineEvents<PL> for () {
-    fn init(_e: &mut Engine<PL>) -> Self {
-        ()
-    }
+    fn init(_e: &mut Engine<PL>) -> Self {}
 }
 
 /// Specifies which type of resource is supports sparse residency?

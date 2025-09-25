@@ -201,13 +201,6 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             back_buffer_image_handles,
         }
     }
-
-    pub fn nth_backbuffer(&self, index: usize) -> IntegratedSwapchainObjectBackbufferRef<Surface> {
-        IntegratedSwapchainObjectBackbufferRef {
-            handle: self.back_buffer_image_handles[index],
-            _source: self.core.clone(),
-        }
-    }
 }
 
 pub struct SubmissionBatchBuilder<'d> {

@@ -8,10 +8,11 @@ edition = "2021"
 [features]
 memory-manager-interop = ["peridot-memory-manager"]
 
+[lints]
+workspace = true
+
 [dependencies]
-bedrock = { workspace = true, features = [
-    "Implements",
-] }
+bedrock = { workspace = true, features = ["Implements"] }
 peridot = { path = "../../base" }
 
 peridot-memory-manager = { path = "../memory-manager", optional = true }

@@ -10,6 +10,9 @@ use-freetype = ["freetype2"]
 use-fontconfig = ["fontconfig"]
 ci-nolib = []
 
+[lints]
+workspace = true
+
 [dependencies]
 bedrock = { workspace = true }
 peridot = { path = "../../base" }

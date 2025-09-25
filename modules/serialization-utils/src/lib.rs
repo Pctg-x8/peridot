@@ -149,15 +149,19 @@ impl PascalString {
 
     pub fn read(reader: &mut (impl BufRead + ?Sized)) -> IOResult<Self> {
         let VariableUInt(bytelength) = VariableUInt::read(reader)?;
-        let mut bytes = Vec::with_capacity(bytelength as _);
-        reader.read_exact(unsafe { core::mem::transmute(bytes.spare_capacity_mut()) })?;
+        let mut bytes = Vec::<u8>::with_capacity(bytelength as _);
+        reader.read_exact(unsafe {
+            core::mem::transmute::<&mut [core::mem::MaybeUninit<u8>], &mut [u8]>(
+                bytes.spare_capacity_mut(),
+            )
+        })?;
         unsafe {
             bytes.set_len(bytelength as _);
         }
 
         from_utf8(&bytes[..])
             .map(|s| Self(s.to_owned()))
-            .map_err(|e| IOError::new(ErrorKind::Other, e))
+            .map_err(IOError::other)
     }
 
     #[cfg(feature = "async-rt-async-std")]
@@ -166,9 +170,11 @@ impl PascalString {
     ) -> IOResult<Self> {
         let VariableUInt(byte_length) = VariableUInt::read_async(reader).await?;
 
-        let mut bytes = Vec::with_capacity(byte_length as _);
+        let mut bytes = Vec::<u8>::with_capacity(byte_length as _);
         async_std::io::ReadExt::read_exact(reader, unsafe {
-            core::mem::transmute(bytes.spare_capacity_mut())
+            core::mem::transmute::<&mut [core::mem::MaybeUninit<u8>], &mut [u8]>(
+                bytes.spare_capacity_mut(),
+            )
         })
         .await?;
         unsafe {
@@ -177,17 +183,17 @@ impl PascalString {
 
         from_utf8(&bytes[..])
             .map(|s| Self(s.to_owned()))
-            .map_err(|e| IOError::new(ErrorKind::Other, e))
+            .map_err(IOError::other)
     }
 }
 impl<'s> PascalStr<'s> {
     pub fn write(&self, writer: &mut (impl Write + ?Sized)) -> IOResult<usize> {
-        VariableUInt(self.0.as_bytes().len() as _)
+        VariableUInt(self.0.len() as _)
             .write(writer)
             .and_then(|wl| {
                 writer
                     .write_all(self.0.as_bytes())
-                    .map(move |_| wl + self.0.as_bytes().len())
+                    .map(move |_| wl + self.0.len())
             })
     }
 
@@ -196,11 +202,9 @@ impl<'s> PascalStr<'s> {
         &self,
         writer: &mut (impl async_std::io::Write + ?Sized + Unpin),
     ) -> IOResult<usize> {
-        let len_bytes = VariableUInt(self.0.as_bytes().len() as _)
-            .write_async(writer)
-            .await?;
+        let len_bytes = VariableUInt(self.0.len() as _).write_async(writer).await?;
         async_std::io::WriteExt::write_all(writer, self.0.as_bytes()).await?;
 
-        Ok(len_bytes + self.0.as_bytes().len())
+        Ok(len_bytes + self.0.len())
     }
 }

@@ -8,6 +8,9 @@ default = ["with-loader-impl", "bedrock-implements"]
 bedrock-implements = ["bedrock/Implements"]
 with-loader-impl = ["dep:peridot", "bedrock-implements"]
 
+[lints]
+workspace = true
+
 [dependencies]
 bedrock.workspace = true
 peridot-serialization-utils.path = "../serialization-utils"

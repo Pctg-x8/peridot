@@ -62,13 +62,13 @@ pub struct ShaderPack<Device: br::Device> {
 }
 impl<Device: br::Device> ShaderPack<Device> {
     /// Creates a wrapper object for GraphicsPipeline's shader stage.
-    pub fn pipeline_vertex_shader(&self) -> br::PipelineShaderStage {
+    pub fn pipeline_vertex_shader<'x, 's>(&'x self) -> br::PipelineShaderStage<'x, 's> {
         self.vertex_module
             .on_stage(br::ShaderStage::Vertex, c"main")
     }
 
     /// Creates a wrapper object for GraphicsPipeline's shader stage.
-    pub fn pipeline_fragment_shader(&self) -> Option<br::PipelineShaderStage> {
+    pub fn pipeline_fragment_shader<'x, 's>(&'x self) -> Option<br::PipelineShaderStage<'x, 's>> {
         self.fragment_module
             .as_ref()
             .map(|m| m.on_stage(br::ShaderStage::Fragment, c"main"))

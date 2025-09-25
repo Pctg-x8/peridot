@@ -850,7 +850,6 @@ mod euclid_interop;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std;
 
     #[test]
     fn vector_dimension_transform() {
@@ -901,6 +900,7 @@ mod tests {
         );
     }
     #[test]
+    #[allow(clippy::no_effect)]
     fn vector_ops() {
         assert_eq!(Vector3(0, 1, 2) + Vector3(3, 4, 5), Vector3(3, 5, 7));
         assert_eq!(Vector3(6, 7, 8) - Vector3(3, 4, 5), Vector3(3, 3, 3));
@@ -921,12 +921,12 @@ mod tests {
     #[test]
     fn inv_quaternion() {
         let q = Quaternion(0.0f32, 1.0, 0.0, 3.0).normalize();
-        let Quaternion(a, b, c, d) = q.clone() * -q;
+        let Quaternion(a, b, c, d) = q * -q;
         // approximate
-        assert!(a.abs() <= std::f32::EPSILON);
-        assert!(b.abs() <= std::f32::EPSILON);
-        assert!(c.abs() <= std::f32::EPSILON);
-        assert!((1.0 - d).abs() <= std::f32::EPSILON);
+        assert!(a.abs() <= f32::EPSILON);
+        assert!(b.abs() <= f32::EPSILON);
+        assert!(c.abs() <= f32::EPSILON);
+        assert!((1.0 - d).abs() <= f32::EPSILON);
     }
     #[test]
     fn vector_ops_assign() {

@@ -1,5 +1,5 @@
 use crate::mthelper::{SharedRef, SharedWeakRef};
-use bedrock::{self as br, ResolverInterface, VkHandle, VkRawHandle};
+use bedrock::{self as br, ResolverInterface};
 use br::{Instance, PhysicalDevice};
 use std::{
     collections::HashSet,
@@ -459,7 +459,7 @@ impl VulkanGfx {
 
         let enabled_extension_names = instance_extensions
             .into_iter()
-            .chain(device_extensions.into_iter())
+            .chain(device_extensions)
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
 
@@ -467,8 +467,7 @@ impl VulkanGfx {
         let set_object_name_fn =
             if enabled_extension_names.contains(VulkanExtension::DEBUG_UTILS_EXT.name) {
                 Some(unsafe {
-                    instance
-                        .native_ptr()
+                    br::VkHandle::native_ptr(&instance)
                         .load_function_unconstrainted::<br::vk::PFN_vkSetDebugUtilsObjectNameEXT>()
                 })
             } else {
@@ -480,8 +479,7 @@ impl VulkanGfx {
             debug_instance: debug_instance.map(|x| (
                 x.unmanage().0,
                 unsafe {
-                    instance
-                        .native_ptr()
+                    br::VkHandle::native_ptr(&instance)
                         .load_function_unconstrainted::<br::vk::PFN_vkDestroyDebugUtilsMessengerEXT>()
                 }
             )),
@@ -600,7 +598,7 @@ impl VulkanGfx {
             br::vkfn_wrapper::get_physical_device_surface_formats(
                 self.0.adapter,
                 surface.native_ptr(),
-                core::mem::transmute(sink.spare_capacity_mut()),
+                sink.spare_capacity_mut(),
             )?;
             sink.set_len(sink.capacity());
         }
@@ -628,7 +626,7 @@ impl VulkanGfx {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
                 self.0.adapter,
                 surface.native_ptr(),
-                core::mem::transmute(sink.spare_capacity_mut()),
+                sink.spare_capacity_mut(),
             )?;
             sink.set_len(sink.capacity());
         }
@@ -695,7 +693,7 @@ impl VulkanGfx {
     #[tracing::instrument(
         name = "VulkanGfx::dbg_set_object_name",
         skip(self),
-        fields(object_type = H::TYPE, handle = handle.native_ptr().raw_handle_value())
+        fields(object_type = H::TYPE, handle = br::VkRawHandle::raw_handle_value(&handle.native_ptr()))
     )]
     pub fn dbg_set_object_name<H>(&self, handle: &H, name: &core::ffi::CStr)
     where
@@ -850,22 +848,6 @@ impl Drop for LocalOnetimeSubmitCommandBuffer<'_> {
     }
 }
 
-struct StandaloneOnetimeSubmitCommandBundle {
-    buffer: br::vk::VkCommandBuffer,
-    pool: br::vk::VkCommandPool,
-    device: VulkanGfx,
-}
-unsafe impl Sync for StandaloneOnetimeSubmitCommandBundle {}
-unsafe impl Send for StandaloneOnetimeSubmitCommandBundle {}
-impl Drop for StandaloneOnetimeSubmitCommandBundle {
-    fn drop(&mut self) {
-        unsafe {
-            // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
-            br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
-        }
-    }
-}
-
 /// Graphics manager
 pub struct Graphics {
     pub(crate) gfx_device: VulkanGfx,
@@ -949,7 +931,7 @@ impl Graphics {
         &mut self,
         generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<()> {
-        let mut buffers = [br::vk::VkCommandBuffer::NULL];
+        let mut buffers = [core::mem::MaybeUninit::uninit()];
         unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 self.gfx_device.0.device,
@@ -962,7 +944,7 @@ impl Graphics {
             )?;
         }
         let cb = LocalOnetimeSubmitCommandBuffer {
-            buffer: buffers[0],
+            buffer: unsafe { buffers[0].assume_init() },
             pool: &self.cp_onetime_submit,
             device: &self.gfx_device,
         };
@@ -1025,7 +1007,11 @@ impl Graphics {
         impl Drop for StandaloneFence {
             fn drop(&mut self) {
                 unsafe {
-                    br::vkfn_wrapper::destroy_fence(self.device.native_ptr(), self.handle, None);
+                    br::vkfn_wrapper::destroy_fence(
+                        br::VkHandle::native_ptr(&self.device),
+                        self.handle,
+                        None,
+                    );
                 }
             }
         }
@@ -1051,6 +1037,22 @@ impl Graphics {
             }
         }
 
+        struct StandaloneOnetimeSubmitCommandBundle {
+            buffer: br::vk::VkCommandBuffer,
+            pool: br::vk::VkCommandPool,
+            device: VulkanGfx,
+        }
+        unsafe impl Sync for StandaloneOnetimeSubmitCommandBundle {}
+        unsafe impl Send for StandaloneOnetimeSubmitCommandBundle {}
+        impl Drop for StandaloneOnetimeSubmitCommandBundle {
+            fn drop(&mut self) {
+                unsafe {
+                    // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
+                    br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
+                }
+            }
+        }
+
         let mut fence = StandaloneFence {
             handle: unsafe {
                 br::vkfn_wrapper::create_fence(
@@ -1069,8 +1071,8 @@ impl Graphics {
                 None,
             )?
         };
-        let mut cb = [br::vk::VkCommandBuffer::NULL];
-        match unsafe {
+        let mut cb = [core::mem::MaybeUninit::uninit()];
+        if let Err(e) = unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 self.gfx_device.0.device,
                 &br::CommandBufferAllocateInfo::new(
@@ -1081,17 +1083,14 @@ impl Graphics {
                 &mut cb,
             )
         } {
-            Ok(()) => (),
-            Err(e) => {
-                unsafe {
-                    br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
-                }
-
-                return Err(e);
+            unsafe {
+                br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
             }
+
+            return Err(e);
         }
         let cb = StandaloneOnetimeSubmitCommandBundle {
-            buffer: cb[0],
+            buffer: unsafe { cb[0].assume_init() },
             pool,
             device: self.gfx_device.clone(),
         };
