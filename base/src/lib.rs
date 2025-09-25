@@ -17,7 +17,6 @@ pub use self::graphics::{
     CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
     MemoryTypeManager, VulkanExtension, VulkanGfx,
 };
-mod state_track;
 mod window;
 pub use self::window::SurfaceInfo;
 mod resource;

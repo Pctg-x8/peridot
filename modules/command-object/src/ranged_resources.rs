@@ -30,7 +30,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
         RangedBuffer(&self.0, self.1.clone())
     }
 
-    pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferInfo {
+    pub fn make_descriptor_buffer_ref<'x>(&'x self) -> br::DescriptorBufferInfo<'x> {
         br::DescriptorBufferInfo::new(&self.0, self.1.clone())
     }
 

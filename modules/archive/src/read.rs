@@ -1,10 +1,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{
-        BufRead, BufReader, Cursor, Error as IOError, ErrorKind, Read, Result as IOResult, Seek,
-        SeekFrom,
-    },
+    io::{BufRead, BufReader, Cursor, Error as IOError, Read, Result as IOResult, Seek, SeekFrom},
     path::Path,
 };
 
