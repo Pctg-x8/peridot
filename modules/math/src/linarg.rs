@@ -900,6 +900,7 @@ mod tests {
         );
     }
     #[test]
+    #[allow(clippy::no_effect)]
     fn vector_ops() {
         assert_eq!(Vector3(0, 1, 2) + Vector3(3, 4, 5), Vector3(3, 5, 7));
         assert_eq!(Vector3(6, 7, 8) - Vector3(3, 4, 5), Vector3(3, 3, 3));
