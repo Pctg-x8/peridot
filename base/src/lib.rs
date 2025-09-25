@@ -43,9 +43,6 @@ pub mod mthelper;
 use mthelper::DynamicMutabilityProvider;
 use mthelper::{DynamicMut, MappableGuardObject, MappableMutGuardObject};
 
-#[cfg(feature = "derive")]
-pub use peridot_derive::*;
-
 pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
     type Presenter: PlatformPresenter;
