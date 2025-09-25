@@ -1,6 +1,6 @@
 //! Batched Operation Helpers
 
-use crate::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
+use crate::mthelper::{DynamicMut, SharedRef};
 use bedrock::{self as br};
 use br::vk::VkBufferCopy;
 use br::{TypedVulkanStructure, VkHandle};
@@ -32,11 +32,11 @@ where
     T: TransferrableBufferResource,
 {
     fn grouping_key(&self) -> u64 {
-        T::grouping_key(&self.borrow())
+        T::grouping_key(&crate::mthelper::DynamicMutabilityProvider::borrow(self))
     }
 
     fn raw_handle(&self) -> br::vk::VkBuffer {
-        T::raw_handle(&self.borrow())
+        T::raw_handle(&crate::mthelper::DynamicMutabilityProvider::borrow(self))
     }
 }
 

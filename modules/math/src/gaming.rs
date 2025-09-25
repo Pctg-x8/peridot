@@ -93,7 +93,7 @@ impl Camera {
     }
     /// calculates the camera view matrix
     pub fn view_matrix(&self) -> Matrix4F32 {
-        Matrix4F32::from(-self.rotation.clone()) * Matrix4F32::translation(-self.position.clone())
+        Matrix4F32::from(-self.rotation) * Matrix4F32::translation(-self.position)
     }
     /// calculates the camera transform(view and projection) matrix
     pub fn view_projection_matrix(&self, aspect_wh: f32) -> Matrix4F32 {
