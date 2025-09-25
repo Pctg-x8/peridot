@@ -206,7 +206,7 @@ impl ArchiveRead {
         let (comp, crc) = Self::read_file_header(&mut fi)?;
         let mut body = WhereArchive::FromIO(fi);
         if check_integrity {
-            let input_crc = crc32::checksum_ieee(&body.on_memory()?);
+            let input_crc = crc32::checksum_ieee(body.on_memory()?);
             if input_crc != crc {
                 return Err(ArchiveReadError::IntegrityCheckFailed);
             }
