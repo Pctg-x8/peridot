@@ -1,5 +1,5 @@
 use crate::mthelper::{SharedRef, SharedWeakRef};
-use bedrock::{self as br, ResolverInterface, VkRawHandle};
+use bedrock::{self as br, ResolverInterface};
 use br::{Instance, PhysicalDevice};
 use std::{
     collections::HashSet,
@@ -693,7 +693,7 @@ impl VulkanGfx {
     #[tracing::instrument(
         name = "VulkanGfx::dbg_set_object_name",
         skip(self),
-        fields(object_type = H::TYPE, handle = handle.native_ptr().raw_handle_value())
+        fields(object_type = H::TYPE, handle = br::VkRawHandle::raw_handle_value(&handle.native_ptr()))
     )]
     pub fn dbg_set_object_name<H>(&self, handle: &H, name: &core::ffi::CStr)
     where
