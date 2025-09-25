@@ -459,7 +459,7 @@ impl VulkanGfx {
 
         let enabled_extension_names = instance_extensions
             .into_iter()
-            .chain(device_extensions.into_iter())
+            .chain(device_extensions)
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
 
@@ -598,7 +598,7 @@ impl VulkanGfx {
             br::vkfn_wrapper::get_physical_device_surface_formats(
                 self.0.adapter,
                 surface.native_ptr(),
-                core::mem::transmute(sink.spare_capacity_mut()),
+                sink.spare_capacity_mut(),
             )?;
             sink.set_len(sink.capacity());
         }
@@ -626,7 +626,7 @@ impl VulkanGfx {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
                 self.0.adapter,
                 surface.native_ptr(),
-                core::mem::transmute(sink.spare_capacity_mut()),
+                sink.spare_capacity_mut(),
             )?;
             sink.set_len(sink.capacity());
         }
