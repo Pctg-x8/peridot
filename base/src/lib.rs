@@ -81,9 +81,7 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
 }
 
 impl<PL: NativeLinker> EngineEvents<PL> for () {
-    fn init(_e: &mut Engine<PL>) -> Self {
-        ()
-    }
+    fn init(_e: &mut Engine<PL>) -> Self {}
 }
 
 /// Specifies which type of resource is supports sparse residency?

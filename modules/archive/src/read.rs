@@ -64,7 +64,7 @@ impl ArchiveReadAsync {
         let (comp, crc) = Self::read_file_header(&mut fi).await?;
         let mut body = crate::WhereArchiveAsync::FromIO(fi);
         if check_integrity {
-            let input_crc = crc32::checksum_ieee(&body.on_memory().await?);
+            let input_crc = crc32::checksum_ieee(body.on_memory().await?);
             if input_crc != crc {
                 // CRCミスマッチ
                 return Err(ArchiveReadError::IntegrityCheckFailed);
@@ -168,7 +168,9 @@ impl ArchiveReadAsync {
             .await?;
         let mut sink = Vec::with_capacity(entry_pair.byte_length as _);
         async_std::io::ReadExt::read_exact(&mut self.content, unsafe {
-            core::mem::transmute(sink.spare_capacity_mut())
+            core::mem::transmute::<&mut [core::mem::MaybeUninit<u8>], &mut [u8]>(
+                sink.spare_capacity_mut(),
+            )
         })
         .await?;
         unsafe {
@@ -292,8 +294,11 @@ impl ArchiveRead {
         if let Some(entry_pair) = self.find(path) {
             self.content.seek(SeekFrom::Start(entry_pair.byte_offset))?;
             let mut sink = Vec::with_capacity(entry_pair.byte_length as _);
-            self.content
-                .read_exact(unsafe { core::mem::transmute(sink.spare_capacity_mut()) })?;
+            self.content.read_exact(unsafe {
+                core::mem::transmute::<&mut [core::mem::MaybeUninit<u8>], &mut [u8]>(
+                    sink.spare_capacity_mut(),
+                )
+            })?;
             unsafe {
                 sink.set_len(sink.capacity());
             }
