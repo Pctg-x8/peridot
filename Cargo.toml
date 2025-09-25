@@ -25,4 +25,4 @@ cfg-if = "1.0"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
-
+manual_div_ceil = "allow"

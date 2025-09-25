@@ -9,6 +9,9 @@ default = ["bedrock-interop", "euclid-interop"]
 bedrock-interop = ["dep:bedrock"]
 euclid-interop = ["dep:euclid"]
 
+[lints]
+workspace = true
+
 [dependencies]
 bedrock = { workspace = true, optional = true }
 euclid = { version = "0.19", optional = true }

@@ -1,5 +1,5 @@
 use crate::mthelper::{SharedRef, SharedWeakRef};
-use bedrock::{self as br, ResolverInterface, VkHandle, VkRawHandle};
+use bedrock::{self as br, ResolverInterface, VkRawHandle};
 use br::{Instance, PhysicalDevice};
 use std::{
     collections::HashSet,
@@ -467,8 +467,7 @@ impl VulkanGfx {
         let set_object_name_fn =
             if enabled_extension_names.contains(VulkanExtension::DEBUG_UTILS_EXT.name) {
                 Some(unsafe {
-                    instance
-                        .native_ptr()
+                    br::VkHandle::native_ptr(&instance)
                         .load_function_unconstrainted::<br::vk::PFN_vkSetDebugUtilsObjectNameEXT>()
                 })
             } else {
@@ -480,8 +479,7 @@ impl VulkanGfx {
             debug_instance: debug_instance.map(|x| (
                 x.unmanage().0,
                 unsafe {
-                    instance
-                        .native_ptr()
+                    br::VkHandle::native_ptr(&instance)
                         .load_function_unconstrainted::<br::vk::PFN_vkDestroyDebugUtilsMessengerEXT>()
                 }
             )),
@@ -850,22 +848,6 @@ impl Drop for LocalOnetimeSubmitCommandBuffer<'_> {
     }
 }
 
-struct StandaloneOnetimeSubmitCommandBundle {
-    buffer: br::vk::VkCommandBuffer,
-    pool: br::vk::VkCommandPool,
-    device: VulkanGfx,
-}
-unsafe impl Sync for StandaloneOnetimeSubmitCommandBundle {}
-unsafe impl Send for StandaloneOnetimeSubmitCommandBundle {}
-impl Drop for StandaloneOnetimeSubmitCommandBundle {
-    fn drop(&mut self) {
-        unsafe {
-            // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
-            br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
-        }
-    }
-}
-
 /// Graphics manager
 pub struct Graphics {
     pub(crate) gfx_device: VulkanGfx,
@@ -1025,7 +1007,11 @@ impl Graphics {
         impl Drop for StandaloneFence {
             fn drop(&mut self) {
                 unsafe {
-                    br::vkfn_wrapper::destroy_fence(self.device.native_ptr(), self.handle, None);
+                    br::vkfn_wrapper::destroy_fence(
+                        br::VkHandle::native_ptr(&self.device),
+                        self.handle,
+                        None,
+                    );
                 }
             }
         }
@@ -1048,6 +1034,22 @@ impl Graphics {
                 };
 
                 Ok(r == br::vk::VK_SUCCESS)
+            }
+        }
+
+        struct StandaloneOnetimeSubmitCommandBundle {
+            buffer: br::vk::VkCommandBuffer,
+            pool: br::vk::VkCommandPool,
+            device: VulkanGfx,
+        }
+        unsafe impl Sync for StandaloneOnetimeSubmitCommandBundle {}
+        unsafe impl Send for StandaloneOnetimeSubmitCommandBundle {}
+        impl Drop for StandaloneOnetimeSubmitCommandBundle {
+            fn drop(&mut self) {
+                unsafe {
+                    // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
+                    br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
+                }
             }
         }
 

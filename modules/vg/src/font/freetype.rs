@@ -131,7 +131,7 @@ impl System {
     }
 }
 impl FaceGroup {
-    pub fn get(&self, index: usize) -> MappedRwLockReadGuard<Face> {
+    pub fn get<'x>(&'x self, index: usize) -> MappedRwLockReadGuard<'x, Face> {
         if !self.faces[index].read().is_loaded() {
             let mut new_face = match &*self.faces[index].read() {
                 FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
@@ -151,7 +151,7 @@ impl FaceGroup {
         })
     }
 
-    pub fn get_mut(&self, index: usize) -> MappedRwLockWriteGuard<Face> {
+    pub fn get_mut<'x>(&'x self, index: usize) -> MappedRwLockWriteGuard<'x, Face> {
         if !self.faces[index].read().is_loaded() {
             let mut new_face = match &*self.faces[index].read() {
                 FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),

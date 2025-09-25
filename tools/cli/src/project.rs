@@ -32,7 +32,7 @@ pub struct PlatformConfiguration<'s> {
 }
 
 impl Project {
-    pub fn resolve_config(&self, platform: &str) -> PlatformConfiguration {
+    pub fn resolve_config<'x>(&'x self, platform: &str) -> PlatformConfiguration<'x> {
         let overrides = self.platform.get(platform);
 
         PlatformConfiguration {
