@@ -1,5 +1,5 @@
 use crate::mthelper::{SharedRef, SharedWeakRef};
-use bedrock::{self as br, ResolverInterface, VkRawHandle};
+use bedrock::{self as br, ResolverInterface};
 use br::{Instance, PhysicalDevice};
 use std::{
     collections::HashSet,
@@ -459,7 +459,7 @@ impl VulkanGfx {
 
         let enabled_extension_names = instance_extensions
             .into_iter()
-            .chain(device_extensions.into_iter())
+            .chain(device_extensions)
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
 
@@ -598,7 +598,7 @@ impl VulkanGfx {
             br::vkfn_wrapper::get_physical_device_surface_formats(
                 self.0.adapter,
                 surface.native_ptr(),
-                core::mem::transmute(sink.spare_capacity_mut()),
+                sink.spare_capacity_mut(),
             )?;
             sink.set_len(sink.capacity());
         }
@@ -626,7 +626,7 @@ impl VulkanGfx {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
                 self.0.adapter,
                 surface.native_ptr(),
-                core::mem::transmute(sink.spare_capacity_mut()),
+                sink.spare_capacity_mut(),
             )?;
             sink.set_len(sink.capacity());
         }
@@ -693,7 +693,7 @@ impl VulkanGfx {
     #[tracing::instrument(
         name = "VulkanGfx::dbg_set_object_name",
         skip(self),
-        fields(object_type = H::TYPE, handle = handle.native_ptr().raw_handle_value())
+        fields(object_type = H::TYPE, handle = br::VkRawHandle::raw_handle_value(&handle.native_ptr()))
     )]
     pub fn dbg_set_object_name<H>(&self, handle: &H, name: &core::ffi::CStr)
     where
@@ -931,7 +931,7 @@ impl Graphics {
         &mut self,
         generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<()> {
-        let mut buffers = [br::vk::VkCommandBuffer::NULL];
+        let mut buffers = [core::mem::MaybeUninit::uninit()];
         unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 self.gfx_device.0.device,
@@ -944,7 +944,7 @@ impl Graphics {
             )?;
         }
         let cb = LocalOnetimeSubmitCommandBuffer {
-            buffer: buffers[0],
+            buffer: unsafe { buffers[0].assume_init() },
             pool: &self.cp_onetime_submit,
             device: &self.gfx_device,
         };
@@ -1071,8 +1071,8 @@ impl Graphics {
                 None,
             )?
         };
-        let mut cb = [br::vk::VkCommandBuffer::NULL];
-        match unsafe {
+        let mut cb = [core::mem::MaybeUninit::uninit()];
+        if let Err(e) = unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 self.gfx_device.0.device,
                 &br::CommandBufferAllocateInfo::new(
@@ -1083,17 +1083,14 @@ impl Graphics {
                 &mut cb,
             )
         } {
-            Ok(()) => (),
-            Err(e) => {
-                unsafe {
-                    br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
-                }
-
-                return Err(e);
+            unsafe {
+                br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
             }
+
+            return Err(e);
         }
         let cb = StandaloneOnetimeSubmitCommandBundle {
-            buffer: cb[0],
+            buffer: unsafe { cb[0].assume_init() },
             pool,
             device: self.gfx_device.clone(),
         };
