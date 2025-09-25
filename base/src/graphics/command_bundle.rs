@@ -123,10 +123,7 @@ impl CommandBundle<VulkanGfx> {
                     count as _,
                     br::CommandBufferLevel::Primary,
                 ),
-                core::mem::transmute::<
-                    &mut [core::mem::MaybeUninit<br::vk::VkCommandBuffer>],
-                    &mut [br::vk::VkCommandBuffer],
-                >(buffers.spare_capacity_mut()),
+                buffers.spare_capacity_mut(),
             )
         } {
             Ok(_) => (),
