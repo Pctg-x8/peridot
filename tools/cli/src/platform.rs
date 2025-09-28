@@ -4,18 +4,15 @@ mod mac;
 mod windows;
 
 use std::path::{Path, PathBuf};
-use structopt::clap::arg_enum;
 
 use crate::{project::PlatformConfiguration, subcommands::build::BuildMode};
 
-arg_enum! {
-    #[derive(Debug, Clone, Copy)]
-    pub enum Platform {
-        Windows,
-        Mac,
-        Linux,
-        Android
-    }
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum Platform {
+    Windows,
+    Mac,
+    Linux,
+    Android,
 }
 impl Platform {
     pub const fn runtime() -> Option<Self> {
