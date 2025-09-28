@@ -22,10 +22,7 @@ pub enum VertexInputSemantic {
     Misc(u8),
 }
 impl VertexInputSemantic {
-    pub(crate) fn write(
-        &self,
-        writer: &mut (impl std::io::Write + ?Sized),
-    ) -> std::io::Result<usize> {
+    pub fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
         match self {
             &Self::Misc(n) => writer.write_all(&[0, n]).map(|_| 2),
             &Self::Position(n) => writer.write_all(&[1, n]).map(|_| 2),
@@ -37,7 +34,7 @@ impl VertexInputSemantic {
         }
     }
 
-    pub(crate) fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
+    pub fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
         let mut buf = [0u8; 2];
         reader.read_exact(&mut buf)?;
 

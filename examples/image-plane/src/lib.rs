@@ -1,4 +1,6 @@
-use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
+use bedrock::{
+    self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, ShaderModule, VkHandle,
+};
 use br::resources::Image;
 use br::Device;
 use log::*;
@@ -9,7 +11,8 @@ use peridot::{
 };
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
-use peridot_semantic_shader::{ShaderPackAsset, VertexInputSemantic};
+use peridot_rendering_configuration as prc;
+use std::ffi::CString;
 use std::sync::Arc;
 
 use peridot_command_object::{
@@ -312,6 +315,31 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Creating Sampler");
+    let single_smp_refs = [smp.as_transparent_ref()];
+    let rc: prc::CompiledRenderingConfigurationVk = e
+        .load("builtin.rendering_configuration.unlit_image")
+        .expect("Loading rendering configuration");
+    let dsl_rc = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(
+            &rc.descriptor_set_bindings
+                .iter()
+                .enumerate()
+                .map(|(n, x)| match x {
+                    prc::DescriptorTypeVk::CombinedImageSampler => {
+                        // TODO: immutable sampler or dynamic sampler selection in rendering configuration
+                        br::DescriptorType::CombinedImageSampler
+                            .make_binding(n as _, 1)
+                            .with_immutable_samplers(&single_smp_refs)
+                    }
+                    prc::DescriptorTypeVk::UniformBuffer { .. } => {
+                        br::DescriptorType::UniformBuffer.make_binding(n as _, 1)
+                    }
+                })
+                .collect::<Vec<_>>(),
+        ),
+    )
+    .expect("Create DescriptorSetLayout for Material");
     let dsl_ub1 = br::DescriptorSetLayoutObject::new(
         e.graphics().device().clone(),
         &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::UniformBuffer
@@ -319,26 +347,25 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .only_for_vertex()]),
     )
     .expect("Create DescriptorSetLayout with UniformBuffer(x1)");
-    let descriptor_layout = br::DescriptorSetLayoutObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorSetLayoutCreateInfo::new(&[
-            br::DescriptorType::UniformBuffer
-                .make_binding(0, 1)
-                .only_for_vertex(),
-            br::DescriptorType::CombinedImageSampler
-                .make_binding(1, 1)
-                .only_for_fragment()
-                .with_immutable_samplers(&[smp.as_transparent_ref()]),
-        ]),
-    )
-    .expect("Create DescriptorSetLayout");
+    let mut descriptor_uniform_counts = 2; // camera+object
+    let mut descriptor_sampler_counts = 0;
+    for x in rc.descriptor_set_bindings.iter() {
+        match x {
+            prc::DescriptorTypeVk::CombinedImageSampler => {
+                descriptor_sampler_counts += 1;
+            }
+            prc::DescriptorTypeVk::UniformBuffer { .. } => {
+                descriptor_uniform_counts += 1;
+            }
+        }
+    }
     let mut descriptor_pool = br::DescriptorPoolObject::new(
         e.graphics().device().clone(),
         &br::DescriptorPoolCreateInfo::new(
-            2,
+            3,
             &[
-                br::DescriptorType::UniformBuffer.make_size(2),
-                br::DescriptorType::CombinedImageSampler.make_size(1),
+                br::DescriptorType::UniformBuffer.make_size(descriptor_uniform_counts),
+                br::DescriptorType::CombinedImageSampler.make_size(descriptor_sampler_counts),
             ],
         ),
     )
@@ -349,70 +376,116 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         &br::PipelineLayoutCreateInfo::new(
             &[
                 dsl_ub1.as_transparent_ref(),
-                descriptor_layout.as_transparent_ref(),
+                dsl_ub1.as_transparent_ref(),
+                dsl_rc.as_transparent_ref(),
             ],
-            &[],
+            &if rc.push_constant_buffer_size_bytes > 0 {
+                vec![br::PushConstantRange::new(
+                    br::vk::VK_SHADER_STAGE_ALL,
+                    0..rc.push_constant_buffer_size_bytes as _,
+                )]
+            } else {
+                vec![]
+            },
         ),
     )
     .expect("Create PipelineLayout");
-    let shader = e
-        .load::<ShaderPackAsset>("builtin.semantic_shaders.unlit_image")
-        .expect("Loading shader")
-        .instantiate(e.graphics().device().clone())
-        .expect("Instantiate Shaders");
-    let sc = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
-    let vp = [sc[0].make_viewport(0.0..1.0)];
-    let [gp] = e
-        .graphics()
-        .device()
-        .new_graphics_pipeline_array(
-            &[br::GraphicsPipelineCreateInfo::new(
-                &pl,
-                renderpass.subpass(0),
-                &[
-                    shader.pipeline_vertex_shader(),
-                    shader.pipeline_fragment_shader().expect("no fsh?"),
-                ],
-                &br::PipelineVertexInputStateCreateInfo::new(
-                    &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
-                        peridot::VertexUV,
-                    >(0)],
-                    &[
-                        br::vk::VkVertexInputAttributeDescription {
-                            binding: 0,
-                            location: shader
-                                .resolve_input_semantic_location(VertexInputSemantic::Position(0))
-                                .expect("no position input?"),
-                            format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                            offset: core::mem::offset_of!(peridot::VertexUV, pos) as _,
-                        },
-                        br::vk::VkVertexInputAttributeDescription {
-                            binding: 0,
-                            location: shader
-                                .resolve_input_semantic_location(VertexInputSemantic::Texcoord(0))
-                                .expect("no texcoord input?"),
-                            format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                            offset: core::mem::offset_of!(peridot::VertexUV, uv) as _,
-                        },
-                    ],
-                ),
-                &br::PipelineInputAssemblyStateCreateInfo::new(
-                    br::PrimitiveTopology::TriangleStrip,
-                ),
-                &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
-                &br::PipelineRasterizationStateCreateInfo::new(
-                    br::PolygonMode::Fill,
-                    br::CullModeFlags::NONE,
-                    br::FrontFace::CounterClockwise,
-                ),
-                &br::PipelineColorBlendStateCreateInfo::new(&[
-                    ColorAttachmentBlending::Disabled.into_vk()
-                ]),
+    let [gp] = match rc.passes["Unlit"] {
+        prc::ShadingPassVk::SimpleDeriveBuiltinPass { ref name } => {
+            todo!("using builtin pass: {name}");
+        }
+        prc::ShadingPassVk::Custom {
+            ref option_overrides,
+            ref vertex_semantic_to_location,
+            ref vertex_entry_point_name,
+            ref fragment_entry_point_name,
+            ref code,
+        } => {
+            let sc = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
+            let vp = [sc[0].make_viewport(0.0..1.0)];
+
+            let shader = br::ShaderModuleObject::new(
+                e.graphics().device().clone(),
+                &br::ShaderModuleCreateInfo::new(code),
             )
-            .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Create GraphicsPipeline");
+            .expect("Failed to instantiate pass shader");
+            let mut stage_with_ep_names = Vec::with_capacity(2);
+            if let Some(e) = vertex_entry_point_name {
+                stage_with_ep_names.push((
+                    br::ShaderStage::Vertex,
+                    CString::new(e as &str).expect("invalid entry point name"),
+                ));
+            }
+            if let Some(e) = fragment_entry_point_name {
+                stage_with_ep_names.push((
+                    br::ShaderStage::Fragment,
+                    CString::new(e as &str).expect("invalid entry point name"),
+                ));
+            }
+
+            // TODO: このへんのパラメータもRendering Configurationで指定できるようにする
+            e.graphics()
+                .device()
+                .new_graphics_pipeline_array(
+                    &[br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        renderpass.subpass(0),
+                        &stage_with_ep_names
+                            .iter()
+                            .map(|&(s, ref e)| shader.on_stage(s, e))
+                            .collect::<Vec<_>>(),
+                        &br::PipelineVertexInputStateCreateInfo::new(
+                            &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
+                                peridot::VertexUV,
+                            >(0)],
+                            &[
+                                br::vk::VkVertexInputAttributeDescription {
+                                    binding: 0,
+                                    location: vertex_semantic_to_location
+                                        [&prc::VertexInputSemantic::Position(0)],
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    offset: core::mem::offset_of!(peridot::VertexUV, pos) as _,
+                                },
+                                br::vk::VkVertexInputAttributeDescription {
+                                    binding: 0,
+                                    location: vertex_semantic_to_location
+                                        [&prc::VertexInputSemantic::Texcoord(0)],
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    offset: core::mem::offset_of!(peridot::VertexUV, uv) as _,
+                                },
+                            ],
+                        ),
+                        &br::PipelineInputAssemblyStateCreateInfo::new(
+                            br::PrimitiveTopology::TriangleStrip,
+                        ),
+                        &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
+                        &br::PipelineRasterizationStateCreateInfo::new(
+                            match option_overrides.mode.unwrap_or_default() {
+                                prc::PolygonRasterizationMode::Point => br::PolygonMode::Point,
+                                prc::PolygonRasterizationMode::Line => br::PolygonMode::Line,
+                                prc::PolygonRasterizationMode::Fill => br::PolygonMode::Fill,
+                            },
+                            match option_overrides.culling.unwrap_or_default() {
+                                prc::FaceCulling::None => br::CullModeFlags::NONE,
+                                prc::FaceCulling::Front => br::CullModeFlags::FRONT,
+                                prc::FaceCulling::Back => br::CullModeFlags::BACK,
+                                prc::FaceCulling::Both => br::CullModeFlags::FRONT_AND_BACK,
+                            },
+                            match option_overrides.front_face.unwrap_or_default() {
+                                prc::FrontFace::CounterClockwise => br::FrontFace::CounterClockwise,
+                                prc::FrontFace::Clockwise => br::FrontFace::Clockwise,
+                            },
+                        ),
+                        &br::PipelineColorBlendStateCreateInfo::new(&[
+                            ColorAttachmentBlending::Disabled.into_vk(),
+                        ]),
+                    )
+                    .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+                    None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                )
+                .expect("Create GraphicsPipeline")
+        }
+    };
     let gp = gp.clone_parent();
     #[cfg(feature = "debug")]
     e.graphics_device()
@@ -429,10 +502,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     )
     .create()
     .expect("Failed to create main image view");
-    let [descriptor_cam, descriptor_main] = descriptor_pool
+    let [descriptor_cam, descriptor_obj, descriptor_mat] = descriptor_pool
         .alloc_array(&[
             dsl_ub1.as_transparent_ref(),
-            descriptor_layout.as_transparent_ref(),
+            dsl_ub1.as_transparent_ref(),
+            dsl_rc.as_transparent_ref(),
         ])
         .expect("Create main Descriptor");
     {
@@ -442,11 +516,14 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 cam_uniform_buffer.make_descriptor_buffer_ref(),
             ]),
         ));
+        descriptor_writes.push(descriptor_obj.binding_at(0).write(
+            br::DescriptorContents::UniformBuffer(vec![
+                obj_uniform_buffer.make_descriptor_buffer_ref(),
+            ]),
+        ));
+        // TODO: Material Parameter
         descriptor_writes.extend(
-            br::DescriptorPointer::new(descriptor_main.into(), 0).write_continuous_bindings([
-                br::DescriptorContents::UniformBuffer(vec![
-                    obj_uniform_buffer.make_descriptor_buffer_ref()
-                ]),
+            br::DescriptorPointer::new(descriptor_mat.into(), 0).write_continuous_bindings([
                 br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
                     &image_view,
                     br::ImageLayout::ShaderReadOnlyOpt,
@@ -463,7 +540,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         vertex_count: 4,
     };
 
-    let descriptor_sets = DescriptorSets(vec![descriptor_cam, descriptor_main]);
+    let descriptor_sets = DescriptorSets(vec![descriptor_cam, descriptor_obj, descriptor_mat]);
     let render_image_plane = plane_mesh
         .draw(1)
         .after_of(descriptor_sets.into_bind_graphics(&pl));
