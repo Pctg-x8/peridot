@@ -10,7 +10,7 @@ use clap::Parser;
 
 /// Peridot Engine BuildProcess CLI
 #[derive(Parser)]
-#[clap(name = "peridot")]
+#[command(name = "peridot")]
 pub enum SubCommands {
     Build(subcommands::build::BuildArgs),
     /// Check game code

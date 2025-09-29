@@ -1,7 +1,7 @@
 use crate::platform::Platform;
 use std::path::PathBuf;
 
-/// Builds an game
+/// Generates a cradle manifest(Cargo.toml) file
 #[derive(clap::Parser, Debug)]
 pub struct Args {
     /// Path to userlib crate
