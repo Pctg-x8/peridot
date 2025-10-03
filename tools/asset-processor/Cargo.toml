@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+image = "0.25.8"

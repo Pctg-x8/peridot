@@ -1,0 +1,12 @@
+[package]
+name = "ktx"
+description = "KhronosGroup/KTX-Software binding for rust"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+bitflags = "2.9.4"
+
+[lints]
+workspace = true

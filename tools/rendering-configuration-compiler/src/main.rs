@@ -16,6 +16,7 @@ use crate::{
 #[derive(Parser)]
 pub struct App {
     input: PathBuf,
+    #[arg(long, short = 'o')]
     output: Option<PathBuf>,
 }
 
