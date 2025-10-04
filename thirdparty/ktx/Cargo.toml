@@ -8,5 +8,3 @@ build = "build.rs"
 [dependencies]
 bitflags = "2.9.4"
 
-[lints]
-workspace = true

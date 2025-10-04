@@ -1,4 +1,5 @@
 use core::{cell::UnsafeCell, mem::MaybeUninit, ptr::NonNull};
+use std::ops::{Deref, DerefMut};
 
 use bitflags::bitflags;
 
@@ -361,6 +362,20 @@ impl<T: Ownable> Drop for Owned<T> {
         unsafe {
             T::destruct(self.0.as_mut());
         }
+    }
+}
+impl<T: Ownable> Deref for Owned<T> {
+    type Target = T;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
+    }
+}
+impl<T: Ownable> DerefMut for Owned<T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.0.as_mut() }
     }
 }
 impl<T: Ownable + Texture> Texture for Owned<T> {
