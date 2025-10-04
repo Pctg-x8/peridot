@@ -56,6 +56,11 @@ pub fn build(
     let mut env = std::collections::HashMap::new();
     let mut ext_features = options.engine_features.clone();
     if let Some(ref p) = asset_path_abs {
+        let runtime_asset_path = ctx.cradle_directory.join(".runtime-assets");
+        std::fs::create_dir_all(&runtime_asset_path)
+            .expect("std::fs::create_dir_all runtime-asset-path failed");
+        steps::process_assets(&ctx, Some(p), &runtime_asset_path);
+
         env.insert(
             "PERIDOT_EXTERNAL_ASSET_PATH",
             p.to_str().expect("invalid sequence in asset path"),

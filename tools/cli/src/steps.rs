@@ -229,3 +229,57 @@ pub fn merge_assets(ctx: &BuildContext, stg_directory_path: &Path, user_assets: 
         .expect("Failed to run mirror command"),
     );
 }
+pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
+    // Pre-required built step
+    let stg_path = std::env::temp_dir().join(".peridot/build/assets");
+    merge_assets(ctx, &stg_path, asset_path);
+
+    ctx.print_step("Processing assets...");
+
+    fn process_recursive(
+        ctx: &BuildContext,
+        target_dir: &Path,
+        base_dir: &Path,
+        output_path: &Path,
+    ) {
+        for e in std::fs::read_dir(target_dir).expect("std::fs::read_dir failed") {
+            let e = e.expect("std::fs::read_dir failed entry");
+            let source_path = e.path();
+            if source_path.is_dir() {
+                process_recursive(ctx, &source_path, base_dir, output_path);
+                continue;
+            }
+
+            if source_path
+                .file_stem()
+                .is_none_or(|x| x.to_str().is_some_and(|x| x.starts_with('.')))
+            {
+                // dot-started files: ignore
+                continue;
+            }
+
+            let relative_path = target_dir
+                .strip_prefix(base_dir)
+                .expect("not a path onto base_dir");
+            let runtime_path = if let Some(p) = relative_path.parent() {
+                output_path.join(p)
+            } else {
+                output_path.into()
+            };
+
+            std::fs::create_dir_all(&runtime_path).expect("Failed to create runtime-asset-path");
+
+            let e = std::process::Command::new(crate::path::asset_processor_path())
+                .arg(&source_path)
+                .arg("-o")
+                .arg(&runtime_path)
+                .spawn()
+                .expect("Failed to spawn peridot-asset-processor")
+                .wait()
+                .expect("Failed to wait peridot-asset-processor");
+            crate::shellutil::handle_process_result("peridot-asset-processor", e);
+        }
+    }
+
+    process_recursive(ctx, &stg_path, &stg_path, output_path);
+}
