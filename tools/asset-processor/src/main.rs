@@ -14,7 +14,6 @@ pub struct Args {
 
 fn main() {
     let args = Args::parse();
-    println!("process: {:?}", args.source_path);
 
     let ext = args.source_path.extension();
     if ext.is_some_and(|x| x == "prc") {
@@ -127,6 +126,23 @@ fn main() {
             println!("skip asset: {:?} (modified time)", args.source_path);
             return;
         }
+
+        std::fs::copy(&args.source_path, &dest_path).expect("Failed to copy asset data");
+    } else if ext.is_some_and(|x| x == "pvp" || x == "csh" || x == "pss" || x == "prcc") {
+        // deprecated assets
+        eprintln!(
+            "found deprecated assets(not processed): {:?}",
+            args.source_path
+        );
+        let dest_path = args
+            .out_dir
+            .as_deref()
+            .unwrap_or_else(|| args.source_path.parent().expect("no parent?"))
+            .join(
+                args.source_path
+                    .file_name()
+                    .expect("no file name in source path"),
+            );
 
         std::fs::copy(&args.source_path, &dest_path).expect("Failed to copy asset data");
     } else {
