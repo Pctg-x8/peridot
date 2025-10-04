@@ -1,4 +1,4 @@
-use std::{io::Write, path::PathBuf};
+use std::path::PathBuf;
 
 use clap::Parser;
 use ktx::Texture;
@@ -51,7 +51,7 @@ fn main() {
         .expect("Failed to spawn rendering-configuration-compiler")
         .wait()
         .expect("rendering-configuration-compiler");
-    } else if ext.is_some_and(|x| x == "png") {
+    } else if ext.is_some_and(|x| x == "png" || x == "jpg" || x == "tiff") {
         // image asset: decompress to rgba and recompress(TODO: if needed, specified by metadata file)
         let dest_path = args
             .out_dir
@@ -108,6 +108,27 @@ fn main() {
                 .expect("invalid cstr seq"),
         )
         .expect("ktx.write_to_named_file failed");
+    } else if ext.is_some_and(|x| x == "wav" || x == "mp3" || x == "ogg" || x == "flac") {
+        // sound asset(TODO: convert to what?)
+        let dest_path = args
+            .out_dir
+            .as_deref()
+            .unwrap_or_else(|| args.source_path.parent().expect("no parent?"))
+            .join(
+                args.source_path
+                    .file_name()
+                    .expect("no file name in source path"),
+            )
+            .with_extension("pa1-audio");
+        if !args.force_rebuild
+            && let (Ok(x), Ok(y)) = (args.source_path.metadata(), dest_path.metadata())
+            && x.modified().unwrap() <= y.modified().unwrap()
+        {
+            println!("skip asset: {:?} (modified time)", args.source_path);
+            return;
+        }
+
+        std::fs::copy(&args.source_path, &dest_path).expect("Failed to copy asset data");
     } else {
         panic!("unknown asset: {ext:?}");
     }
