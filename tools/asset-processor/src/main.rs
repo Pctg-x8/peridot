@@ -95,8 +95,14 @@ fn main() {
         .expect("failed to initialize ktxTexture2");
         ktx.set_image_from_memory(0, 0, 0, img.as_raw())
             .expect("ktx.set_image_from_memory failed");
-        ktx.compress_basis_ex(&mut ktx::BasisParams::new())
-            .expect("ktx.compress_basis_ex failed");
+        ktx.compress_basis_ex(
+            &mut ktx::BasisParams::new()
+                .uastc()
+                .uastc_flags(ktx::ffi::KTX_PACK_UASTC_LEVEL_DEFAULT)
+                .uastc_rdo(),
+        )
+        .expect("ktx.compress_basis_ex failed");
+        ktx.deflate_zstd(11).expect("ktx.deflate_zstd failed");
         ktx.write_to_named_file(
             &std::ffi::CString::new(dest_path.to_str().expect("invalid utf-8 seq"))
                 .expect("invalid cstr seq"),

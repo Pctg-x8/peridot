@@ -792,6 +792,11 @@ impl BasisParams {
         self
     }
 
+    pub const fn uastc(mut self) -> Self {
+        self.0.uastc = true;
+        self
+    }
+
     pub const fn no_sse(mut self) -> Self {
         self.0.noSSE = true;
         self
