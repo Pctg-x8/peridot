@@ -1,6 +1,7 @@
 use std::{io::Write, path::PathBuf};
 
 use clap::Parser;
+use ktx::Texture;
 
 #[derive(Parser)]
 pub struct Args {
@@ -51,7 +52,7 @@ fn main() {
         .wait()
         .expect("rendering-configuration-compiler");
     } else if ext.is_some_and(|x| x == "png") {
-        // image asset: decompress to rgba and recompress(if needed, specified by metadata file)
+        // image asset: decompress to rgba and recompress(TODO: if needed, specified by metadata file)
         let dest_path = args
             .out_dir
             .as_deref()
@@ -73,22 +74,34 @@ fn main() {
         let img = image::open(&args.source_path)
             .expect("Failed to open asset")
             .to_rgba8();
-        let w = img.width();
-        let h = img.height();
 
-        let mut f = std::fs::File::options()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&dest_path)
-            .expect("Failed to open dest");
-        f.write_all(&0x12345678u32.to_ne_bytes())
-            .expect("Failed to write bom");
-        f.write_all(&w.to_ne_bytes())
-            .expect("Failed to write width");
-        f.write_all(&h.to_ne_bytes())
-            .expect("Failed to write height");
-        f.write_all(img.as_raw()).expect("Failed to write content");
+        let mut ktx = ktx::Texture2::new(
+            &ktx::ffi::ktxTextureCreateInfo {
+                glInternalformat: 0,
+                vkFormat: bedrock::vk::VK_FORMAT_R8G8B8A8_UNORM as _,
+                pDfd: core::ptr::null_mut(),
+                baseWidth: img.width(),
+                baseHeight: img.height(),
+                baseDepth: 1,
+                numDimensions: 2,
+                numLevels: 1,
+                numLayers: 1,
+                numFaces: 1,
+                isArray: false,
+                generateMipmaps: false,
+            },
+            true,
+        )
+        .expect("failed to initialize ktxTexture2");
+        ktx.set_image_from_memory(0, 0, 0, img.as_raw())
+            .expect("ktx.set_image_from_memory failed");
+        ktx.compress_basis_ex(&mut ktx::BasisParams::new())
+            .expect("ktx.compress_basis_ex failed");
+        ktx.write_to_named_file(
+            &std::ffi::CString::new(dest_path.to_str().expect("invalid utf-8 seq"))
+                .expect("invalid cstr seq"),
+        )
+        .expect("ktx.write_to_named_file failed");
     } else {
         panic!("unknown asset: {ext:?}");
     }

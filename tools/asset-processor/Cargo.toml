@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
 image = "0.25.8"
+ktx = { path = "../../thirdparty/ktx" }
+bedrock = { workspace = true }
