@@ -109,6 +109,30 @@ pub enum Value<'s> {
     Array(Vec<Value<'s>>),
     Map(HashMap<&'s str, Value<'s>>),
 }
+impl<'s> ElementWrite for Value<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        match self {
+            Self::Single(v) => w.emit_single(v),
+            Self::Array(xs) => {
+                w.begin_array()?;
+                for x in xs {
+                    x.write(w)?;
+                }
+                w.end_array()?;
+                Ok(())
+            }
+            Self::Map(xs) => {
+                w.begin_map()?;
+                for (k, v) in xs {
+                    w.emit_single(k)?;
+                    v.write(w)?;
+                }
+                w.end_map()?;
+                Ok(())
+            }
+        }
+    }
+}
 impl<'s> Value<'s> {
     #[inline(always)]
     pub fn try_into_single_str(self) -> Result<Cow<'s, str>, Self> {
@@ -402,4 +426,311 @@ pub fn parse_object<'s>(
 
     state.expect_head_char(b'}')?;
     Ok(())
+}
+
+pub trait ElementWrite {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()>;
+}
+impl<'x, T> ElementWrite for &'x T
+where
+    T: ElementWrite + ?Sized + 'x,
+{
+    #[inline(always)]
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        T::write(*self, w)
+    }
+}
+impl ElementWrite for str {
+    #[inline(always)]
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.emit_single(self)
+    }
+}
+impl ElementWrite for String {
+    #[inline(always)]
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.emit_single(self)
+    }
+}
+impl<'x> ElementWrite for Cow<'x, str> {
+    #[inline(always)]
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.emit_single(self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritingContext {
+    Map,
+    Array,
+    MapValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FinalEmit {
+    Single,
+    Token,
+}
+
+pub struct Writer<D> {
+    dest: D,
+    final_emit: FinalEmit,
+    context_stack: Vec<WritingContext>,
+}
+impl<D> Writer<D> {
+    pub fn new(dest: D) -> Self {
+        Self {
+            dest,
+            final_emit: FinalEmit::Token,
+            context_stack: Vec::new(),
+        }
+    }
+
+    fn current_context(&self) -> Option<WritingContext> {
+        self.context_stack.last().copied()
+    }
+
+    fn push_context(&mut self, ctx: WritingContext) {
+        self.context_stack.push(ctx);
+    }
+
+    fn pop_context(&mut self) {
+        self.context_stack.pop();
+    }
+
+    #[inline(always)]
+    pub fn emit(&mut self, e: &(impl ElementWrite + ?Sized)) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        e.write(self)
+    }
+
+    pub fn emit_value(&mut self, v: &Value<'_>) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        match v {
+            Value::Single(x) => self.emit_single(&x),
+            Value::Array(xs) => {
+                self.begin_array()?;
+                for x in xs {
+                    self.emit_value(x)?;
+                }
+                self.end_array()?;
+                Ok(())
+            }
+            Value::Map(xs) => {
+                self.begin_map()?;
+                for (k, v) in xs {
+                    self.emit_single(k)?;
+                    self.emit_value(v)?;
+                }
+                self.end_map()?;
+                Ok(())
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn emit_raw_map_entries<'m, 'v>(
+        &mut self,
+        entries: impl IntoIterator<Item = (&'m &'v str, &'m Value<'v>)>,
+    ) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+        'v: 'm,
+    {
+        for (k, v) in entries {
+            self.emit_map_entry(k, v)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn begin_map(&mut self) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        if self.current_context() == Some(WritingContext::MapValue) {
+            self.dest.write_all(b" = ")?;
+        }
+
+        self.dest.write_all(b"{")?;
+        self.final_emit = FinalEmit::Token;
+        self.push_context(WritingContext::Map);
+        Ok(())
+    }
+
+    pub fn end_map(&mut self) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        assert_eq!(
+            self.current_context(),
+            Some(WritingContext::Map),
+            "not in a map context"
+        );
+
+        self.dest.write_all(b"}")?;
+        self.final_emit = FinalEmit::Token;
+        self.pop_context();
+        if self.current_context() == Some(WritingContext::MapValue) {
+            self.dest.write_all(b";")?;
+            self.pop_context();
+        }
+        Ok(())
+    }
+
+    pub fn begin_array(&mut self) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        if self.current_context() == Some(WritingContext::MapValue) {
+            self.dest.write_all(b" = ")?;
+        }
+
+        self.dest.write_all(b"(")?;
+        self.final_emit = FinalEmit::Token;
+        self.push_context(WritingContext::Array);
+        Ok(())
+    }
+
+    pub fn end_array(&mut self) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        assert_eq!(
+            self.current_context(),
+            Some(WritingContext::Array),
+            "not in a array context"
+        );
+
+        self.dest.write_all(b")")?;
+        self.final_emit = FinalEmit::Token;
+        self.pop_context();
+        if self.current_context() == Some(WritingContext::MapValue) {
+            self.dest.write_all(b";")?;
+            self.pop_context();
+        }
+        Ok(())
+    }
+
+    #[inline]
+    pub fn emit_array<'v>(
+        &mut self,
+        xs: impl IntoIterator<Item = &'v (impl ElementWrite + ?Sized + 'v)>,
+    ) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        self.begin_array()?;
+        for x in xs {
+            x.write(self)?;
+        }
+        self.end_array()?;
+        Ok(())
+    }
+
+    #[inline]
+    pub fn emit_map_entry(
+        &mut self,
+        key: &str,
+        value: &(impl ElementWrite + ?Sized),
+    ) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        self.emit_single(key)?;
+        self.emit(value)?;
+        Ok(())
+    }
+
+    #[inline]
+    pub fn emit_some_map_entry(
+        &mut self,
+        key: &str,
+        v: Option<&(impl ElementWrite + ?Sized)>,
+    ) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        let Some(v) = v else {
+            return Ok(());
+        };
+
+        self.emit_single(key)?;
+        self.emit(v)?;
+        Ok(())
+    }
+
+    pub fn emit_singles(&mut self, vs: &[&str]) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        for x in vs {
+            self.emit_single(x)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn emit_single(&mut self, v: &str) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        match self.current_context() {
+            None => panic!("single cannot emit on toplevel"),
+            Some(WritingContext::Array) => {
+                if self.final_emit == FinalEmit::Single {
+                    self.dest.write_all(b", ")?;
+                }
+                self.emit_single_core(v)?;
+                self.final_emit = FinalEmit::Single;
+            }
+            Some(WritingContext::Map) => {
+                self.emit_single_core(v)?;
+                self.final_emit = FinalEmit::Single;
+                self.push_context(WritingContext::MapValue);
+            }
+            Some(WritingContext::MapValue) => {
+                assert_eq!(
+                    self.final_emit,
+                    FinalEmit::Single,
+                    "an key single should be emitted preceding"
+                );
+
+                self.dest.write_all(b" = ")?;
+                self.emit_single_core(v)?;
+                self.dest.write_all(b";")?;
+                self.final_emit = FinalEmit::Token;
+                self.pop_context();
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_single_core(&mut self, v: &str) -> std::io::Result<()>
+    where
+        D: std::io::Write,
+    {
+        let requires_quoted = Self::single_requires_quoted(v);
+
+        if requires_quoted {
+            self.dest.write_all(b"\"")?;
+        }
+        self.dest.write_all(v.as_bytes())?;
+        if requires_quoted {
+            self.dest.write_all(b"\"")?;
+        }
+
+        Ok(())
+    }
+
+    fn single_requires_quoted(v: &str) -> bool {
+        v.is_empty()
+            || v.contains([
+                '"', '(', ')', '{', '}', '/', '*', '<', '>', '-', ' ', ';', '=', ',', '+',
+            ])
+    }
 }

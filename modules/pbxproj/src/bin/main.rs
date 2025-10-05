@@ -1,13 +1,17 @@
-use pbxproj::{Decodable, PBXObject, PBXProjectFile, ParserState, Value, parse_value};
+use pbxproj::{
+    Decodable, ElementWrite, PBXObject, PBXProjectFile, ParserState, Value, Writer, parse_value,
+};
 
 fn main() {
     let src = std::fs::read_to_string(std::env::args().nth(1).expect("no args"))
         .expect("Failed to load file");
+
     let mut ps = ParserState::new(&src);
     ps.skip_spaces();
     let v = parse_value(&mut ps).unwrap();
     let mut pbxproj = PBXProjectFile::decode(v).expect("Failed to parse pbxproj");
     eprintln!("pbxproj: {pbxproj:#?}");
+
     let root_project = pbxproj.root_project();
     eprintln!("rootObject: {root_project:#?}");
     let main_group = root_project
@@ -16,7 +20,7 @@ fn main() {
         .expect("invalid mainGroup");
     eprintln!("main group: {main_group:#?}");
     for c in main_group.children.iter() {
-        eprintln!("main: {:#?}", pbxproj.object_ref(c));
+        eprintln!("main: {:#?}", c.entity(&pbxproj));
     }
     eprintln!(
         "product ref group: {:#?}",
@@ -49,7 +53,7 @@ fn main() {
                         .build_settings
                         .insert(
                             "VULKAN_SDK",
-                            Value::Single("/home/pctgx8/VulkanSDK/1.3.283.0/macOS".into()),
+                            Value::Single("/home/test/VulkanSDK/1.3.283.0/macOS".into()),
                         );
                 }
             }
@@ -60,11 +64,12 @@ fn main() {
     let mut serialized = std::io::Cursor::new(Vec::with_capacity(src.len()));
     let p1 = pbxproj.clone();
     pbxproj
-        .encode()
-        .write_oneline(&mut serialized)
+        .write(&mut Writer::new(&mut serialized))
         .expect("Failed to re-serialize pbxproj");
     let serialized = unsafe { String::from_utf8_unchecked(serialized.into_inner()) };
     println!("{serialized}");
+
+    // ここから下はデグレ検出用
     let mut ps = ParserState::new(&serialized);
     ps.skip_spaces();
     let v = parse_value(&mut ps).unwrap();

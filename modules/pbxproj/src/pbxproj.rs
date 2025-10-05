@@ -1,6 +1,6 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use crate::Value;
+use crate::{ElementWrite, Value, Writer};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError<'s> {
@@ -83,10 +83,20 @@ impl<'s> Decodable<'s> for PBXObjectIDRef<'s> {
         Ok(Self(x.decode_single_as_str()?))
     }
 }
+impl<'s> ElementWrite for PBXObjectIDRef<'s> {
+    #[inline(always)]
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.emit_single(&self.0)
+    }
+}
 impl<'s> PBXObjectIDRef<'s> {
     #[inline(always)]
     pub fn encode(self) -> Value<'s> {
         Value::Single(self.0)
+    }
+
+    pub fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.emit_single(&self.0)
     }
 
     #[inline(always)]
@@ -134,10 +144,21 @@ impl<'s, T> Decodable<'s> for PBXTypedObjectIDRef<'s, T> {
         Ok(Self(v.decode()?, core::marker::PhantomData))
     }
 }
+impl<'s, T> ElementWrite for PBXTypedObjectIDRef<'s, T> {
+    #[inline(always)]
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        self.0.write(w)
+    }
+}
 impl<'s, T> PBXTypedObjectIDRef<'s, T> {
     #[inline(always)]
     pub fn encode(self) -> Value<'s> {
         self.0.encode()
+    }
+
+    #[inline(always)]
+    pub fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        self.0.write(w)
     }
 
     #[inline(always)]
@@ -199,24 +220,23 @@ impl<'s> Decodable<'s> for PBXProjectFile<'s> {
         })
     }
 }
-impl<'s> PBXProjectFile<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(2 + self.extras.len());
-        xs.insert(
-            "objects",
-            Value::Map(
-                self.objects
-                    .into_iter()
-                    .map(|(k, v)| (k, v.encode()))
-                    .collect(),
-            ),
-        );
-        xs.insert("rootObject", self.root_object.encode());
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXProjectFile<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_single("objects")?;
+        w.begin_map()?;
+        for (k, v) in &self.objects {
+            w.emit_single(k)?;
+            v.write(w)?;
+        }
+        w.end_map()?;
+        w.emit_map_entry("rootObject", &self.root_object)?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
-
+}
+impl<'s> PBXProjectFile<'s> {
     #[inline(always)]
     pub fn object_ref(&self, id: &PBXObjectIDRef<'_>) -> Option<&PBXObject<'s>> {
         self.objects.get(&id.0 as &str)
@@ -383,31 +403,32 @@ impl<'s> Decodable<'s> for PBXObject<'s> {
         })
     }
 }
-impl<'s> PBXObject<'s> {
-    pub fn encode(self) -> Value<'s> {
+impl<'s> ElementWrite for PBXObject<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
         match self {
-            Self::BuildFile(x) => x.encode(),
-            Self::FileReference(x) => x.encode(),
-            Self::FrameworksBuildPhase(x) => x.encode(),
-            Self::Group(x) => x.encode(),
-            Self::NativeTarget(x) => x.encode(),
-            Self::Project(x) => x.encode(),
-            Self::ResourcesBuildPhase(x) => x.encode(),
-            Self::SourcesBuildPhase(x) => x.encode(),
-            Self::VariantGroup(x) => x.encode(),
-            Self::BuildConfiguration(x) => x.encode(),
-            Self::ConfigurationList(x) => x.encode(),
-            Self::CopyFilesBuildPhase(x) => x.encode(),
+            Self::BuildFile(x) => x.write(w),
+            Self::FileReference(x) => x.write(w),
+            Self::FrameworksBuildPhase(x) => x.write(w),
+            Self::Group(x) => x.write(w),
+            Self::NativeTarget(x) => x.write(w),
+            Self::Project(x) => x.write(w),
+            Self::ResourcesBuildPhase(x) => x.write(w),
+            Self::SourcesBuildPhase(x) => x.write(w),
+            Self::VariantGroup(x) => x.write(w),
+            Self::BuildConfiguration(x) => x.write(w),
+            Self::ConfigurationList(x) => x.write(w),
+            Self::CopyFilesBuildPhase(x) => x.write(w),
             Self::Unknown { isa, attributes } => {
-                let mut xs = HashMap::with_capacity(1 + attributes.len());
-                xs.insert("isa", isa);
-                xs.extend(attributes);
-
-                Value::Map(xs)
+                w.begin_map()?;
+                w.emit_map_entry("isa", isa)?;
+                w.emit_raw_map_entries(attributes)?;
+                w.end_map()?;
+                Ok(())
             }
         }
     }
-
+}
+impl<'s> PBXObject<'s> {
     #[inline(always)]
     pub fn downcast_ref<T>(&self) -> Option<&T>
     where
@@ -481,15 +502,15 @@ impl<'s> DecodableMap<'s> for PBXBuildFile<'s> {
         })
     }
 }
-impl<'s> PBXBuildFile<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 2 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXBuildFile".into()));
-        xs.insert("fileRef", self.file_ref.encode());
-        xs.extend(self.settings.map(|x| ("settings", x.encode())));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXBuildFile<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXBuildFile")?;
+        w.emit_map_entry("fileRef", &self.file_ref)?;
+        w.emit_some_map_entry("settings", self.settings.as_ref())?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -520,18 +541,16 @@ impl<'s> Decodable<'s> for PBXBuildFileSettings<'s> {
         })
     }
 }
-impl<'s> PBXBuildFileSettings<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + self.extras.len());
+impl<'s> ElementWrite for PBXBuildFileSettings<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
         if !self.attributes.is_empty() {
-            xs.insert(
-                "ATTRIBUTES",
-                Value::Array(self.attributes.into_iter().map(Value::Single).collect()),
-            );
+            w.emit_single("ATTRIBUTES")?;
+            w.emit_array(&self.attributes)?;
         }
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -574,20 +593,17 @@ impl<'s> DecodableMap<'s> for PBXFileReference<'s> {
         })
     }
 }
-impl<'s> PBXFileReference<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 4 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXFileReference".into()));
-        xs.extend(
-            self.last_known_file_type
-                .map(|x| ("lastKnownFileType", Value::Single(x))),
-        );
-        xs.extend(self.name.map(|x| ("name", Value::Single(x))));
-        xs.insert("path", Value::Single(self.path));
-        xs.insert("sourceTree", Value::Single(self.source_tree));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXFileReference<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXFileReference")?;
+        w.emit_some_map_entry("lastKnownFileType", self.last_known_file_type.as_ref())?;
+        w.emit_some_map_entry("name", self.name.as_ref())?;
+        w.emit_map_entry("path", &self.path)?;
+        w.emit_map_entry("sourceTree", &self.source_tree)?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -620,21 +636,16 @@ impl<'s> DecodableMap<'s> for PBXFrameworksBuildPhase<'s> {
         })
     }
 }
-impl<'s> PBXFrameworksBuildPhase<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 2 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXFrameworksBuildPhase".into()));
-        xs.insert(
-            "buildActionMask",
-            Value::Single(self.build_action_mask.to_string().into()),
-        );
-        xs.insert(
-            "files",
-            Value::Array(self.files.into_iter().map(Value::Single).collect()),
-        );
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXFrameworksBuildPhase<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXFrameworksBuildPhase")?;
+        w.emit_map_entry("buildActionMask", &self.build_action_mask.to_string())?;
+        w.emit_single("files")?;
+        w.emit_array(&self.files)?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -683,20 +694,18 @@ impl<'s> DecodableMap<'s> for PBXGroup<'s> {
         })
     }
 }
-impl<'s> PBXGroup<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 4 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXGroup".into()));
-        xs.insert(
-            "children",
-            Value::Array(self.children.into_iter().map(|x| x.encode()).collect()),
-        );
-        xs.insert("sourceTree", Value::Single(self.source_tree));
-        xs.extend(self.name.map(|x| ("name", Value::Single(x))));
-        xs.extend(self.path.map(|x| ("path", Value::Single(x))));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXGroup<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXGroup")?;
+        w.emit_single("children")?;
+        w.emit_array(&self.children)?;
+        w.emit_map_entry("sourceTree", &self.source_tree)?;
+        w.emit_some_map_entry("name", self.name.as_ref())?;
+        w.emit_some_map_entry("path", self.path.as_ref())?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -777,33 +786,24 @@ impl<'s> DecodableMap<'s> for PBXNativeTarget<'s> {
         })
     }
 }
-impl<'s> PBXNativeTarget<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 8 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXNativeTarget".into()));
-        xs.insert("name", Value::Single(self.name));
-        xs.insert("productReference", self.product_reference.encode());
-        xs.insert("productType", Value::Single(self.product_type));
-        xs.insert(
-            "buildPhases",
-            Value::Array(self.build_phases.into_iter().map(|x| x.encode()).collect()),
-        );
-        xs.insert(
-            "buildRules",
-            Value::Array(self.build_rules.into_iter().map(|x| x.encode()).collect()),
-        );
-        xs.insert(
-            "buildConfigurationList",
-            self.build_configuration_list.encode(),
-        );
-        xs.insert("productName", Value::Single(self.product_name));
-        xs.insert(
-            "dependencies",
-            Value::Array(self.dependencies.into_iter().map(|x| x.encode()).collect()),
-        );
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXNativeTarget<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXNativeTarget")?;
+        w.emit_map_entry("name", &self.name)?;
+        w.emit_map_entry("productReference", &self.product_reference)?;
+        w.emit_map_entry("productType", &self.product_type)?;
+        w.emit_single("buildPhases")?;
+        w.emit_array(&self.build_phases)?;
+        w.emit_single("buildRules")?;
+        w.emit_array(&self.build_rules)?;
+        w.emit_map_entry("buildConfigurationList", &self.build_configuration_list)?;
+        w.emit_map_entry("productName", &self.product_name)?;
+        w.emit_single("dependencies")?;
+        w.emit_array(&self.dependencies)?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -872,32 +872,21 @@ impl<'s> DecodableMap<'s> for PBXProject<'s> {
         })
     }
 }
-impl<'s> PBXProject<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 7 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXProject".into()));
-        xs.insert(
-            "buildConfigurationList",
-            self.build_configuration_list.encode(),
-        );
-        xs.insert(
-            "targets",
-            Value::Array(self.targets.into_iter().map(|x| x.encode()).collect()),
-        );
-        xs.extend(
-            self.project_dir_path
-                .map(|x| ("projectDirPath", Value::Single(x))),
-        );
-        xs.insert("mainGroup", self.main_group.encode());
-        xs.extend(
-            self.development_region
-                .map(|x| ("developmentRegion", Value::Single(x))),
-        );
-        xs.insert("productRefGroup", self.product_ref_group.encode());
-        xs.extend(self.project_root.map(|x| ("projectRoot", Value::Single(x))));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXProject<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXProject")?;
+        w.emit_map_entry("buildConfigurationList", &self.build_configuration_list)?;
+        w.emit_single("targets")?;
+        w.emit_array(&self.targets)?;
+        w.emit_some_map_entry("projectDirPath", self.project_dir_path.as_ref())?;
+        w.emit_map_entry("mainGroup", &self.main_group)?;
+        w.emit_some_map_entry("developmentRegion", self.development_region.as_ref())?;
+        w.emit_map_entry("productRefGroup", &self.product_ref_group)?;
+        w.emit_some_map_entry("projectRoot", self.project_root.as_ref())?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -910,13 +899,13 @@ impl<'s> DecodableMap<'s> for PBXResourcesBuildPhase<'s> {
         Ok(Self { extras: xs })
     }
 }
-impl<'s> PBXResourcesBuildPhase<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXResourcesBuildPhase".into()));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXResourcesBuildPhase<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXResourcesBuildPhase")?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -929,13 +918,13 @@ impl<'s> DecodableMap<'s> for PBXSourcesBuildPhase<'s> {
         Ok(Self { extras: xs })
     }
 }
-impl<'s> PBXSourcesBuildPhase<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXSourcesBuildPhase".into()));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXSourcesBuildPhase<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXSourcesBuildPhase")?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -948,13 +937,13 @@ impl<'s> DecodableMap<'s> for PBXVariantGroup<'s> {
         Ok(Self { extras: xs })
     }
 }
-impl<'s> PBXVariantGroup<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXVariantGroup".into()));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXVariantGroup<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXVariantGroup")?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -981,15 +970,18 @@ impl<'s> DecodableMap<'s> for XCBuildConfiguration<'s> {
         })
     }
 }
-impl<'s> XCBuildConfiguration<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 2 + self.extras.len());
-        xs.insert("isa", Value::Single("XCBuildConfiguration".into()));
-        xs.insert("name", Value::Single(self.name));
-        xs.insert("buildSettings", Value::Map(self.build_settings));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for XCBuildConfiguration<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "XCBuildConfiguration")?;
+        w.emit_map_entry("name", &self.name)?;
+        w.emit_single("buildSettings")?;
+        w.begin_map()?;
+        w.emit_raw_map_entries(&self.build_settings)?;
+        w.end_map()?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -1023,26 +1015,16 @@ impl<'s> DecodableMap<'s> for XCConfigurationList<'s> {
         })
     }
 }
-impl<'s> XCConfigurationList<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + 2 + self.extras.len());
-        xs.insert("isa", Value::Single("XCConfigurationList".into()));
-        xs.insert(
-            "defaultConfigurationName",
-            Value::Single(self.default_configuration_name),
-        );
-        xs.insert(
-            "buildConfigurations",
-            Value::Array(
-                self.build_configurations
-                    .into_iter()
-                    .map(|x| x.encode())
-                    .collect(),
-            ),
-        );
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for XCConfigurationList<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "XCConfigurationList")?;
+        w.emit_map_entry("defaultConfigurationName", &self.default_configuration_name)?;
+        w.emit_single("buildConfigurations")?;
+        w.emit_array(&self.build_configurations)?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
 
@@ -1056,12 +1038,12 @@ impl<'s> DecodableMap<'s> for PBXCopyFilesBuildPhase<'s> {
         Ok(Self { extras: xs })
     }
 }
-impl<'s> PBXCopyFilesBuildPhase<'s> {
-    pub fn encode(self) -> Value<'s> {
-        let mut xs = HashMap::with_capacity(1 + self.extras.len());
-        xs.insert("isa", Value::Single("PBXCopyFilesBuildPhase".into()));
-        xs.extend(self.extras);
-
-        Value::Map(xs)
+impl<'s> ElementWrite for PBXCopyFilesBuildPhase<'s> {
+    fn write(&self, w: &mut Writer<impl std::io::Write>) -> std::io::Result<()> {
+        w.begin_map()?;
+        w.emit_map_entry("isa", "PBXCopyFilesBuildPhase")?;
+        w.emit_raw_map_entries(&self.extras)?;
+        w.end_map()?;
+        Ok(())
     }
 }
