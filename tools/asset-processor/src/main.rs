@@ -128,10 +128,10 @@ fn main() {
         }
 
         std::fs::copy(&args.source_path, &dest_path).expect("Failed to copy asset data");
-    } else if ext.is_some_and(|x| x == "pvp" || x == "csh" || x == "pss" || x == "prcc") {
-        // deprecated assets
+    } else {
+        // unknown assets
         eprintln!(
-            "found deprecated assets(not processed): {:?}",
+            "found unknown assets(not processed): {:?}",
             args.source_path
         );
         let dest_path = args
@@ -145,7 +145,5 @@ fn main() {
             );
 
         std::fs::copy(&args.source_path, &dest_path).expect("Failed to copy asset data");
-    } else {
-        panic!("unknown asset: {ext:?}");
     }
 }
