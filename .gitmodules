@@ -1,3 +1,6 @@
 [submodule "thirdparty/ktx/source-repo"]
 	path = thirdparty/ktx/source-repo
 	url = https://github.com/KhronosGroup/KTX-Software
+[submodule "thirdparty/slang"]
+	path = thirdparty/slang
+	url = https://github.com/shader-slang/slang
