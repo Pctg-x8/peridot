@@ -147,3 +147,21 @@ impl LDRImageAsset for WebP {
         self.0
     }
 }
+
+#[repr(transparent)]
+pub struct StdTexture2DAsset(pub ktx::Owned<ktx::Texture2>);
+impl LogicalAssetData for StdTexture2DAsset {
+    const EXT: &'static str = "pa1-texture2d";
+}
+impl FromAsset for StdTexture2DAsset {
+    type Error = std::io::Error;
+
+    fn from_asset<Asset: Read + Seek + 'static>(mut asset: Asset) -> Result<Self, Self::Error> {
+        let mut buf = Vec::new();
+        asset.read_to_end(&mut buf).expect("Failed to read");
+        let container = ktx::Texture2::from_memory(&buf, ktx::TextureCreateFlags::empty())
+            .expect("Failed to load ktx2");
+
+        Ok(Self(container))
+    }
+}

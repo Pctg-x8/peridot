@@ -17,7 +17,7 @@ pub struct CompiledRenderingConfigurationVk {
 
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
-    const EXT: &'static str = "prcc";
+    const EXT: &'static str = "pa1-rendering-configuration";
 }
 #[cfg(feature = "with-loader-impl")]
 impl peridot::FromAsset for CompiledRenderingConfigurationVk {

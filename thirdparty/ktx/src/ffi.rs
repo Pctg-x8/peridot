@@ -1122,4 +1122,6 @@ unsafe extern "system" {
         indent_width: u32,
         minified: bool,
     ) -> ktx_error_code_e;
+
+    pub fn ktxTexture2_GetVkFormat(this: *mut ktxTexture2) -> core::ffi::c_int;
 }

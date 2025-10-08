@@ -3,6 +3,7 @@ use bedrock::{
 };
 use br::resources::Image;
 use br::Device;
+use ktx::Texture;
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
@@ -45,10 +46,24 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-    let image_data: peridot_image::PNG = e.load("images.example").expect("No image found");
-    debug!("image: {}x{}", image_data.0.size.x(), image_data.0.size.y());
-    debug!("ImageFormat: {:?}", image_data.0.format);
-    debug!("ImageStride: {} bytes", image_data.0.stride);
+    let mut image_data: peridot_image::StdTexture2DAsset =
+        e.load("images.example").expect("No image found");
+    if image_data.0.needs_transcoding() {
+        // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
+        image_data
+            .0
+            .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
+            .expect("failed to transcode to bc7");
+    }
+    let image_width = image_data.0.base_width();
+    let image_height = image_data.0.base_height();
+    let offs = image_data
+        .0
+        .image_offset(0, 0, 0)
+        .expect("image_offset failed");
+    debug!("image: {image_width}x{image_height}");
+    debug!("image data size: {} offs {offs}", image_data.0.data_size());
+    debug!("ImageFormat: {:?}", image_data.0.vk_format());
 
     let bgm = Arc::new(RwLock::new(
         e.streaming::<StreamingPlayableWav>("bgm")
@@ -145,22 +160,30 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let image = memory_manager
         .allocate_device_local_image(
             e.graphics(),
-            br::ImageCreateInfo::new(image_data.0.size, image_data.0.format as _)
-                .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
-                .init_layout(br::ImageLayout::Preinitialized),
+            br::ImageCreateInfo::new(
+                br::Extent2D {
+                    width: image_width,
+                    height: image_height,
+                },
+                image_data.0.vk_format(),
+            )
+            .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
+            .init_layout(br::ImageLayout::Preinitialized),
         )
         .expect("Failed to allocate main image");
     let mut image_data_stg_buffer = memory_manager
         .allocate_upload_linear_image_buffer(
             e.graphics(),
-            *image_data.0.size.x(),
-            *image_data.0.size.y(),
-            image_data.0.format,
+            image_width,
+            image_height,
+            peridot::PixelFormat::BC7,
             br::BufferUsage::TRANSFER_SRC,
         )
         .expect("Failed to allocate linear image buffer");
     image_data_stg_buffer
-        .copy_content_from_slice(image_data.0.u8_pixels())
+        .copy_content_from_slice(unsafe {
+            core::slice::from_raw_parts(image_data.0.data().add(offs), image_data.0.data_size())
+        })
         .expect("Failed to set image data");
 
     let pre_configure_awaiter = e

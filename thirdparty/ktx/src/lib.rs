@@ -190,6 +190,63 @@ pub trait Texture {
     ) -> Result<()> {
         r(unsafe { ffi::ktxTexture_IterateLevelFaces(self.as_thisptr(), iter_cb, user_data) })
     }
+
+    // direct accessor of ktxTexture fields //
+
+    #[inline(always)]
+    fn is_array(&self) -> bool {
+        unsafe { (*self.as_thisptr()).isArray }
+    }
+
+    #[inline(always)]
+    fn is_cubemap(&self) -> bool {
+        unsafe { (*self.as_thisptr()).isCubemap }
+    }
+
+    #[inline(always)]
+    fn is_compressed(&self) -> bool {
+        unsafe { (*self.as_thisptr()).isCompressed }
+    }
+
+    #[inline(always)]
+    fn needs_generate_mipmaps(&mut self) -> bool {
+        unsafe { (*self.as_thisptr()).generateMipmaps }
+    }
+
+    #[inline(always)]
+    fn base_width(&self) -> u32 {
+        unsafe { (*self.as_thisptr()).baseWidth }
+    }
+
+    #[inline(always)]
+    fn base_height(&self) -> u32 {
+        unsafe { (*self.as_thisptr()).baseHeight }
+    }
+
+    #[inline(always)]
+    fn base_depth(&self) -> u32 {
+        unsafe { (*self.as_thisptr()).baseDepth }
+    }
+
+    #[inline(always)]
+    fn num_dimensions(&self) -> u32 {
+        unsafe { (*self.as_thisptr()).numDimensions }
+    }
+
+    #[inline(always)]
+    fn num_levels(&self) -> u32 {
+        unsafe { (*self.as_thisptr()).numLevels }
+    }
+
+    #[inline(always)]
+    fn num_layers(&self) -> u32 {
+        unsafe { (*self.as_thisptr()).numLayers }
+    }
+
+    #[inline(always)]
+    fn num_faces(&self) -> u32 {
+        unsafe { (*self.as_thisptr()).numFaces }
+    }
 }
 
 pub trait TextureEx: Texture {
@@ -685,6 +742,11 @@ impl Texture2 {
         transcode_flags: TranscodeFlags,
     ) -> Result<()> {
         r(unsafe { ffi::ktxTexture2_TranscodeBasis(self.0.get(), fmt, transcode_flags.bits()) })
+    }
+
+    #[inline(always)]
+    pub fn vk_format(&self) -> core::ffi::c_int {
+        unsafe { ffi::ktxTexture2_GetVkFormat(self.0.get()) }
     }
 }
 

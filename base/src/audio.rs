@@ -446,7 +446,7 @@ pub struct StreamingPlayableWav {
     state: PlayableAudioState,
 }
 impl super::LogicalAssetData for StreamingPlayableWav {
-    const EXT: &'static str = "wav";
+    const EXT: &'static str = "pa1-audio";
 }
 impl super::FromStreamingAsset for StreamingPlayableWav {
     type Error = std::io::Error;
