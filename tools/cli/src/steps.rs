@@ -236,8 +236,15 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
 
     ctx.print_step("Processing assets...");
 
+    let processors: [Box<dyn peridot_asset_processing::AssetProcessor>; _] = [
+        Box::new(peridot_rendering_configuration::AssetProcessor),
+        Box::new(peridot_asset_processing::builtin::ImageAssetProcessor),
+        Box::new(peridot_asset_processing::builtin::SoundAssetProcessor),
+    ];
+
     fn process_recursive(
         ctx: &BuildContext,
+        processors: &[Box<dyn peridot_asset_processing::AssetProcessor>],
         target_dir: &Path,
         base_dir: &Path,
         output_path: &Path,
@@ -246,7 +253,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
             let e = e.expect("std::fs::read_dir failed entry");
             let source_path = e.path();
             if source_path.is_dir() {
-                process_recursive(ctx, &source_path, base_dir, output_path);
+                process_recursive(ctx, processors, &source_path, base_dir, output_path);
                 continue;
             }
 
@@ -264,18 +271,17 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
             let runtime_path = output_path.join(relative_path);
 
             std::fs::create_dir_all(&runtime_path).expect("Failed to create runtime-asset-path");
-
-            let e = std::process::Command::new(crate::path::asset_processor_path())
-                .arg(&source_path)
-                .arg("-o")
-                .arg(&runtime_path)
-                .spawn()
-                .expect("Failed to spawn peridot-asset-processor")
-                .wait()
-                .expect("Failed to wait peridot-asset-processor");
-            crate::shellutil::handle_process_result("peridot-asset-processor", e);
+            peridot_asset_processing::process(
+                processors,
+                source_path,
+                peridot_asset_processing::ProcessOptions {
+                    out_dir: Some(&runtime_path),
+                    force_rebuild: false,
+                },
+            )
+            .expect("Failed to process asset");
         }
     }
 
-    process_recursive(ctx, &stg_path, &stg_path, output_path);
+    process_recursive(ctx, &processors, &stg_path, &stg_path, output_path);
 }

@@ -12,16 +12,6 @@ pub fn archiver_path() -> PathBuf {
     }
 }
 
-/// absolute path to peridot-asset-processor
-pub fn asset_processor_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("PERIDOT_CLI_ASSET_PROCESSOR_PATH") {
-        PathBuf::from(p)
-    } else {
-        // Note: dev-packageのフォルダ構造に依存しているので、そっちを変えたらこっちも変える
-        current_exe().with_file_name("peridot-asset-processor")
-    }
-}
-
 /// absolute path to builtin assets
 pub fn builtin_assets_path() -> PathBuf {
     if let Some(p) = std::env::var_os("PERIDOT_CLI_BUILTIN_ASSETS_PATH") {
