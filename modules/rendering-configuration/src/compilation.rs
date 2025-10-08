@@ -14,32 +14,6 @@ use crate::{
     },
 };
 
-#[repr(transparent)]
-pub struct DiagnosticMessage(slang::IBlobPtr);
-impl core::fmt::Debug for DiagnosticMessage {
-    #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        unsafe { core::ffi::CStr::from_ptr(self.0.get_buffer_pointer() as _).fmt(f) }
-    }
-}
-impl core::fmt::Display for DiagnosticMessage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let c_str = unsafe { core::ffi::CStr::from_ptr(self.0.get_buffer_pointer() as _) };
-        match c_str.to_str() {
-            Ok(x) => f.write_str(x),
-            Err(e) => write!(f, "(Invalid diagnostic message: {e:?} {c_str:?})"),
-        }
-    }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum CompileError {
-    #[error("libslang error({0}): {1:?}")]
-    SlangLibError(&'static str, slang::ffi::SlangResult),
-    #[error("libslang error({0}): {1:?}")]
-    SlangLibErrorWithDiag(&'static str, Option<DiagnosticMessage>),
-}
-
 #[tracing::instrument(skip(src))]
 pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
     let ctx = tokenizer::Context::new(src);
