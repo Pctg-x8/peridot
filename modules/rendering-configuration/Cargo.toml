@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default = []
 with-loader-impl = ["dep:peridot"]
+with-asset-processing = ["dep:peridot-asset-processing", "compilation"]
 compilation = ["dep:slang", "dep:thiserror"]
 
 [dependencies]
@@ -15,6 +16,7 @@ peridot-semantic-shader = { path = "../semantic-shader", default-features = fals
 slang = { git = "https://github.com/Pctg-x8/slang-binding-rs", optional = true }
 thiserror = { workspace = true, optional = true }
 tracing = { workspace = true }
+peridot-asset-processing = { path = "../asset-processing", optional = true }
 
 [lints]
 workspace = true

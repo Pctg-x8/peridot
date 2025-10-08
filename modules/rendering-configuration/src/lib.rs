@@ -2,12 +2,17 @@ use std::{
     collections::HashMap,
     io::{BufRead, Seek, SeekFrom, Write},
 };
+#[cfg(feature = "with-asset-processing")]
+use std::{
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
 
 pub use peridot_semantic_shader::VertexInputSemantic;
 
-mod file;
 #[cfg(feature = "compilation")]
 pub mod compilation;
+mod file;
 
 /// converted asset data
 pub struct CompiledRenderingConfigurationVk {
@@ -29,6 +34,57 @@ impl peridot::FromAsset for CompiledRenderingConfigurationVk {
         asset: Asset,
     ) -> Result<Self, Self::Error> {
         read(&mut std::io::BufReader::new(asset))
+    }
+}
+
+#[cfg(feature = "with-asset-processing")]
+#[derive(thiserror::Error, Debug)]
+pub enum AssetProcessError {
+    #[error("Failed to read source file: {0}")]
+    ReadingFailed(std::io::Error),
+    #[error("Error generating asset")]
+    GeneratingAssetFailure,
+    #[error("Failed to open destination file for writing: {0}")]
+    DestWriteOpenFailed(std::io::Error),
+    #[error("Error writing asset: {0}")]
+    WritingAssetFailure(std::io::Error),
+}
+
+#[cfg(feature = "with-asset-processing")]
+pub struct AssetProcessor;
+#[cfg(feature = "with-asset-processing")]
+impl peridot_asset_processing::AssetProcessor for AssetProcessor {
+    fn can_process(&self, source_path: &Path) -> bool {
+        source_path.extension().is_some_and(|x| x == "prc")
+    }
+
+    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
+        out_dir_path
+            .join(source_file_name)
+            .with_extension("pa1-rendering-configuration")
+    }
+
+    fn process(
+        &self,
+        source_path: &Path,
+        out_path: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let content =
+            std::fs::read_to_string(source_path).map_err(AssetProcessError::ReadingFailed)?;
+        let asset =
+            compilation::compile(&content).ok_or(AssetProcessError::GeneratingAssetFailure)?;
+        write(
+            &mut std::fs::File::options()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(out_path)
+                .map_err(AssetProcessError::DestWriteOpenFailed)?,
+            asset,
+        )
+        .map_err(AssetProcessError::WritingAssetFailure)?;
+
+        Ok(())
     }
 }
 
