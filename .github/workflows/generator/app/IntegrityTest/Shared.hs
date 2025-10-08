@@ -42,8 +42,8 @@ preconditionBeginTimestampOutputDef :: GHA.Job -> GHA.Job
 preconditionBeginTimestampOutputDef = GHA.jobForwardingStepOutput "begintime" "begintime"
 
 checkoutStep, checkoutHeadStep :: GHA.Step
-checkoutStep = GHA.namedAs "Checking out" $ Checkout.step Nothing
-checkoutHeadStep = GHA.namedAs "Checking out (HEAD commit)" $ Checkout.step $ Just pullRequestHeadHashExpr
+checkoutStep = GHA.namedAs "Checking out" $ Checkout.step Nothing & Checkout.submodules Checkout.SubmodulesRecursive
+checkoutHeadStep = GHA.namedAs "Checking out (HEAD commit)" $ Checkout.step (Just pullRequestHeadHashExpr) & Checkout.submodules Checkout.SubmodulesRecursive
 
 -- あとでlatest自動取得とかしたいけど面倒だから一旦これでいいや
 setupCargoOutputTranslatorStep :: GHA.Step

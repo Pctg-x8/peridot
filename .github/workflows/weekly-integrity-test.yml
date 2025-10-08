@@ -12,9 +12,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -62,9 +65,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -136,9 +142,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -201,9 +210,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -262,9 +274,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -319,9 +334,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -363,9 +381,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -413,9 +434,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -458,9 +482,12 @@ jobs:
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -517,10 +544,13 @@ jobs:
     steps:
       - name: Checking out
         uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - name: "Checking out (HEAD commit)"
         uses: "actions/checkout@v4"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
+          submodules: recursive
       - name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
