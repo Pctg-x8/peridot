@@ -13,7 +13,18 @@ pub struct Args {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+
     let args = Args::parse();
+    let span = tracing::span!(
+        tracing::Level::INFO,
+        "main",
+        source_path = %args.source_path.display(),
+    );
+    let _span_enter = span.enter();
 
     let ext = args.source_path.extension();
     if ext.is_some_and(|x| x == "prc") {
@@ -32,11 +43,11 @@ fn main() {
             && let (Ok(x), Ok(y)) = (args.source_path.metadata(), dest_path.metadata())
             && x.modified().unwrap() <= y.modified().unwrap()
         {
-            println!("skip asset: {:?} (modified time)", args.source_path);
+            tracing::info!(reason = "modified time", "skip asset");
             return;
         }
 
-        std::process::Command::new(
+        let mut process = match std::process::Command::new(
             std::env::current_exe()
                 .expect("current_exe")
                 .parent()
@@ -47,9 +58,17 @@ fn main() {
         .arg("--output")
         .arg(&dest_path)
         .spawn()
-        .expect("Failed to spawn rendering-configuration-compiler")
-        .wait()
-        .expect("rendering-configuration-compiler");
+        {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "Failed to spawn peridot-rendering-configuration-compiler");
+                std::process::exit(1);
+            }
+        };
+        if let Err(e) = process.wait() {
+            tracing::error!(reason = ?e, "process.wait failed");
+            std::process::exit(1);
+        }
     } else if ext.is_some_and(|x| x == "png" || x == "jpg" || x == "tiff") {
         // image asset: decompress to rgba and recompress(TODO: if needed, specified by metadata file)
         let dest_path = args
@@ -66,13 +85,17 @@ fn main() {
             && let (Ok(x), Ok(y)) = (args.source_path.metadata(), dest_path.metadata())
             && x.modified().unwrap() <= y.modified().unwrap()
         {
-            println!("skip asset: {:?} (modified time)", args.source_path);
+            tracing::info!(reason = "modified time", "skip asset");
             return;
         }
 
-        let img = image::open(&args.source_path)
-            .expect("Failed to open asset")
-            .to_rgba8();
+        let img = match image::open(&args.source_path) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "Failed to open asset");
+                std::process::exit(1);
+            }
+        };
 
         let mut ktx = ktx::Texture2::new(
             &ktx::ffi::ktxTextureCreateInfo {
@@ -92,7 +115,7 @@ fn main() {
             true,
         )
         .expect("failed to initialize ktxTexture2");
-        ktx.set_image_from_memory(0, 0, 0, img.as_raw())
+        ktx.set_image_from_memory(0, 0, 0, img.to_rgba8().as_raw())
             .expect("ktx.set_image_from_memory failed");
         ktx.compress_basis_ex(
             &mut ktx::BasisParams::new()
@@ -123,17 +146,17 @@ fn main() {
             && let (Ok(x), Ok(y)) = (args.source_path.metadata(), dest_path.metadata())
             && x.modified().unwrap() <= y.modified().unwrap()
         {
-            println!("skip asset: {:?} (modified time)", args.source_path);
+            tracing::info!(reason = "modified time", "skip asset");
             return;
         }
 
-        std::fs::copy(&args.source_path, &dest_path).expect("Failed to copy asset data");
+        if let Err(e) = std::fs::copy(&args.source_path, &dest_path) {
+            tracing::error!(reason = ?e, "Failed to copy asset file");
+            std::process::exit(1);
+        }
     } else {
         // unknown assets
-        eprintln!(
-            "found unknown assets(not processed): {:?}",
-            args.source_path
-        );
+        tracing::warn!("found unknown assets(not processed)");
         let dest_path = args
             .out_dir
             .as_deref()
@@ -144,6 +167,9 @@ fn main() {
                     .expect("no file name in source path"),
             );
 
-        std::fs::copy(&args.source_path, &dest_path).expect("Failed to copy asset data");
+        if let Err(e) = std::fs::copy(&args.source_path, &dest_path) {
+            tracing::error!(reason = ?e, "Failed to copy asset file");
+            std::process::exit(1);
+        }
     }
 }

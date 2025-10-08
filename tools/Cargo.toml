@@ -5,4 +5,6 @@ members = ["archiver", "cli", "shaderbuild", "semantic-shaderbuild", "rendering-
 [workspace.dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 clap = "4.5"
+tracing = "0.1"
+tracing-subscriber = "0.3"
 
