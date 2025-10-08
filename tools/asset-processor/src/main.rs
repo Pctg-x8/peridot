@@ -27,10 +27,14 @@ pub trait AssetProcessor {
 
 #[derive(thiserror::Error, Debug)]
 pub enum RenderingConfigurationAssetProcessError {
-    #[error("Failed to spawn compiler process: {0}")]
-    SpawnCompilerProcessFailed(std::io::Error),
-    #[error("Failed to wait process: {0}")]
-    ProcessWaitFailed(std::io::Error),
+    #[error("Failed to read source file: {0}")]
+    ReadingFailed(std::io::Error),
+    #[error("Error generating asset")]
+    GeneratingAssetFailure,
+    #[error("Failed to open destination file for writing: {0}")]
+    DestWriteOpenFailed(std::io::Error),
+    #[error("Error writing asset: {0}")]
+    WritingAssetFailure(std::io::Error),
 }
 
 pub struct RenderingConfigurationAssetProcessor;
@@ -50,20 +54,20 @@ impl AssetProcessor for RenderingConfigurationAssetProcessor {
         source_path: &Path,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        std::process::Command::new(
-            std::env::current_exe()
-                .expect("current_exe")
-                .parent()
-                .expect("dirname")
-                .join("peridot-rendering-configuration-compiler"),
+        let content = std::fs::read_to_string(source_path)
+            .map_err(RenderingConfigurationAssetProcessError::ReadingFailed)?;
+        let asset = peridot_rendering_configuration::compilation::compile(&content)
+            .ok_or(RenderingConfigurationAssetProcessError::GeneratingAssetFailure)?;
+        peridot_rendering_configuration::write(
+            &mut std::fs::File::options()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(out_path)
+                .map_err(RenderingConfigurationAssetProcessError::DestWriteOpenFailed)?,
+            asset,
         )
-        .arg(source_path)
-        .arg("--output")
-        .arg(out_path)
-        .spawn()
-        .map_err(RenderingConfigurationAssetProcessError::SpawnCompilerProcessFailed)?
-        .wait()
-        .map_err(RenderingConfigurationAssetProcessError::ProcessWaitFailed)?;
+        .map_err(RenderingConfigurationAssetProcessError::WritingAssetFailure)?;
 
         Ok(())
     }

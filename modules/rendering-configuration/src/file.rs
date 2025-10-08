@@ -243,7 +243,7 @@ impl ShadingPassVk {
         }
 
         let mut stage_flags = [0u8];
-        source.read_exact(&mut stage_flags);
+        source.read_exact(&mut stage_flags)?;
         let vertex_entry_point_name = if (stage_flags[0] & 0x01) == 0x01 {
             Some(PascalString::read(source)?.0)
         } else {

@@ -6,6 +6,8 @@ use std::{
 pub use peridot_semantic_shader::VertexInputSemantic;
 
 mod file;
+#[cfg(feature = "compilation")]
+pub mod compilation;
 
 /// converted asset data
 pub struct CompiledRenderingConfigurationVk {

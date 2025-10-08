@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = { workspace = true, features = ["derive"] }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = ["compilation"] }
 image = "0.25.8"
 ktx = { path = "../../thirdparty/ktx" }
 bedrock = { workspace = true }

@@ -6,11 +6,15 @@ edition = "2024"
 [features]
 default = []
 with-loader-impl = ["dep:peridot"]
+compilation = ["dep:slang", "dep:thiserror"]
 
 [dependencies]
 peridot-serialization-utils = { path = "../serialization-utils" }
 peridot = { path = "../../base", optional = true }
 peridot-semantic-shader = { path = "../semantic-shader", default-features = false }
+slang = { git = "https://github.com/Pctg-x8/slang-binding-rs", optional = true }
+thiserror = { workspace = true, optional = true }
+tracing = { workspace = true }
 
 [lints]
 workspace = true
