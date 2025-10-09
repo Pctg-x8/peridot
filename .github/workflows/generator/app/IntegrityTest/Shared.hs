@@ -64,7 +64,7 @@ rustCacheStep =
       GHA.runnerOs <> "-cargo-" <> hash
   where
     hash = GHA.mkExpression "hashFiles('**/Cargo.lock')"
-thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["./thirdparty/slang/source-repo/build", "./thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
+thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["thirdparty/slang/source-repo/build", "thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
 checkFormats :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkFormats precondition =
@@ -168,14 +168,11 @@ checkCradleWindows precondition =
               checkoutStep,
               rustCacheStep,
               thirdpartySubmodulesCacheStep,
-              GHA.identifiedAs llvmCacheStepId llvmCacheStep,
-              llvmInstallStep & InstallLLVMAction.isCached (CacheAction.refCacheHit llvmCacheStepId),
               cliBuildStep,
               GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
               GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
             ]
 
-    llvmCacheStepId = "llvm-cache"
     integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . GHA.runStep
     integratedTestNormalScript =
       "\
@@ -235,13 +232,10 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
               checkoutStep,
               rustCacheStep,
               thirdpartySubmodulesCacheStep,
-              GHA.identifiedAs llvmCacheStepId llvmCacheStep,
-              llvmInstallStep & InstallLLVMAction.isCached (CacheAction.refCacheHit llvmCacheStepId),
               cliBuildStep,
               integratedTestStep
             ]
 
-    llvmCacheStepId = "llvm-cache"
     integratedTestStep =
       applyModifiers
         [ GHA.namedAs "cargo check",
