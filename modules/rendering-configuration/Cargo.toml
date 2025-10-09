@@ -13,7 +13,7 @@ compilation = ["dep:slang", "dep:thiserror"]
 peridot-serialization-utils = { path = "../serialization-utils" }
 peridot = { path = "../../base", optional = true }
 peridot-semantic-shader = { path = "../semantic-shader", default-features = false }
-slang = { git = "https://github.com/Pctg-x8/slang-binding-rs", optional = true }
+slang = { path = "../../thirdparty/slang", optional = true }
 thiserror = { workspace = true, optional = true }
 tracing = { workspace = true }
 peridot-asset-processing = { path = "../asset-processing", optional = true }
