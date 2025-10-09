@@ -82,7 +82,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
@@ -166,20 +166,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
-      - id: llvm-cache
-        if: 'true'
-        name: Initialize LLVM Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-llvm-19"
-          path: "./llvm"
-      - if: 'true'
-        name: Install LLVM
-        uses: "KyleMayes/install-llvm-action@v1"
-        with:
-          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
-          version: '19'
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Build CLI
         run: cargo build
@@ -241,7 +228,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Build CLI
         run: cargo build
@@ -312,20 +299,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
-      - id: llvm-cache
-        if: 'true'
-        name: Initialize LLVM Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-llvm-19"
-          path: "./llvm"
-      - if: 'true'
-        name: Install LLVM
-        uses: "KyleMayes/install-llvm-action@v1"
-        with:
-          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
-          version: '19'
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Build CLI
         run: cargo build
@@ -391,7 +365,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -444,7 +418,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -503,7 +477,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -557,7 +531,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
-          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
