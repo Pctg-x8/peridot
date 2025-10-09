@@ -27,8 +27,12 @@ fn main() {
     }
 
     println!("cargo::rustc-link-lib=ktx");
+    // どうやらWindows(厳密にはおそらくmsvc)だと出力先が微妙に違うらしい
+    #[cfg(not(windows))]
     println!(
         "cargo::rustc-link-search={}",
         source_repo_path.join("build").display()
     );
+    #[cfg(windows)]
+    println!("cargo::rustc-link-search={}", source_repo_path.join("build/Debug").display());
 }
