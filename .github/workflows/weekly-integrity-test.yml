@@ -172,14 +172,14 @@ jobs:
         name: Initialize LLVM Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-llvm-11"
+          key: "${{ runner.os }}-llvm-19"
           path: "./llvm"
       - if: 'true'
         name: Install LLVM
         uses: "KyleMayes/install-llvm-action@v1"
         with:
           cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
-          version: '11'
+          version: '19'
       - if: 'true'
         name: Build CLI
         run: cargo build
@@ -313,6 +313,19 @@ jobs:
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
           path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+      - id: llvm-cache
+        if: 'true'
+        name: Initialize LLVM Cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-llvm-19"
+          path: "./llvm"
+      - if: 'true'
+        name: Install LLVM
+        uses: "KyleMayes/install-llvm-action@v1"
+        with:
+          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
+          version: '19'
       - if: 'true'
         name: Build CLI
         run: cargo build

@@ -32,6 +32,13 @@ pullRequestHeadHashExpr, pullRequestNumberExpr :: String
 pullRequestHeadHashExpr = GHA.mkExpression "github.event.pull_request.head.sha"
 pullRequestNumberExpr = GHA.mkExpression "github.event.number"
 
+llvmVersion :: String
+llvmVersion = "19"
+
+llvmInstallStep, llvmCacheStep :: GHA.Step
+llvmInstallStep = GHA.namedAs "Install LLVM" $ InstallLLVMAction.step llvmVersion
+llvmCacheStep = GHA.namedAs "Initialize LLVM Cache" $ CacheAction.step ["./llvm"] (GHA.runnerOs <> "-llvm-" <> llvmVersion)
+
 preconditionRecordBeginTimeStamp :: GHA.Step
 preconditionRecordBeginTimeStamp =
   GHA.identifiedAs "begintime" $
@@ -50,15 +57,13 @@ setupCargoOutputTranslatorStep :: GHA.Step
 setupCargoOutputTranslatorStep = GHA.namedAs "Setup cargo-json-gha-translator" $
   GHA.runStep "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
 
-rustCacheStep, llvmCacheStep, thirdpartySubmodulesCacheStep :: GHA.Step
+rustCacheStep, thirdpartySubmodulesCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
     CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target"] $
       GHA.runnerOs <> "-cargo-" <> hash
   where
     hash = GHA.mkExpression "hashFiles('**/Cargo.lock')"
-llvmCacheStep =
-  GHA.namedAs "Initialize LLVM Cache" $ CacheAction.step ["./llvm"] $ GHA.runnerOs <> "-llvm-11"
 thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["./thirdparty/slang/source-repo/build", "./thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
 checkFormats :: SlackReportContext m => Functor m => String -> m GHA.Job
@@ -163,13 +168,15 @@ checkCradleWindows precondition =
               checkoutStep,
               rustCacheStep,
               thirdpartySubmodulesCacheStep,
+              GHA.identifiedAs llvmCacheStepId llvmCacheStep,
+              llvmInstallStep & InstallLLVMAction.isCached (CacheAction.refCacheHit llvmCacheStepId),
               cliBuildStep,
               GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
               GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
             ]
 
+    llvmCacheStepId = "llvm-cache"
     integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . GHA.runStep
-
     integratedTestNormalScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
@@ -229,16 +236,12 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
               rustCacheStep,
               thirdpartySubmodulesCacheStep,
               GHA.identifiedAs llvmCacheStepId llvmCacheStep,
-              llvmInstallStep,
+              llvmInstallStep & InstallLLVMAction.isCached (CacheAction.refCacheHit llvmCacheStepId),
               cliBuildStep,
               integratedTestStep
             ]
 
     llvmCacheStepId = "llvm-cache"
-    llvmInstallStep =
-      GHA.namedAs "Install LLVM" $
-        InstallLLVMAction.step "11"
-          & InstallLLVMAction.isCached (CacheAction.refCacheHit llvmCacheStepId)
     integratedTestStep =
       applyModifiers
         [ GHA.namedAs "cargo check",
