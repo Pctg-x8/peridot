@@ -10,7 +10,11 @@ where
     let color = decoder.color_type();
     let (w, h) = decoder.dimensions();
     let mut pixels = Vec::with_capacity(decoder.total_bytes() as _);
-    decoder.read_image(unsafe { core::mem::transmute(pixels.spare_capacity_mut()) })?;
+    decoder.read_image(unsafe {
+        core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+            pixels.spare_capacity_mut(),
+        )
+    })?;
     unsafe {
         pixels.set_len(pixels.capacity());
     }

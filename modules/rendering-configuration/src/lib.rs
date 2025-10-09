@@ -174,10 +174,7 @@ pub fn write(
                     .push((n, file::ShadingPassDirectoryEntry::Located(writes as _)));
                 writes += file::ShadingPassVk {
                     option_overrides,
-                    vertex_semantic_to_location: vertex_semantic_to_location
-                        .into_iter()
-                        .map(|(n, l)| (n, l))
-                        .collect(),
+                    vertex_semantic_to_location: vertex_semantic_to_location.into_iter().collect(),
                     vertex_entry_point_name,
                     fragment_entry_point_name,
                     code,

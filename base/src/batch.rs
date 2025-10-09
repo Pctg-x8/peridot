@@ -107,8 +107,9 @@ impl<Device: br::Device> PartialEq for ImageKey<Device> {
     }
 }
 impl<Device: br::Device> PartialOrd for ImageKey<Device> {
+    #[inline(always)]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.native_ptr().partial_cmp(&other.0.native_ptr())
+        Some(self.cmp(other))
     }
 }
 impl<Device: br::Device> Eq for ImageKey<Device> {}
@@ -167,25 +168,17 @@ impl PartialEq for CopyBufferPair {
 }
 impl Eq for CopyBufferPair {}
 
+struct BufferTransitionState {
+    res: Box<dyn TransferrableBufferResource>,
+    byte_range: Range<u64>,
+    access_mask: br::vk::VkAccessFlags,
+}
+
 pub struct TransferBatch2 {
     copy_buffers: HashMap<CopyBufferPair, Vec<br::BufferCopy>>,
     src_transition_sets: HashSet<(TransferrableBufferResourceCompareCell, Range<u64>)>,
-    before_transitions: HashMap<
-        br::vk::VkPipelineStageFlags,
-        Vec<(
-            Box<dyn TransferrableBufferResource>,
-            Range<u64>,
-            br::vk::VkAccessFlags,
-        )>,
-    >,
-    after_transitions: HashMap<
-        br::vk::VkPipelineStageFlags,
-        Vec<(
-            Box<dyn TransferrableBufferResource>,
-            Range<u64>,
-            br::vk::VkAccessFlags,
-        )>,
-    >,
+    before_transitions: HashMap<br::vk::VkPipelineStageFlags, Vec<BufferTransitionState>>,
+    after_transitions: HashMap<br::vk::VkPipelineStageFlags, Vec<BufferTransitionState>>,
 }
 impl TransferBatch2 {
     pub fn new() -> Self {
@@ -214,14 +207,11 @@ impl TransferBatch2 {
         self.copy_buffers
             .entry(CopyBufferPair(Box::new(src.clone()), Box::new(dst)))
             .or_insert_with(Vec::new)
-            .push(
-                br::vk::VkBufferCopy {
-                    srcOffset: src_offset,
-                    dstOffset: dst_offset,
-                    size: byte_length,
-                }
-                .into(),
-            );
+            .push(br::vk::VkBufferCopy {
+                srcOffset: src_offset,
+                dstOffset: dst_offset,
+                size: byte_length,
+            });
         self.src_transition_sets.insert((
             TransferrableBufferResourceCompareCell(Box::new(src)),
             src_offset..src_offset + byte_length,
@@ -238,7 +228,11 @@ impl TransferBatch2 {
         self.before_transitions
             .entry(pipeline_stage)
             .or_insert_with(Vec::new)
-            .push((Box::new(res), range, access_mask));
+            .push(BufferTransitionState {
+                res: Box::new(res),
+                byte_range: range,
+                access_mask,
+            });
     }
 
     pub fn register_after_transition(
@@ -251,7 +245,11 @@ impl TransferBatch2 {
         self.after_transitions
             .entry(pipeline_stage)
             .or_insert_with(Vec::new)
-            .push((Box::new(res), range, access_mask));
+            .push(BufferTransitionState {
+                res: Box::new(res),
+                byte_range: range,
+                access_mask,
+            });
     }
 
     pub fn register_outer_usage(
@@ -302,17 +300,17 @@ impl TransferBatch2 {
                     &[],
                     &trans
                         .iter()
-                        .map(|(res, range, a)| {
+                        .map(|x| {
                             br::BufferMemoryBarrier::from(br::vk::VkBufferMemoryBarrier {
                                 sType: br::vk::VkBufferMemoryBarrier::TYPE,
                                 pNext: core::ptr::null(),
-                                srcAccessMask: *a,
+                                srcAccessMask: x.access_mask,
                                 dstAccessMask: br::AccessFlags::TRANSFER.write,
                                 srcQueueFamilyIndex: br::vk::VK_QUEUE_FAMILY_IGNORED,
                                 dstQueueFamilyIndex: br::vk::VK_QUEUE_FAMILY_IGNORED,
-                                buffer: res.raw_handle(),
-                                offset: range.start,
-                                size: range.end - range.start,
+                                buffer: x.res.raw_handle(),
+                                offset: x.byte_range.start,
+                                size: x.byte_range.end - x.byte_range.start,
                             })
                         })
                         .collect::<Vec<_>>(),
@@ -327,7 +325,7 @@ impl TransferBatch2 {
                     r.copy_buffer(
                         &unsafe { br::VkHandleRef::dangling(src.raw_handle()) },
                         &unsafe { br::VkHandleRef::dangling(dst.raw_handle()) },
-                        &ranges,
+                        ranges,
                     )
                 })
         })
@@ -339,17 +337,17 @@ impl TransferBatch2 {
                     0,
                     &[],
                     &ts.iter()
-                        .map(|(res, range, a)| {
+                        .map(|x| {
                             br::BufferMemoryBarrier::from(br::vk::VkBufferMemoryBarrier {
                                 sType: br::vk::VkBufferMemoryBarrier::TYPE,
                                 pNext: core::ptr::null(),
                                 srcAccessMask: br::AccessFlags::TRANSFER.write,
-                                dstAccessMask: *a,
+                                dstAccessMask: x.access_mask,
                                 srcQueueFamilyIndex: br::vk::VK_QUEUE_FAMILY_IGNORED,
                                 dstQueueFamilyIndex: br::vk::VK_QUEUE_FAMILY_IGNORED,
-                                buffer: res.raw_handle(),
-                                offset: range.start,
-                                size: range.end - range.start,
+                                buffer: x.res.raw_handle(),
+                                offset: x.byte_range.start,
+                                size: x.byte_range.end - x.byte_range.start,
                             })
                         })
                         .collect::<Vec<_>>(),
@@ -384,6 +382,16 @@ impl TransferBatch2 {
     }
 }
 
+struct StagingImageBufferRef {
+    extent: br::vk::VkExtent3D,
+    res: SharedRef<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
+    byte_offset: br::vk::VkDeviceSize,
+}
+type GenericReadyResourceBarrier = ReadyResourceBarriers<
+    SharedRef<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
+    SharedRef<dyn br::VkHandle<Handle = br::vk::VkImage>>,
+>;
+
 /// Batching Manager for Transferring Operations.
 pub struct TransferBatch<Device: br::Device = super::DeviceObject> {
     barrier_range_src: BTreeMap<ResourceKey<br::vk::VkBuffer>, Range<br::vk::VkDeviceSize>>,
@@ -394,21 +402,8 @@ pub struct TransferBatch<Device: br::Device = super::DeviceObject> {
         (ResourceKey<br::vk::VkBuffer>, ResourceKey<br::vk::VkBuffer>),
         Vec<br::BufferCopy>,
     >,
-    init_images: BTreeMap<
-        ImageKey<Device>,
-        (
-            br::vk::VkExtent3D,
-            SharedRef<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
-            br::vk::VkDeviceSize,
-        ),
-    >,
-    ready_barriers: BTreeMap<
-        br::PipelineStageFlags,
-        ReadyResourceBarriers<
-            SharedRef<dyn br::VkHandle<Handle = br::vk::VkBuffer>>,
-            SharedRef<dyn br::VkHandle<Handle = br::vk::VkImage>>,
-        >,
-    >,
+    init_images: BTreeMap<ImageKey<Device>, StagingImageBufferRef>,
+    ready_barriers: BTreeMap<br::PipelineStageFlags, GenericReadyResourceBarrier>,
 }
 impl<Device: br::Device> TransferBatch<Device> {
     pub fn new() -> Self {
@@ -450,14 +445,11 @@ impl<Device: br::Device> TransferBatch<Device> {
         self.copy_buffers
             .entry((ResourceKey(src.buffer), ResourceKey(dst.buffer)))
             .or_insert_with(Vec::new)
-            .push(
-                VkBufferCopy {
-                    srcOffset: src.offset,
-                    dstOffset: dst.offset,
-                    size: bytes,
-                }
-                .into(),
-            );
+            .push(VkBufferCopy {
+                srcOffset: src.offset,
+                dstOffset: dst.offset,
+                size: bytes,
+            });
     }
 
     /// Add copying operation between buffers.
@@ -489,13 +481,17 @@ impl<Device: br::Device> TransferBatch<Device> {
         dest: SharedRef<dyn br::DeviceChildImage<ConcreteDevice = Device>>,
         src: crate::DeviceBufferView<SharedRef<dyn br::VkHandle<Handle = br::vk::VkBuffer>>>,
     ) {
-        let extent = dest.size();
+        let extent = *dest.size();
         let byte_length = (extent.width * extent.height) as u64
             * (PixelFormat::from(dest.format()).bpp() >> 3) as u64;
 
         self.init_images.insert(
             ImageKey(dest.clone()),
-            (extent.clone(), src.buffer.clone(), src.offset),
+            StagingImageBufferRef {
+                extent,
+                res: src.buffer.clone(),
+                byte_offset: src.offset,
+            },
         );
         let sr = src.head_range(byte_length);
         Self::update_barrier_range_for(&mut self.barrier_range_src, ResourceKey(src.buffer), sr);
@@ -605,18 +601,18 @@ impl<Device: br::Device> TransferBatch<Device> {
         .inject(|r| {
             self.copy_buffers
                 .iter()
-                .fold(r, |r, ((s, d), rs)| r.copy_buffer(&s.0, &d.0, &rs))
+                .fold(r, |r, ((s, d), rs)| r.copy_buffer(&s.0, &d.0, rs))
         })
         .inject(|r| {
-            self.init_images.iter().fold(r, |r, (d, (dex, s, so))| {
-                tracing::trace!(extent = ?dex, "Copying Image");
+            self.init_images.iter().fold(r, |r, (d, x)| {
+                tracing::trace!(extent = ?x.extent, "Copying Image");
 
                 r.copy_buffer_to_image(
-                    &s,
+                    &x.res,
                     &d.0,
                     br::ImageLayout::TransferDestOpt,
                     &[br::vk::VkBufferImageCopy {
-                        bufferOffset: *so,
+                        bufferOffset: x.byte_offset,
                         bufferRowLength: 0,
                         bufferImageHeight: 0,
                         // TODO: これもいじれるようにしたほうがいいんだろうか......
@@ -627,7 +623,7 @@ impl<Device: br::Device> TransferBatch<Device> {
                             layerCount: 1,
                         },
                         imageOffset: br::vk::VkOffset3D { x: 0, y: 0, z: 0 },
-                        imageExtent: dex.clone(),
+                        imageExtent: x.extent,
                     }],
                 )
             })

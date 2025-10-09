@@ -209,14 +209,14 @@ struct FrameData {
 }
 
 pub struct InputProcessSharedState {
-    nativelink: Option<Box<dyn NativeInput>>,
+    nativelink: Option<Box<dyn NativeInput + Send + Sync>>,
     collected: AsyncCollectedData,
     frame: FrameData,
     input_map: InputMaps,
 }
 impl InputProcessSharedState {
     #[inline]
-    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput>) {
+    pub fn set_nativelink(&mut self, n: Box<dyn NativeInput + Send + Sync>) {
         self.nativelink = Some(n);
     }
 
@@ -271,22 +271,29 @@ impl InputProcessSharedState {
             }
         }
 
-        let analog_values = self.collected.analog_values.iter().copied().chain(
-            std::iter::repeat(0.0).take(
-                self.collected
-                    .ax_button_pressing
-                    .len()
-                    .saturating_sub(self.collected.analog_values.len()),
-            ),
-        );
-        let emulated_analog_values = self.collected.ax_button_pressing.iter().chain(
-            std::iter::repeat(&(false, false)).take(
-                self.collected
-                    .analog_values
-                    .len()
-                    .saturating_sub(self.collected.ax_button_pressing.len()),
-            ),
-        );
+        let analog_values =
+            self.collected
+                .analog_values
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(
+                    0.0,
+                    self.collected
+                        .ax_button_pressing
+                        .len()
+                        .saturating_sub(self.collected.analog_values.len()),
+                ));
+        let emulated_analog_values =
+            self.collected
+                .ax_button_pressing
+                .iter()
+                .chain(std::iter::repeat_n(
+                    &(false, false),
+                    self.collected
+                        .analog_values
+                        .len()
+                        .saturating_sub(self.collected.ax_button_pressing.len()),
+                ));
         for (n, (a, &(pos, neg))) in analog_values.zip(emulated_analog_values).enumerate() {
             self.frame.analog_values_abs[n] =
                 a + (if pos { 1.0 } else { 0.0 }) + (if neg { -1.0 } else { 0.0 });
@@ -362,7 +369,7 @@ impl InputProcess {
     }
 
     #[inline]
-    pub fn set_nativelink(&self, n: Box<dyn NativeInput>) {
+    pub fn set_nativelink(&self, n: Box<dyn NativeInput + Send + Sync>) {
         self.state_write_lock().set_nativelink(n);
     }
 

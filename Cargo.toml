@@ -13,7 +13,8 @@ members = [
     "modules/transition",
     "modules/command-object",
     "modules/memory-manager",
-    "modules/semantic-shader", "modules/rendering-configuration",
+    "modules/semantic-shader",
+    "modules/rendering-configuration",
 ]
 
 [workspace.dependencies]
@@ -26,3 +27,10 @@ cfg-if = "1.0"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 manual_div_ceil = "allow"
+needless_lifetimes = "allow"
+manual_async_fn = "allow"
+
+# defaultは基本使わない方針なのでそれ関係のlintは無視する
+unwrap_or_default = "allow"
+new_without_default = "allow"
+mem_replace_with_default = "allow"

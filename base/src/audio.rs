@@ -224,17 +224,19 @@ impl WaveSamples {
         }
     }
 }
-impl Into<Vec<f32>> for WaveSamples {
-    fn into(self) -> Vec<f32> {
-        match self {
+impl From<WaveSamples> for Vec<f32> {
+    #[inline]
+    fn from(value: WaveSamples) -> Self {
+        match value {
             WaveSamples::Mono(v) => v,
             WaveSamples::Stereo(v) => v.into_iter().map(|x| (x[0] + x[1]) * 0.5).collect(),
         }
     }
 }
-impl Into<Vec<[f32; 2]>> for WaveSamples {
-    fn into(self) -> Vec<[f32; 2]> {
-        match self {
+impl From<WaveSamples> for Vec<[f32; 2]> {
+    #[inline]
+    fn from(value: WaveSamples) -> Self {
+        match value {
             WaveSamples::Mono(v) => v.into_iter().map(|x| [x; 2]).collect(),
             WaveSamples::Stereo(v) => v,
         }
@@ -426,7 +428,7 @@ impl Processor for PreloadedPlayableWav {
             .iter()
             .enumerate()
         {
-            flattened_buffer[(n << 1) + 0] = s[0];
+            flattened_buffer[n << 1] = s[0];
             flattened_buffer[(n << 1) + 1] = s[1];
         }
         self.current_smp += fill_count;
@@ -504,7 +506,7 @@ impl Processor for StreamingPlayableWav {
                 .iter()
                 .enumerate()
             {
-                flattened_buffer[(n << 1) + 0] = s[0];
+                flattened_buffer[n << 1] = s[0];
                 flattened_buffer[(n << 1) + 1] = s[1];
             }
             self.buffered_smp += frames;
@@ -525,7 +527,7 @@ impl Processor for StreamingPlayableWav {
             .iter()
             .enumerate()
         {
-            flattened_buffer[((n + frames) << 1) + 0] = s[0];
+            flattened_buffer[(n + frames) << 1] = s[0];
             flattened_buffer[((n + frames) << 1) + 1] = s[1];
         }
 
