@@ -151,7 +151,7 @@ withBuilderEnv = setCradleBase . setBuiltinAssetsPath
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
 
 setLibrarySearchPathsUnix :: GHA.HasEnvironmentVariables e => e -> e
-setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH)"
+setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH)"
 
 checkCradleWindows :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkCradleWindows precondition =

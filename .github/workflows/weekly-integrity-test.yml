@@ -103,7 +103,7 @@ jobs:
         run: cargo build
         working-directory: "./tools/cli"
       - env:
-          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           NDK_PLATFORM_TARGET: '28'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
@@ -185,7 +185,7 @@ jobs:
         run: cargo build
         working-directory: "./tools/cli"
       - env:
-          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
@@ -254,7 +254,7 @@ jobs:
         name: Install requirements
         run: brew install coreutils
       - env:
-          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
