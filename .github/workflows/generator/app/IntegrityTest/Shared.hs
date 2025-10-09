@@ -139,11 +139,12 @@ cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep 
 archiverBuildStep = GHA.namedAs "Build archiver" $ GHA.workAt "./tools/archiver" $ GHA.runStep "cargo build"
 
 withBuilderEnv :: (GHA.HasEnvironmentVariables e) => e -> e
-withBuilderEnv = setCradleBase . setBuiltinAssetsPath
+withBuilderEnv = setCradleBase . setBuiltinAssetsPath . setLibrarySearchPaths
   where
     setCradleBase = GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)"
     setBuiltinAssetsPath =
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
+    setLibrarySearchPaths = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH)"
 
 checkCradleWindows :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkCradleWindows precondition =

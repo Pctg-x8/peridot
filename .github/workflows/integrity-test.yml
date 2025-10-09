@@ -104,6 +104,7 @@ jobs:
         run: cargo build
         working-directory: "./tools/cli"
       - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           NDK_PLATFORM_TARGET: '28'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
@@ -183,6 +184,7 @@ jobs:
         run: cargo build
         working-directory: "./tools/cli"
       - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -249,6 +251,7 @@ jobs:
         name: Install requirements
         run: brew install coreutils
       - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
@@ -310,6 +313,7 @@ jobs:
         run: cargo build
         working-directory: "./tools/cli"
       - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
@@ -317,6 +321,7 @@ jobs:
         name: cargo check
         run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
