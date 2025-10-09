@@ -74,8 +74,23 @@ pub fn process(
 
     let dest_path = processor.dest_path(source_file_name, dest_dir);
     if !options.force_rebuild
-        && let (Ok(x), Ok(y)) = (source_path.as_ref().metadata(), dest_path.metadata())
-        && x.modified().unwrap() <= y.modified().unwrap()
+        && let (Ok(x), Ok(y)) = (
+            source_path.as_ref().metadata().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving metadata failed"),
+            ),
+            dest_path.metadata().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving metadata failed"),
+            ),
+        )
+        && let (Ok(x), Ok(y)) = (
+            x.modified().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving modified date failed"),
+            ),
+            y.modified().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving modified date failed"),
+            )
+        )
+        && x <= y
     {
         tracing::info!(reason = "modified time", "skip asset");
         return Some(dest_path);
