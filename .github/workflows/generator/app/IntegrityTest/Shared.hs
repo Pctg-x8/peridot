@@ -139,12 +139,14 @@ cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep 
 archiverBuildStep = GHA.namedAs "Build archiver" $ GHA.workAt "./tools/archiver" $ GHA.runStep "cargo build"
 
 withBuilderEnv :: (GHA.HasEnvironmentVariables e) => e -> e
-withBuilderEnv = setCradleBase . setBuiltinAssetsPath . setLibrarySearchPaths
+withBuilderEnv = setCradleBase . setBuiltinAssetsPath
   where
     setCradleBase = GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)"
     setBuiltinAssetsPath =
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
-    setLibrarySearchPaths = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH)"
+
+setLibrarySearchPathsUnix :: GHA.HasEnvironmentVariables e => e -> e
+setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{1}', github.workspace, env.LD_LIBRARY_PATH)"
 
 checkCradleWindows :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkCradleWindows precondition =
@@ -193,7 +195,8 @@ checkCradleMacos precondition =
           GHA.env "VULKAN_SDK" "/Users",
           withBuilderEnv,
           GHA.env "PERIDOT_CLI_ARCHIVER_PATH" $
-            GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
+            GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)",
+          setLibrarySearchPathsUnix
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
@@ -232,7 +235,8 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
       applyModifiers
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
-          withBuilderEnv
+          withBuilderEnv,
+          setLibrarySearchPathsUnix
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
@@ -259,7 +263,8 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
         [ GHA.namedAs "cargo check",
           GHA.stepUseShell "bash",
           withBuilderEnv,
-          GHA.env "NDK_PLATFORM_TARGET" "28"
+          GHA.env "NDK_PLATFORM_TARGET" "28",
+          setLibrarySearchPathsUnix
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
