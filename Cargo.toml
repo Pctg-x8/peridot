@@ -13,7 +13,9 @@ members = [
     "modules/transition",
     "modules/command-object",
     "modules/memory-manager",
-    "modules/semantic-shader", "modules/rendering-configuration", "modules/asset-processing",
+    "modules/semantic-shader",
+    "modules/rendering-configuration",
+    "modules/asset-processing",
 ]
 
 [workspace.dependencies]
