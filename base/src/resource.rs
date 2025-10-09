@@ -71,7 +71,7 @@ impl<Image: br::Image> Texture2D<Image> {
         format: PixelFormat,
         prealloc: &mut BufferPrealloc,
     ) -> br::Result<(UnboundedStandaloneImage, u64)> {
-        let idesc = br::ImageCreateInfo::new(size.clone(), format as _)
+        let idesc = br::ImageCreateInfo::new(size, format as _)
             .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
             .init_layout(br::ImageLayout::Preinitialized);
         let bytes_per_pixel = (format.bpp() >> 3) as u64;
@@ -637,7 +637,7 @@ impl DeviceWorkingTextureAllocator<'_> {
                     };
 
                     Ok(DeviceWorkingTexture3D {
-                        size: res.size().clone().into(),
+                        size: From::from(*res.size()),
                         format: res.format(),
                         view: view_handle,
                         under: res,

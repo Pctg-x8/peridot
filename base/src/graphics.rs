@@ -644,6 +644,10 @@ impl VulkanGfx {
     /// Sets an object's name for debugging.
     ///
     /// On failure, this function logs a warning and does not bail.
+    ///
+    /// # Safety
+    ///
+    /// The object identified by `handle` must be the type of `object_type`.
     #[cfg(feature = "debug")]
     #[tracing::instrument(
         name = "VulkanGfx::dbg_set_object_name_raw",
@@ -661,6 +665,9 @@ impl VulkanGfx {
         }
     }
 
+    /// # Safety
+    ///
+    /// The object identified by `handle` must be the type of `object_type`.
     #[cfg(feature = "debug")]
     pub unsafe fn set_object_name_raw(
         &self,
@@ -707,7 +714,7 @@ impl VulkanGfx {
     #[cfg(feature = "debug")]
     pub fn set_object_name(
         &self,
-        object: &(impl br::VkHandle<Handle: br::VkRawHandle> + br::VkObject + ?Sized),
+        object: &(impl br::VkObject<Handle: br::VkRawHandle> + ?Sized),
         name: &core::ffi::CStr,
     ) -> br::Result<()> {
         let Some(ref f) = self.0.set_object_name_fn else {
@@ -724,6 +731,9 @@ impl VulkanGfx {
         }
     }
 
+    /// # Safety
+    ///
+    /// This function is just calling underlying raw api [`bedrock::device::VkDevice::load_function_unconstrainted`].
     #[inline]
     pub unsafe fn load_function<F: br::PFN>(&self) -> F {
         unsafe { self.0.device.load_function_unconstrainted::<F>() }

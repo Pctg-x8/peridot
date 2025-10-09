@@ -109,10 +109,7 @@ impl FaceGroupEntry {
     }
 
     pub const fn is_loaded(&self) -> bool {
-        match self {
-            Self::Loaded(_) | Self::LoadedMem(_, _) => true,
-            _ => false,
-        }
+        matches!(self, Self::Loaded(_) | Self::LoadedMem(_, _))
     }
 }
 pub struct FaceGroup {
@@ -331,7 +328,7 @@ extern "system" fn outline_decompose_moveto<B: FlatPathBuilder>(
             vector.y as f32 / 64.0,
         )));
 
-    return 0;
+    0
 }
 extern "system" fn outline_decompose_lineto<B: FlatPathBuilder>(
     to: *const FT_Vector,
@@ -346,7 +343,7 @@ extern "system" fn outline_decompose_lineto<B: FlatPathBuilder>(
             vector.y as f32 / 64.0,
         )));
 
-    return 0;
+    0
 }
 extern "system" fn outline_decompose_conicto<B: PathBuilder>(
     control: *const FT_Vector,
@@ -366,7 +363,7 @@ extern "system" fn outline_decompose_conicto<B: PathBuilder>(
         )),
     );
 
-    return 0;
+    0
 }
 extern "system" fn outline_decompose_cubicto<B: PathBuilder>(
     control: *const FT_Vector,
@@ -390,5 +387,5 @@ extern "system" fn outline_decompose_cubicto<B: PathBuilder>(
         )),
     );
 
-    return 0;
+    0
 }

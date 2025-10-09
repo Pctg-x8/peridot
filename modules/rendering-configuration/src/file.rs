@@ -9,20 +9,20 @@ use crate::{
 };
 
 #[inline(always)]
-fn b32<'x>(v: &'x u32) -> &'x [u8] {
-    unsafe { &core::mem::transmute::<_, &[u8; 4]>(v)[..] }
+const fn b32<'x>(v: &'x u32) -> &'x [u8] {
+    unsafe { core::mem::transmute::<&_, &[u8; 4]>(v) }
 }
 #[inline(always)]
-fn b32m<'x>(v: &'x mut u32) -> &'x mut [u8] {
-    unsafe { &mut core::mem::transmute::<_, &mut [u8; 4]>(v)[..] }
+const fn b32m<'x>(v: &'x mut u32) -> &'x mut [u8] {
+    unsafe { core::mem::transmute::<&mut _, &mut [u8; 4]>(v) }
 }
 #[inline(always)]
-fn b64<'x>(v: &'x u64) -> &'x [u8] {
-    unsafe { &core::mem::transmute::<_, &[u8; 8]>(v)[..] }
+const fn b64<'x>(v: &'x u64) -> &'x [u8] {
+    unsafe { core::mem::transmute::<&_, &[u8; 8]>(v) }
 }
 #[inline(always)]
-fn b64m<'x>(v: &'x mut u64) -> &'x mut [u8] {
-    unsafe { &mut core::mem::transmute::<_, &mut [u8; 8]>(v)[..] }
+const fn b64m<'x>(v: &'x mut u64) -> &'x mut [u8] {
+    unsafe { core::mem::transmute::<&mut _, &mut [u8; 8]>(v) }
 }
 
 pub struct Header {
@@ -397,20 +397,20 @@ impl PropertyMappingVk {
 
 impl PropertyDestinationVk {
     fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
-        match self {
-            &Self::SpecConstant(n) => {
+        match *self {
+            Self::SpecConstant(n) => {
                 sink.write_all(&[0])?;
                 Ok(1 + VariableUInt(n as _).write(sink)?)
             }
-            &Self::PushConstantBlock(n) => {
+            Self::PushConstantBlock(n) => {
                 sink.write_all(&[1])?;
                 Ok(1 + VariableUInt(n as _).write(sink)?)
             }
-            &Self::DescriptorSet(n) => {
+            Self::DescriptorSet(n) => {
                 sink.write_all(&[2])?;
                 Ok(1 + VariableUInt(n as _).write(sink)?)
             }
-            &Self::RealtimeBuffer(n) => {
+            Self::RealtimeBuffer(n) => {
                 sink.write_all(&[3])?;
                 Ok(1 + VariableUInt(n as _).write(sink)?)
             }

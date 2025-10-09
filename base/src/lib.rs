@@ -205,10 +205,7 @@ pub struct EngineEventReceiver {
 impl EngineEventReceiver {
     pub async fn wait_for_event(&mut self) -> Option<Event> {
         futures_util::select! {
-            e = self.frame_timing_receiver.next().fuse() => match e {
-                Some(()) => Some(Event::NextFrame),
-                None => None,
-            },
+            e = self.frame_timing_receiver.next().fuse() => e.map(|_| Event::NextFrame),
             e = self.other_events_receiver.next().fuse() => match e {
                 Some(EngineEvent::Shutdown) => Some(Event::Shutdown),
                 Some(EngineEvent::Resize(ns)) => Some(Event::Resize(ns)),
@@ -253,7 +250,7 @@ impl EventQueue {
 
     pub fn enqueue(&self, event: Event) {
         self.queue.borrow_mut().push_back(event);
-        for w in core::mem::replace(&mut *self.queue_waker.borrow_mut(), Vec::new()) {
+        for w in self.queue_waker.replace(Vec::new()) {
             w.wake();
         }
     }
@@ -366,7 +363,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
         };
 
         Self {
-            ip: InputProcess::new().into(),
+            ip: InputProcess::new(),
             game_timer: GameTimer::new(),
             last_rendering_completion,
             audio_mixer: Arc::new(RwLock::new(audio::Mixer::new())),
@@ -695,7 +692,7 @@ impl<T> Discardable<T> {
             .map_guarded_value(|x| x.as_ref().expect("uninitialized"))
     }
 
-    pub fn get_mut<'v>(&'v self) -> impl Deref<Target = T> + DerefMut + 'v {
+    pub fn get_mut<'v>(&'v self) -> impl DerefMut<Target = T> + 'v {
         self.0
             .borrow_mut()
             .map_guarded_value(|x| x.as_mut().expect("uninitialized"))
@@ -728,14 +725,15 @@ impl GameTimer {
     pub fn new() -> Self {
         GameTimer(None)
     }
+
     pub fn delta_time(&mut self) -> Duration {
-        let d = self
-            .0
-            .as_ref()
-            .map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
+        let d = match self.0 {
+            Some(ref it) => it.elapsed(),
+            None => Duration::new(0, 0),
+        };
         self.0 = InstantTimer::now().into();
 
-        return d;
+        d
     }
 }
 

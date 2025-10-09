@@ -256,6 +256,9 @@ pub struct Wayland {
     surface: NonNull<wl::Surface>,
     state: Pin<Box<State>>,
 }
+// TODO: conとsurfaceはSync/Sendじゃないので注意（本来はPointerPositionProviderを分けるのがよいとおもう）
+unsafe impl Sync for Wayland {}
+unsafe impl Send for Wayland {}
 impl Wayland {
     #[tracing::instrument(name = "Wayland::try_init")]
     pub fn try_init() -> Option<Self> {

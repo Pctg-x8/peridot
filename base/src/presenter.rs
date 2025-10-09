@@ -133,7 +133,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
                 &br::SwapchainCreateInfo::new(
                     &surface,
                     buffer_count,
-                    surface_info.fmt.clone(),
+                    surface_info.fmt,
                     ext,
                     br::ImageUsageFlags::COLOR_ATTACHMENT,
                 )
@@ -172,7 +172,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             br::vkfn_wrapper::get_swapchain_images(
                 g.gfx_device.0.device,
                 chain.handle,
-                core::mem::transmute(back_buffer_image_handles.spare_capacity_mut()),
+                back_buffer_image_handles.spare_capacity_mut(),
             )
         } {
             tracing::error!(cause = ?e, "Failed to acquire swapchain images");
