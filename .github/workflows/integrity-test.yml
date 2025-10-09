@@ -85,6 +85,12 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
         with:
@@ -166,6 +172,12 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
       - id: llvm-cache
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize LLVM Cache
@@ -240,6 +252,12 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
         working-directory: "./tools/cli"
@@ -309,6 +327,12 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
         working-directory: "./tools/cli"
@@ -373,6 +397,12 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -423,6 +453,12 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -481,6 +517,12 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -532,6 +574,12 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Thirdparty submodules build cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-thirdparty-submodules"
+          path: "./thirdparty/slang/source-repo/build\n./thirdparty/ktx/source-repo/build"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"

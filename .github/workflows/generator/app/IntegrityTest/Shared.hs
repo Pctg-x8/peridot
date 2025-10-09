@@ -50,7 +50,7 @@ setupCargoOutputTranslatorStep :: GHA.Step
 setupCargoOutputTranslatorStep = GHA.namedAs "Setup cargo-json-gha-translator" $
   GHA.runStep "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
 
-rustCacheStep, llvmCacheStep :: GHA.Step
+rustCacheStep, llvmCacheStep, thirdpartySubmodulesCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
     CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target"] $
@@ -59,6 +59,7 @@ rustCacheStep =
     hash = GHA.mkExpression "hashFiles('**/Cargo.lock')"
 llvmCacheStep =
   GHA.namedAs "Initialize LLVM Cache" $ CacheAction.step ["./llvm"] $ GHA.runnerOs <> "-llvm-11"
+thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["./thirdparty/slang/source-repo/build", "./thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
 checkFormats :: SlackReportContext m => Functor m => String -> m GHA.Job
 checkFormats precondition =
@@ -69,6 +70,7 @@ checkFormats precondition =
             <$> [ checkoutHeadStep,
                   checkoutStep,
                   rustCacheStep,
+                  thirdpartySubmodulesCacheStep,
                   setupCargoOutputTranslatorStep,
                   GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
                   GHA.namedAs "Running Clippy" $ GHA.runStep "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
@@ -100,6 +102,7 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
         [ checkoutHeadStep
         , checkoutStep
         , rustCacheStep
+        , thirdpartySubmodulesCacheStep
         , setupCargoOutputTranslatorStep
         , GHA.namedAs "check" $
             GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
@@ -114,6 +117,7 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job s
         [ checkoutHeadStep
         , checkoutStep
         , rustCacheStep
+        , thirdpartySubmodulesCacheStep
         , setupCargoOutputTranslatorStep
         , GHA.namedAs "check" $
             GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
@@ -128,6 +132,7 @@ checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job
         [ checkoutHeadStep
         , checkoutStep
         , rustCacheStep
+        , thirdpartySubmodulesCacheStep
         , setupCargoOutputTranslatorStep
         , GHA.namedAs "check" $
             GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
@@ -157,6 +162,7 @@ checkCradleWindows precondition =
         <$> [ checkoutHeadStep,
               checkoutStep,
               rustCacheStep,
+              thirdpartySubmodulesCacheStep,
               cliBuildStep,
               GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
               GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
@@ -182,6 +188,7 @@ checkCradleMacos precondition =
         <$> [ checkoutHeadStep,
               checkoutStep,
               rustCacheStep,
+              thirdpartySubmodulesCacheStep,
               cliBuildStep,
               archiverBuildStep,
               GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
@@ -220,6 +227,7 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
               checkoutHeadStep,
               checkoutStep,
               rustCacheStep,
+              thirdpartySubmodulesCacheStep,
               GHA.identifiedAs llvmCacheStepId llvmCacheStep,
               llvmInstallStep,
               cliBuildStep,
@@ -248,6 +256,7 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
         <$> [ checkoutHeadStep,
               checkoutStep,
               rustCacheStep,
+              thirdpartySubmodulesCacheStep,
               GHA.namedAs "Setup Rust for Android" $
                 RustToolchainAction.step
                   & RustToolchainAction.useStable
