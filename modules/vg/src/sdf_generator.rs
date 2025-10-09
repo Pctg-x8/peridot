@@ -72,8 +72,8 @@ impl ParabolaRect {
         let scale = 0.5 * ll / xlen;
         let vertex = c + yaxis * (ll * 1.0e-16);
 
-        let rect_min = from.min(to.clone()) - Vector2(sdf_extra, sdf_extra);
-        let rect_max = from.max(to.clone()) + Vector2(sdf_extra, sdf_extra);
+        let rect_min = from.min(to) - Vector2(sdf_extra, sdf_extra);
+        let rect_max = from.max(to) + Vector2(sdf_extra, sdf_extra);
 
         Self {
             rect_min,

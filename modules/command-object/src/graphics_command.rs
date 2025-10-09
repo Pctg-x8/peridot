@@ -9,26 +9,31 @@ use crate::{
 pub trait GraphicsCommand {
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r>;
 
+    #[inline(always)]
     fn execute_and_finish(&self, cb: br::CmdRecord<'_>) -> br::Result<()> {
         self.execute(cb).end()
     }
 }
 impl<T: GraphicsCommand + ?Sized> GraphicsCommand for Box<T> {
+    #[inline(always)]
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
-        T::execute(&*self, cb)
+        T::execute(self, cb)
     }
 }
 impl<T: GraphicsCommand + ?Sized> GraphicsCommand for std::rc::Rc<T> {
+    #[inline(always)]
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
-        T::execute(&*self, cb)
+        T::execute(self, cb)
     }
 }
 impl<T: GraphicsCommand + ?Sized> GraphicsCommand for std::sync::Arc<T> {
+    #[inline(always)]
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
-        T::execute(&*self, cb)
+        T::execute(self, cb)
     }
 }
 impl<T: GraphicsCommand + ?Sized> GraphicsCommand for &'_ T {
+    #[inline(always)]
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         T::execute(*self, cb)
     }
@@ -112,7 +117,7 @@ impl<
 /// consecutive exec
 impl<T: GraphicsCommand> GraphicsCommand for Vec<T> {
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
-        (&self[..]).execute(cb)
+        self[..].execute(cb)
     }
 }
 impl<T> GraphicsCommand for [T]
@@ -140,10 +145,10 @@ impl PipelineBarrierEntry for br::ImageMemoryBarrier {
     fn add_into(self, barrier: &mut PipelineBarrier) {
         let r: br::vk::VkImageMemoryBarrier = self.into();
         barrier.src_stage_mask |= vk_pipeline_stage_mask_requirements_for_image_layout(unsafe {
-            std::mem::transmute(r.oldLayout)
+            core::mem::transmute::<br::vk::VkImageLayout, br::ImageLayout>(r.oldLayout)
         });
         barrier.dst_stage_mask |= vk_pipeline_stage_mask_requirements_for_image_layout(unsafe {
-            std::mem::transmute(r.newLayout)
+            core::mem::transmute::<br::vk::VkImageLayout, br::ImageLayout>(r.newLayout)
         });
         barrier.image_barriers.push(r.into());
     }
@@ -250,14 +255,11 @@ impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk
     }
 
     pub fn with_range(mut self, src_offset: u64, dest_offset: u64, size: usize) -> Self {
-        self.2.push(
-            br::vk::VkBufferCopy {
-                srcOffset: src_offset,
-                dstOffset: dest_offset,
-                size: size as _,
-            }
-            .into(),
-        );
+        self.2.push(br::vk::VkBufferCopy {
+            srcOffset: src_offset,
+            dstOffset: dest_offset,
+            size: size as _,
+        });
         self
     }
 
@@ -385,7 +387,7 @@ impl<
             &br::RenderPassBeginInfo::new(
                 &self.render_pass,
                 &self.framebuffer,
-                self.rect.clone(),
+                self.rect,
                 &self.clear_values,
             ),
             self.subpass_contents,
@@ -555,14 +557,14 @@ where
 pub struct ViewportWithScissorRect(pub br::Viewport, pub br::Rect2D);
 impl GraphicsCommand for ViewportWithScissorRect {
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
-        cb.set_viewport(0, &[self.0.clone()])
-            .set_scissor(0, &[self.1.clone()])
+        cb.set_viewport(0, core::slice::from_ref(&self.0))
+            .set_scissor(0, core::slice::from_ref(&self.1))
     }
 }
 impl<const N: usize> GraphicsCommand for [ViewportWithScissorRect; N] {
     fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         let (viewports, scissors): (Vec<_>, Vec<_>) =
-            self.iter().map(|a| (a.0.clone(), a.1.clone())).unzip();
+            self.iter().map(|a| (a.0.clone(), a.1)).unzip();
 
         cb.set_viewport(0, &viewports).set_scissor(0, &scissors)
     }

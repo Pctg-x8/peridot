@@ -4,15 +4,13 @@ pub trait AwaitableFence {
     fn is_ready(&self) -> br::Result<bool>;
 }
 
+struct PendingFenceWakingData {
+    waker: std::task::Waker,
+    fence: std::sync::Weak<dyn AwaitableFence + Send + Sync>,
+}
+
 pub struct FenceReactorThread {
-    pending_fences: std::sync::Arc<
-        parking_lot::Mutex<
-            Vec<(
-                std::task::Waker,
-                std::sync::Weak<dyn AwaitableFence + Send + Sync>,
-            )>,
-        >,
-    >,
+    pending_fences: std::sync::Arc<parking_lot::Mutex<Vec<PendingFenceWakingData>>>,
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
     thread_waker: std::sync::Arc<parking_lot::Condvar>,
@@ -29,10 +27,7 @@ impl FenceReactorThread {
         let thread_handle = std::thread::Builder::new()
             .name(String::from("Peridot Fence Reactor"))
             .spawn(move || {
-                let mut managed_fences = Vec::<(
-                    std::task::Waker,
-                    std::sync::Weak<dyn AwaitableFence + Send + Sync>,
-                )>::new();
+                let mut managed_fences = Vec::<PendingFenceWakingData>::new();
                 let mut signaled_indexes = Vec::new();
 
                 loop {
@@ -50,21 +45,25 @@ impl FenceReactorThread {
                     }
 
                     if !managed_fences.is_empty() {
-                        for (n, (_, f)) in managed_fences.iter().enumerate().rev() {
-                            if let Some(f) = f.upgrade() {
-                                if f.is_ready().expect("Failed to get fence status") {
-                                    signaled_indexes.push((n, true));
-                                }
-                            } else {
+                        for (n, d) in managed_fences.iter().enumerate().rev() {
+                            let Some(f) = d.fence.upgrade() else {
                                 // observing fence was dropped externally
                                 signaled_indexes.push((n, false));
+                                continue;
+                            };
+
+                            if f.is_ready().inspect_err(
+                                |e| tracing::warn!(reason = ?e, "Failed to get fence status"),
+                            ) == Ok(true)
+                            {
+                                signaled_indexes.push((n, true));
                             }
                         }
                         // signaled_indexes is sorted larger to smaller
                         for (dx, wake) in signaled_indexes.drain(..) {
-                            let (wk, _) = managed_fences.remove(dx);
+                            let d = managed_fences.remove(dx);
                             if wake {
-                                wk.wake();
+                                d.waker.wake();
                             }
                         }
                     }
@@ -85,9 +84,10 @@ impl FenceReactorThread {
         fence: &std::sync::Arc<dyn AwaitableFence + Send + Sync>,
         waker: std::task::Waker,
     ) {
-        self.pending_fences
-            .lock()
-            .push((waker, std::sync::Arc::downgrade(fence)));
+        self.pending_fences.lock().push(PendingFenceWakingData {
+            waker,
+            fence: std::sync::Arc::downgrade(fence),
+        });
         self.thread_waker.notify_all();
     }
 }

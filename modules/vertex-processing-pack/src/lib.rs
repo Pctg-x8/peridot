@@ -592,7 +592,7 @@ impl BinarySerializeVkStructures for SpvBinary {
             core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
         })?;
 
-        Ok(w0 + self.0.len() << 2)
+        Ok(w0 + (self.0.len() << 2))
     }
 
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>

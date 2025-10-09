@@ -147,6 +147,9 @@ impl CommandBundle<VulkanGfx> {
     }
 }
 impl<Device: br::Device> CommandBundle<Device> {
+    /// # Safety
+    ///
+    /// The command buffers in this bundle must not be used anywhere.
     #[inline]
     pub unsafe fn reset(&mut self) -> br::Result<()> {
         unsafe {

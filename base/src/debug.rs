@@ -166,7 +166,7 @@ fn vk_log(
         }
         s.push(']');
 
-        tracing::Span::current().record("queue_labels", &tracing::field::display(s));
+        tracing::Span::current().record("queue_labels", tracing::field::display(s));
     }
 
     if callback_data.cmdBufLabelCount > 0 {
@@ -188,7 +188,7 @@ fn vk_log(
         }
         s.push(']');
 
-        tracing::Span::current().record("cmdbuf_labels", &tracing::field::display(s));
+        tracing::Span::current().record("cmdbuf_labels", tracing::field::display(s));
     }
 
     if callback_data.objectCount > 0 {
@@ -218,7 +218,7 @@ fn vk_log(
         }
         s.push(']');
 
-        tracing::Span::current().record("objects", &tracing::field::display(s));
+        tracing::Span::current().record("objects", tracing::field::display(s));
     }
 
     let msg = match unsafe { CStr::from_ptr(callback_data.pMessage).to_str() } {

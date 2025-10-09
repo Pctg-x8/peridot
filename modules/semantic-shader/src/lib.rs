@@ -23,14 +23,14 @@ pub enum VertexInputSemantic {
 }
 impl VertexInputSemantic {
     pub fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
-        match self {
-            &Self::Misc(n) => writer.write_all(&[0, n]).map(|_| 2),
-            &Self::Position(n) => writer.write_all(&[1, n]).map(|_| 2),
-            &Self::Normal(n) => writer.write_all(&[2, n]).map(|_| 2),
-            &Self::Tangent(n) => writer.write_all(&[3, n]).map(|_| 2),
-            &Self::Binormal(n) => writer.write_all(&[4, n]).map(|_| 2),
-            &Self::Texcoord(n) => writer.write_all(&[5, n]).map(|_| 2),
-            &Self::Color(n) => writer.write_all(&[6, n]).map(|_| 2),
+        match *self {
+            Self::Misc(n) => writer.write_all(&[0, n]).map(|_| 2),
+            Self::Position(n) => writer.write_all(&[1, n]).map(|_| 2),
+            Self::Normal(n) => writer.write_all(&[2, n]).map(|_| 2),
+            Self::Tangent(n) => writer.write_all(&[3, n]).map(|_| 2),
+            Self::Binormal(n) => writer.write_all(&[4, n]).map(|_| 2),
+            Self::Texcoord(n) => writer.write_all(&[5, n]).map(|_| 2),
+            Self::Color(n) => writer.write_all(&[6, n]).map(|_| 2),
         }
     }
 
@@ -46,10 +46,7 @@ impl VertexInputSemantic {
             4 => Ok(Self::Binormal(buf[1])),
             5 => Ok(Self::Texcoord(buf[1])),
             6 => Ok(Self::Color(buf[1])),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "unknown tag for VertexInputSemantic",
-            )),
+            _ => Err(std::io::Error::other("unknown tag for VertexInputSemantic")),
         }
     }
 }
@@ -147,7 +144,7 @@ impl ShaderPackAsset {
         } else {
             None
         };
-        let data_base_offset = reader.seek(std::io::SeekFrom::Current(0))?;
+        let data_base_offset = reader.stream_position()?;
 
         let InputSemanticMap(input_semantic_location_map) = InputSemanticMap::read(reader)?;
         reader.seek(std::io::SeekFrom::Start(
@@ -219,7 +216,7 @@ impl SpirvBinary {
             core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
         })?;
 
-        Ok(blen + self.0.len() << 2)
+        Ok(blen + (self.0.len() << 2))
     }
 
     fn read(reader: &mut (impl std::io::BufRead + ?Sized)) -> std::io::Result<Self> {

@@ -148,7 +148,7 @@ impl<'g> MemoryBadget<'g> {
         let new_offset = super::align2!(self.total_size, req.alignment);
         let align_required = self
             .last_resource_tiling
-            .map_or(false, |t| t.is_additional_alignment_required(v.tiling()));
+            .is_some_and(|t| t.is_additional_alignment_required(v.tiling()));
         let new_offset = if align_required {
             super::align2!(
                 new_offset,
@@ -161,7 +161,8 @@ impl<'g> MemoryBadget<'g> {
         self.entries.push((v, new_offset));
         self.total_size = new_offset + req.size;
         self.memory_type_bitmask |= req.memoryTypeBits;
-        return new_offset;
+
+        new_offset
     }
 
     pub fn alloc(self) -> br::Result<Vec<MemoryBoundResource>> {

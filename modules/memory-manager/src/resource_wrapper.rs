@@ -96,12 +96,18 @@ impl AnyPointer {
         self.0
     }
 
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
     pub unsafe fn get_at<T>(&self, byte_offset: usize) -> &T {
         (self.0.as_ptr().add(byte_offset) as *const T)
             .as_ref()
             .unwrap_unchecked()
     }
 
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn get_mut_at<T>(&self, byte_offset: usize) -> &mut T {
         (self.0.as_ptr().add(byte_offset) as *mut T)
@@ -109,24 +115,39 @@ impl AnyPointer {
             .unwrap_unchecked()
     }
 
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
     pub const unsafe fn slice<T>(&self, byte_offset: usize, len: usize) -> &[T] {
         core::slice::from_raw_parts(self.0.as_ptr().add(byte_offset) as _, len)
     }
 
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
     #[allow(clippy::mut_from_ref)]
     pub unsafe fn slice_mut<T>(&self, byte_offset: usize, len: usize) -> &mut [T] {
         core::slice::from_raw_parts_mut(self.0.as_ptr().add(byte_offset) as _, len)
     }
 
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
     pub unsafe fn clone_to<T: Clone>(&self, byte_offset: usize, value: &T) {
         self.get_mut_at::<T>(byte_offset).clone_from(value)
     }
 
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
     pub unsafe fn clone_slice_to<T: Clone>(&self, byte_offset: usize, values: &[T]) {
         self.slice_mut(byte_offset, values.len())
             .clone_from_slice(values)
     }
 
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
     pub unsafe fn copy_slice_to<T: Copy>(&self, byte_offset: usize, values: &[T]) {
         self.slice_mut(byte_offset, values.len())
             .copy_from_slice(values)
@@ -170,6 +191,8 @@ impl Buffer {
         self.requires_flushing
     }
 
+    /// # Safety
+    ///
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn map_raw(
         &mut self,
@@ -196,6 +219,8 @@ impl Buffer {
         Ok(AnyPointer(core::ptr::NonNull::new_unchecked(p as _)))
     }
 
+    /// # Safety
+    ///
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn unmap_raw(&mut self) {
         match self.memory_block {
@@ -211,6 +236,8 @@ impl Buffer {
         }
     }
 
+    /// # Safety
+    ///
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn invalidate_ranges_raw(
         &mut self,
@@ -255,6 +282,8 @@ impl Buffer {
         }
     }
 
+    /// # Safety
+    ///
     /// very unsafe operation: no guarantees for under resource operations
     pub unsafe fn flush_ranges_raw(
         &mut self,
@@ -421,6 +450,9 @@ impl Buffer {
         unsafe { self.write_content_unchecked(value) }
     }
 
+    /// # Safety
+    ///
+    /// Size of T must be smaller or equal to buffer size.
     pub unsafe fn write_content_unchecked<T>(&mut self, value: T) -> br::Result<()> {
         self.guard_map(BufferMapMode::Write, |ptr| {
             *ptr.get_mut_at(0) = value;
@@ -428,7 +460,7 @@ impl Buffer {
     }
 
     pub fn clone_content_from_slice<T: Clone>(&mut self, values: &[T]) -> br::Result<()> {
-        assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
+        assert_eq!(self.size, core::mem::size_of_val(values));
 
         self.guard_map(BufferMapMode::Write, |ptr| unsafe {
             ptr.clone_slice_to(0, values);
@@ -436,7 +468,7 @@ impl Buffer {
     }
 
     pub fn copy_content_from_slice<T: Copy>(&mut self, values: &[T]) -> br::Result<()> {
-        assert_eq!(self.size, core::mem::size_of::<T>() * values.len());
+        assert_eq!(self.size, core::mem::size_of_val(values));
 
         self.guard_map(BufferMapMode::Write, |ptr| unsafe {
             ptr.copy_slice_to(0, values);
