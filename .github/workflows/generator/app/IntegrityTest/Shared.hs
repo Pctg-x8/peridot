@@ -168,7 +168,7 @@ checkCradleWindows precondition =
               checkoutStep,
               rustCacheStep,
               thirdpartySubmodulesCacheStep,
-              cliBuildStep,
+              cliBuildStep & GHA.env "PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET" "vs2022", -- CI環境だとなんかうまくclangを見つけられないのでmsvcでビルド(mingwだとdxcのコンパイルに失敗する)
               GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
               GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
             ]

@@ -319,7 +319,9 @@ jobs:
         with:
           key: "${{ runner.os }}-thirdparty-submodules"
           path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      - env:
+          PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET: vs2022
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
         working-directory: "./tools/cli"

@@ -3,8 +3,9 @@ fn main() {
         .expect("Failed to get current dir")
         .join("source-repo");
 
+    let configure_preset = std::env::var("PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET");
     let r = std::process::Command::new("cmake")
-        .args(&["--preset", "default"])
+        .args(&["--preset", configure_preset.as_deref().unwrap_or("default")])
         .current_dir(&source_repo_path)
         .spawn()
         .expect("Failed to spwan cmake")
