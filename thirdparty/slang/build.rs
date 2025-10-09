@@ -38,6 +38,6 @@ fn main() {
     println!("cargo::rustc-link-lib=slang");
     println!(
         "cargo::rustc-link-search={}",
-        source_repo_path.join("build").display()
+        source_repo_path.join("build/RelWithDebInfo/lib").display()
     );
 }
