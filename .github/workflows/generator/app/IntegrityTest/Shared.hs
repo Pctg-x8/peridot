@@ -19,7 +19,7 @@ where
 
 import Data.Function ((&))
 import Data.Functor ((<&>))
-import SlackNotification (SlackReportContext(..), reportJobFailure)
+import SlackNotification (SlackReportContext (..), reportJobFailure)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction
@@ -54,8 +54,9 @@ checkoutHeadStep = GHA.namedAs "Checking out (HEAD commit)" $ Checkout.step (Jus
 
 -- あとでlatest自動取得とかしたいけど面倒だから一旦これでいいや
 setupCargoOutputTranslatorStep :: GHA.Step
-setupCargoOutputTranslatorStep = GHA.namedAs "Setup cargo-json-gha-translator" $
-  GHA.runStep "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+setupCargoOutputTranslatorStep =
+  GHA.namedAs "Setup cargo-json-gha-translator" $
+    GHA.runStep "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
 
 rustCacheStep, thirdpartySubmodulesCacheStep :: GHA.Step
 rustCacheStep =
@@ -67,7 +68,7 @@ rustCacheStep =
     key = keyPrefix <> GHA.mkExpression "hashFiles('**/*.rs', '**/Cargo.toml')"
 thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["thirdparty/slang/source-repo/build", "thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
-checkFormats :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
   reportJobFailure $
     applyModifiers [GHA.namedAs "Code Formats"] $
@@ -85,7 +86,7 @@ checkFormats precondition =
                 ]
         )
 
-checkBaseLayer :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkBaseLayer :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.job steps
   where
     steps =
@@ -100,50 +101,57 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
                 GHA.runStep "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
             ]
 
-checkTools :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
   where
     steps =
-      GHA.withCondition precondition <$>
-        [ checkoutHeadStep
-        , checkoutStep
-        , rustCacheStep
-        , thirdpartySubmodulesCacheStep
-        , setupCargoOutputTranslatorStep
-        , GHA.namedAs "check" $
-            GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-              & GHA.workAt "tools"
-        ]
+      GHA.withCondition precondition
+        <$> [ checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              thirdpartySubmodulesCacheStep,
+              setupCargoOutputTranslatorStep,
+              GHA.runStep "ccache --show-config",
+              GHA.namedAs "Pre-build native deps(slang)" $
+                GHA.runStep "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang --target slang-glslang --target slang-glsl-module"
+                  & GHA.workAt "thirdparty/slang/source-repo",
+              GHA.namedAs "Pre-build native deps(ktx)" $
+                GHA.runStep "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target ktx"
+                  & GHA.workAt "thirdparty/ktx/source-repo",
+              GHA.namedAs "check" $
+                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                  & GHA.workAt "tools"
+            ]
 
-checkModules :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job steps
   where
     steps =
-      GHA.withCondition precondition <$>
-        [ checkoutHeadStep
-        , checkoutStep
-        , rustCacheStep
-        , thirdpartySubmodulesCacheStep
-        , setupCargoOutputTranslatorStep
-        , GHA.namedAs "check" $
-            GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-              & GHA.workAt "modules"
-        ]
+      GHA.withCondition precondition
+        <$> [ checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              thirdpartySubmodulesCacheStep,
+              setupCargoOutputTranslatorStep,
+              GHA.namedAs "check" $
+                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                  & GHA.workAt "modules"
+            ]
 
-checkExamples :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkExamples :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job steps
   where
     steps =
-      GHA.withCondition precondition <$>
-        [ checkoutHeadStep
-        , checkoutStep
-        , rustCacheStep
-        , thirdpartySubmodulesCacheStep
-        , setupCargoOutputTranslatorStep
-        , GHA.namedAs "check" $
-            GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-              & GHA.workAt "examples"
-        ]
+      GHA.withCondition precondition
+        <$> [ checkoutHeadStep,
+              checkoutStep,
+              rustCacheStep,
+              thirdpartySubmodulesCacheStep,
+              setupCargoOutputTranslatorStep,
+              GHA.namedAs "check" $
+                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                  & GHA.workAt "examples"
+            ]
 
 cliBuildStep, archiverBuildStep :: GHA.Step
 cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build"
@@ -156,10 +164,10 @@ withBuilderEnv = setCradleBase . setBuiltinAssetsPath
     setBuiltinAssetsPath =
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
 
-setLibrarySearchPathsUnix :: GHA.HasEnvironmentVariables e => e -> e
+setLibrarySearchPathsUnix :: (GHA.HasEnvironmentVariables e) => e -> e
 setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH)"
 
-checkCradleWindows :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkCradleWindows :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleWindows precondition =
   reportJobFailure $ GHA.namedAs "Cradle(Windows)" $ GHA.jobRunsOn ["windows-latest"] $ GHA.job steps
   where
@@ -184,7 +192,7 @@ checkCradleWindows precondition =
       \$ErrorActionPreference = \"Continue\"\n\
       \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
 
-checkCradleMacos :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkCradleMacos :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleMacos precondition =
   reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ GHA.job steps
   where
@@ -221,7 +229,7 @@ aptInstallStep packages =
     GHA.runStep $
       "sudo apt-get update && sudo apt-get install -y " <> unwords packages
 
-checkCradleLinux :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkCradleLinux :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $ GHA.job steps
   where
     steps =
@@ -246,7 +254,7 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
-checkCradleAndroid :: SlackReportContext m => Functor m => String -> m GHA.Job
+checkCradleAndroid :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android)" $ GHA.job steps
   where
     steps =
@@ -275,7 +283,7 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
-reportSuccessJob :: SlackReportContext m => Functor m => m GHA.Job
+reportSuccessJob :: (SlackReportContext m) => (Functor m) => m GHA.Job
 reportSuccessJob =
   reportSuccessSteps <&> \reportSteps ->
     -- NotificationでHeadの情報見るっぽくて必要そう
