@@ -32,6 +32,13 @@ pullRequestHeadHashExpr, pullRequestNumberExpr :: String
 pullRequestHeadHashExpr = GHA.mkExpression "github.event.pull_request.head.sha"
 pullRequestNumberExpr = GHA.mkExpression "github.event.number"
 
+data Step = Step GHA.Step | StepGroup [Step]
+
+flattenSteps :: [Step] -> [GHA.Step]
+flattenSteps (Step s : xs) = s : flattenSteps xs
+flattenSteps (StepGroup ss : xs) = flattenSteps ss <> flattenSteps xs
+flattenSteps [] = []
+
 llvmVersion :: String
 llvmVersion = "19"
 
@@ -68,22 +75,39 @@ rustCacheStep =
     key = keyPrefix <> GHA.mkExpression "hashFiles('**/*.rs', '**/Cargo.toml')"
 thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["thirdparty/slang/source-repo/build", "thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
+preBuildCDeps :: Step
+preBuildCDeps =
+  StepGroup
+    [ Step $ GHA.namedAs "Cache ccache artifacts" $ CacheAction.step ["~/.cache/ccache"] (GHA.runnerOs <> "-ccache"),
+      Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
+      Step $
+        GHA.namedAs "Pre-build c deps(slang)" $
+          GHA.runStep "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang --target slang-glslang --target slang-glsl-module"
+            & GHA.workAt "thirdparty/slang/source-repo",
+      Step $
+        GHA.namedAs "Pre-build c deps(ktx)" $
+          GHA.runStep "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target ktx"
+            & GHA.workAt "thirdparty/ktx/source-repo"
+    ]
+
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
   reportJobFailure $
     applyModifiers [GHA.namedAs "Code Formats"] $
       GHA.job
         ( GHA.withCondition precondition
-            <$> [ checkoutHeadStep,
-                  checkoutStep,
-                  rustCacheStep,
-                  thirdpartySubmodulesCacheStep,
-                  setupCargoOutputTranslatorStep,
-                  GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
-                  GHA.namedAs "Running Clippy" $ GHA.runStep "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+            <$> flattenSteps
+              [ Step checkoutHeadStep,
+                Step checkoutStep,
+                Step rustCacheStep,
+                preBuildCDeps,
+                Step setupCargoOutputTranslatorStep,
+                Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
+                Step $ GHA.namedAs "Running Clippy" $ GHA.runStep "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+                Step $
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
                     GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
-                ]
+              ]
         )
 
 checkBaseLayer :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
@@ -106,52 +130,51 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
-        <$> [ checkoutHeadStep,
-              checkoutStep,
-              rustCacheStep,
-              CacheAction.step ["~/.cache/ccache"] (GHA.runnerOs <> "-ccache"),
-              setupCargoOutputTranslatorStep,
-              GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
-              GHA.namedAs "Pre-build c deps(slang)" $
-                GHA.runStep "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang --target slang-glslang --target slang-glsl-module"
-                  & GHA.workAt "thirdparty/slang/source-repo",
-              GHA.namedAs "Pre-build c deps(ktx)" $
-                GHA.runStep "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target ktx"
-                  & GHA.workAt "thirdparty/ktx/source-repo",
+        <$> flattenSteps
+          [ Step checkoutHeadStep,
+            Step checkoutStep,
+            Step rustCacheStep,
+            preBuildCDeps,
+            Step setupCargoOutputTranslatorStep,
+            Step $
               GHA.namedAs "check" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "tools"
-            ]
+          ]
 
 checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
-        <$> [ checkoutHeadStep,
-              checkoutStep,
-              rustCacheStep,
-              thirdpartySubmodulesCacheStep,
-              setupCargoOutputTranslatorStep,
+        <$> flattenSteps
+          [ Step checkoutHeadStep,
+            Step checkoutStep,
+            Step rustCacheStep,
+            preBuildCDeps,
+            Step setupCargoOutputTranslatorStep,
+            Step $
               GHA.namedAs "check" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "modules"
-            ]
+          ]
 
 checkExamples :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
-        <$> [ checkoutHeadStep,
-              checkoutStep,
-              rustCacheStep,
-              thirdpartySubmodulesCacheStep,
-              setupCargoOutputTranslatorStep,
+        <$> flattenSteps
+          [ Step checkoutHeadStep,
+            Step checkoutStep,
+            Step rustCacheStep,
+            preBuildCDeps,
+            Step setupCargoOutputTranslatorStep,
+            Step $
               GHA.namedAs "check" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "examples"
-            ]
+          ]
 
 cliBuildStep, archiverBuildStep :: GHA.Step
 cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build"
