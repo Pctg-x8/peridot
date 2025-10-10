@@ -109,7 +109,20 @@ preBuildCDeps =
             & GHA.workAt "thirdparty/slang/source-repo",
       Step $
         GHA.namedAs "Pre-build c deps(ktx)" $
-          GHA.runStep "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target ktx"
+          GHA.runStep
+            ( cmake
+                [ ".",
+                  "-B",
+                  "build",
+                  "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                  "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                  "-DKTX_FEATURE_TESTS=OFF",
+                  "-DKTX_FEATURE_VK_UPLOAD=OFF",
+                  "-DKTX_FEATURE_GL_UPLOAD=OFF",
+                  "-DKTX_FEATURE_TOOLS=OFF"
+                ]
+                <> " && cmake --build build"
+            )
             & GHA.workAt "thirdparty/ktx/source-repo"
     ]
 

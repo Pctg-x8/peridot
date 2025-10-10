@@ -5,7 +5,17 @@ fn main() {
         .join("source-repo");
 
     let r = std::process::Command::new("cmake")
-        .args(&[".", "-B", "build"])
+        .args(&[
+            ".",
+            "-B",
+            "build",
+            "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+            "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+            "-DKTX_FEATURE_TESTS=OFF",
+            "-DKTX_FEATURE_VK_UPLOAD=OFF",
+            "-DKTX_FEATURE_GL_UPLOAD=OFF",
+            "-DKTX_FEATURE_TOOLS=OFF",
+        ])
         .current_dir(&source_repo_path)
         .spawn()
         .expect("Failed to spwan cmake")
@@ -16,7 +26,7 @@ fn main() {
     }
 
     let r = std::process::Command::new("cmake")
-        .args(&["--build", "build", "--target", "ktx"])
+        .args(&["--build", "build"])
         .current_dir(&source_repo_path)
         .spawn()
         .expect("Failed to spawn cmake")
@@ -33,5 +43,8 @@ fn main() {
         source_repo_path.join("build").display()
     );
     #[cfg(windows)]
-    println!("cargo::rustc-link-search={}", source_repo_path.join("build\\Debug").display());
+    println!(
+        "cargo::rustc-link-search={}",
+        source_repo_path.join("build\\Debug").display()
+    );
 }
