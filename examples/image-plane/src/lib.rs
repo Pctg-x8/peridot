@@ -63,7 +63,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .expect("image_offset failed");
     debug!("image: {image_width}x{image_height}");
     debug!("image data size: {} offs {offs}", image_data.0.data_size());
-    debug!("ImageFormat: {:?}", image_data.0.vk_format());
+    // debug!("ImageFormat: {:?}", image_data.0.vk_format());
 
     let bgm = Arc::new(RwLock::new(
         e.streaming::<StreamingPlayableWav>("bgm")
@@ -165,7 +165,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     width: image_width,
                     height: image_height,
                 },
-                image_data.0.vk_format(),
+                br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
             )
             .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
             .init_layout(br::ImageLayout::Preinitialized),

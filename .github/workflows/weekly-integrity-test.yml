@@ -355,6 +355,9 @@ jobs:
         name: Build CLI
         run: cargo build
         working-directory: "./tools/cli"
+      - if: 'true'
+        name: Copy thirdparty DLLs
+        run: "Copy-Item -Path thirdparty/ktx/source-repo/build/Debug/ktx.dll -Destination tools/target/debug/ktx.dll\nCopy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/slang.dll -Destination tools/target/debug/slang.dll\nCopy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll\nCopy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/slang-glsl-module.dll -Destination tools/target/debug/slang-glsl-module.dll"
       - env:
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"

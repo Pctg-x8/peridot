@@ -29,7 +29,6 @@ import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
-import Workflow.GitHub.Actions.Predefined.InstallLLVM qualified as InstallLLVMAction
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
 import Workflow.GitHub.Actions.Predefined.SetupJava qualified as SetupJavaAction
 
@@ -43,13 +42,6 @@ flattenSteps :: [Step] -> [GHA.Step]
 flattenSteps (Step s : xs) = s : flattenSteps xs
 flattenSteps (StepGroup ss : xs) = flattenSteps ss <> flattenSteps xs
 flattenSteps [] = []
-
-llvmVersion :: String
-llvmVersion = "19"
-
-llvmInstallStep, llvmCacheStep :: GHA.Step
-llvmInstallStep = GHA.namedAs "Install LLVM" $ InstallLLVMAction.step llvmVersion
-llvmCacheStep = GHA.namedAs "Initialize LLVM Cache" $ CacheAction.step ["./llvm"] (GHA.runnerOs <> "-llvm-" <> llvmVersion)
 
 preconditionRecordBeginTimeStamp :: GHA.Step
 preconditionRecordBeginTimeStamp =
@@ -259,7 +251,17 @@ checkCradleWindows precondition =
             Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheWindowsVariants,
-            Step $ cliBuildStep & GHA.env "PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET" "vs2022", -- CI環境だとなんかうまくclangを見つけられないのでmsvcでビルド(mingwだとdxcのコンパイルに失敗する)
+            -- CI環境だとなんかうまくclangを見つけられないのでmsvcでビルド(mingwだとdxcのコンパイルに失敗する)
+            Step $ cliBuildStep & GHA.env "PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET" "vs2022",
+            Step $
+              GHA.namedAs "Copy thirdparty DLLs" $
+                GHA.runStep
+                  """
+                  Copy-Item -Path thirdparty/ktx/source-repo/build/Debug/ktx.dll -Destination tools/target/debug/ktx.dll
+                  Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/slang.dll -Destination tools/target/debug/slang.dll
+                  Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll
+                  Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/slang-glsl-module.dll -Destination tools/target/debug/slang-glsl-module.dll
+                  """,
             Step $ GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
             Step $ GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
           ]
