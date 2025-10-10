@@ -822,9 +822,13 @@ pub struct ktxAstcParams {
     pub inputSwizzle: [core::ffi::c_char; 4],
 }
 
-unsafe extern "system" {
+// TODO: kind = dylibにしないとWindowsだとグローバル定数のリンクがうまくいかない
+#[link(name = "ktx", kind = "dylib")]
+unsafe extern "C" {
     pub static KTX_ETC1S_DEFAULT_COMPRESSION_LEVEL: u32;
+}
 
+unsafe extern "system" {
     pub fn ktxTexture2_CompressAstcEx(
         this: *mut ktxTexture2,
         params: *mut ktxAstcParams,
