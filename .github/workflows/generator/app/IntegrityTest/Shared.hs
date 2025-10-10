@@ -260,7 +260,6 @@ checkCradleWindows precondition =
                   Copy-Item -Path thirdparty/ktx/source-repo/build/Debug/ktx.dll -Destination tools/target/debug/ktx.dll
                   Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/bin/slang.dll -Destination tools/target/debug/slang.dll
                   Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/bin/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll
-                  Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/bin/slang-glsl-module.dll -Destination tools/target/debug/slang-glsl-module.dll
                   """,
             Step $ GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
             Step $ GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
