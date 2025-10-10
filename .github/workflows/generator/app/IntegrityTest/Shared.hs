@@ -82,23 +82,26 @@ rustCacheStep =
 cmake :: [String] -> String
 cmake args = unwords ("cmake" : args)
 
-data CCachePlatformVariants = CCachePlatformVariants {ccInstallStep :: Step, ccCacheDirectoryPath :: String}
+data CCachePlatformVariants = CCachePlatformVariants {ccInstallStep :: Step, ccCacheDirectoryPath :: String, ccSlangConfigurePreset :: String}
 
 ccacheUbuntuVariants, ccacheWindowsVariants, ccacheMacVariants :: CCachePlatformVariants
 ccacheUbuntuVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
-      ccCacheDirectoryPath = "~/.cache/ccache"
+      ccCacheDirectoryPath = "~/.cache/ccache",
+      ccSlangConfigurePreset = "default"
     }
 ccacheWindowsVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache",
-      ccCacheDirectoryPath = "~/AppData/Roaming/ccache"
+      ccCacheDirectoryPath = "~/AppData/Roaming/ccache",
+      ccSlangConfigurePreset = "vs2022"
     }
 ccacheMacVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "brew install ccache",
-      ccCacheDirectoryPath = "~/Library/Caches/ccache"
+      ccCacheDirectoryPath = "~/Library/Caches/ccache",
+      ccSlangConfigurePreset = "default"
     }
 
 preBuildCDeps :: CCachePlatformVariants -> Step
@@ -111,7 +114,7 @@ preBuildCDeps variants =
           GHA.runStep
             ( cmake
                 [ "--preset",
-                  "default",
+                  ccSlangConfigurePreset variants,
                   "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
                   "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
                   "-DSLANG_ENABLE_SLANG_RHI=FALSE",
