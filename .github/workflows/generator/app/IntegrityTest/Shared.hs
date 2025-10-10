@@ -86,7 +86,7 @@ preBuildCDeps =
       Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
-          GHA.runStep "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset debug -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang --target slang-glslang --target slang-glsl-module"
+          GHA.runStep "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang slang-glslang slang-glsl-module"
             & GHA.workAt "thirdparty/slang/source-repo",
       Step $
         GHA.namedAs "Pre-build c deps(ktx)" $
