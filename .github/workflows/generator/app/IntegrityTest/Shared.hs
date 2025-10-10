@@ -79,6 +79,9 @@ rustCacheStep =
     key = keyPrefix <> GHA.mkExpression "hashFiles('**/*.rs', '**/Cargo.toml')"
 thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["thirdparty/slang/source-repo/build", "thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
+cmake :: [String] -> String
+cmake args = unwords ("cmake" : args)
+
 preBuildCDeps :: Step
 preBuildCDeps =
   StepGroup
@@ -86,7 +89,23 @@ preBuildCDeps =
       Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
-          GHA.runStep "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE --target slang slang-glslang slang-glsl-module"
+          GHA.runStep
+            ( cmake
+                [ "--preset",
+                  "default",
+                  "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                  "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                  "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+                  "-DSLANG_ENABLE_GFX=FALSE",
+                  "-DSLANG_ENABLE_SLANGD=FALSE",
+                  "-DSLANG_ENABLE_SLANGC=FALSE",
+                  "-DSLANG_ENABLE_SLANGI=FALSE",
+                  "-DSLANG_ENABLE_SLANGRT=FALSE",
+                  "-DSLANG_ENABLE_TESTS=FALSE",
+                  "-DSLANG_ENABLE_EXAMPLES=FALSE"
+                ]
+                <> " && cmake --build --preset releaseWithDebugInfo"
+            )
             & GHA.workAt "thirdparty/slang/source-repo",
       Step $
         GHA.namedAs "Pre-build c deps(ktx)" $

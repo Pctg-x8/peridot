@@ -9,6 +9,13 @@ fn main() {
             "--preset",
             configure_preset.as_deref().unwrap_or("default"),
             "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+            "-DSLANG_ENABLE_GFX=FALSE",
+            "-DSLANG_ENABLE_SLANGD=FALSE",
+            "-DSLANG_ENABLE_SLANGC=FALSE",
+            "-DSLANG_ENABLE_SLANGI=FALSE",
+            "-DSLANG_ENABLE_SLANGRT=FALSE",
+            "-DSLANG_ENABLE_TESTS=FALSE",
+            "-DSLANG_ENABLE_EXAMPLES=FALSE",
         ])
         .current_dir(&source_repo_path)
         .spawn()
@@ -20,16 +27,7 @@ fn main() {
     }
 
     let r = std::process::Command::new("cmake")
-        .args(&[
-            "--build",
-            "--preset",
-            "releaseWithDebugInfo",
-            "-DSLANG_ENABLE_SLANG_RHI=FALSE",
-            "--target",
-            "slang",
-            "slang-glslang",
-            "slang-glsl-module",
-        ])
+        .args(&["--build", "--preset", "releaseWithDebugInfo"])
         .current_dir(&source_repo_path)
         .spawn()
         .expect("Failed to spawn cmake")
