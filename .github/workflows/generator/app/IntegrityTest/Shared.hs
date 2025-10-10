@@ -17,6 +17,7 @@ module IntegrityTest.Shared
     Step (..),
     flattenSteps,
     preBuildCDeps,
+    checkoutStep,
   )
 where
 

@@ -38,7 +38,7 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
           applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
             GHA.job $
               -- ここでpreBuildCDepsしてキャッシュを温めておく
-              flattenSteps [Step preconditionRecordBeginTimeStamp, preBuildCDeps]
+              flattenSteps [Step preconditionRecordBeginTimeStamp, Step checkoutStep, preBuildCDeps]
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 
   checkJobs <- do

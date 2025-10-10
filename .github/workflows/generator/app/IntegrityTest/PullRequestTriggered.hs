@@ -58,7 +58,7 @@ preconditions =
     ]
     $ GHA.job
     -- ここでpreBuildCDepsしてキャッシュを温めておく
-    $ flattenSteps [Step preconditionRecordBeginTimeStamp, Step collectChangesStep, preBuildCDeps]
+    $ flattenSteps [Step preconditionRecordBeginTimeStamp, Step checkoutStep, Step collectChangesStep, preBuildCDeps]
   where
     collectChangesStep =
       applyModifiers [GHA.namedAs "Checking Changed Filenames", GHA.identifiedAs "fileck"] $

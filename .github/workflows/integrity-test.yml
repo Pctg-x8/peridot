@@ -659,6 +659,10 @@ jobs:
       - id: begintime
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
+      - name: Checking out
+        uses: "actions/checkout@v4"
+        with:
+          submodules: recursive
       - id: fileck
         name: Checking Changed Filenames
         run: |
