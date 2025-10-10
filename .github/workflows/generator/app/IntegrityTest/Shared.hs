@@ -14,6 +14,9 @@ module IntegrityTest.Shared
     checkCradleLinux,
     checkCradleAndroid,
     reportSuccessJob,
+    Step (..),
+    flattenSteps,
+    preBuildCDeps,
   )
 where
 

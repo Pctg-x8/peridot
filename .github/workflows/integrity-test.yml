@@ -689,6 +689,19 @@ jobs:
           echo "HAS_WORKFLOW_CHANGES?$HAS_WORKFLOW_CHANGES"
           echo "has_code_changes=$HAS_CODE_CHANGES" >> $GITHUB_OUTPUT
           echo "has_workflow_changes=$HAS_WORKFLOW_CHANGES" >> $GITHUB_OUTPUT
+      - name: Cache ccache artifacts
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-ccache"
+          path: "~/.cache/ccache"
+      - name: Install ccache
+        run: "sudo apt-get update && sudo apt-get install ccache"
+      - name: "Pre-build c deps(slang)"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang --target slang-glslang --target slang-glsl-module"
+        working-directory: thirdparty/slang/source-repo
+      - name: "Pre-build c deps(ktx)"
+        run: "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target ktx"
+        working-directory: thirdparty/ktx/source-repo
   report-success:
     name: Report as Success
     needs:
