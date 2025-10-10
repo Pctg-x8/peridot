@@ -54,13 +54,20 @@ preconditionBeginTimestampOutputDef = GHA.jobForwardingStepOutput "begintime" "b
 
 checkoutStep, checkoutHeadStep :: GHA.Step
 checkoutStep = GHA.namedAs "Checking out" $ Checkout.step Nothing & Checkout.submodules Checkout.SubmodulesRecursive
-checkoutHeadStep = GHA.namedAs "Checking out (HEAD commit)" $ Checkout.step (Just pullRequestHeadHashExpr) & Checkout.submodules Checkout.SubmodulesRecursive
+checkoutHeadStep =
+  GHA.namedAs "Checking out (HEAD commit)" $
+    Checkout.step (Just pullRequestHeadHashExpr) & Checkout.submodules Checkout.SubmodulesRecursive
 
 -- あとでlatest自動取得とかしたいけど面倒だから一旦これでいいや
 setupCargoOutputTranslatorStep :: GHA.Step
 setupCargoOutputTranslatorStep =
   GHA.namedAs "Setup cargo-json-gha-translator" $
-    GHA.runStep "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+    GHA.runStep
+      """
+      mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\
+        https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator
+      chmod +x $HOME/.local/bin/cargo-json-gha-translator
+      """
 
 rustCacheStep :: GHA.Step
 rustCacheStep =
@@ -74,7 +81,11 @@ rustCacheStep =
 cmake :: [String] -> String
 cmake args = unwords ("cmake" : args)
 
-data CCachePlatformVariants = CCachePlatformVariants {ccInstallStep :: Step, ccCacheDirectoryPath :: String, ccSlangConfigurePreset :: String}
+data CCachePlatformVariants = CCachePlatformVariants
+  { ccInstallStep :: Step,
+    ccCacheDirectoryPath :: String,
+    ccSlangConfigurePreset :: String
+  }
 
 ccacheUbuntuVariants, ccacheWindowsVariants, ccacheMacVariants :: CCachePlatformVariants
 ccacheUbuntuVariants =
@@ -86,7 +97,7 @@ ccacheUbuntuVariants =
 ccacheWindowsVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache",
-      ccCacheDirectoryPath = "~/AppData/Roaming/ccache",
+      ccCacheDirectoryPath = "~\\AppData\\Roaming\\ccache",
       ccSlangConfigurePreset = "vs2022"
     }
 ccacheMacVariants =
@@ -153,7 +164,13 @@ checkFormats precondition =
                 preBuildCDeps ccacheUbuntuVariants,
                 Step setupCargoOutputTranslatorStep,
                 Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
-                Step $ GHA.namedAs "Running Clippy" $ GHA.runStep "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+                Step $
+                  GHA.namedAs "Running Clippy" $
+                    GHA.runStep
+                      """
+                      set -o pipefail
+                      cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
+                      """,
                 Step $
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
                     GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
@@ -170,9 +187,17 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
               rustCacheStep,
               setupCargoOutputTranslatorStep,
               GHA.namedAs "check" $
-                GHA.runStep "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+                GHA.runStep
+                  """
+                  set -o pipefail
+                  cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
+                  """,
               GHA.namedAs "check(mt)" $
-                GHA.runStep "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+                GHA.runStep
+                  """
+                  set -o pipefail
+                  cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
+                  """
             ]
 
 checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job

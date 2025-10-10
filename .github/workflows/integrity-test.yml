@@ -30,13 +30,13 @@ jobs:
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
-        run: "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        run: "set -o pipefail\ncargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "check(mt)"
-        run: "set -o pipefail; cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        run: "set -o pipefail\ncargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -356,7 +356,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-ccache"
-          path: "~/AppData/Roaming/ccache"
+          path: "~\\AppData\\Roaming\\ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: choco install ccache
@@ -457,7 +457,7 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
@@ -526,13 +526,13 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Rustfmt
         run: cargo fmt -- --check
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Clippy
-        run: "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        run: "set -o pipefail\ncargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Check - Trailing Newline for Source Code Files
         run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
@@ -601,7 +601,7 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
@@ -671,7 +671,7 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
