@@ -109,10 +109,9 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
         <$> [ checkoutHeadStep,
               checkoutStep,
               rustCacheStep,
-              thirdpartySubmodulesCacheStep,
+              CacheAction.step ["~/.cache/ccache"] (GHA.runnerOs <> "-ccache"),
               setupCargoOutputTranslatorStep,
               GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
-              GHA.runStep "ccache --show-config",
               GHA.namedAs "Pre-build c deps(slang)" $
                 GHA.runStep "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang --target slang-glslang --target slang-glsl-module"
                   & GHA.workAt "thirdparty/slang/source-repo",
