@@ -24,6 +24,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -77,6 +78,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
@@ -161,6 +163,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
@@ -223,6 +226,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
@@ -294,6 +298,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
@@ -362,6 +367,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
@@ -415,6 +421,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
@@ -474,6 +481,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
@@ -528,6 +536,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Initialize Thirdparty submodules build cache
         uses: "actions/cache@v4"
