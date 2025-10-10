@@ -60,10 +60,10 @@ setupCargoOutputTranslatorStep = GHA.namedAs "Setup cargo-json-gha-translator" $
 rustCacheStep, thirdpartySubmodulesCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
-    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target"] $
+    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target", "tools/target"] $
       GHA.runnerOs <> "-cargo-" <> hash
   where
-    hash = GHA.mkExpression "hashFiles('**/Cargo.lock')"
+    hash = GHA.mkExpression "hashFiles('**/*.rs', '**/Cargo.toml')"
 thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["thirdparty/slang/source-repo/build", "thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
 checkFormats :: SlackReportContext m => Functor m => String -> m GHA.Job
