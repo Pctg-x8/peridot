@@ -18,6 +18,7 @@ module IntegrityTest.Shared
     flattenSteps,
     preBuildCDeps,
     checkoutStep,
+    ccacheUbuntuVariants,
   )
 where
 
@@ -69,7 +70,7 @@ setupCargoOutputTranslatorStep =
   GHA.namedAs "Setup cargo-json-gha-translator" $
     GHA.runStep "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator && chmod +x $HOME/.local/bin/cargo-json-gha-translator"
 
-rustCacheStep, thirdpartySubmodulesCacheStep :: GHA.Step
+rustCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
     CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target", "tools/target"] key
@@ -77,16 +78,34 @@ rustCacheStep =
   where
     keyPrefix = GHA.runnerOs <> "-cargo-"
     key = keyPrefix <> GHA.mkExpression "hashFiles('**/*.rs', '**/Cargo.toml')"
-thirdpartySubmodulesCacheStep = GHA.namedAs "Initialize Thirdparty submodules build cache" $ CacheAction.step ["thirdparty/slang/source-repo/build", "thirdparty/ktx/source-repo/build"] $ GHA.runnerOs <> "-thirdparty-submodules"
 
 cmake :: [String] -> String
 cmake args = unwords ("cmake" : args)
 
-preBuildCDeps :: Step
-preBuildCDeps =
+data CCachePlatformVariants = CCachePlatformVariants {ccInstallStep :: Step, ccCacheDirectoryPath :: String}
+
+ccacheUbuntuVariants, ccacheWindowsVariants, ccacheMacVariants :: CCachePlatformVariants
+ccacheUbuntuVariants =
+  CCachePlatformVariants
+    { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
+      ccCacheDirectoryPath = "~/.cache/ccache"
+    }
+ccacheWindowsVariants =
+  CCachePlatformVariants
+    { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache",
+      ccCacheDirectoryPath = "~/AppData/Roaming/ccache"
+    }
+ccacheMacVariants =
+  CCachePlatformVariants
+    { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "brew install ccache",
+      ccCacheDirectoryPath = "~/Library/Caches/ccache"
+    }
+
+preBuildCDeps :: CCachePlatformVariants -> Step
+preBuildCDeps variants =
   StepGroup
-    [ Step $ GHA.namedAs "Cache ccache artifacts" $ CacheAction.step ["~/.cache/ccache"] (GHA.runnerOs <> "-ccache"),
-      Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
+    [ Step $ GHA.namedAs "Cache ccache artifacts" $ CacheAction.step [ccCacheDirectoryPath variants] (GHA.runnerOs <> "-ccache"),
+      ccInstallStep variants,
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
           GHA.runStep
@@ -136,7 +155,7 @@ checkFormats precondition =
               [ Step checkoutHeadStep,
                 Step checkoutStep,
                 Step rustCacheStep,
-                preBuildCDeps,
+                preBuildCDeps ccacheUbuntuVariants,
                 Step setupCargoOutputTranslatorStep,
                 Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
                 Step $ GHA.namedAs "Running Clippy" $ GHA.runStep "set -o pipefail; cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
@@ -170,7 +189,7 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ GHA.job steps
           [ Step checkoutHeadStep,
             Step checkoutStep,
             Step rustCacheStep,
-            preBuildCDeps,
+            preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
             Step $
               GHA.namedAs "check" $
@@ -187,7 +206,7 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ GHA.job s
           [ Step checkoutHeadStep,
             Step checkoutStep,
             Step rustCacheStep,
-            preBuildCDeps,
+            preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
             Step $
               GHA.namedAs "check" $
@@ -204,7 +223,7 @@ checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ GHA.job
           [ Step checkoutHeadStep,
             Step checkoutStep,
             Step rustCacheStep,
-            preBuildCDeps,
+            preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
             Step $
               GHA.namedAs "check" $
@@ -232,14 +251,15 @@ checkCradleWindows precondition =
   where
     steps =
       GHA.withCondition precondition
-        <$> [ checkoutHeadStep,
-              checkoutStep,
-              rustCacheStep,
-              thirdpartySubmodulesCacheStep,
-              cliBuildStep & GHA.env "PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET" "vs2022", -- CI環境だとなんかうまくclangを見つけられないのでmsvcでビルド(mingwだとdxcのコンパイルに失敗する)
-              GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
-              GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
-            ]
+        <$> flattenSteps
+          [ Step checkoutHeadStep,
+            Step checkoutStep,
+            Step rustCacheStep,
+            preBuildCDeps ccacheWindowsVariants,
+            Step $ cliBuildStep & GHA.env "PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET" "vs2022", -- CI環境だとなんかうまくclangを見つけられないのでmsvcでビルド(mingwだとdxcのコンパイルに失敗する)
+            Step $ GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
+            Step $ GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
+          ]
 
     integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . GHA.runStep
     integratedTestNormalScript =
@@ -257,15 +277,16 @@ checkCradleMacos precondition =
   where
     steps =
       GHA.withCondition precondition
-        <$> [ checkoutHeadStep,
-              checkoutStep,
-              rustCacheStep,
-              thirdpartySubmodulesCacheStep,
-              cliBuildStep,
-              archiverBuildStep,
-              GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
-              integratedTestStep
-            ]
+        <$> flattenSteps
+          [ Step checkoutHeadStep,
+            Step checkoutStep,
+            Step rustCacheStep,
+            preBuildCDeps ccacheMacVariants,
+            Step cliBuildStep,
+            Step archiverBuildStep,
+            Step $ GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
+            Step integratedTestStep
+          ]
 
     integratedTestStep =
       applyModifiers
@@ -293,16 +314,18 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
   where
     steps =
       GHA.withCondition precondition
-        <$> [ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
+        <$> flattenSteps
+          [ Step $ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
+            Step $
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
-              checkoutHeadStep,
-              checkoutStep,
-              rustCacheStep,
-              thirdpartySubmodulesCacheStep,
-              cliBuildStep,
-              integratedTestStep
-            ]
+            Step checkoutHeadStep,
+            Step checkoutStep,
+            Step rustCacheStep,
+            preBuildCDeps ccacheUbuntuVariants,
+            Step cliBuildStep,
+            Step integratedTestStep
+          ]
 
     integratedTestStep =
       applyModifiers
@@ -318,19 +341,21 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
   where
     steps =
       GHA.withCondition precondition
-        <$> [ checkoutHeadStep,
-              checkoutStep,
-              rustCacheStep,
-              thirdpartySubmodulesCacheStep,
+        <$> flattenSteps
+          [ Step checkoutHeadStep,
+            Step checkoutStep,
+            Step rustCacheStep,
+            preBuildCDeps ccacheUbuntuVariants,
+            Step $
               GHA.namedAs "Setup Rust for Android" $
                 RustToolchainAction.step
                   & RustToolchainAction.useStable
                   & RustToolchainAction.forTarget "aarch64-linux-android",
-              GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" & SetupJavaAction.javaVersion "17",
-              GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
-              cliBuildStep,
-              integratedTestStep
-            ]
+            Step $ GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" & SetupJavaAction.javaVersion "17",
+            Step $ GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
+            Step cliBuildStep,
+            Step integratedTestStep
+          ]
 
     integratedTestStep =
       applyModifiers

@@ -87,11 +87,22 @@ jobs:
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Thirdparty submodules build cache
+        name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-thirdparty-submodules"
-          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
+          key: "${{ runner.os }}-ccache"
+          path: "~/.cache/ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Install ccache
+        run: "sudo apt-get update && sudo apt-get install ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(slang)"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        working-directory: thirdparty/slang/source-repo
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(ktx)"
+        run: "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
+        working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
@@ -176,11 +187,22 @@ jobs:
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Thirdparty submodules build cache
+        name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-thirdparty-submodules"
-          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
+          key: "${{ runner.os }}-ccache"
+          path: "~/.cache/ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Install ccache
+        run: "sudo apt-get update && sudo apt-get install ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(slang)"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        working-directory: thirdparty/slang/source-repo
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(ktx)"
+        run: "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
+        working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
@@ -243,11 +265,22 @@ jobs:
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Thirdparty submodules build cache
+        name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-thirdparty-submodules"
-          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
+          key: "${{ runner.os }}-ccache"
+          path: "~/Library/Caches/ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Install ccache
+        run: brew install ccache
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(slang)"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        working-directory: thirdparty/slang/source-repo
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(ktx)"
+        run: "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
+        working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
@@ -319,11 +352,22 @@ jobs:
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Thirdparty submodules build cache
+        name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-thirdparty-submodules"
-          path: "thirdparty/slang/source-repo/build\nthirdparty/ktx/source-repo/build"
+          key: "${{ runner.os }}-ccache"
+          path: "~/AppData/Roaming/ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Install ccache
+        run: choco install ccache
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(slang)"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        working-directory: thirdparty/slang/source-repo
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Pre-build c deps(ktx)"
+        run: "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
+        working-directory: thirdparty/ktx/source-repo
       - env:
           PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET: vs2022
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"

@@ -57,8 +57,13 @@ preconditions =
       GHA.jobForwardingStepOutput "fileck" "has_workflow_changes"
     ]
     $ GHA.job
-    -- ここでpreBuildCDepsしてキャッシュを温めておく
-    $ flattenSteps [Step preconditionRecordBeginTimeStamp, Step checkoutStep, Step collectChangesStep, preBuildCDeps]
+    $ flattenSteps
+      [ Step preconditionRecordBeginTimeStamp,
+        Step checkoutStep,
+        Step collectChangesStep,
+        -- ここでpreBuildCDepsしてキャッシュを温めておく
+        preBuildCDeps ccacheUbuntuVariants
+      ]
   where
     collectChangesStep =
       applyModifiers [GHA.namedAs "Checking Changed Filenames", GHA.identifiedAs "fileck"] $
