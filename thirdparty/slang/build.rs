@@ -5,7 +5,11 @@ fn main() {
 
     let configure_preset = std::env::var("PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET");
     let r = std::process::Command::new("cmake")
-        .args(&["--preset", configure_preset.as_deref().unwrap_or("default")])
+        .args(&[
+            "--preset",
+            configure_preset.as_deref().unwrap_or("default"),
+            "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+        ])
         .current_dir(&source_repo_path)
         .spawn()
         .expect("Failed to spwan cmake")
@@ -20,11 +24,10 @@ fn main() {
             "--build",
             "--preset",
             "releaseWithDebugInfo",
+            "-DSLANG_ENABLE_SLANG_RHI=FALSE",
             "--target",
             "slang",
-            "--target",
             "slang-glslang",
-            "--target",
             "slang-glsl-module",
         ])
         .current_dir(&source_repo_path)

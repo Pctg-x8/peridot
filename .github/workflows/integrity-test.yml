@@ -402,7 +402,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang slang-glslang slang-glsl-module"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE --target slang slang-glslang slang-glsl-module"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -471,7 +471,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang slang-glslang slang-glsl-module"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE --target slang slang-glslang slang-glsl-module"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -546,7 +546,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang slang-glslang slang-glsl-module"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE --target slang slang-glslang slang-glsl-module"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -616,7 +616,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang slang-glslang slang-glsl-module"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE --target slang slang-glslang slang-glsl-module"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -701,7 +701,7 @@ jobs:
       - name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target slang slang-glslang slang-glsl-module"
+        run: "cmake --preset default -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE && cmake --build --preset releaseWithDebugInfo -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE --target slang slang-glslang slang-glsl-module"
         working-directory: thirdparty/slang/source-repo
       - name: "Pre-build c deps(ktx)"
         run: "cmake . -B build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache && cmake --build build -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache --target ktx"
