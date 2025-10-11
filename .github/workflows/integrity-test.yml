@@ -93,8 +93,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/.cache/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
@@ -196,8 +197,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/.cache/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
@@ -277,8 +279,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/Library/Caches/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: brew install ccache
@@ -367,8 +370,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~\\AppData\\Roaming\\ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: choco install ccache
@@ -455,8 +459,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/.cache/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
@@ -527,8 +532,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/.cache/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
@@ -605,8 +611,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/.cache/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
@@ -678,8 +685,9 @@ jobs:
         name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/.cache/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
@@ -765,8 +773,9 @@ jobs:
       - name: Cache ccache artifacts
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-ccache"
+          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
           path: "~/.cache/ccache"
+          restore-keys: "${{ runner.os }}-ccache-"
       - name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - name: "Pre-build c deps(slang)"

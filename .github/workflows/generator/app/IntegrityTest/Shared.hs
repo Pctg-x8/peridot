@@ -24,6 +24,7 @@ where
 
 import Data.Function ((&))
 import Data.Functor ((<&>))
+import Data.List (intercalate)
 import SlackNotification (SlackReportContext (..), reportJobFailure)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
@@ -110,7 +111,10 @@ ccacheMacVariants =
 preBuildCDeps :: CCachePlatformVariants -> Step
 preBuildCDeps variants =
   StepGroup
-    [ Step $ GHA.namedAs "Cache ccache artifacts" $ CacheAction.step [ccCacheDirectoryPath variants] (GHA.runnerOs <> "-ccache"),
+    [ Step $
+        GHA.namedAs "Cache ccache artifacts" $
+          CacheAction.step [ccCacheDirectoryPath variants] (ccCachePrefix <> ccTargetHash)
+            & CacheAction.restoreKeys [ccCachePrefix],
       ccInstallStep variants,
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
@@ -156,6 +160,21 @@ preBuildCDeps variants =
             )
             & GHA.workAt "thirdparty/ktx/source-repo"
     ]
+  where
+    ccCachePrefix = GHA.runnerOs <> "-ccache-"
+    ccTargetHash = GHA.mkExpression ("hashFiles(" <> intercalate ", " (map (\x -> "'" <> x <> "'") hashFileTargets) <> ")")
+    hashFileTargets =
+      [ "thirdparty/slang/source-repo/**/*.c",
+        "thirdparty/slang/source-repo/**/*.h",
+        "thirdparty/slang/source-repo/**/*.cpp",
+        "thirdparty/slang/source-repo/**/*.hpp",
+        "thirdparty/slang/source-repo/**/*.inl",
+        "thirdparty/ktx/source-repo/**/*.c",
+        "thirdparty/ktx/source-repo/**/*.h",
+        "thirdparty/ktx/source-repo/**/*.cpp",
+        "thirdparty/ktx/source-repo/**/*.hpp",
+        "thirdparty/ktx/source-repo/**/*.inl"
+      ]
 
 skipCMakeBuilds :: (GHA.HasEnvironmentVariables e) => e -> e
 skipCMakeBuilds = GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1" . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
