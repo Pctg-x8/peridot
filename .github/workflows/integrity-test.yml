@@ -11,12 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
         with:
@@ -37,6 +31,10 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "check(mt)"
         run: "set -o pipefail\ncargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -71,12 +69,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -136,6 +128,10 @@ jobs:
         run: "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
@@ -175,12 +171,6 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install extra packages
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -224,6 +214,10 @@ jobs:
         run: "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
@@ -257,12 +251,6 @@ jobs:
       id-token: write
     runs-on: macos-latest
     steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -315,6 +303,10 @@ jobs:
         run: "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
@@ -348,12 +340,6 @@ jobs:
       id-token: write
     runs-on: windows-latest
     steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -406,6 +392,10 @@ jobs:
         name: cargo check for transparent-back
         run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
@@ -437,12 +427,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -481,6 +465,10 @@ jobs:
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: examples
       - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
@@ -510,12 +498,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -559,6 +541,10 @@ jobs:
         name: Running Check - Trailing Newline for Source Code Files
         run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
       - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
@@ -589,12 +575,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -633,6 +613,10 @@ jobs:
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: modules
       - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:
@@ -663,12 +647,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -706,6 +684,10 @@ jobs:
         name: check
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: tools
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -810,6 +792,9 @@ jobs:
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
+      - uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
         with:

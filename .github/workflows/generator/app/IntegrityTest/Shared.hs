@@ -186,8 +186,7 @@ checkFormats precondition =
       GHA.job
         ( GHA.withCondition precondition
             <$> flattenSteps
-              [ Step checkoutHeadStep,
-                Step checkoutStep,
+              [ Step checkoutStep,
                 Step rustCacheStep,
                 preBuildCDeps ccacheUbuntuVariants,
                 Step setupCargoOutputTranslatorStep,
@@ -210,8 +209,7 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
   where
     steps =
       GHA.withCondition precondition
-        <$> [ checkoutHeadStep,
-              checkoutStep,
+        <$> [ checkoutStep,
               rustCacheStep,
               setupCargoOutputTranslatorStep,
               GHA.namedAs "check" $
@@ -234,8 +232,7 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ skipCMakeBuil
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutHeadStep,
-            Step checkoutStep,
+          [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -251,8 +248,7 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ skipCMake
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutHeadStep,
-            Step checkoutStep,
+          [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -268,8 +264,7 @@ checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ skipCMa
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutHeadStep,
-            Step checkoutStep,
+          [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -300,8 +295,7 @@ checkCradleWindows precondition =
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutHeadStep,
-            Step checkoutStep,
+          [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheWindowsVariants,
             Step cliBuildStep,
@@ -334,8 +328,7 @@ checkCradleMacos precondition =
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutHeadStep,
-            Step checkoutStep,
+          [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheMacVariants,
             Step cliBuildStep,
@@ -375,7 +368,6 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
             Step $
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
-            Step checkoutHeadStep,
             Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
@@ -398,8 +390,7 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutHeadStep,
-            Step checkoutStep,
+          [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step $
