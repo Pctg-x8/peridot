@@ -181,7 +181,7 @@ cdepsEnvVars =
   GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1"
     . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
     -- NinjaでビルドするとRelWithDebInfoじゃなくてReleaseに生成されるらしい
-    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace)")
+    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace)")
 
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
