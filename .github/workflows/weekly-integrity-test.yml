@@ -9,13 +9,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -66,13 +66,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -165,13 +165,13 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -242,13 +242,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -328,13 +328,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -412,13 +412,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -480,13 +480,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -554,13 +554,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -623,13 +623,13 @@ jobs:
     steps:
       - if: 'true'
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: 'true'
@@ -688,7 +688,7 @@ jobs:
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
       - name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - name: Cache ccache artifacts
@@ -722,11 +722,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive

@@ -12,13 +12,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -73,13 +73,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -176,13 +176,13 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -257,13 +257,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -347,13 +347,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -435,13 +435,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -507,13 +507,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -585,13 +585,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -658,13 +658,13 @@ jobs:
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -729,7 +729,7 @@ jobs:
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
       - name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - id: fileck
@@ -793,11 +793,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           submodules: recursive
       - name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
           submodules: recursive
