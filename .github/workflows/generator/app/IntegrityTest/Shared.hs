@@ -143,6 +143,8 @@ preBuildCDeps variants =
                   [ ".",
                     "-B",
                     "build",
+                    "-G",
+                    "Ninja",
                     "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
                     "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
                     "-DKTX_FEATURE_TESTS=OFF",
