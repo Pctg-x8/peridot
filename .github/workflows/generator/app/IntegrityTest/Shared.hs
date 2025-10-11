@@ -84,7 +84,7 @@ cmake args = unwords ("cmake" : args)
 data CCachePlatformVariants = CCachePlatformVariants
   { ccInstallStep :: Step,
     ccCacheDirectoryPath :: String,
-    ccSlangConfigurePreset :: String
+    ccCommandPrelude :: Maybe String
   }
 
 ccacheUbuntuVariants, ccacheWindowsVariants, ccacheMacVariants :: CCachePlatformVariants
@@ -92,19 +92,19 @@ ccacheUbuntuVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
       ccCacheDirectoryPath = "~/.cache/ccache",
-      ccSlangConfigurePreset = "default"
+      ccCommandPrelude = Nothing
     }
 ccacheWindowsVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache",
       ccCacheDirectoryPath = "~\\AppData\\Roaming\\ccache",
-      ccSlangConfigurePreset = "vs2022"
+      ccCommandPrelude = Just "call \"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Auxiliary\\Build\\vcvarsall.bat\" x64"
     }
 ccacheMacVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "brew install ccache",
       ccCacheDirectoryPath = "~/Library/Caches/ccache",
-      ccSlangConfigurePreset = "default"
+      ccCommandPrelude = Nothing
     }
 
 preBuildCDeps :: CCachePlatformVariants -> Step
@@ -115,37 +115,41 @@ preBuildCDeps variants =
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
           GHA.runStep
-            ( cmake
-                [ "--preset",
-                  ccSlangConfigurePreset variants,
-                  "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-                  "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-                  "-DSLANG_ENABLE_SLANG_RHI=FALSE",
-                  "-DSLANG_ENABLE_GFX=FALSE",
-                  "-DSLANG_ENABLE_SLANGD=FALSE",
-                  "-DSLANG_ENABLE_SLANGC=FALSE",
-                  "-DSLANG_ENABLE_SLANGI=FALSE",
-                  "-DSLANG_ENABLE_SLANGRT=FALSE",
-                  "-DSLANG_ENABLE_TESTS=FALSE",
-                  "-DSLANG_ENABLE_EXAMPLES=FALSE"
-                ]
+            ( maybe "" (<> " && ") (ccCommandPrelude variants)
+                <> cmake
+                  [ "--preset",
+                    "default",
+                    "-G",
+                    "Ninja",
+                    "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                    "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                    "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+                    "-DSLANG_ENABLE_GFX=FALSE",
+                    "-DSLANG_ENABLE_SLANGD=FALSE",
+                    "-DSLANG_ENABLE_SLANGC=FALSE",
+                    "-DSLANG_ENABLE_SLANGI=FALSE",
+                    "-DSLANG_ENABLE_SLANGRT=FALSE",
+                    "-DSLANG_ENABLE_TESTS=FALSE",
+                    "-DSLANG_ENABLE_EXAMPLES=FALSE"
+                  ]
                 <> " && cmake --build --preset releaseWithDebugInfo"
             )
             & GHA.workAt "thirdparty/slang/source-repo",
       Step $
         GHA.namedAs "Pre-build c deps(ktx)" $
           GHA.runStep
-            ( cmake
-                [ ".",
-                  "-B",
-                  "build",
-                  "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-                  "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-                  "-DKTX_FEATURE_TESTS=OFF",
-                  "-DKTX_FEATURE_VK_UPLOAD=OFF",
-                  "-DKTX_FEATURE_GL_UPLOAD=OFF",
-                  "-DKTX_FEATURE_TOOLS=OFF"
-                ]
+            ( maybe "" (<> " && ") (ccCommandPrelude variants)
+                <> cmake
+                  [ ".",
+                    "-B",
+                    "build",
+                    "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                    "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                    "-DKTX_FEATURE_TESTS=OFF",
+                    "-DKTX_FEATURE_VK_UPLOAD=OFF",
+                    "-DKTX_FEATURE_GL_UPLOAD=OFF",
+                    "-DKTX_FEATURE_TOOLS=OFF"
+                  ]
                 <> " && cmake --build build"
             )
             & GHA.workAt "thirdparty/ktx/source-repo"
@@ -276,8 +280,7 @@ checkCradleWindows precondition =
             Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheWindowsVariants,
-            -- CI環境だとなんかうまくclangを見つけられないのでmsvcでビルド(mingwだとdxcのコンパイルに失敗する)
-            Step $ cliBuildStep & GHA.env "PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET" "vs2022",
+            Step cliBuildStep,
             Step $
               GHA.namedAs "Copy thirdparty DLLs" $
                 GHA.runStep
