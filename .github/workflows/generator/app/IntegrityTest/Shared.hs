@@ -99,7 +99,7 @@ ccacheWindowsVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache",
       ccCacheDirectoryPath = "~\\AppData\\Roaming\\ccache",
-      ccCommandPrelude = Just "call \"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Auxiliary\\Build\\vcvarsall.bat\" x64"
+      ccCommandPrelude = Just "Install-Module Pscx -Scope CurrentUser && Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64"
     }
 ccacheMacVariants =
   CCachePlatformVariants
