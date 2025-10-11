@@ -176,13 +176,17 @@ preBuildCDeps variants =
         "thirdparty/ktx/source-repo/**/*.inl"
       ]
 
-skipCMakeBuilds :: (GHA.HasEnvironmentVariables e) => e -> e
-skipCMakeBuilds = GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1" . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
+cdepsEnvVars :: (GHA.HasEnvironmentVariables e) => e -> e
+cdepsEnvVars =
+  GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1"
+    . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
+    -- NinjaでビルドするとRelWithDebInfoじゃなくてReleaseに生成されるらしい
+    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace)")
 
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
   reportJobFailure $
-    applyModifiers [GHA.namedAs "Code Formats", skipCMakeBuilds] $
+    applyModifiers [GHA.namedAs "Code Formats", cdepsEnvVars] $
       GHA.job
         ( GHA.withCondition precondition
             <$> flattenSteps
@@ -227,7 +231,7 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
             ]
 
 checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ skipCMakeBuilds $ GHA.job steps
+checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ cdepsEnvVars $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
@@ -243,7 +247,7 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ skipCMakeBuil
           ]
 
 checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ skipCMakeBuilds $ GHA.job steps
+checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ cdepsEnvVars $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
@@ -259,7 +263,7 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ skipCMake
           ]
 
 checkExamples :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ skipCMakeBuilds $ GHA.job steps
+checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ cdepsEnvVars $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
@@ -290,7 +294,7 @@ setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format
 
 checkCradleWindows :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleWindows precondition =
-  reportJobFailure $ GHA.namedAs "Cradle(Windows)" $ GHA.jobRunsOn ["windows-latest"] $ skipCMakeBuilds $ GHA.job steps
+  reportJobFailure $ GHA.namedAs "Cradle(Windows)" $ GHA.jobRunsOn ["windows-latest"] $ cdepsEnvVars $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
@@ -323,7 +327,7 @@ checkCradleWindows precondition =
 
 checkCradleMacos :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleMacos precondition =
-  reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ skipCMakeBuilds $ GHA.job steps
+  reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ cdepsEnvVars $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
@@ -359,7 +363,7 @@ aptInstallStep packages =
       "sudo apt-get update && sudo apt-get install -y " <> unwords packages
 
 checkCradleLinux :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $ skipCMakeBuilds $ GHA.job steps
+checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $ cdepsEnvVars $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
@@ -385,7 +389,7 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleAndroid :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android)" $ skipCMakeBuilds $ GHA.job steps
+checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android)" $ cdepsEnvVars $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition

@@ -50,6 +50,7 @@ jobs:
   check-cradle-android:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Android)"
     needs:
@@ -142,6 +143,7 @@ jobs:
   check-cradle-linux:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Linux)"
     needs:
@@ -224,6 +226,7 @@ jobs:
   check-cradle-macos:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(macOS)"
     needs:
@@ -309,6 +312,7 @@ jobs:
   check-cradle-windows:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Windows)"
     needs:
@@ -394,6 +398,7 @@ jobs:
   check-examples:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Examples
     needs:
@@ -463,6 +468,7 @@ jobs:
   check-formats:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Code Formats
     needs:
@@ -535,6 +541,7 @@ jobs:
   check-modules:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Modules
     needs:
@@ -603,6 +610,7 @@ jobs:
   check-tools:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format(\"{0}/thirdparty/slang/source-repo/build/Release/lib\", github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Tools
     needs:

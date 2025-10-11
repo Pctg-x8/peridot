@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 fn main() {
     let source_repo_path = std::env::current_dir()
         .expect("Failed to get current dir")
@@ -42,6 +44,11 @@ fn main() {
     println!("cargo::rustc-link-lib=slang");
     println!(
         "cargo::rustc-link-search={}",
-        source_repo_path.join("build/RelWithDebInfo/lib").display()
+        std::env::var_os("PERIDOT_BUILD_TP_SLANG_LIB_PATH")
+            .map_or_else(
+                || source_repo_path.join("build/RelWithDebInfo/lib"),
+                PathBuf::from
+            )
+            .display()
     );
 }
