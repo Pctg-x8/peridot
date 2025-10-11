@@ -57,6 +57,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-cradle-android:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Android)"
     needs:
       - check-baselayer
@@ -151,6 +154,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-cradle-linux:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Linux)"
     needs:
       - check-baselayer
@@ -235,6 +241,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-cradle-macos:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(macOS)"
     needs:
       - check-baselayer
@@ -322,6 +331,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-cradle-windows:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Windows)"
     needs:
       - check-baselayer
@@ -409,6 +421,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-examples:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Examples
     needs:
       - check-modules
@@ -480,6 +495,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-formats:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Code Formats
     needs:
       - preconditions
@@ -554,6 +572,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-modules:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Modules
     needs:
       - check-baselayer
@@ -624,6 +645,9 @@ jobs:
           report_name: PR Integrity Check
           status: failure
   check-tools:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Tools
     needs:
       - check-baselayer
