@@ -317,6 +317,7 @@ checkCradleWindows precondition = cdepsEnvVars RunnerVariantWindows <$> stdWindo
           [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps RunnerVariantWindows,
+            Step $ GHA.runStep "ls thirdparty/ktx/source-repo/build/Debug",
             Step cliBuildStep,
             Step $
               GHA.namedAs "Copy thirdparty DLLs" $
