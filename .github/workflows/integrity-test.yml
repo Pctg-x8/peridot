@@ -98,6 +98,8 @@ jobs:
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
@@ -204,6 +206,8 @@ jobs:
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
@@ -285,6 +289,8 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: brew install ccache
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
@@ -377,6 +383,8 @@ jobs:
         name: Install ccache
         run: choco install ccache
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
@@ -468,6 +476,8 @@ jobs:
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
@@ -542,6 +552,8 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
@@ -625,6 +637,8 @@ jobs:
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
@@ -700,6 +714,8 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        run: ccache --show-config
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
@@ -793,6 +809,7 @@ jobs:
           restore-keys: "${{ runner.os }}-ccache-"
       - name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
+      - run: ccache --show-config
       - name: "Pre-build c deps(slang)"
         run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo

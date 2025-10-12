@@ -99,6 +99,7 @@ preBuildCDeps variant =
           CacheAction.step [cacheDirectoryPath] (ccCachePrefix <> ccTargetHash)
             & CacheAction.restoreKeys [ccCachePrefix],
       installStep,
+      Step $ GHA.runStep "ccache --show-config",
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
           GHA.runStep
