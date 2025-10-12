@@ -18,6 +18,7 @@ serde = { version = "1.0", features = ["derive"] }
 console = "0.14"
 regex = "1.4"
 semver = "1.0"
+pbxproj = { path = "../../thirdparty/pbxproj" }
 peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = [
     "with-asset-processing",
 ] }
