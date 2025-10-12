@@ -99,7 +99,6 @@ preBuildCDeps variant =
           CacheAction.step [cacheDirectoryPath] (ccCachePrefix <> ccTargetHash)
             & CacheAction.restoreKeys [ccCachePrefix],
       installStep,
-      Step $ GHA.runStep "ccache --show-config",
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
           GHA.runStep
@@ -163,7 +162,7 @@ preBuildCDeps variant =
 
     cacheDirectoryPath = case variant of
       RunnerVariantUbuntu -> "~/.cache/ccache"
-      RunnerVariantWindows -> "~\\AppData\\Roaming\\ccache"
+      RunnerVariantWindows -> "~\\AppData\\Local\\ccache"
       RunnerVariantMac -> "~/Library/Caches/ccache"
     installStep = case variant of
       RunnerVariantUbuntu -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache"
