@@ -125,7 +125,7 @@ preBuildCDeps variant =
       Step $
         GHA.namedAs "Pre-build c deps(ktx)" $
           GHA.runStep
-            ( maybe "" (<> " && ") commandPrelude
+            ( maybe "" (<> "\n") commandPrelude
                 <> cmake
                   [ ".",
                     "-B",
@@ -140,6 +140,7 @@ preBuildCDeps variant =
                     "-DKTX_FEATURE_TOOLS=OFF"
                   ]
                 <> " && cmake --build build"
+                <> maybe "" ("\n" <>) commandPostKtx
             )
             & GHA.workAt "thirdparty/ktx/source-repo"
     ]
@@ -174,6 +175,16 @@ preBuildCDeps variant =
           """
           Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease
           Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
+          """
+      _ -> Nothing
+    commandPostKtx = case variant of
+      RunnerVariantWindows ->
+        -- NinjaだとどうやらImport Libraryが作られないらしいので自前で作る（ktxのみ？）
+        Just
+          """
+          echo \"EXPORTS\" | Set-Content build\\Debug\\ktx.def
+          dumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def
+          lib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64
           """
       _ -> Nothing
 

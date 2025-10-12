@@ -363,7 +363,7 @@ jobs:
         working-directory: thirdparty/slang/source-repo
       - if: 'true'
         name: "Pre-build c deps(ktx)"
-        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64 && cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
+        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build\necho \"EXPORTS\" | Set-Content build\\Debug\\ktx.def\ndumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def\nlib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64"
         working-directory: thirdparty/ktx/source-repo
       - if: 'true'
         run: ls thirdparty/ktx/source-repo/build/Debug
