@@ -24,7 +24,7 @@ do
     then
         ./ci-test.sh
     else
-        cargo `test_or_check` --verbose --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
+        cargo `test_or_check` --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
     fi
 
     popd

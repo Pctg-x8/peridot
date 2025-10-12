@@ -52,17 +52,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         #[allow(unused_mut)]
         let mut path_segments = path.split('.').peekable();
 
-        #[cfg(feature = "IterationBuild")]
-        if path_segments.peek().map_or(false, |&s| s == "builtin") {
-            // Switch base to external builtin path
-            path_segments.next();
-            let mut apath = self.builtin_asset_basedir.clone();
-            apath.extend(path_segments);
-            apath.set_extension(ext);
-
-            return File::open(apath);
-        }
-
         let mut apath = self.basedir.clone();
         apath.extend(path_segments);
         apath.set_extension(ext);

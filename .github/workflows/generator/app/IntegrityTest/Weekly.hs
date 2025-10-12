@@ -3,13 +3,13 @@
 module IntegrityTest.Weekly (weeklyIntegrityTest) where
 
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
+import Data.Functor.Identity (runIdentity)
 import Data.Map qualified as M
 import IntegrityTest.Shared
 import SlackNotification
 import Utils
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.JobGroupComposer ((~=>))
-import Data.Functor.Identity (runIdentity)
 
 weeklySlackNotifyProvider :: SlackNotificationProvider
 weeklySlackNotifyProvider = SlackNotificationProvider succ' fail'
@@ -36,7 +36,14 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
   let preconditions' =
         M.singleton "preconditions" $
           applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
-            GHA.job [preconditionRecordBeginTimeStamp]
+            GHA.job $
+              flattenSteps
+                [ Step disableAPTManualUpdateStep,
+                  Step preconditionRecordBeginTimeStamp,
+                  Step checkoutStep,
+                  -- ここでpreBuildCDepsしてキャッシュを温めておく
+                  preBuildCDeps RunnerVariantUbuntu
+                ]
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 
   checkJobs <- do

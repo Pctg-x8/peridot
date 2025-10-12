@@ -15,6 +15,7 @@ members = [
     "modules/memory-manager",
     "modules/semantic-shader",
     "modules/rendering-configuration",
+    "modules/asset-processing",
 ]
 
 [workspace.dependencies]
@@ -23,6 +24,7 @@ tracing = "0.1"
 async-std = "1.13"
 futures-util = "0.3"
 cfg-if = "1.0"
+thiserror = "2.0"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

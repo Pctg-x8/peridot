@@ -1,4 +1,4 @@
-use crate::tokenizer::{
+use super::tokenizer::{
     self, CloseBracket, CloseParen, Colon, Comma, Equal, Identifier, Keyword, KwEnd, KwPass,
     KwProperties, KwRenderOption, KwShader, KwUse, KwVertexBindings, NumLit, OpenBracket,
     OpenParen, StrLit, Token,

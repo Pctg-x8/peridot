@@ -74,9 +74,6 @@ executable generator-exe
   main-is: Main.hs
   other-modules:
       AutoDeliveryDev
-      CustomAction.CheckBuildBaseLayer
-      CustomAction.CheckBuildSubdirectory
-      CustomAction.CodeFormChecker
       CustomAction.CreateDevDeliverPRs
       CustomAction.PostCINotifications
       DocumentDeployment
