@@ -197,8 +197,8 @@ cdepsEnvVars :: (GHA.HasEnvironmentVariables e) => e -> e
 cdepsEnvVars =
   GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1"
     . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
-    -- CIではDebugでビルドしてるのでそれを指定
-    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace)")
+    -- CIではDebugでビルドしてるのでそれを指定（ただしWindows以外ではなぜかRelease以下に生成される）
+    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "runner.os == 'Windows' && format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) || format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace)")
 
 stdBashStep :: String -> GHA.Step
 stdBashStep command = GHA.runStep command & GHA.stepUseShell "bash --noprofile --norc -eo pipefail"
@@ -320,8 +320,8 @@ checkCradleWindows precondition =
                 GHA.runStep
                   """
                   Copy-Item -Path thirdparty/ktx/source-repo/build/Debug/ktx.dll -Destination tools/target/debug/ktx.dll
-                  Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/bin/slang.dll -Destination tools/target/debug/slang.dll
-                  Copy-Item -Path thirdparty/slang/source-repo/build/RelWithDebInfo/bin/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll
+                  Copy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang.dll -Destination tools/target/debug/slang.dll
+                  Copy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll
                   """,
             Step $ GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
             Step $ GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
@@ -352,7 +352,7 @@ checkCradleMacos precondition =
               GHA.namedAs "Add rpath for cdeps(CI special path)" $
                 GHA.runStep
                   """
-                  install_name_tool -add_rpath $(realpath ./thirdparty/slang/source-repo/build/Debug/lib) tools/target/debug/peridot
+                  install_name_tool -add_rpath $(realpath ./thirdparty/slang/source-repo/build/Release/lib) tools/target/debug/peridot
                   install_name_tool -add_rpath $(realpath ./thirdparty/ktx/source-repo/build/) tools/target/debug/peridot
                   """,
             Step archiverBuildStep,
