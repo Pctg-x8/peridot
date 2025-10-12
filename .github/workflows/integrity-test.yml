@@ -293,13 +293,12 @@ jobs:
         name: "Pre-build c deps(ktx)"
         run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
         working-directory: thirdparty/ktx/source-repo
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      - env:
+          RUSTFLAGS: "${{ format('-Clink-arg=\"-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib\" -Clink-arg=\"-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build\"', github.workspace) }}"
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
         working-directory: "./tools/cli"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Add rpath for cdeps(CI special path)"
-        run: "install_name_tool -add_rpath $(realpath ./thirdparty/slang/source-repo/build/Release/lib) tools/target/debug/peridot\ninstall_name_tool -add_rpath $(realpath ./thirdparty/ktx/source-repo/build/) tools/target/debug/peridot"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build archiver
         run: cargo build

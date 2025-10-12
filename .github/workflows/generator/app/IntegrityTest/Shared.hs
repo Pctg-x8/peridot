@@ -349,14 +349,9 @@ checkCradleMacos precondition = cdepsEnvVars RunnerVariantMac . platformExtraEnv
           [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps RunnerVariantMac,
-            Step cliBuildStep,
             Step $
-              GHA.namedAs "Add rpath for cdeps(CI special path)" $
-                GHA.runStep
-                  """
-                  install_name_tool -add_rpath $(realpath ./thirdparty/slang/source-repo/build/Release/lib) tools/target/debug/peridot
-                  install_name_tool -add_rpath $(realpath ./thirdparty/ktx/source-repo/build/) tools/target/debug/peridot
-                  """,
+              cliBuildStep
+                & GHA.env "RUSTFLAGS" (GHA.mkExpression "format('-Clink-arg=\"-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib\" -Clink-arg=\"-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build\"', github.workspace)"),
             Step archiverBuildStep,
             Step $ GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
             Step integratedTestStep
