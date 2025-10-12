@@ -1,5 +1,7 @@
 fn main() {
-    if cfg!(target_os = "macos") {
+    if cfg!(target_os = "macos")
+        && std::env::var_os("PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH").is_none_or(|x| x != "1")
+    {
         // TODO: デバッグ用 正式にrpathどう設定するか......
         println!(
             "cargo::rustc-link-arg-bins=-Wl,-rpath,{}",

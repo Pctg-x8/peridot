@@ -339,7 +339,7 @@ checkCradleWindows precondition =
 
 checkCradleMacos :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleMacos precondition =
-  reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ cdepsEnvVars $ GHA.job steps
+  reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ cdepsEnvVars $ platformExtraEnvs $ GHA.job steps
   where
     steps =
       GHA.withCondition precondition
@@ -359,6 +359,8 @@ checkCradleMacos precondition =
             Step $ GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
             Step integratedTestStep
           ]
+
+    platformExtraEnvs = GHA.env "PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH" "1"
 
     integratedTestStep =
       applyModifiers

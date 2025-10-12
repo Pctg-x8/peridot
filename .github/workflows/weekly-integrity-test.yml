@@ -233,6 +233,7 @@ jobs:
           status: failure
   check-cradle-macos:
     env:
+      PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH: '1'
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
       PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ runner.os == 'Windows' && format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) || format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
