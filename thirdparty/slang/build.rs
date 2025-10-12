@@ -47,7 +47,7 @@ fn main() {
         std::env::var_os("PERIDOT_BUILD_TP_SLANG_LIB_PATH")
             .map_or_else(
                 || source_repo_path.join("build/RelWithDebInfo/lib"),
-                PathBuf::from
+                PathBuf::from,
             )
             .display()
     );
