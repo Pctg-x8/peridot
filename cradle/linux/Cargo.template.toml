@@ -20,12 +20,10 @@ xcb = { version = "1.1", optional = true }
 pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 libc = "0.2"
 regex = "1.4"
-wayland-backend = { version = "0.1.2", features = ["client_system"] }
-wayland-client = "0.30.2"
-wayland-protocols = { version = "0.30.0", features = [
-    "client",
-    "staging",
-    "unstable",
+peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
+    "xdg-shell",
+    "xdg-decoration-unstable-v1",
+    "content-type-v1"
 ] }
 pipewire = "0.7.0"
 libspa-sys = "0.7.0"

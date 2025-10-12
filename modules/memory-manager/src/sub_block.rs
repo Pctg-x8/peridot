@@ -217,7 +217,7 @@ impl MemoryBlockSlabCacheFreeAreaManager {
                 block_count -= bc;
             }
 
-            if block_count <= 0 {
+            if block_count == 0 {
                 break;
             }
         }

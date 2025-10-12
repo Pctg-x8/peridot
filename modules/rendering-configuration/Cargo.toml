@@ -1,0 +1,16 @@
+[package]
+name = "peridot-rendering-configuration"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+with-loader-impl = ["dep:peridot"]
+
+[dependencies]
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot = { path = "../../base", optional = true }
+peridot-semantic-shader = { path = "../semantic-shader", default-features = false }
+
+[lints]
+workspace = true

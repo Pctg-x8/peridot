@@ -25,7 +25,7 @@ mod test {
     macro_rules! assert_approx_eq {
         ($left: expr, $right: expr) => {
             let (l, r) = ($left, $right);
-            if (l - r).abs() as f32 > std::f32::EPSILON {
+            if (l - r).abs() as f32 > f32::EPSILON {
                 panic!("approxeq assertion failed!\n   left: {}\n  right: {}", l, r);
             }
         };

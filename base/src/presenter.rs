@@ -12,8 +12,8 @@ pub trait PlatformPresenter {
 
     fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, VulkanGfx>,
-    ) -> br::CmdRecord<'r, VulkanGfx>;
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
     fn render_and_present<'s, 'r>(
@@ -133,7 +133,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
                 &br::SwapchainCreateInfo::new(
                     &surface,
                     buffer_count,
-                    surface_info.fmt.clone(),
+                    surface_info.fmt,
                     ext,
                     br::ImageUsageFlags::COLOR_ATTACHMENT,
                 )
@@ -155,12 +155,8 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             device: g.gfx_device.clone(),
         });
         #[cfg(feature = "debug")]
-        if let Err(e) = g
-            .gfx_device
-            .set_object_name(&chain, c"Peridot-Default Presenter-Swapchain")
-        {
-            tracing::warn!(cause = ?e, "Failed to set swapchain name");
-        }
+        g.gfx_device
+            .dbg_set_object_name(&chain, c"[Peridot.DefaultPresenter] Swapchain");
 
         let n = match unsafe {
             br::vkfn_wrapper::get_swapchain_image_count(g.gfx_device.0.device, chain.handle)
@@ -172,32 +168,30 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             }
         };
         let mut back_buffer_image_handles = Vec::with_capacity(n as _);
-        unsafe {
-            back_buffer_image_handles.set_len(back_buffer_image_handles.capacity());
-        }
         if let Err(e) = unsafe {
             br::vkfn_wrapper::get_swapchain_images(
                 g.gfx_device.0.device,
                 chain.handle,
-                &mut back_buffer_image_handles,
+                back_buffer_image_handles.spare_capacity_mut(),
             )
         } {
             tracing::error!(cause = ?e, "Failed to acquire swapchain images");
             std::process::abort();
         }
+        unsafe {
+            back_buffer_image_handles.set_len(back_buffer_image_handles.capacity());
+        }
 
         #[cfg(feature = "debug")]
         for (n, v) in back_buffer_image_handles.iter().enumerate() {
             let name = unsafe {
-                std::ffi::CString::from_vec_unchecked(
-                    format!("Peridot-Default Presenter-BackBuffer #{n}").into_bytes(),
+                std::ffi::CString::from_vec_with_nul_unchecked(
+                    format!("[Peridot.DefaultPresenter] BackBuffer #{n}\0").into_bytes(),
                 )
             };
-            if let Err(e) = unsafe {
+            unsafe {
                 g.gfx_device
-                    .set_object_name_raw(br::vk::VkImage::OBJECT_TYPE, v, &name)
-            } {
-                tracing::warn!(cause = ?e, "Failed to set swapchain backbuffer image name");
+                    .dbg_set_object_name_raw(br::vk::VkImage::OBJECT_TYPE, v, &name);
             }
         }
 
@@ -205,13 +199,6 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             core: chain,
             buffer_size: ext.into(),
             back_buffer_image_handles,
-        }
-    }
-
-    pub fn nth_backbuffer(&self, index: usize) -> IntegratedSwapchainObjectBackbufferRef<Surface> {
-        IntegratedSwapchainObjectBackbufferRef {
-            handle: self.back_buffer_image_handles[index],
-            _source: self.core.clone(),
         }
     }
 }
@@ -272,7 +259,7 @@ impl<'d> SubmissionBatchBuilder<'d> {
         self
     }
 
-    pub fn build(&self) -> br::SubmitInfo {
+    pub fn build<'s, 'n>(&'s self) -> br::SubmitInfo<'s, 's, 'n> {
         br::SubmitInfo::new(
             &self.wait_semaphores,
             &self.wait_dst_stages,
@@ -366,32 +353,26 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
 
         #[cfg(feature = "debug")]
         {
-            if let Err(e) = unsafe {
-                g.gfx_device.set_object_name_raw(
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
                     br::vk::VK_OBJECT_TYPE_SEMAPHORE,
                     &rendering_order,
-                    c"Peridot-Default Presenter-Rendering Order Semaphore",
-                )
-            } {
-                tracing::warn!(cause = ?e, "Failed to set rendering order semaphore name");
+                    c"[Peridot.DefaultPresenter] Rendering Order Semaphore",
+                );
             }
-            if let Err(e) = unsafe {
-                g.gfx_device.set_object_name_raw(
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
                     br::vk::VK_OBJECT_TYPE_SEMAPHORE,
                     &buffer_ready_order,
-                    c"Peridot-Default Presenter-BufferReady Order Semaphore",
-                )
-            } {
-                tracing::warn!(cause = ?e, "Failed to set buffer ready order semaphore name");
+                    c"[Peridot.DefaultPresenter] BufferReady Order Semaphore",
+                );
             }
-            if let Err(e) = unsafe {
-                g.gfx_device.set_object_name_raw(
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
                     br::vk::VK_OBJECT_TYPE_SEMAPHORE,
                     &present_order,
-                    c"Peridot-Default Presenter-Present Order Semaphore",
-                )
-            } {
-                tracing::warn!(cause = ?e, "Failed to set present order semaphore name");
+                    c"[Peridot.DefaultPresenter] Present Order Semaphore",
+                );
             }
         }
 
@@ -442,10 +423,10 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
     }
 
     // TODO: undefined -> anyが無条件に許可される環境だったらこれいらない気がする synchronization2拡張が有効じゃないとダメとかあったかもしれないのであとでVulkanの仕様をあたる
-    pub fn emit_initialize_back_buffer_commands<'r, E: 'r + ?Sized>(
+    pub fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, E>,
-    ) -> br::CmdRecord<'r, E> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         let image_barriers = self
             .swapchain
             .get()

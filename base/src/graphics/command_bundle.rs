@@ -115,9 +115,6 @@ impl CommandBundle<VulkanGfx> {
             )?
         };
         let mut buffers = Vec::with_capacity(count);
-        unsafe {
-            buffers.set_len(buffers.capacity());
-        }
         match unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 g.gfx_device.0.device,
@@ -126,7 +123,7 @@ impl CommandBundle<VulkanGfx> {
                     count as _,
                     br::CommandBufferLevel::Primary,
                 ),
-                &mut buffers,
+                buffers.spare_capacity_mut(),
             )
         } {
             Ok(_) => (),
@@ -138,6 +135,9 @@ impl CommandBundle<VulkanGfx> {
                 return Err(e);
             }
         }
+        unsafe {
+            buffers.set_len(buffers.capacity());
+        }
 
         Ok(Self {
             buffers,
@@ -147,6 +147,9 @@ impl CommandBundle<VulkanGfx> {
     }
 }
 impl<Device: br::Device> CommandBundle<Device> {
+    /// # Safety
+    ///
+    /// The command buffers in this bundle must not be used anywhere.
     #[inline]
     pub unsafe fn reset(&mut self) -> br::Result<()> {
         unsafe {
@@ -159,22 +162,22 @@ impl<Device: br::Device> CommandBundle<Device> {
     }
 
     #[inline]
-    pub fn iter(&self) -> CommandBundleBufferIter<Device> {
+    pub fn iter<'s>(&'s self) -> CommandBundleBufferIter<'s, Device> {
         CommandBundleBufferIter(&self.buffers, 0, core::marker::PhantomData)
     }
 
     #[inline]
-    pub fn iter_mut(&mut self) -> CommandBundleBufferIterMut<Device> {
+    pub fn iter_mut<'s>(&'s mut self) -> CommandBundleBufferIterMut<'s, Device> {
         CommandBundleBufferIterMut(&mut self.buffers, 0, core::marker::PhantomData)
     }
 
     #[inline]
-    pub fn nth_ref(&self, n: usize) -> CommandBundleBufferRef<Device> {
+    pub fn nth_ref<'s>(&'s self, n: usize) -> CommandBundleBufferRef<'s, Device> {
         CommandBundleBufferRef(self.buffers[n], core::marker::PhantomData)
     }
 
     #[inline]
-    pub fn synchronized_nth(&mut self, n: usize) -> br::SynchronizedCommandBuffer {
+    pub fn synchronized_nth<'s>(&'s mut self, n: usize) -> br::SynchronizedCommandBuffer<'s, 's> {
         // self.0は必ずself.1から生成されてるのでsafe
         unsafe {
             br::SynchronizedCommandBuffer::new_unchecked(

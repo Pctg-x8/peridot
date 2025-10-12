@@ -37,3 +37,6 @@ features = [
     "VK_KHR_get_memory_requirements2",
 ]
 workspace = true
+
+[lints]
+workspace = true

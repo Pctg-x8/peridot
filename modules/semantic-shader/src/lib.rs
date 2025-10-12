@@ -22,22 +22,19 @@ pub enum VertexInputSemantic {
     Misc(u8),
 }
 impl VertexInputSemantic {
-    pub(crate) fn write(
-        &self,
-        writer: &mut (impl std::io::Write + ?Sized),
-    ) -> std::io::Result<usize> {
-        match self {
-            &Self::Misc(n) => writer.write_all(&[0, n]).map(|_| 2),
-            &Self::Position(n) => writer.write_all(&[1, n]).map(|_| 2),
-            &Self::Normal(n) => writer.write_all(&[2, n]).map(|_| 2),
-            &Self::Tangent(n) => writer.write_all(&[3, n]).map(|_| 2),
-            &Self::Binormal(n) => writer.write_all(&[4, n]).map(|_| 2),
-            &Self::Texcoord(n) => writer.write_all(&[5, n]).map(|_| 2),
-            &Self::Color(n) => writer.write_all(&[6, n]).map(|_| 2),
+    pub fn write(&self, writer: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<usize> {
+        match *self {
+            Self::Misc(n) => writer.write_all(&[0, n]).map(|_| 2),
+            Self::Position(n) => writer.write_all(&[1, n]).map(|_| 2),
+            Self::Normal(n) => writer.write_all(&[2, n]).map(|_| 2),
+            Self::Tangent(n) => writer.write_all(&[3, n]).map(|_| 2),
+            Self::Binormal(n) => writer.write_all(&[4, n]).map(|_| 2),
+            Self::Texcoord(n) => writer.write_all(&[5, n]).map(|_| 2),
+            Self::Color(n) => writer.write_all(&[6, n]).map(|_| 2),
         }
     }
 
-    pub(crate) fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
+    pub fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
         let mut buf = [0u8; 2];
         reader.read_exact(&mut buf)?;
 
@@ -49,10 +46,7 @@ impl VertexInputSemantic {
             4 => Ok(Self::Binormal(buf[1])),
             5 => Ok(Self::Texcoord(buf[1])),
             6 => Ok(Self::Color(buf[1])),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "unknown tag for VertexInputSemantic",
-            )),
+            _ => Err(std::io::Error::other("unknown tag for VertexInputSemantic")),
         }
     }
 }
@@ -65,13 +59,13 @@ pub struct ShaderPack<Device: br::Device> {
 }
 impl<Device: br::Device> ShaderPack<Device> {
     /// Creates a wrapper object for GraphicsPipeline's shader stage.
-    pub fn pipeline_vertex_shader(&self) -> br::PipelineShaderStage {
+    pub fn pipeline_vertex_shader<'x, 's>(&'x self) -> br::PipelineShaderStage<'x, 's> {
         self.vertex_module
             .on_stage(br::ShaderStage::Vertex, c"main")
     }
 
     /// Creates a wrapper object for GraphicsPipeline's shader stage.
-    pub fn pipeline_fragment_shader(&self) -> Option<br::PipelineShaderStage> {
+    pub fn pipeline_fragment_shader<'x, 's>(&'x self) -> Option<br::PipelineShaderStage<'x, 's>> {
         self.fragment_module
             .as_ref()
             .map(|m| m.on_stage(br::ShaderStage::Fragment, c"main"))
@@ -150,7 +144,7 @@ impl ShaderPackAsset {
         } else {
             None
         };
-        let data_base_offset = reader.seek(std::io::SeekFrom::Current(0))?;
+        let data_base_offset = reader.stream_position()?;
 
         let InputSemanticMap(input_semantic_location_map) = InputSemanticMap::read(reader)?;
         reader.seek(std::io::SeekFrom::Start(
@@ -222,18 +216,18 @@ impl SpirvBinary {
             core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
         })?;
 
-        Ok(blen + self.0.len() << 2)
+        Ok(blen + (self.0.len() << 2))
     }
 
     fn read(reader: &mut (impl std::io::BufRead + ?Sized)) -> std::io::Result<Self> {
         let VariableUInt(len) = VariableUInt::read(reader)?;
         let mut buf = Vec::with_capacity(len as _);
-        unsafe {
-            buf.set_len(len as _);
-        }
         reader.read_exact(unsafe {
-            core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() << 2)
+            core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.capacity() << 2)
         })?;
+        unsafe {
+            buf.set_len(buf.capacity());
+        }
 
         Ok(Self(buf))
     }

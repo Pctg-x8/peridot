@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["archiver", "cli", "shaderbuild", "semantic-shaderbuild"]
+members = ["archiver", "cli", "shaderbuild", "semantic-shaderbuild", "rendering-configuration-compiler", "rendering-configuration-reader"]
 
 [workspace.dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+clap = "4.5"
+

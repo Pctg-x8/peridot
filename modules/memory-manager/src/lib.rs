@@ -159,7 +159,7 @@ impl MemoryBlock {
     fn suballocate(&mut self, size: usize) -> Option<u64> {
         let slab_object_size = Self::align_object_size(size);
         let slab_level = Self::slab_level(slab_object_size);
-        let allocator = &mut self.slab_cache_by_object_size[slab_level as usize];
+        let allocator = &mut self.slab_cache_by_object_size[slab_level];
 
         tracing::debug!("using level #{slab_level}");
 
@@ -228,7 +228,7 @@ impl MemoryBlock {
 
         tracing::debug!("using level #{slab_level}");
 
-        self.slab_cache_by_object_size[slab_level as usize].free_object(offset, |empty| {
+        self.slab_cache_by_object_size[slab_level].free_object(offset, |empty| {
             self.slab_cache_free_area_manager
                 .release_power_of_two_block(empty.block_info.0, empty.block_info.1);
         });
@@ -429,19 +429,19 @@ impl MemoryManager {
 
             let (mut v, mut units) = (h.size as f64, "bytes");
             if v > 1000.0 {
-                v = v / 1024.0;
+                v /= 1024.0;
                 units = "KB";
             }
             if v > 1000.0 {
-                v = v / 1024.0;
+                v /= 1024.0;
                 units = "MB";
             }
             if v > 1000.0 {
-                v = v / 1024.0;
+                v /= 1024.0;
                 units = "GB";
             }
             if v > 1000.0 {
-                v = v / 1024.0;
+                v /= 1024.0;
                 units = "TB";
             }
 
@@ -808,7 +808,7 @@ impl MemoryManager {
     ) -> br::Result<(Buffer, Vec<u64>)> {
         let mut bp = peridot::BufferPrealloc::new(e);
         let offsets = contents.into_iter().map(|c| bp.add(c)).collect::<Vec<_>>();
-        let obj = self.allocate_device_local_buffer(e, bp.build_desc().and_usage(add_usage))?;
+        let obj = self.allocate_device_local_buffer(e, bp.build_desc().with_usage(add_usage))?;
 
         Ok((obj, offsets))
     }
@@ -824,7 +824,7 @@ impl MemoryManager {
         for (o, c) in offsets.iter_mut().zip(contents.iter()) {
             *o = bp.add(*c);
         }
-        let obj = self.allocate_device_local_buffer(e, bp.build_desc().and_usage(add_usage))?;
+        let obj = self.allocate_device_local_buffer(e, bp.build_desc().with_usage(add_usage))?;
 
         Ok((obj, offsets))
     }

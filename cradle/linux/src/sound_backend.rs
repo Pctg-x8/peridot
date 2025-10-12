@@ -19,7 +19,7 @@ impl AudioBitstreamConverter for SignedInt16LEConverter {
 
     fn convert(&self, floats: &[f32], into: &mut [u8]) {
         for (n, &e) in floats.into_iter().enumerate() {
-            let v = unsafe { std::mem::transmute::<_, u16>((e * 65535.0) as i16) };
+            let v = unsafe { (e * 65535.0).to_int_unchecked::<i16>().cast_unsigned() };
             into[n * 2 + 0] = (v & 0xff) as _;
             into[n * 2 + 1] = ((v >> 8) & 0xff) as _;
         }
@@ -32,7 +32,7 @@ impl AudioBitstreamConverter for SignedInt16BEConverter {
 
     fn convert(&self, floats: &[f32], into: &mut [u8]) {
         for (n, &e) in floats.into_iter().enumerate() {
-            let v = unsafe { std::mem::transmute::<_, u16>((e * 65535.0) as i16) };
+            let v = unsafe { (e * 65535.0).to_int_unchecked::<i16>().cast_unsigned() };
             into[n * 2 + 0] = ((v >> 8) & 0xff) as _;
             into[n * 2 + 1] = (v & 0xff) as _;
         }
@@ -44,7 +44,7 @@ impl AudioBitstreamConverter for SignedInt24LEConverter {
     }
     fn convert(&self, floats: &[f32], into: &mut [u8]) {
         for (n, &e) in floats.into_iter().enumerate() {
-            let v = unsafe { std::mem::transmute::<_, u32>((e * 8388607.0) as i32) };
+            let v = unsafe { (e * 8388607.0).to_int_unchecked::<i32>().cast_unsigned() };
             into[n * 3 + 0] = (v & 0xff) as _;
             into[n * 3 + 1] = ((v >> 8) & 0xff) as _;
             into[n * 3 + 2] = ((v >> 16) & 0xff) as _;

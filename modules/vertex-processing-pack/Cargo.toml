@@ -13,6 +13,9 @@ async-rt-async-std = [
     "dep:async-std",
 ]
 
+[lints]
+workspace = true
+
 [dependencies]
 bedrock = { workspace = true }
 peridot = { path = "../../base", optional = true }

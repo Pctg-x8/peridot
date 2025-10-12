@@ -20,35 +20,83 @@ fn format_message_type(x: VkDebugUtilsMessageTypeFlagsEXT) -> String {
 }
 
 fn format_object_type(x: VkObjectType) -> Cow<'static, str> {
-    match x {
-        VK_OBJECT_TYPE_UNKNOWN => "???".into(),
-        VK_OBJECT_TYPE_INSTANCE => "Instance".into(),
-        VK_OBJECT_TYPE_PHYSICAL_DEVICE => "PhysicalDevice".into(),
-        VK_OBJECT_TYPE_DEVICE => "Device".into(),
-        VK_OBJECT_TYPE_QUEUE => "Queue".into(),
-        VK_OBJECT_TYPE_SEMAPHORE => "Semaphore".into(),
-        VK_OBJECT_TYPE_COMMAND_BUFFER => "CommandBuffer".into(),
-        VK_OBJECT_TYPE_FENCE => "Fence".into(),
-        VK_OBJECT_TYPE_DEVICE_MEMORY => "DeviceMemory".into(),
-        VK_OBJECT_TYPE_BUFFER => "Buffer".into(),
-        VK_OBJECT_TYPE_IMAGE => "Image".into(),
-        VK_OBJECT_TYPE_EVENT => "Event".into(),
-        VK_OBJECT_TYPE_QUERY_POOL => "QueryPool".into(),
-        VK_OBJECT_TYPE_BUFFER_VIEW => "BufferView".into(),
-        VK_OBJECT_TYPE_IMAGE_VIEW => "ImageView".into(),
-        VK_OBJECT_TYPE_SHADER_MODULE => "ShaderModule".into(),
-        VK_OBJECT_TYPE_PIPELINE_CACHE => "PipelineCache".into(),
-        VK_OBJECT_TYPE_PIPELINE_LAYOUT => "PipelineLayout".into(),
-        VK_OBJECT_TYPE_RENDER_PASS => "RenderPass".into(),
-        VK_OBJECT_TYPE_PIPELINE => "Pipeline".into(),
-        VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT => "DescriptorSetLayout".into(),
-        VK_OBJECT_TYPE_SAMPLER => "Sampler".into(),
-        VK_OBJECT_TYPE_DESCRIPTOR_POOL => "DescriptorPool".into(),
-        VK_OBJECT_TYPE_DESCRIPTOR_SET => "DescriptorSet".into(),
-        VK_OBJECT_TYPE_FRAMEBUFFER => "Framebuffer".into(),
-        VK_OBJECT_TYPE_COMMAND_POOL => "CommandPool".into(),
-        _ => format!("UnknownObject#{x}").into(),
+    if x == VK_OBJECT_TYPE_INSTANCE {
+        return "Instance".into();
     }
+    if x == VK_OBJECT_TYPE_PHYSICAL_DEVICE {
+        return "PhysicalDevice".into();
+    }
+    if x == VK_OBJECT_TYPE_DEVICE {
+        return "Device".into();
+    }
+    if x == VK_OBJECT_TYPE_QUEUE {
+        return "Queue".into();
+    }
+    if x == VK_OBJECT_TYPE_SEMAPHORE {
+        return "Semaphore".into();
+    }
+    if x == VK_OBJECT_TYPE_COMMAND_BUFFER {
+        return "CommandBuffer".into();
+    }
+    if x == VK_OBJECT_TYPE_FENCE {
+        return "Fence".into();
+    }
+    if x == VK_OBJECT_TYPE_DEVICE_MEMORY {
+        return "DeviceMemory".into();
+    }
+    if x == VK_OBJECT_TYPE_BUFFER {
+        return "Buffer".into();
+    }
+    if x == VK_OBJECT_TYPE_IMAGE {
+        return "Image".into();
+    }
+    if x == VK_OBJECT_TYPE_EVENT {
+        return "Event".into();
+    }
+    if x == VK_OBJECT_TYPE_QUERY_POOL {
+        return "QueryPool".into();
+    }
+    if x == VK_OBJECT_TYPE_BUFFER_VIEW {
+        return "BufferView".into();
+    }
+    if x == VK_OBJECT_TYPE_IMAGE_VIEW {
+        return "ImageView".into();
+    }
+    if x == VK_OBJECT_TYPE_SHADER_MODULE {
+        return "ShaderModule".into();
+    }
+    if x == VK_OBJECT_TYPE_PIPELINE_CACHE {
+        return "PipelineCache".into();
+    }
+    if x == VK_OBJECT_TYPE_PIPELINE_LAYOUT {
+        return "PipelineLayout".into();
+    }
+    if x == VK_OBJECT_TYPE_RENDER_PASS {
+        return "RenderPass".into();
+    }
+    if x == VK_OBJECT_TYPE_PIPELINE {
+        return "Pipeline".into();
+    }
+    if x == VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT {
+        return "DescriptorSetLayout".into();
+    }
+    if x == VK_OBJECT_TYPE_SAMPLER {
+        return "Sampler".into();
+    }
+    if x == VK_OBJECT_TYPE_DESCRIPTOR_POOL {
+        return "DescriptorPool".into();
+    }
+    if x == VK_OBJECT_TYPE_DESCRIPTOR_SET {
+        return "DescriptorSet".into();
+    }
+    if x == VK_OBJECT_TYPE_FRAMEBUFFER {
+        return "Framebuffer".into();
+    }
+    if x == VK_OBJECT_TYPE_COMMAND_POOL {
+        return "CommandPool".into();
+    }
+
+    format!("UnknownObject#{x}").into()
 }
 
 pub struct MessageIDFormatter<'d>(&'d VkDebugUtilsMessengerCallbackDataEXT);
@@ -103,41 +151,53 @@ fn vk_log(
         let mut s = String::new();
         s.push('[');
         let mut first = true;
-        for x in unsafe { callback_data.queue_labels() } {
+        for x in unsafe {
+            core::slice::from_raw_parts(
+                callback_data.pQueueLabels,
+                callback_data.queueLabelCount as _,
+            )
+        } {
             if !first {
                 s.push(',');
             }
 
             first = false;
-            s.push_str(&unsafe { x.label_name_cstr().to_string_lossy() });
+            s.push_str(&unsafe { core::ffi::CStr::from_ptr(x.pLabelName).to_string_lossy() });
         }
         s.push(']');
 
-        tracing::Span::current().record("queue_labels", &tracing::field::display(s));
+        tracing::Span::current().record("queue_labels", tracing::field::display(s));
     }
 
     if callback_data.cmdBufLabelCount > 0 {
         let mut s = String::new();
         s.push('[');
         let mut first = true;
-        for x in unsafe { callback_data.cmd_buf_labels() } {
+        for x in unsafe {
+            core::slice::from_raw_parts(
+                callback_data.pCmdBufLabels,
+                callback_data.cmdBufLabelCount as _,
+            )
+        } {
             if !first {
                 s.push(',');
             }
 
             first = false;
-            s.push_str(&unsafe { x.label_name_cstr().to_string_lossy() });
+            s.push_str(&unsafe { core::ffi::CStr::from_ptr(x.pLabelName).to_string_lossy() });
         }
         s.push(']');
 
-        tracing::Span::current().record("cmdbuf_labels", &tracing::field::display(s));
+        tracing::Span::current().record("cmdbuf_labels", tracing::field::display(s));
     }
 
     if callback_data.objectCount > 0 {
         let mut s = String::new();
         s.push('[');
         let mut first = true;
-        for x in unsafe { callback_data.objects() } {
+        for x in unsafe {
+            core::slice::from_raw_parts(callback_data.pObjects, callback_data.objectCount as _)
+        } {
             if !first {
                 s.push(',');
             }
@@ -150,15 +210,15 @@ fn vk_log(
                 x.objectHandle
             )
             .expect("formatting failed");
-            if let Some(n) = unsafe { x.object_name_cstr() } {
+            if !x.pObjectName.is_null() {
                 s.push('(');
-                s.push_str(&n.to_string_lossy());
+                s.push_str(&unsafe { core::ffi::CStr::from_ptr(x.pObjectName).to_string_lossy() });
                 s.push(')');
             }
         }
         s.push(']');
 
-        tracing::Span::current().record("objects", &tracing::field::display(s));
+        tracing::Span::current().record("objects", tracing::field::display(s));
     }
 
     let msg = match unsafe { CStr::from_ptr(callback_data.pMessage).to_str() } {

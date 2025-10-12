@@ -1,16 +1,13 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{
-        BufRead, BufReader, Cursor, Error as IOError, ErrorKind, Read, Result as IOResult, Seek,
-        SeekFrom,
-    },
+    io::{BufRead, BufReader, Error as IOError, Read, Result as IOResult, Seek, SeekFrom},
     path::Path,
 };
 
 use crate::{
     AssetEntryHeadingPair, CompressionMethod, EitherArchiveReader, EitherArchiveReaderAsync,
-    WhereArchive, WhereArchiveAsync,
+    WhereArchive,
 };
 use crc::crc32;
 use libflate::deflate as zlib;
@@ -40,13 +37,11 @@ impl From<ArchiveReadError> for IOError {
         match e {
             ArchiveReadError::IO(e) => e,
             ArchiveReadError::IntegrityCheckFailed => {
-                IOError::new(ErrorKind::Other, "Archive Integrity check failed")
+                IOError::other("Archive Integrity check failed")
             }
-            ArchiveReadError::SignatureMismatch => {
-                IOError::new(ErrorKind::Other, "Archive Signature Mismatch")
-            }
+            ArchiveReadError::SignatureMismatch => IOError::other("Archive Signature Mismatch"),
             ArchiveReadError::Lz4DecompressError(e) => {
-                IOError::new(ErrorKind::Other, format!("Lz4DecompressError: {:?}", e))
+                IOError::other(format!("Lz4DecompressError: {:?}", e))
             }
         }
     }
@@ -67,9 +62,9 @@ impl ArchiveReadAsync {
             .await
             .map(async_std::io::BufReader::new)?;
         let (comp, crc) = Self::read_file_header(&mut fi).await?;
-        let mut body = WhereArchiveAsync::FromIO(fi);
+        let mut body = crate::WhereArchiveAsync::FromIO(fi);
         if check_integrity {
-            let input_crc = crc32::checksum_ieee(&body.on_memory().await?[..]);
+            let input_crc = crc32::checksum_ieee(body.on_memory().await?);
             if input_crc != crc {
                 // CRCミスマッチ
                 return Err(ArchiveReadError::IntegrityCheckFailed);
@@ -78,7 +73,7 @@ impl ArchiveReadAsync {
 
         match comp {
             CompressionMethod::Lz4(_) => {
-                body = WhereArchiveAsync::OnMemory(lz4_compression::prelude::decompress(
+                body = crate::WhereArchiveAsync::OnMemory(lz4_compression::prelude::decompress(
                     body.on_memory().await?,
                 )?);
             }
@@ -91,8 +86,8 @@ impl ArchiveReadAsync {
                 )
                 .await?;
                 let mut sink = Vec::with_capacity(ubl as _);
-                zlib::Decoder::new(Cursor::new(compressed)).read_to_end(&mut sink)?;
-                body = WhereArchiveAsync::OnMemory(sink);
+                zlib::Decoder::new(std::io::Cursor::new(compressed)).read_to_end(&mut sink)?;
+                body = crate::WhereArchiveAsync::OnMemory(sink);
             }
             CompressionMethod::Zstd11(ubl) => {
                 // TODO: ライブラリが対応してないので、全部オンメモリに展開してからじゃないと処理できない
@@ -103,8 +98,8 @@ impl ArchiveReadAsync {
                 )
                 .await?;
                 let mut sink = Vec::with_capacity(ubl as _);
-                zstd::Decoder::new(Cursor::new(compressed))?.read_to_end(&mut sink)?;
-                body = WhereArchiveAsync::OnMemory(sink);
+                zstd::Decoder::new(std::io::Cursor::new(compressed))?.read_to_end(&mut sink)?;
+                body = crate::WhereArchiveAsync::OnMemory(sink);
             }
             CompressionMethod::None => (/* Nothing to do */),
         }
@@ -149,7 +144,7 @@ impl ArchiveReadAsync {
         reader: &mut (impl async_std::io::BufRead + Unpin + ?Sized),
     ) -> IOResult<HashMap<String, AssetEntryHeadingPair>> {
         let VariableUInt(count) = VariableUInt::read_async(reader).await?;
-        if count <= 0 {
+        if count == 0 {
             return Ok(HashMap::new());
         }
 
@@ -172,11 +167,16 @@ impl ArchiveReadAsync {
         async_std::io::SeekExt::seek(&mut self.content, SeekFrom::Start(entry_pair.byte_offset))
             .await?;
         let mut sink = Vec::with_capacity(entry_pair.byte_length as _);
+        async_std::io::ReadExt::read_exact(&mut self.content, unsafe {
+            core::mem::transmute::<&mut [core::mem::MaybeUninit<u8>], &mut [u8]>(
+                sink.spare_capacity_mut(),
+            )
+        })
+        .await?;
         unsafe {
-            sink.set_len(entry_pair.byte_length as _);
+            sink.set_len(sink.capacity());
         }
 
-        async_std::io::ReadExt::read_exact(&mut self.content, &mut sink).await?;
         Ok(Some(sink))
     }
 }
@@ -185,7 +185,7 @@ impl ArchiveReadAsync {
         self.entries.keys().map(|k| k.as_str())
     }
 
-    pub fn find<'s>(&'s self, path: &str) -> Option<AssetEntryInfo> {
+    pub fn find(&self, path: &str) -> Option<AssetEntryInfo> {
         self.entries.get(path).map(|x| AssetEntryInfo {
             byte_length: x.byte_length,
             byte_offset: self.content_baseptr + x.relative_offset,
@@ -208,7 +208,7 @@ impl ArchiveRead {
         let (comp, crc) = Self::read_file_header(&mut fi)?;
         let mut body = WhereArchive::FromIO(fi);
         if check_integrity {
-            let input_crc = crc32::checksum_ieee(&body.on_memory()?[..]);
+            let input_crc = crc32::checksum_ieee(body.on_memory()?);
             if input_crc != crc {
                 return Err(ArchiveReadError::IntegrityCheckFailed);
             }
@@ -238,7 +238,7 @@ impl ArchiveRead {
         }
         let mut areader = EitherArchiveReader::new(body);
         let entries = Self::read_asset_entries(&mut areader)?;
-        let content_baseptr = areader.seek(SeekFrom::Current(0))?;
+        let content_baseptr = areader.stream_position()?;
 
         Ok(ArchiveRead {
             entries,
@@ -277,7 +277,7 @@ impl ArchiveRead {
         reader: &mut (impl BufRead + ?Sized),
     ) -> IOResult<HashMap<String, AssetEntryHeadingPair>> {
         let VariableUInt(count) = VariableUInt::read(reader)?;
-        if count <= 0 {
+        if count == 0 {
             return Ok(HashMap::new());
         }
         let mut elements = HashMap::with_capacity(count as _);
@@ -286,18 +286,24 @@ impl ArchiveRead {
             let PascalString(id_ref) = PascalString::read(reader)?;
             elements.insert(id_ref, heading);
         }
-        return Ok(elements);
+
+        Ok(elements)
     }
 
     pub fn read_bin(&mut self, path: &str) -> IOResult<Option<Vec<u8>>> {
         if let Some(entry_pair) = self.find(path) {
             self.content.seek(SeekFrom::Start(entry_pair.byte_offset))?;
             let mut sink = Vec::with_capacity(entry_pair.byte_length as _);
+            self.content.read_exact(unsafe {
+                core::mem::transmute::<&mut [core::mem::MaybeUninit<u8>], &mut [u8]>(
+                    sink.spare_capacity_mut(),
+                )
+            })?;
             unsafe {
-                sink.set_len(entry_pair.byte_length as _);
+                sink.set_len(sink.capacity());
             }
 
-            self.content.read_exact(&mut sink).map(move |_| Some(sink))
+            Ok(Some(sink))
         } else {
             Ok(None)
         }
@@ -305,7 +311,7 @@ impl ArchiveRead {
     pub fn entry_names(&self) -> impl Iterator<Item = &str> {
         self.entries.keys().map(|k| k.as_str())
     }
-    pub fn find<'s>(&'s self, path: &str) -> Option<AssetEntryInfo> {
+    pub fn find(&self, path: &str) -> Option<AssetEntryInfo> {
         self.entries.get(path).map(|x| AssetEntryInfo {
             byte_length: x.byte_length,
             byte_offset: self.content_baseptr + x.relative_offset,
