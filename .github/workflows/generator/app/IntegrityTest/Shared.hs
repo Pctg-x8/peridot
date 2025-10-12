@@ -62,8 +62,8 @@ setupCargoOutputTranslatorStep =
   GHA.namedAs "Setup cargo-json-gha-translator" $
     GHA.runStep
       """
-      mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\
-        https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator
+      mkdir -p $HOME/.local/bin
+      curl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator
       chmod +x $HOME/.local/bin/cargo-json-gha-translator
       """
 
@@ -352,7 +352,7 @@ checkCradleMacos precondition = cdepsEnvVars RunnerVariantMac . platformExtraEnv
             preBuildCDeps RunnerVariantMac,
             Step $
               cliBuildStep
-                & GHA.env "RUSTFLAGS" (GHA.mkExpression "format('-Clink-arg=\"-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib\" -Clink-arg=\"-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build\"', github.workspace)"),
+                & GHA.env "RUSTFLAGS" (GHA.mkExpression "format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace)"),
             Step archiverBuildStep,
             Step $ GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
             Step integratedTestStep

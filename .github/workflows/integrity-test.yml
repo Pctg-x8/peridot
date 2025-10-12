@@ -24,7 +24,7 @@ jobs:
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
@@ -294,7 +294,7 @@ jobs:
         run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
         working-directory: thirdparty/ktx/source-repo
       - env:
-          RUSTFLAGS: "${{ format('-Clink-arg=\"-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib\" -Clink-arg=\"-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build\"', github.workspace) }}"
+          RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build
@@ -479,7 +479,7 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
@@ -554,7 +554,7 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Rustfmt
         run: cargo fmt -- --check
@@ -636,7 +636,7 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
@@ -712,7 +712,7 @@ jobs:
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\\n  https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
