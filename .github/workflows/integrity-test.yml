@@ -28,11 +28,11 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: check
         run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: bash --noprofile --norc -eo pipefail
+        shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "check(mt)"
         run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: bash --noprofile --norc -eo pipefail
+        shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: "failure()"
         uses: "actions/checkout@v5"
         with:
@@ -560,7 +560,7 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Clippy
         run: "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: bash --noprofile --norc -eo pipefail
+        shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Running Check - Trailing Newline for Source Code Files
         run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"

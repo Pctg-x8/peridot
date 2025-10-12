@@ -207,7 +207,7 @@ cdepsEnvVars variant =
       _ -> GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace)"
 
 stdBashStep :: String -> GHA.Step
-stdBashStep command = GHA.runStep command & GHA.stepUseShell "bash --noprofile --norc -eo pipefail"
+stdBashStep command = GHA.runStep command & GHA.stepUseShell "bash --noprofile --norc -eo pipefail {0}"
 
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
