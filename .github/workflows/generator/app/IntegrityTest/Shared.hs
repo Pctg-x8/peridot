@@ -209,33 +209,36 @@ cdepsEnvVars variant =
 stdBashStep :: String -> GHA.Step
 stdBashStep command = GHA.runStep command & GHA.stepUseShell "bash --noprofile --norc -eo pipefail {0}"
 
+stdJob :: (SlackReportContext m, Functor m) => String -> [GHA.Step] -> m GHA.Job
+stdJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.job steps
+
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
-  reportJobFailure $
-    applyModifiers [GHA.namedAs "Code Formats", cdepsEnvVars RunnerVariantUbuntu] $
-      GHA.job
-        ( GHA.withCondition precondition
-            <$> flattenSteps
-              [ Step disableAPTManualUpdateStep,
-                Step checkoutStep,
-                Step rustCacheStep,
-                preBuildCDeps ccacheUbuntuVariants,
-                Step setupCargoOutputTranslatorStep,
-                Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
-                Step $
-                  GHA.namedAs "Running Clippy" $
-                    stdBashStep "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
-                Step $
-                  GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
-                    GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
-              ]
-        )
+  cdepsEnvVars RunnerVariantUbuntu
+    <$> stdJob
+      "Code Formats"
+      ( GHA.withCondition precondition
+          <$> flattenSteps
+            [ Step disableAPTManualUpdateStep,
+              Step checkoutStep,
+              Step rustCacheStep,
+              preBuildCDeps ccacheUbuntuVariants,
+              Step setupCargoOutputTranslatorStep,
+              Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
+              Step $
+                GHA.namedAs "Running Clippy" $
+                  stdBashStep "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
+              Step $
+                GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
+                  GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
+            ]
+      )
 
 checkBaseLayer :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.job steps
-  where
-    steps =
-      GHA.withCondition precondition
+checkBaseLayer precondition =
+  stdJob
+    "Base Layer"
+    ( GHA.withCondition precondition
         <$> [ checkoutStep,
               rustCacheStep,
               setupCargoOutputTranslatorStep,
@@ -244,57 +247,64 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
               GHA.namedAs "check(mt)" $
                 stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
             ]
+    )
 
 checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ cdepsEnvVars RunnerVariantUbuntu $ GHA.job steps
-  where
-    steps =
-      GHA.withCondition precondition
-        <$> flattenSteps
-          [ Step disableAPTManualUpdateStep,
-            Step checkoutStep,
-            Step rustCacheStep,
-            preBuildCDeps ccacheUbuntuVariants,
-            Step setupCargoOutputTranslatorStep,
-            Step $
-              GHA.namedAs "check" $
-                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                  & GHA.workAt "tools"
-          ]
+checkTools precondition =
+  cdepsEnvVars RunnerVariantUbuntu
+    <$> stdJob
+      "Tools"
+      ( GHA.withCondition precondition
+          <$> flattenSteps
+            [ Step disableAPTManualUpdateStep,
+              Step checkoutStep,
+              Step rustCacheStep,
+              preBuildCDeps ccacheUbuntuVariants,
+              Step setupCargoOutputTranslatorStep,
+              Step $
+                GHA.namedAs "check" $
+                  GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                    & GHA.workAt "tools"
+            ]
+      )
 
 checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ cdepsEnvVars RunnerVariantUbuntu $ GHA.job steps
-  where
-    steps =
-      GHA.withCondition precondition
-        <$> flattenSteps
-          [ Step disableAPTManualUpdateStep,
-            Step checkoutStep,
-            Step rustCacheStep,
-            preBuildCDeps ccacheUbuntuVariants,
-            Step setupCargoOutputTranslatorStep,
-            Step $
-              GHA.namedAs "check" $
-                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                  & GHA.workAt "modules"
-          ]
+checkModules precondition =
+  cdepsEnvVars RunnerVariantUbuntu
+    <$> stdJob
+      "Modules"
+      ( GHA.withCondition precondition
+          <$> flattenSteps
+            [ Step disableAPTManualUpdateStep,
+              Step checkoutStep,
+              Step rustCacheStep,
+              preBuildCDeps ccacheUbuntuVariants,
+              Step setupCargoOutputTranslatorStep,
+              Step $
+                GHA.namedAs "check" $
+                  GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                    & GHA.workAt "modules"
+            ]
+      )
 
 checkExamples :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ cdepsEnvVars RunnerVariantUbuntu $ GHA.job steps
-  where
-    steps =
-      GHA.withCondition precondition
-        <$> flattenSteps
-          [ Step disableAPTManualUpdateStep,
-            Step checkoutStep,
-            Step rustCacheStep,
-            preBuildCDeps ccacheUbuntuVariants,
-            Step setupCargoOutputTranslatorStep,
-            Step $
-              GHA.namedAs "check" $
-                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                  & GHA.workAt "examples"
-          ]
+checkExamples precondition =
+  cdepsEnvVars RunnerVariantUbuntu
+    <$> stdJob
+      "Examples"
+      ( GHA.withCondition precondition
+          <$> flattenSteps
+            [ Step disableAPTManualUpdateStep,
+              Step checkoutStep,
+              Step rustCacheStep,
+              preBuildCDeps ccacheUbuntuVariants,
+              Step setupCargoOutputTranslatorStep,
+              Step $
+                GHA.namedAs "check" $
+                  GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                    & GHA.workAt "examples"
+            ]
+      )
 
 cliBuildStep, archiverBuildStep :: GHA.Step
 cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build"
