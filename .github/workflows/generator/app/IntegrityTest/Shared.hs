@@ -112,8 +112,9 @@ ccacheWindowsVariants =
       ccCacheDirectoryPath = "~\\AppData\\Roaming\\ccache",
       ccCommandPrelude =
         Just
+          -- Pscx 4.0.0じゃないとvs2022のサポートがないのでPrereleaseを有効にする（4.0.0正式リリースが来たら消す）
           """
-          Install-Module Pscx -Scope CurrentUser -Force -AllowClobber
+          Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease
           Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
           """
     }
