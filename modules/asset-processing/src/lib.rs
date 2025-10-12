@@ -43,6 +43,8 @@ pub fn process(
     source_path: impl AsRef<Path>,
     options: ProcessOptions,
 ) -> Option<PathBuf> {
+    tracing::info!("Processing...");
+
     let (Some(source_dir), Some(source_file_name)) = (
         source_path.as_ref().parent(),
         source_path.as_ref().file_name(),
