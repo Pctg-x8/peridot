@@ -352,7 +352,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~\\AppData\\Roaming\\ccache"
+          path: "~\\AppData\\Local\\ccache"
           restore-keys: "${{ runner.os }}-ccache-"
       - if: 'true'
         name: Install ccache
@@ -365,8 +365,6 @@ jobs:
         name: "Pre-build c deps(ktx)"
         run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build\necho \"EXPORTS\" | Set-Content build\\Debug\\ktx.def\ndumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def\nlib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64"
         working-directory: thirdparty/ktx/source-repo
-      - if: 'true'
-        run: ls thirdparty/ktx/source-repo/build/Debug
       - if: 'true'
         name: Build CLI
         run: cargo build

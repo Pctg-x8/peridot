@@ -162,7 +162,7 @@ preBuildCDeps variant =
 
     cacheDirectoryPath = case variant of
       RunnerVariantUbuntu -> "~/.cache/ccache"
-      RunnerVariantWindows -> "~\\AppData\\Roaming\\ccache"
+      RunnerVariantWindows -> "~\\AppData\\Local\\ccache"
       RunnerVariantMac -> "~/Library/Caches/ccache"
     installStep = case variant of
       RunnerVariantUbuntu -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache"
@@ -328,7 +328,6 @@ checkCradleWindows precondition = cdepsEnvVars RunnerVariantWindows <$> stdWindo
           [ Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps RunnerVariantWindows,
-            Step $ GHA.runStep "ls thirdparty/ktx/source-repo/build/Debug",
             Step cliBuildStep,
             Step $
               GHA.namedAs "Copy thirdparty DLLs" $

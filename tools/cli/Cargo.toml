@@ -18,5 +18,8 @@ serde = { version = "1.0", features = ["derive"] }
 console = "0.14"
 regex = "1.4"
 semver = "1.0"
-peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = ["with-asset-processing"] }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = [
+    "with-asset-processing",
+] }
 peridot-asset-processing = { path = "../../modules/asset-processing" }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }

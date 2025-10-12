@@ -21,6 +21,11 @@ pub enum SubCommands {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .pretty()
+        .init();
+
     match SubCommands::parse() {
         SubCommands::Build(b) => subcommands::build::run(b),
         SubCommands::Check(b) => subcommands::build::run_check(b),
