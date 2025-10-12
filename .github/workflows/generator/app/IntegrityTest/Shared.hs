@@ -200,6 +200,9 @@ cdepsEnvVars =
     -- CIではDebugでビルドしてるのでそれを指定
     . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace)")
 
+stdBashStep :: String -> GHA.Step
+stdBashStep command = GHA.runStep command & GHA.stepUseShell "bash --noprofile --norc -eo pipefail"
+
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
   reportJobFailure $
@@ -215,11 +218,7 @@ checkFormats precondition =
                 Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
                 Step $
                   GHA.namedAs "Running Clippy" $
-                    GHA.runStep
-                      """
-                      set -o pipefail
-                      cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
-                      """,
+                    stdBashStep "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
                 Step $
                   GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
                     GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
@@ -235,17 +234,9 @@ checkBaseLayer precondition = reportJobFailure $ GHA.namedAs "Base Layer" $ GHA.
               rustCacheStep,
               setupCargoOutputTranslatorStep,
               GHA.namedAs "check" $
-                GHA.runStep
-                  """
-                  set -o pipefail
-                  cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
-                  """,
+                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator",
               GHA.namedAs "check(mt)" $
-                GHA.runStep
-                  """
-                  set -o pipefail
-                  cargo check --package peridot --verbose --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator
-                  """
+                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
             ]
 
 checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
