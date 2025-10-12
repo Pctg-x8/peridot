@@ -71,6 +71,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
         with:
@@ -167,6 +170,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Add External PPA
         run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
@@ -433,6 +439,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
         with:
@@ -504,6 +513,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -583,6 +595,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
         with:
@@ -656,6 +671,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
         with:
@@ -723,6 +741,8 @@ jobs:
       has_workflow_changes: "${{ steps.fileck.outputs.has_workflow_changes }}"
     runs-on: ubuntu-latest
     steps:
+      - name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
       - id: begintime
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"

@@ -19,6 +19,7 @@ module IntegrityTest.Shared
     preBuildCDeps,
     checkoutStep,
     ccacheUbuntuVariants,
+    disableAPTManualUpdateStep,
   )
 where
 
@@ -68,6 +69,16 @@ setupCargoOutputTranslatorStep =
       mkdir -p $HOME/.local/bin && curl -o $HOME/.local/bin/cargo-json-gha-translator -L \\
         https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator
       chmod +x $HOME/.local/bin/cargo-json-gha-translator
+      """
+
+-- https://github.com/actions/runner-images/issues/10977
+disableAPTManualUpdateStep :: GHA.Step
+disableAPTManualUpdateStep =
+  GHA.namedAs "Disable man-db triggers for apt-get" $
+    GHA.runStep
+      """
+      echo \"set man-db/auto-update false\" | debconf-communicate
+      dpkg-reconfigure man-db
       """
 
 rustCacheStep :: GHA.Step
@@ -195,7 +206,8 @@ checkFormats precondition =
       GHA.job
         ( GHA.withCondition precondition
             <$> flattenSteps
-              [ Step checkoutStep,
+              [ Step disableAPTManualUpdateStep,
+                Step checkoutStep,
                 Step rustCacheStep,
                 preBuildCDeps ccacheUbuntuVariants,
                 Step setupCargoOutputTranslatorStep,
@@ -241,7 +253,8 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ cdepsEnvVars 
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -257,7 +270,8 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ cdepsEnvV
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -273,7 +287,8 @@ checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ cdepsEn
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -373,7 +388,8 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step $ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
+          [ Step disableAPTManualUpdateStep,
+            Step $ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
             Step $
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
@@ -399,7 +415,8 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step $

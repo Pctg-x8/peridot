@@ -58,7 +58,8 @@ preconditions =
     ]
     $ GHA.job
     $ flattenSteps
-      [ Step preconditionRecordBeginTimeStamp,
+      [ Step disableAPTManualUpdateStep,
+        Step preconditionRecordBeginTimeStamp,
         Step checkoutStep,
         Step $ GHA.identifiedAs "fileck" collectChangesStep,
         -- ここでpreBuildCDepsしてキャッシュを温めておく
