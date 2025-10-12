@@ -18,8 +18,8 @@ module IntegrityTest.Shared
     flattenSteps,
     preBuildCDeps,
     checkoutStep,
-    ccacheUbuntuVariants,
     disableAPTManualUpdateStep,
+    RunnerVariant (..),
   )
 where
 
@@ -93,50 +93,20 @@ rustCacheStep =
 cmake :: [String] -> String
 cmake args = unwords ("cmake" : args)
 
-data CCachePlatformVariants = CCachePlatformVariants
-  { ccInstallStep :: Step,
-    ccCacheDirectoryPath :: String,
-    ccCommandPrelude :: Maybe String
-  }
+data RunnerVariant = RunnerVariantWindows | RunnerVariantMac | RunnerVariantUbuntu
 
-ccacheUbuntuVariants, ccacheWindowsVariants, ccacheMacVariants :: CCachePlatformVariants
-ccacheUbuntuVariants =
-  CCachePlatformVariants
-    { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache",
-      ccCacheDirectoryPath = "~/.cache/ccache",
-      ccCommandPrelude = Nothing
-    }
-ccacheWindowsVariants =
-  CCachePlatformVariants
-    { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache",
-      ccCacheDirectoryPath = "~\\AppData\\Roaming\\ccache",
-      ccCommandPrelude =
-        Just
-          -- Pscx 4.0.0じゃないとvs2022のサポートがないのでPrereleaseを有効にする（4.0.0正式リリースが来たら消す）
-          """
-          Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
-          """
-    }
-ccacheMacVariants =
-  CCachePlatformVariants
-    { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "brew install ccache",
-      ccCacheDirectoryPath = "~/Library/Caches/ccache",
-      ccCommandPrelude = Nothing
-    }
-
-preBuildCDeps :: CCachePlatformVariants -> Step
-preBuildCDeps variants =
+preBuildCDeps :: RunnerVariant -> Step
+preBuildCDeps variant =
   StepGroup
     [ Step $
         GHA.namedAs "Cache ccache artifacts" $
-          CacheAction.step [ccCacheDirectoryPath variants] (ccCachePrefix <> ccTargetHash)
+          CacheAction.step [cacheDirectoryPath] (ccCachePrefix <> ccTargetHash)
             & CacheAction.restoreKeys [ccCachePrefix],
-      ccInstallStep variants,
+      installStep,
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
           GHA.runStep
-            ( maybe "" (<> "\n") (ccCommandPrelude variants)
+            ( maybe "" (<> "\n") commandPrelude
                 <> cmake
                   [ "--preset",
                     "default",
@@ -159,7 +129,7 @@ preBuildCDeps variants =
       Step $
         GHA.namedAs "Pre-build c deps(ktx)" $
           GHA.runStep
-            ( maybe "" (<> " && ") (ccCommandPrelude variants)
+            ( maybe "" (<> " && ") commandPrelude
                 <> cmake
                   [ ".",
                     "-B",
@@ -193,7 +163,23 @@ preBuildCDeps variants =
         "thirdparty/ktx/source-repo/**/*.inl"
       ]
 
-data RunnerVariant = RunnerVariantWindows | RunnerVariantMac | RunnerVariantUbuntu
+    cacheDirectoryPath = case variant of
+      RunnerVariantUbuntu -> "~/.cache/ccache"
+      RunnerVariantWindows -> "~\\AppData\\Roaming\\ccache"
+      RunnerVariantMac -> "~/Library/Caches/ccache"
+    installStep = case variant of
+      RunnerVariantUbuntu -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache"
+      RunnerVariantWindows -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache"
+      RunnerVariantMac -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "brew install ccache"
+    commandPrelude = case variant of
+      RunnerVariantWindows ->
+        Just
+          -- Pscx 4.0.0じゃないとvs2022のサポートがないのでPrereleaseを有効にする（TODO: 4.0.0正式リリースが来たら消す）
+          """
+          Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease
+          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
+          """
+      _ -> Nothing
 
 cdepsEnvVars :: (GHA.HasEnvironmentVariables e) => RunnerVariant -> e -> e
 cdepsEnvVars variant =
@@ -228,7 +214,7 @@ checkFormats precondition =
             [ Step disableAPTManualUpdateStep,
               Step checkoutStep,
               Step rustCacheStep,
-              preBuildCDeps ccacheUbuntuVariants,
+              preBuildCDeps RunnerVariantUbuntu,
               Step setupCargoOutputTranslatorStep,
               Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
               Step $
@@ -265,7 +251,7 @@ checkTools precondition =
             [ Step disableAPTManualUpdateStep,
               Step checkoutStep,
               Step rustCacheStep,
-              preBuildCDeps ccacheUbuntuVariants,
+              preBuildCDeps RunnerVariantUbuntu,
               Step setupCargoOutputTranslatorStep,
               Step $
                 GHA.namedAs "check" $
@@ -284,7 +270,7 @@ checkModules precondition =
             [ Step disableAPTManualUpdateStep,
               Step checkoutStep,
               Step rustCacheStep,
-              preBuildCDeps ccacheUbuntuVariants,
+              preBuildCDeps RunnerVariantUbuntu,
               Step setupCargoOutputTranslatorStep,
               Step $
                 GHA.namedAs "check" $
@@ -303,7 +289,7 @@ checkExamples precondition =
             [ Step disableAPTManualUpdateStep,
               Step checkoutStep,
               Step rustCacheStep,
-              preBuildCDeps ccacheUbuntuVariants,
+              preBuildCDeps RunnerVariantUbuntu,
               Step setupCargoOutputTranslatorStep,
               Step $
                 GHA.namedAs "check" $
@@ -334,7 +320,7 @@ checkCradleWindows precondition = cdepsEnvVars RunnerVariantWindows <$> stdWindo
         <$> flattenSteps
           [ Step checkoutStep,
             Step rustCacheStep,
-            preBuildCDeps ccacheWindowsVariants,
+            preBuildCDeps RunnerVariantWindows,
             Step cliBuildStep,
             Step $
               GHA.namedAs "Copy thirdparty DLLs" $
@@ -366,7 +352,7 @@ checkCradleMacos precondition = cdepsEnvVars RunnerVariantMac . platformExtraEnv
         <$> flattenSteps
           [ Step checkoutStep,
             Step rustCacheStep,
-            preBuildCDeps ccacheMacVariants,
+            preBuildCDeps RunnerVariantMac,
             Step cliBuildStep,
             Step $
               GHA.namedAs "Add rpath for cdeps(CI special path)" $
@@ -415,7 +401,7 @@ checkCradleLinux precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Cra
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
             Step checkoutStep,
             Step rustCacheStep,
-            preBuildCDeps ccacheUbuntuVariants,
+            preBuildCDeps RunnerVariantUbuntu,
             Step cliBuildStep,
             Step integratedTestStep
           ]
@@ -438,7 +424,7 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
           [ Step disableAPTManualUpdateStep,
             Step checkoutStep,
             Step rustCacheStep,
-            preBuildCDeps ccacheUbuntuVariants,
+            preBuildCDeps RunnerVariantUbuntu,
             Step $
               GHA.namedAs "Setup Rust for Android" $
                 RustToolchainAction.step

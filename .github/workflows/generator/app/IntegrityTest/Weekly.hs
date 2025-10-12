@@ -42,7 +42,7 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
                   Step preconditionRecordBeginTimeStamp,
                   Step checkoutStep,
                   -- ここでpreBuildCDepsしてキャッシュを温めておく
-                  preBuildCDeps ccacheUbuntuVariants
+                  preBuildCDeps RunnerVariantUbuntu
                 ]
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 

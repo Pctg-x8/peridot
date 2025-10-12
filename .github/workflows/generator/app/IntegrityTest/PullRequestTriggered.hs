@@ -63,7 +63,7 @@ preconditions =
         Step checkoutStep,
         Step $ GHA.identifiedAs "fileck" collectChangesStep,
         -- ここでpreBuildCDepsしてキャッシュを温めておく
-        preBuildCDeps ccacheUbuntuVariants
+        preBuildCDeps RunnerVariantUbuntu
       ]
   where
     collectChangesStep =
