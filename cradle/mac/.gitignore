@@ -3,4 +3,4 @@ src/userlib
 src/userlib.rs
 Cargo.toml
 assets.par
-peridot-cradle/
+/peridot-cradle
