@@ -153,7 +153,7 @@ preBuildCDeps variants =
                     "-DSLANG_ENABLE_TESTS=FALSE",
                     "-DSLANG_ENABLE_EXAMPLES=FALSE"
                   ]
-                <> " && cmake --build --preset releaseWithDebugInfo"
+                <> " && cmake --build --preset debug"
             )
             & GHA.workAt "thirdparty/slang/source-repo",
       Step $
@@ -197,8 +197,8 @@ cdepsEnvVars :: (GHA.HasEnvironmentVariables e) => e -> e
 cdepsEnvVars =
   GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1"
     . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
-    -- NinjaでビルドするとRelWithDebInfoじゃなくてReleaseに生成されるらしい
-    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace)")
+    -- CIではDebugでビルドしてるのでそれを指定
+    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace)")
 
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
