@@ -1,3 +1,7 @@
+use std::borrow::Cow;
+
+use pbxproj::{Decodable, ElementWrite};
+
 use crate::manifest::*;
 use crate::project::PlatformConfiguration;
 use crate::steps;
@@ -48,7 +52,7 @@ pub fn build(
     steps::package_assets(
         &ctx,
         options.ext_asset_path.as_deref(),
-        &ctx.cradle_directory.join("peridot-cradle/assets.par"),
+        &ctx.cradle_directory.join("assets.par"),
     );
 
     ctx.within_cradle_dir(|| {
@@ -82,7 +86,31 @@ pub fn build(
 fn build_app_bundle(ctx: &steps::BuildContext) {
     ctx.print_step("Building app bundle...");
 
-    let rust_library_path = ctx.cradle_directory.join("peridot-cradle/rlibs");
+    let xcode_project_dir_path = ctx.cradle_directory.join("peridot-cradle");
+    let xcode_project_template_dir_path = ctx.cradle_directory.join("peridot-cradle.template");
+
+    // restore xcode project from template
+    if xcode_project_dir_path.exists() {
+        std::fs::remove_dir_all(&xcode_project_dir_path)
+            .expect("Failed to remove old xcode project");
+    }
+    crate::shellutil::handle_process_result(
+        "restore xcodeproj",
+        crate::shellutil::sh_mirror(
+            &xcode_project_template_dir_path,
+            &xcode_project_dir_path,
+            &[],
+        )
+        .expect("Failed to spawn sh_mirror"),
+    );
+
+    // copy assets/binaries
+    std::fs::copy(
+        ctx.cradle_directory.join("assets.par"),
+        xcode_project_dir_path.join("assets.par"),
+    )
+    .expect("Failed to copy assets archive");
+    let rust_library_path = xcode_project_dir_path.join("rlibs");
     if !rust_library_path.exists() {
         std::fs::create_dir_all(&rust_library_path).expect("Failed to create rust library path");
     }
@@ -92,10 +120,56 @@ fn build_app_bundle(ctx: &steps::BuildContext) {
     )
     .expect("Failed to copy built library");
 
-    let xcode_project_path = ctx
-        .cradle_directory
-        .join("peridot-cradle/peridot-cradle.xcodeproj");
-    XcodeBuild::new(&xcode_project_path)
+    // tweak pbxproj
+    let pbxproj_path = xcode_project_dir_path.join("peridot-cradle.xcodeproj/project.pbxproj");
+    let pbxproj_content = std::fs::read_to_string(&pbxproj_path).expect("Failed to read pbxproj");
+    let mut ps = pbxproj::ParserState::new(&pbxproj_content);
+    ps.skip_spaces();
+    let mut pbxproj = pbxproj::PBXProjectFile::decode(
+        pbxproj::parse_value(&mut ps).expect("Failed to parse root object"),
+    )
+    .expect("Failed to decode to PBXProjectFile");
+
+    let system_vk_sdk_path = std::env::var("VULKAN_SDK").expect("VULKAN_SDK not set");
+    let mut build_configuration_ids = Vec::new();
+    for t in pbxproj.root_project().targets.iter() {
+        match t.entity(&pbxproj).expect("no target entity found") {
+            pbxproj::PBXObject::NativeTarget(t) => {
+                for bc in t
+                    .build_configuration_list
+                    .entity(&pbxproj)
+                    .expect("no buildConfigurationList entity")
+                    .build_configurations
+                    .iter()
+                {
+                    build_configuration_ids.push(bc.clone());
+                }
+            }
+            t => eprintln!("unknown target type: {t:?}"),
+        }
+    }
+    for bc in build_configuration_ids {
+        bc.entity_mut(&mut pbxproj)
+            .expect("no buildConfiguration entity")
+            .build_settings
+            .insert(
+                "VULKAN_SDK",
+                pbxproj::Value::Single(Cow::Borrowed(&system_vk_sdk_path)),
+            );
+    }
+
+    pbxproj
+        .write(&mut pbxproj::Writer::new(
+            std::fs::File::options()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&pbxproj_path)
+                .expect("Failed to open project file"),
+        ))
+        .expect("Failed to write pbxproj");
+
+    XcodeBuild::new(&xcode_project_dir_path.join("peridot-cradle.xcodeproj"))
         .with_configuration("Debug")
         .build();
 }
