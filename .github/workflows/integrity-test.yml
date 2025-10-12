@@ -295,6 +295,9 @@ jobs:
         run: cargo build
         working-directory: "./tools/cli"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Add rpath for cdeps(CI special path)"
+        run: "install_name_tool -add_rpath $(realpath ./thirdparty/slang/source-repo/build/Debug/lib) tools/target/debug/peridot\ninstall_name_tool -add_rpath $(realpath ./thirdparty/ktx/source-repo/build/) tools/target/debug/peridot"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build archiver
         run: cargo build
         working-directory: "./tools/archiver"
@@ -302,7 +305,6 @@ jobs:
         name: Install requirements
         run: brew install coreutils
       - env:
-          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"

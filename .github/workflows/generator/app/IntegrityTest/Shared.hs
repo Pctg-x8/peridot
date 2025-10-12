@@ -357,6 +357,13 @@ checkCradleMacos precondition =
             Step rustCacheStep,
             preBuildCDeps ccacheMacVariants,
             Step cliBuildStep,
+            Step $
+              GHA.namedAs "Add rpath for cdeps(CI special path)" $
+                GHA.runStep
+                  """
+                  install_name_tool -add_rpath $(realpath ./thirdparty/slang/source-repo/build/Debug/lib) tools/target/debug/peridot
+                  install_name_tool -add_rpath $(realpath ./thirdparty/ktx/source-repo/build/) tools/target/debug/peridot
+                  """,
             Step archiverBuildStep,
             Step $ GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
             Step integratedTestStep
@@ -369,8 +376,7 @@ checkCradleMacos precondition =
           GHA.env "VULKAN_SDK" "/Users",
           withBuilderEnv,
           GHA.env "PERIDOT_CLI_ARCHIVER_PATH" $
-            GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)",
-          setLibrarySearchPathsUnix
+            GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)"
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
