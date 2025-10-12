@@ -77,8 +77,8 @@ disableAPTManualUpdateStep =
   GHA.namedAs "Disable man-db triggers for apt-get" $
     GHA.runStep
       """
-      echo \"set man-db/auto-update false\" | debconf-communicate
-      dpkg-reconfigure man-db
+      echo \"set man-db/auto-update false\" | sudo debconf-communicate
+      sudo dpkg-reconfigure man-db
       """
 
 rustCacheStep :: GHA.Step

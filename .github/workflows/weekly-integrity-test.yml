@@ -65,7 +65,7 @@ jobs:
     steps:
       - if: 'true'
         name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -161,7 +161,7 @@ jobs:
     steps:
       - if: 'true'
         name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Add External PPA
         run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
@@ -417,7 +417,7 @@ jobs:
     steps:
       - if: 'true'
         name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -488,7 +488,7 @@ jobs:
     steps:
       - if: 'true'
         name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -565,7 +565,7 @@ jobs:
     steps:
       - if: 'true'
         name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -637,7 +637,7 @@ jobs:
     steps:
       - if: 'true'
         name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -701,7 +701,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | debconf-communicate\ndpkg-reconfigure man-db"
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - id: begintime
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
