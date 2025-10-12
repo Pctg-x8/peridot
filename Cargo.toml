@@ -14,7 +14,6 @@ members = [
     "modules/command-object",
     "modules/memory-manager",
     "modules/semantic-shader",
-    "modules/pbxproj",
 ]
 
 [workspace.dependencies]
