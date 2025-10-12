@@ -72,7 +72,7 @@ pub fn build(
     });
 
     if postlink {
-        build_app_bundle(&ctx);
+        build_app_bundle(&ctx, options.appid);
     }
     if after_run {
         let executable_path = ctx
@@ -83,7 +83,7 @@ pub fn build(
     }
 }
 
-fn build_app_bundle(ctx: &steps::BuildContext) {
+fn build_app_bundle(ctx: &steps::BuildContext, identifier: &str) {
     ctx.print_step("Building app bundle...");
 
     let xcode_project_dir_path = ctx.cradle_directory.join("peridot-cradle");
@@ -105,20 +105,20 @@ fn build_app_bundle(ctx: &steps::BuildContext) {
     );
 
     // copy assets/binaries
-    std::fs::copy(
+    std::fs::rename(
         ctx.cradle_directory.join("assets.par"),
         xcode_project_dir_path.join("assets.par"),
     )
-    .expect("Failed to copy assets archive");
+    .expect("Failed to move assets archive");
     let rust_library_path = xcode_project_dir_path.join("rlibs");
     if !rust_library_path.exists() {
         std::fs::create_dir_all(&rust_library_path).expect("Failed to create rust library path");
     }
-    std::fs::copy(
+    std::fs::rename(
         ctx.cradle_directory.join("target/debug/libpegamelib.a"),
         rust_library_path.join("libpegamelib.a"),
     )
-    .expect("Failed to copy built library");
+    .expect("Failed to move built library");
 
     // tweak pbxproj
     let pbxproj_path = xcode_project_dir_path.join("peridot-cradle.xcodeproj/project.pbxproj");
@@ -149,13 +149,18 @@ fn build_app_bundle(ctx: &steps::BuildContext) {
         }
     }
     for bc in build_configuration_ids {
-        bc.entity_mut(&mut pbxproj)
-            .expect("no buildConfiguration entity")
-            .build_settings
-            .insert(
-                "VULKAN_SDK",
-                pbxproj::Value::Single(Cow::Borrowed(&system_vk_sdk_path)),
-            );
+        let bc = bc
+            .entity_mut(&mut pbxproj)
+            .expect("no buildConfiguration entity");
+
+        bc.build_settings.insert(
+            "VULKAN_SDK",
+            pbxproj::Value::Single(Cow::Borrowed(&system_vk_sdk_path)),
+        );
+        bc.build_settings.insert(
+            "PRODUCT_BUNDLE_IDENTIFIER",
+            pbxproj::Value::Single(Cow::Borrowed(identifier)),
+        );
     }
 
     pbxproj
