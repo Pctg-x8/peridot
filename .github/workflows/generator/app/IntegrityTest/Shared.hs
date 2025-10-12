@@ -212,6 +212,12 @@ stdBashStep command = GHA.runStep command & GHA.stepUseShell "bash --noprofile -
 stdJob :: (SlackReportContext m, Functor m) => String -> [GHA.Step] -> m GHA.Job
 stdJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.job steps
 
+stdWindowsJob :: (SlackReportContext m, Functor m) => String -> [GHA.Step] -> m GHA.Job
+stdWindowsJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.jobRunsOn ["windows-latest"] $ GHA.job steps
+
+stdMacJob :: (SlackReportContext m, Functor m) => String -> [GHA.Step] -> m GHA.Job
+stdMacJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.jobRunsOn ["macos-latest"] $ GHA.job steps
+
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
   cdepsEnvVars RunnerVariantUbuntu
@@ -321,8 +327,7 @@ setLibrarySearchPathsUnix :: (GHA.HasEnvironmentVariables e) => e -> e
 setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH)"
 
 checkCradleWindows :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkCradleWindows precondition =
-  reportJobFailure $ GHA.namedAs "Cradle(Windows)" $ GHA.jobRunsOn ["windows-latest"] $ cdepsEnvVars RunnerVariantWindows $ GHA.job steps
+checkCradleWindows precondition = cdepsEnvVars RunnerVariantWindows <$> stdWindowsJob "Cradle(Windows)" steps
   where
     steps =
       GHA.withCondition precondition
@@ -354,8 +359,7 @@ checkCradleWindows precondition =
       \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
 
 checkCradleMacos :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkCradleMacos precondition =
-  reportJobFailure $ GHA.namedAs "Cradle(macOS)" $ GHA.jobRunsOn ["macos-latest"] $ cdepsEnvVars RunnerVariantMac $ platformExtraEnvs $ GHA.job steps
+checkCradleMacos precondition = cdepsEnvVars RunnerVariantMac . platformExtraEnvs <$> stdMacJob "Cradle(macOS)" steps
   where
     steps =
       GHA.withCondition precondition
@@ -399,7 +403,7 @@ aptInstallStep packages =
       "sudo apt-get update && sudo apt-get install -y " <> unwords packages
 
 checkCradleLinux :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $ cdepsEnvVars RunnerVariantUbuntu $ GHA.job steps
+checkCradleLinux precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Cradle(Linux)" steps
   where
     steps =
       GHA.withCondition precondition
@@ -426,7 +430,7 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleAndroid :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android)" $ cdepsEnvVars RunnerVariantUbuntu $ GHA.job steps
+checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Cradle(Android)" steps
   where
     steps =
       GHA.withCondition precondition
