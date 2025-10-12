@@ -8,6 +8,7 @@ module SlackNotification
     SlackReporter (..),
     withSlackReport,
     reportJobFailure,
+    reportSuccessSteps,
   )
 where
 
@@ -19,6 +20,9 @@ import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.AWS.ConfigureCredentials qualified as AWSConfigureCredentials
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as CheckoutAction
 
+checkoutHeadStep :: GHA.Step
+checkoutHeadStep = CheckoutAction.step $ Just $ GHA.mkExpression "github.event.pull_request.head.sha"
+
 configureSlackNotification :: GHA.Step
 configureSlackNotification =
   GHA.namedAs "Configure for Slack Notification" $
@@ -27,14 +31,20 @@ configureSlackNotification =
       & AWSConfigureCredentials.roleToAssume "arn:aws:iam::208140986057:role/GHALambdaInvoker"
 
 class SlackReportContext m where
-  reportSuccessSteps :: m [GHA.Step]
-  reportFailureSteps :: String -> m [GHA.Step]
+  successReportStep :: m GHA.Step
+  failureReportStep :: String -> m GHA.Step
+
+reportSuccessSteps :: (SlackReportContext m, Functor m) => m [GHA.Step]
+reportSuccessSteps = successReportStep <&> \reportStep -> [checkoutHeadStep, configureSlackNotification, reportStep]
 
 reportJobFailure :: (SlackReportContext m) => (Functor m) => GHA.Job -> m GHA.Job
 reportJobFailure job =
   let jobName = fromMaybe "<unknown job>" $ GHA.nameOf job
-   in reportFailureSteps jobName <&> \reportSteps ->
-        GHA.grantWritable GHA.IDTokenPermission $ GHA.jobAppendSteps (runOnFailure <$> reportSteps) job
+   in failureReportStep jobName <&> \reportStep ->
+        GHA.grantWritable GHA.IDTokenPermission $
+          GHA.jobAppendSteps
+            (runOnFailure <$> [checkoutHeadStep, configureSlackNotification, reportStep])
+            job
 
 data SlackNotificationProvider = SlackNotificationProvider
   { buildSuccessReportStep :: GHA.Step,
@@ -44,18 +54,8 @@ data SlackNotificationProvider = SlackNotificationProvider
 newtype SlackReporter m a = SlackReporter {runSlackReporter :: SlackNotificationProvider -> m a}
 
 instance (Applicative m) => SlackReportContext (SlackReporter m) where
-  reportSuccessSteps = SlackReporter \p ->
-    pure
-      [ CheckoutAction.step (Just $ GHA.mkExpression "github.event.pull_request.head.sha"),
-        configureSlackNotification,
-        buildSuccessReportStep p
-      ]
-  reportFailureSteps jobName = SlackReporter \p ->
-    pure
-      [ CheckoutAction.step (Just $ GHA.mkExpression "github.event.pull_request.head.sha"),
-        configureSlackNotification,
-        buildFailureReportStep p jobName
-      ]
+  successReportStep = SlackReporter $ pure . buildSuccessReportStep
+  failureReportStep jobName = SlackReporter \p -> pure $ buildFailureReportStep p jobName
 
 instance (Functor m) => Functor (SlackReporter m) where
   fmap f a = SlackReporter $ fmap f . runSlackReporter a

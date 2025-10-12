@@ -817,15 +817,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-          submodules: recursive
       - uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"

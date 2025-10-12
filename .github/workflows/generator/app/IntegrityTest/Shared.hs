@@ -26,7 +26,7 @@ where
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.List (intercalate)
-import SlackNotification (SlackReportContext (..), reportJobFailure)
+import SlackNotification (SlackReportContext (..), reportJobFailure, reportSuccessSteps)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction
@@ -34,8 +34,7 @@ import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
 import Workflow.GitHub.Actions.Predefined.SetupJava qualified as SetupJavaAction
 
-pullRequestHeadHashExpr, pullRequestNumberExpr :: String
-pullRequestHeadHashExpr = GHA.mkExpression "github.event.pull_request.head.sha"
+pullRequestNumberExpr :: String
 pullRequestNumberExpr = GHA.mkExpression "github.event.number"
 
 data Step = Step GHA.Step | StepGroup [Step]
@@ -54,11 +53,8 @@ preconditionRecordBeginTimeStamp =
 preconditionBeginTimestampOutputDef :: GHA.Job -> GHA.Job
 preconditionBeginTimestampOutputDef = GHA.jobForwardingStepOutput "begintime" "begintime"
 
-checkoutStep, checkoutHeadStep :: GHA.Step
+checkoutStep :: GHA.Step
 checkoutStep = GHA.namedAs "Checking out" $ Checkout.step Nothing & Checkout.submodules Checkout.SubmodulesRecursive
-checkoutHeadStep =
-  GHA.namedAs "Checking out (HEAD commit)" $
-    Checkout.step (Just pullRequestHeadHashExpr) & Checkout.submodules Checkout.SubmodulesRecursive
 
 -- あとでlatest自動取得とかしたいけど面倒だから一旦これでいいや
 setupCargoOutputTranslatorStep :: GHA.Step
@@ -449,6 +445,4 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
 reportSuccessJob :: (SlackReportContext m) => (Functor m) => m GHA.Job
 reportSuccessJob =
   reportSuccessSteps <&> \reportSteps ->
-    -- NotificationでHeadの情報見るっぽくて必要そう
-    let steps = [checkoutStep, checkoutHeadStep] <> reportSteps
-     in GHA.namedAs "Report as Success" $ GHA.grantWritable GHA.IDTokenPermission $ GHA.job steps
+    GHA.namedAs "Report as Success" $ GHA.grantWritable GHA.IDTokenPermission $ GHA.job reportSteps
