@@ -60,13 +60,13 @@ preconditions =
     $ flattenSteps
       [ Step preconditionRecordBeginTimeStamp,
         Step checkoutStep,
-        Step collectChangesStep,
+        Step $ GHA.identifiedAs "fileck" collectChangesStep,
         -- ここでpreBuildCDepsしてキャッシュを温めておく
         preBuildCDeps ccacheUbuntuVariants
       ]
   where
     collectChangesStep =
-      applyModifiers [GHA.namedAs "Checking Changed Filenames", GHA.identifiedAs "fileck"] $
+      GHA.namedAs "Checking Changed Filenames" $
         GHA.runStep $
           "\
           \HAS_CODE_CHANGES=0\n\

@@ -102,7 +102,7 @@ ccacheWindowsVariants =
       ccCommandPrelude =
         Just
           """
-          Install-Module Pscx -Scope CurrentUser -Force -Function Import-VisualStudioVars
+          Install-Module Pscx -Scope CurrentUser -Force -AllowClobber
           Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
           """
     }
