@@ -19,6 +19,7 @@ module IntegrityTest.Shared
     preBuildCDeps,
     checkoutStep,
     ccacheUbuntuVariants,
+    disableAPTManualUpdateStep,
   )
 where
 
@@ -70,6 +71,16 @@ setupCargoOutputTranslatorStep =
       chmod +x $HOME/.local/bin/cargo-json-gha-translator
       """
 
+-- https://github.com/actions/runner-images/issues/10977
+disableAPTManualUpdateStep :: GHA.Step
+disableAPTManualUpdateStep =
+  GHA.namedAs "Disable man-db triggers for apt-get" $
+    GHA.runStep
+      """
+      echo \"set man-db/auto-update false\" | sudo debconf-communicate
+      sudo dpkg-reconfigure man-db
+      """
+
 rustCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
@@ -99,7 +110,13 @@ ccacheWindowsVariants =
   CCachePlatformVariants
     { ccInstallStep = Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache",
       ccCacheDirectoryPath = "~\\AppData\\Roaming\\ccache",
-      ccCommandPrelude = Just "Install-Module Pscx -Scope CurrentUser -Force\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64"
+      ccCommandPrelude =
+        Just
+          -- Pscx 4.0.0じゃないとvs2022のサポートがないのでPrereleaseを有効にする（4.0.0正式リリースが来たら消す）
+          """
+          Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease
+          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
+          """
     }
 ccacheMacVariants =
   CCachePlatformVariants
@@ -136,7 +153,7 @@ preBuildCDeps variants =
                     "-DSLANG_ENABLE_TESTS=FALSE",
                     "-DSLANG_ENABLE_EXAMPLES=FALSE"
                   ]
-                <> " && cmake --build --preset releaseWithDebugInfo"
+                <> " && cmake --build --preset debug"
             )
             & GHA.workAt "thirdparty/slang/source-repo",
       Step $
@@ -180,8 +197,8 @@ cdepsEnvVars :: (GHA.HasEnvironmentVariables e) => e -> e
 cdepsEnvVars =
   GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1"
     . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
-    -- NinjaでビルドするとRelWithDebInfoじゃなくてReleaseに生成されるらしい
-    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace)")
+    -- CIではDebugでビルドしてるのでそれを指定
+    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" (GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace)")
 
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
@@ -190,7 +207,8 @@ checkFormats precondition =
       GHA.job
         ( GHA.withCondition precondition
             <$> flattenSteps
-              [ Step checkoutStep,
+              [ Step disableAPTManualUpdateStep,
+                Step checkoutStep,
                 Step rustCacheStep,
                 preBuildCDeps ccacheUbuntuVariants,
                 Step setupCargoOutputTranslatorStep,
@@ -236,7 +254,8 @@ checkTools precondition = reportJobFailure $ GHA.namedAs "Tools" $ cdepsEnvVars 
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -252,7 +271,8 @@ checkModules precondition = reportJobFailure $ GHA.namedAs "Modules" $ cdepsEnvV
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -268,7 +288,8 @@ checkExamples precondition = reportJobFailure $ GHA.namedAs "Examples" $ cdepsEn
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step setupCargoOutputTranslatorStep,
@@ -368,7 +389,8 @@ checkCradleLinux precondition = reportJobFailure $ GHA.namedAs "Cradle(Linux)" $
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step $ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
+          [ Step disableAPTManualUpdateStep,
+            Step $ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
             Step $
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
@@ -394,7 +416,8 @@ checkCradleAndroid precondition = reportJobFailure $ GHA.namedAs "Cradle(Android
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step disableAPTManualUpdateStep,
+            Step checkoutStep,
             Step rustCacheStep,
             preBuildCDeps ccacheUbuntuVariants,
             Step $

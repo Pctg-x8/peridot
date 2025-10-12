@@ -57,7 +57,7 @@ jobs:
   check-cradle-android:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Android)"
     needs:
@@ -70,6 +70,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -94,7 +97,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -154,7 +157,7 @@ jobs:
   check-cradle-linux:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Linux)"
     needs:
@@ -167,6 +170,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Add External PPA
         run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
@@ -197,7 +203,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -241,7 +247,7 @@ jobs:
   check-cradle-macos:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(macOS)"
     needs:
@@ -278,7 +284,7 @@ jobs:
         run: brew install ccache
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -331,7 +337,7 @@ jobs:
   check-cradle-windows:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Windows)"
     needs:
@@ -368,11 +374,11 @@ jobs:
         run: choco install ccache
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "Install-Module Pscx -Scope CurrentUser -Force\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
-        run: "Install-Module Pscx -Scope CurrentUser -Force\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64 && cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
+        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64 && cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
         working-directory: thirdparty/ktx/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
@@ -421,7 +427,7 @@ jobs:
   check-examples:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Examples
     needs:
@@ -432,6 +438,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -456,7 +465,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -495,7 +504,7 @@ jobs:
   check-formats:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Code Formats
     needs:
@@ -504,6 +513,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -528,7 +540,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -572,7 +584,7 @@ jobs:
   check-modules:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Modules
     needs:
@@ -582,6 +594,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -606,7 +621,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -645,7 +660,7 @@ jobs:
   check-tools:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Tools
     needs:
@@ -655,6 +670,9 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
@@ -679,7 +697,7 @@ jobs:
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
@@ -723,6 +741,8 @@ jobs:
       has_workflow_changes: "${{ steps.fileck.outputs.has_workflow_changes }}"
     runs-on: ubuntu-latest
     steps:
+      - name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - id: begintime
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
@@ -769,7 +789,7 @@ jobs:
       - name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset releaseWithDebugInfo"
+        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
         working-directory: thirdparty/slang/source-repo
       - name: "Pre-build c deps(ktx)"
         run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"

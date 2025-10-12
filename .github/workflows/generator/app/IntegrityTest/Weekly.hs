@@ -38,7 +38,8 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
           applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
             GHA.job $
               flattenSteps
-                [ Step preconditionRecordBeginTimeStamp,
+                [ Step disableAPTManualUpdateStep,
+                  Step preconditionRecordBeginTimeStamp,
                   Step checkoutStep,
                   -- ここでpreBuildCDepsしてキャッシュを温めておく
                   preBuildCDeps ccacheUbuntuVariants
