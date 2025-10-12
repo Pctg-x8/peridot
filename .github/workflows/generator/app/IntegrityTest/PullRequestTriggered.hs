@@ -4,13 +4,13 @@ module IntegrityTest.PullRequestTriggered (integrityTest) where
 
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
 import Data.Function ((&))
+import Data.Functor.Identity (runIdentity)
 import Data.Map qualified as M
 import IntegrityTest.Shared
 import SlackNotification
 import Utils
 import Workflow.GitHub.Actions qualified as GHA
 import Workflow.GitHub.Actions.JobGroupComposer ((~=>))
-import Data.Functor.Identity (runIdentity)
 
 repositoryOwnerLoginExpr, repositoryNameExpr :: String
 repositoryOwnerLoginExpr = GHA.mkExpression "github.event.repository.owner.login"
@@ -56,10 +56,18 @@ preconditions =
       GHA.jobForwardingStepOutput "fileck" "has_code_changes",
       GHA.jobForwardingStepOutput "fileck" "has_workflow_changes"
     ]
-    $ GHA.job [preconditionRecordBeginTimeStamp, collectChangesStep]
+    $ GHA.job
+    $ flattenSteps
+      [ Step disableAPTManualUpdateStep,
+        Step preconditionRecordBeginTimeStamp,
+        Step checkoutStep,
+        Step $ GHA.identifiedAs "fileck" collectChangesStep,
+        -- ここでpreBuildCDepsしてキャッシュを温めておく
+        preBuildCDeps RunnerVariantUbuntu
+      ]
   where
     collectChangesStep =
-      applyModifiers [GHA.namedAs "Checking Changed Filenames", GHA.identifiedAs "fileck"] $
+      GHA.namedAs "Checking Changed Filenames" $
         GHA.runStep $
           "\
           \HAS_CODE_CHANGES=0\n\

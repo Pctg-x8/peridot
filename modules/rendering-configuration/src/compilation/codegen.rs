@@ -1,7 +1,13 @@
 use std::{borrow::Cow, collections::HashMap};
 
-use crate::{syntax, tokenizer::Identifier};
-use peridot_rendering_configuration as prc;
+use peridot_semantic_shader::VertexInputSemantic;
+
+use crate::{
+    DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
+    PropertyMappingVk, PropertyType, RenderingOptionOverrides,
+};
+
+use super::{syntax, tokenizer::Identifier};
 
 #[derive(Debug)]
 pub struct RenderingConfiguration {
@@ -83,7 +89,7 @@ impl RenderingConfiguration {
                 }) => {
                     let mut vertex_bindings = None;
                     let mut shader_code = None;
-                    let mut option_overrides = None::<prc::RenderingOptionOverrides>;
+                    let mut option_overrides = None::<RenderingOptionOverrides>;
 
                     for c in contents {
                         match c {
@@ -120,55 +126,55 @@ impl RenderingConfiguration {
                                             panic!("conflicting PolygonRasterizationMode: {m:?}");
                                         }
 
-                                        o.mode = Some(prc::PolygonRasterizationMode::Point);
+                                        o.mode = Some(PolygonRasterizationMode::Point);
                                     } else if e.as_str() == "LinedPolygon" {
                                         if let Some(m) = o.mode {
                                             panic!("conflicting PolygonRasterizationMode: {m:?}");
                                         }
 
-                                        o.mode = Some(prc::PolygonRasterizationMode::Line);
+                                        o.mode = Some(PolygonRasterizationMode::Line);
                                     } else if e.as_str() == "FilledPolygon" {
                                         if let Some(m) = o.mode {
                                             panic!("conflicting PolygonRasterizationMode: {m:?}");
                                         }
 
-                                        o.mode = Some(prc::PolygonRasterizationMode::Fill);
+                                        o.mode = Some(PolygonRasterizationMode::Fill);
                                     } else if e.as_str() == "NoCulling" {
                                         if let Some(x) = o.culling {
                                             panic!("conflicting FaceCulling: {x:?}");
                                         }
 
-                                        o.culling = Some(prc::FaceCulling::None);
+                                        o.culling = Some(FaceCulling::None);
                                     } else if e.as_str() == "CullFront" {
                                         if let Some(x) = o.culling {
                                             panic!("conflicting FaceCulling: {x:?}");
                                         }
 
-                                        o.culling = Some(prc::FaceCulling::Front);
+                                        o.culling = Some(FaceCulling::Front);
                                     } else if e.as_str() == "CullBack" {
                                         if let Some(x) = o.culling {
                                             panic!("conflicting FaceCulling: {x:?}");
                                         }
 
-                                        o.culling = Some(prc::FaceCulling::Back);
+                                        o.culling = Some(FaceCulling::Back);
                                     } else if e.as_str() == "CullBoth" {
                                         if let Some(x) = o.culling {
                                             panic!("conflicting FaceCulling: {x:?}");
                                         }
 
-                                        o.culling = Some(prc::FaceCulling::Both);
+                                        o.culling = Some(FaceCulling::Both);
                                     } else if e.as_str() == "CounterClockwiseAsFront" {
                                         if let Some(x) = o.front_face {
                                             panic!("conflicting FrontFace: {x:?}");
                                         }
 
-                                        o.front_face = Some(prc::FrontFace::CounterClockwise);
+                                        o.front_face = Some(FrontFace::CounterClockwise);
                                     } else if e.as_str() == "ClockwiseAsFront" {
                                         if let Some(x) = o.front_face {
                                             panic!("conflicting FrontFace: {x:?}");
                                         }
 
-                                        o.front_face = Some(prc::FrontFace::Clockwise);
+                                        o.front_face = Some(FrontFace::Clockwise);
                                     } else {
                                         panic!("unknown option: {}", e.as_str());
                                     }
@@ -198,10 +204,10 @@ impl RenderingConfiguration {
         &self,
     ) -> (
         String,
-        HashMap<String, (prc::PropertyType, prc::PropertyMappingVk)>,
-        Vec<prc::DescriptorTypeVk>,
+        HashMap<String, (PropertyType, PropertyMappingVk)>,
+        Vec<DescriptorTypeVk>,
     ) {
-        let mut specialized_constants = Vec::<(Cow<str>, &prc::PropertyType)>::new();
+        let mut specialized_constants = Vec::<(Cow<str>, &PropertyType)>::new();
         let mut combined_constants = Vec::new();
         let mut push_constant_block_members = Vec::new();
         let mut descriptor_sets = Vec::new();
@@ -213,18 +219,18 @@ impl RenderingConfiguration {
             match p.update_frequency {
                 // compound typeはそのままspecialized constantsにできないのでスカラ型に分解
                 PropertyUpdateFrequency::Immutable => match p.r#type {
-                    prc::PropertyType::Float2 => {
+                    PropertyType::Float2 => {
                         let r_dest =
-                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_R", name = p.name).into(),
-                            &prc::PropertyType::Float,
+                            &PropertyType::Float,
                         ));
                         let g_dest =
-                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_G", name = p.name).into(),
-                            &prc::PropertyType::Float,
+                            &PropertyType::Float,
                         ));
                         combined_constants.push(format!(
                             "static const float2 {name} = float2({name}_R, {name}_G);",
@@ -234,7 +240,7 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    prc::PropertyMappingVk::Splitted(vec![r_dest, g_dest]),
+                                    PropertyMappingVk::Splitted(vec![r_dest, g_dest]),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -242,30 +248,30 @@ impl RenderingConfiguration {
                             }
                         }
                     }
-                    prc::PropertyType::Float4 | prc::PropertyType::RGB => {
+                    PropertyType::Float4 | PropertyType::RGB => {
                         let r_dest =
-                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_R", name = p.name).into(),
-                            &prc::PropertyType::Float,
+                            &PropertyType::Float,
                         ));
                         let g_dest =
-                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_G", name = p.name).into(),
-                            &prc::PropertyType::Float,
+                            &PropertyType::Float,
                         ));
                         let b_dest =
-                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_B", name = p.name).into(),
-                            &prc::PropertyType::Float,
+                            &PropertyType::Float,
                         ));
                         let a_dest =
-                            prc::PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
                         specialized_constants.push((
                             format!("{name}_A", name = p.name).into(),
-                            &prc::PropertyType::Float,
+                            &PropertyType::Float,
                         ));
                         combined_constants.push(format!(
                             "static const float4 {name} = float4({name}_R, {name}_G, {name}_B, {name}_A);", name = p.name
@@ -274,7 +280,7 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    prc::PropertyMappingVk::Splitted(vec![
+                                    PropertyMappingVk::Splitted(vec![
                                         r_dest, g_dest, b_dest, a_dest,
                                     ]),
                                 ));
@@ -290,11 +296,9 @@ impl RenderingConfiguration {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    prc::PropertyMappingVk::Direct(
-                                        prc::PropertyDestinationVk::SpecConstant(
-                                            specialized_constants.len() - 1,
-                                        ),
-                                    ),
+                                    PropertyMappingVk::Direct(PropertyDestinationVk::SpecConstant(
+                                        specialized_constants.len() - 1,
+                                    )),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -309,8 +313,8 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                prc::PropertyMappingVk::Direct(
-                                    prc::PropertyDestinationVk::PushConstantBlock(
+                                PropertyMappingVk::Direct(
+                                    PropertyDestinationVk::PushConstantBlock(
                                         push_constant_block_members.len() - 1,
                                     ),
                                 ),
@@ -327,11 +331,9 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                prc::PropertyMappingVk::Direct(
-                                    prc::PropertyDestinationVk::DescriptorSet(
-                                        descriptor_sets.len() - 1,
-                                    ),
-                                ),
+                                PropertyMappingVk::Direct(PropertyDestinationVk::DescriptorSet(
+                                    descriptor_sets.len() - 1,
+                                )),
                             ));
                         }
                         std::collections::hash_map::Entry::Occupied(x) => {
@@ -345,11 +347,9 @@ impl RenderingConfiguration {
                         std::collections::hash_map::Entry::Vacant(x) => {
                             x.insert((
                                 p.r#type.clone(),
-                                prc::PropertyMappingVk::Direct(
-                                    prc::PropertyDestinationVk::RealtimeBuffer(
-                                        realtime_buffer_members.len() - 1,
-                                    ),
-                                ),
+                                PropertyMappingVk::Direct(PropertyDestinationVk::RealtimeBuffer(
+                                    realtime_buffer_members.len() - 1,
+                                )),
                             ));
                         }
                         std::collections::hash_map::Entry::Occupied(x) => {
@@ -433,7 +433,7 @@ static inline float4x4 transformMatrix() {
             code.push_str(";\n");
 
             descriptor_set_bindings.push(match ty {
-                prc::PropertyType::Texture2D => prc::DescriptorTypeVk::CombinedImageSampler,
+                PropertyType::Texture2D => DescriptorTypeVk::CombinedImageSampler,
                 x => {
                     todo!("non-texture dynamic properties(constructs single uniform block): {x:?}")
                 }
@@ -462,7 +462,7 @@ static inline float4x4 transformMatrix() {
 #[derive(Debug)]
 pub struct PropertyData {
     pub name: String,
-    pub r#type: prc::PropertyType,
+    pub r#type: PropertyType,
     pub default: Value,
     pub update_frequency: PropertyUpdateFrequency,
 }
@@ -482,13 +482,13 @@ impl Default for PropertyUpdateFrequency {
 
 #[derive(Debug)]
 pub struct PassData {
-    pub option_overrides: Option<prc::RenderingOptionOverrides>,
+    pub option_overrides: Option<RenderingOptionOverrides>,
     pub deriving: Option<String>,
     pub vertex_bindings: Vec<PassVertexBindingData>,
     pub shader_code: Option<String>,
 }
 impl PassData {
-    pub fn gen_vk_code(&self) -> (String, HashMap<prc::VertexInputSemantic, u32>) {
+    pub fn gen_vk_code(&self) -> (String, HashMap<VertexInputSemantic, u32>) {
         let mut semantic_to_location_map = HashMap::with_capacity(self.vertex_bindings.len());
 
         let mut code = String::new();
@@ -534,35 +534,35 @@ impl PassData {
 #[derive(Debug)]
 pub struct PassVertexBindingData {
     pub name: String,
-    pub r#type: prc::PropertyType,
-    pub semantic: prc::VertexInputSemantic,
+    pub r#type: PropertyType,
+    pub semantic: VertexInputSemantic,
 }
 
-fn property_type_from_syntax(x: syntax::Type) -> prc::PropertyType {
+fn property_type_from_syntax(x: syntax::Type) -> PropertyType {
     match x {
-        syntax::Type::Texture2D(_) => prc::PropertyType::Texture2D,
-        syntax::Type::RGB(_) => prc::PropertyType::RGB,
-        syntax::Type::UInt(_) => prc::PropertyType::UInt,
-        syntax::Type::Int(_) => prc::PropertyType::Int,
-        syntax::Type::Float2(_) => prc::PropertyType::Float2,
-        syntax::Type::Float4(_) => prc::PropertyType::Float4,
+        syntax::Type::Texture2D(_) => PropertyType::Texture2D,
+        syntax::Type::RGB(_) => PropertyType::RGB,
+        syntax::Type::UInt(_) => PropertyType::UInt,
+        syntax::Type::Int(_) => PropertyType::Int,
+        syntax::Type::Float2(_) => PropertyType::Float2,
+        syntax::Type::Float4(_) => PropertyType::Float4,
     }
 }
 
-fn print_property_type(pt: &prc::PropertyType, sink: &mut String) {
+fn print_property_type(pt: &PropertyType, sink: &mut String) {
     match pt {
         // Texture: treated as combined image sampler
-        prc::PropertyType::Texture2D => sink.push_str("Sampler2D"),
-        prc::PropertyType::RGB => sink.push_str("float4"),
-        prc::PropertyType::UInt => sink.push_str("uint"),
-        prc::PropertyType::Int => sink.push_str("int"),
-        prc::PropertyType::Float => sink.push_str("float"),
-        prc::PropertyType::Float2 => sink.push_str("float2"),
-        prc::PropertyType::Float4 => sink.push_str("float4"),
+        PropertyType::Texture2D => sink.push_str("Sampler2D"),
+        PropertyType::RGB => sink.push_str("float4"),
+        PropertyType::UInt => sink.push_str("uint"),
+        PropertyType::Int => sink.push_str("int"),
+        PropertyType::Float => sink.push_str("float"),
+        PropertyType::Float2 => sink.push_str("float2"),
+        PropertyType::Float4 => sink.push_str("float4"),
     }
 }
 
-fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
+fn parse_vi_semantic(x: &Identifier) -> VertexInputSemantic {
     let l = x.as_str().to_uppercase();
 
     'try_parse: {
@@ -575,7 +575,7 @@ fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
                 break 'try_parse;
             };
 
-            return prc::VertexInputSemantic::Position(index);
+            return VertexInputSemantic::Position(index);
         }
 
         if let Some(s) = l.strip_prefix("NORMAL") {
@@ -587,7 +587,7 @@ fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
                 break 'try_parse;
             };
 
-            return prc::VertexInputSemantic::Normal(index);
+            return VertexInputSemantic::Normal(index);
         }
 
         if let Some(s) = l.strip_prefix("TANGENT") {
@@ -599,7 +599,7 @@ fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
                 break 'try_parse;
             };
 
-            return prc::VertexInputSemantic::Tangent(index);
+            return VertexInputSemantic::Tangent(index);
         }
 
         if let Some(s) = l.strip_prefix("BINORMAL") {
@@ -611,7 +611,7 @@ fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
                 break 'try_parse;
             };
 
-            return prc::VertexInputSemantic::Binormal(index);
+            return VertexInputSemantic::Binormal(index);
         }
 
         if let Some(s) = l.strip_prefix("TEXCOORD") {
@@ -623,7 +623,7 @@ fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
                 break 'try_parse;
             };
 
-            return prc::VertexInputSemantic::Texcoord(index);
+            return VertexInputSemantic::Texcoord(index);
         }
 
         if let Some(s) = l.strip_prefix("COLOR") {
@@ -635,7 +635,7 @@ fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
                 break 'try_parse;
             };
 
-            return prc::VertexInputSemantic::Color(index);
+            return VertexInputSemantic::Color(index);
         }
 
         if let Some(s) = l.strip_prefix("MISC") {
@@ -647,40 +647,40 @@ fn parse_vi_semantic(x: &Identifier) -> prc::VertexInputSemantic {
                 break 'try_parse;
             };
 
-            return prc::VertexInputSemantic::Misc(index);
+            return VertexInputSemantic::Misc(index);
         }
     }
 
     panic!("invalid semantic name: {}", x.as_str());
 }
 
-fn print_vi_semantic(s: &prc::VertexInputSemantic, sink: &mut String) {
+fn print_vi_semantic(s: &VertexInputSemantic, sink: &mut String) {
     match s {
-        prc::VertexInputSemantic::Position(index) => {
+        VertexInputSemantic::Position(index) => {
             sink.push_str("POSITION");
             sink.extend(index.to_string().chars());
         }
-        prc::VertexInputSemantic::Normal(index) => {
+        VertexInputSemantic::Normal(index) => {
             sink.push_str("NORMAL");
             sink.extend(index.to_string().chars());
         }
-        prc::VertexInputSemantic::Tangent(index) => {
+        VertexInputSemantic::Tangent(index) => {
             sink.push_str("TANGENT");
             sink.extend(index.to_string().chars());
         }
-        prc::VertexInputSemantic::Binormal(index) => {
+        VertexInputSemantic::Binormal(index) => {
             sink.push_str("BINORMAL");
             sink.extend(index.to_string().chars());
         }
-        prc::VertexInputSemantic::Texcoord(index) => {
+        VertexInputSemantic::Texcoord(index) => {
             sink.push_str("TEXCOORD");
             sink.extend(index.to_string().chars());
         }
-        prc::VertexInputSemantic::Color(index) => {
+        VertexInputSemantic::Color(index) => {
             sink.push_str("COLOR");
             sink.extend(index.to_string().chars());
         }
-        prc::VertexInputSemantic::Misc(index) => {
+        VertexInputSemantic::Misc(index) => {
             sink.push_str("MISC");
             sink.extend(index.to_string().chars());
         }

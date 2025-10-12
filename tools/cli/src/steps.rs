@@ -180,19 +180,25 @@ pub fn cargo<'x>(ctx: &'x BuildContext) -> Cargo<'x> {
 
 pub fn package_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
     // Prerequired build step
-    let stg_path = std::env::temp_dir().join(".peridot/build/assets");
-    merge_assets(ctx, &stg_path, asset_path);
+    let runtime_assets_path = std::env::temp_dir().join(".peridot/build/runtime-assets");
+    process_assets(ctx, asset_path, &runtime_assets_path);
 
     ctx.print_step("Packaging assets...");
 
-    let mut basedir_str = String::from(stg_path.to_str().expect("invalid sequence in asset path"));
+    let mut basedir_str = String::from(
+        runtime_assets_path
+            .to_str()
+            .expect("invalid sequence in asset path"),
+    );
     if !basedir_str.ends_with("/") {
         basedir_str.push('/');
     }
     let e = std::process::Command::new(crate::path::archiver_path())
         .args(&[
             "new",
-            stg_path.to_str().expect("invalid sequence in asset path"),
+            runtime_assets_path
+                .to_str()
+                .expect("invalid sequence in asset path"),
             "-o",
             output_path
                 .to_str()
@@ -228,4 +234,60 @@ pub fn merge_assets(ctx: &BuildContext, stg_directory_path: &Path, user_assets: 
         )
         .expect("Failed to run mirror command"),
     );
+}
+pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
+    // Pre-required built step
+    let stg_path = std::env::temp_dir().join(".peridot/build/assets");
+    merge_assets(ctx, &stg_path, asset_path);
+
+    ctx.print_step("Processing assets...");
+
+    let processors: [Box<dyn peridot_asset_processing::AssetProcessor>; _] = [
+        Box::new(peridot_rendering_configuration::AssetProcessor),
+        Box::new(peridot_asset_processing::builtin::ImageAssetProcessor),
+        Box::new(peridot_asset_processing::builtin::SoundAssetProcessor),
+    ];
+
+    fn process_recursive(
+        ctx: &BuildContext,
+        processors: &[Box<dyn peridot_asset_processing::AssetProcessor>],
+        target_dir: &Path,
+        base_dir: &Path,
+        output_path: &Path,
+    ) {
+        for e in std::fs::read_dir(target_dir).expect("std::fs::read_dir failed") {
+            let e = e.expect("std::fs::read_dir failed entry");
+            let source_path = e.path();
+            if source_path.is_dir() {
+                process_recursive(ctx, processors, &source_path, base_dir, output_path);
+                continue;
+            }
+
+            if source_path
+                .file_stem()
+                .is_none_or(|x| x.to_str().is_some_and(|x| x.starts_with('.')))
+            {
+                // dot-started files: ignore
+                continue;
+            }
+
+            let relative_path = target_dir
+                .strip_prefix(base_dir)
+                .expect("not a path onto base_dir");
+            let runtime_path = output_path.join(relative_path);
+
+            std::fs::create_dir_all(&runtime_path).expect("Failed to create runtime-asset-path");
+            peridot_asset_processing::process(
+                processors,
+                source_path,
+                peridot_asset_processing::ProcessOptions {
+                    out_dir: Some(&runtime_path),
+                    force_rebuild: false,
+                },
+            )
+            .expect("Failed to process asset");
+        }
+    }
+
+    process_recursive(ctx, &processors, &stg_path, &stg_path, output_path);
 }

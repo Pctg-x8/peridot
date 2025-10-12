@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 peridot = { path = "../../base" }
 image = "*"
+ktx = { path = "../../thirdparty/ktx" }
