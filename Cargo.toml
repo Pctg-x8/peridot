@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["extras/", "cradle/", "examples/", "tools/", "thirdparty/"]
+exclude = ["extras/", "cradle/", "examples/", "tools/", "thirdparty/", "build-script-helper/"]
 members = [
     "base",
     "derive",
@@ -15,7 +15,7 @@ members = [
     "modules/memory-manager",
     "modules/semantic-shader",
     "modules/rendering-configuration",
-    "modules/asset-processing",
+    "modules/asset-processing"
 ]
 
 [workspace.dependencies]

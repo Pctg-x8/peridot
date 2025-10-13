@@ -1,17 +1,25 @@
+use build_script_helper::{peridot_build_skip_cdeps, peridot_build_switch_enable};
+
 fn main() {
+    build_cdeps();
+}
+
+fn build_cdeps() {
+    if peridot_build_skip_cdeps() {
+        return;
+    }
+
     // source-repo: https://github.com/KhronosGroup/KTX-Software
     let source_repo_path = std::env::current_dir()
         .expect("Failed to get current dir")
         .join("source-repo");
 
-    if std::env::var_os("PERIDOT_BUILD_TP_KTX_SKIP_CMAKE").is_none_or(|x| x != "1") {
+    if !peridot_build_switch_enable!("TP_KTX_SKIP_CMAKE") {
         let r = std::process::Command::new("cmake")
             .args(&[
                 ".",
                 "-B",
                 "build",
-                "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-                "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
                 "-DKTX_FEATURE_TESTS=OFF",
                 "-DKTX_FEATURE_VK_UPLOAD=OFF",
                 "-DKTX_FEATURE_GL_UPLOAD=OFF",
