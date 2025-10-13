@@ -250,10 +250,10 @@ checkBaseLayer precondition =
         <$> [ checkoutStep,
               rustCacheStep,
               setupCargoOutputTranslatorStep,
-              GHA.namedAs "Run tests" $
-                stdBashStep "cargo test --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json" & skipCDeps,
-              GHA.namedAs "Run tests(mt)" $
-                stdBashStep "cargo test --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps
+              GHA.namedAs "Run checks" $
+                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps,
+              GHA.namedAs "Run checks(mt)" $
+                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps
             ]
     )
 
@@ -267,7 +267,7 @@ checkTools precondition =
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
             Step $
-              GHA.namedAs "Run tests" $
+              GHA.namedAs "Run checks" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "tools"
                   & skipCDeps
@@ -284,7 +284,7 @@ checkModules precondition =
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
             Step $
-              GHA.namedAs "Run tests" $
+              GHA.namedAs "Run checks" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "modules"
                   & skipCDeps
@@ -301,7 +301,7 @@ checkExamples precondition =
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
             Step $
-              GHA.namedAs "Run tests" $
+              GHA.namedAs "Run checks" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "examples"
                   & skipCDeps
@@ -339,19 +339,19 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
                   Copy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang.dll -Destination tools/target/debug/slang.dll
                   Copy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll
                   """,
-            Step $ GHA.namedAs "Run tests" $ integratedTestStep integratedTestNormalScript,
-            Step $ GHA.namedAs "Run tests for transparent-back" $ integratedTestStep integratedTestTransparentScript
+            Step $ GHA.namedAs "Run checks" $ integratedTestStep integratedTestNormalScript,
+            Step $ GHA.namedAs "Run checks for transparent-back" $ integratedTestStep integratedTestTransparentScript
           ]
 
     integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . skipCDeps . GHA.runStep
     integratedTestNormalScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
-      \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      \pwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
     integratedTestTransparentScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
-      \pwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      \pwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
 
 checkCradleMacos :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" steps
@@ -373,7 +373,7 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
 
     integratedTestStep =
       applyModifiers
-        [ GHA.namedAs "Run tests",
+        [ GHA.namedAs "Run checks",
           GHA.stepUseShell "bash",
           GHA.env "VULKAN_SDK" "/Users",
           withBuilderEnv,
@@ -381,7 +381,7 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
             GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)",
           skipCDeps
         ]
-        $ GHA.runStep "./tools/target/debug/peridot test examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleLinux :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
@@ -402,13 +402,13 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
 
     integratedTestStep =
       applyModifiers
-        [ GHA.namedAs "Run tests",
+        [ GHA.namedAs "Run checks",
           GHA.stepUseShell "bash",
           withBuilderEnv,
           setLibrarySearchPathsUnix,
           skipCDeps
         ]
-        $ GHA.runStep "./tools/target/debug/peridot test examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleAndroid :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Cradle(Android)" steps
@@ -431,14 +431,14 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
 
     integratedTestStep =
       applyModifiers
-        [ GHA.namedAs "Run tests",
+        [ GHA.namedAs "Run checks",
           GHA.stepUseShell "bash",
           withBuilderEnv,
           GHA.env "NDK_PLATFORM_TARGET" "28",
           setLibrarySearchPathsUnix,
           skipCDeps
         ]
-        $ GHA.runStep "./tools/target/debug/peridot test examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 reportSuccessJob :: (SlackReportContext m) => (Functor m) => m GHA.Job
 reportSuccessJob =
