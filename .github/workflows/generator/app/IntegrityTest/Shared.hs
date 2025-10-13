@@ -80,7 +80,7 @@ disableAPTManualUpdateStep =
 rustCacheStep :: GHA.Step
 rustCacheStep =
   GHA.namedAs "Initialize Cache" $
-    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target", "tools/target"] key
+    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target", "tools/target", "examples/**/target", "cradle/**/target"] key
       & CacheAction.restoreKeys [keyPrefix]
   where
     keyPrefix = GHA.runnerOs <> "-cargo-"

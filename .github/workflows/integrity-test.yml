@@ -20,7 +20,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
@@ -86,7 +86,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup Rust for Android
@@ -171,7 +171,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
@@ -233,7 +233,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - env:
           RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
@@ -299,7 +299,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
@@ -364,7 +364,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
@@ -416,7 +416,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
@@ -475,7 +475,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
@@ -528,7 +528,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
