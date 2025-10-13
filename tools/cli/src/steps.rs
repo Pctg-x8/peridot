@@ -235,12 +235,12 @@ pub fn merge_assets(ctx: &BuildContext, stg_directory_path: &Path, user_assets: 
         .expect("Failed to run mirror command"),
     );
 }
+#[cfg(not(feature = "process-assets"))]
+pub fn process_assets(_: &BuildContext, _: Option<&Path>, _: &Path) {
+    eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
+}
+#[cfg(feature = "process-assets")]
 pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
-    if !cfg!(feature = "process-assets") {
-        eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
-        return;
-    }
-
     // Pre-required built step
     let stg_path = std::env::temp_dir().join(".peridot/build/assets");
     merge_assets(ctx, &stg_path, asset_path);
