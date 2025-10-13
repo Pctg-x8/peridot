@@ -308,9 +308,8 @@ checkExamples precondition =
           ]
     )
 
-cliBuildStep, archiverBuildStep :: GHA.Step
+cliBuildStep :: GHA.Step
 cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build --no-default-features"
-archiverBuildStep = GHA.namedAs "Build archiver" $ GHA.workAt "./tools/archiver" $ GHA.runStep "cargo build"
 
 withBuilderEnv :: (GHA.HasEnvironmentVariables e) => e -> e
 withBuilderEnv = setCradleBase . setBuiltinAssetsPath
