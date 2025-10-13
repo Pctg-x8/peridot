@@ -109,10 +109,7 @@ impl FaceGroupEntry {
     }
 
     pub const fn is_loaded(&self) -> bool {
-        match self {
-            Self::Loaded(_) | Self::LoadedMem(_, _) => true,
-            _ => false,
-        }
+        matches!(self, Self::Loaded(_) | Self::LoadedMem(_, _))
     }
 }
 pub struct FaceGroup {
@@ -131,7 +128,7 @@ impl System {
     }
 }
 impl FaceGroup {
-    pub fn get(&self, index: usize) -> MappedRwLockReadGuard<Face> {
+    pub fn get<'x>(&'x self, index: usize) -> MappedRwLockReadGuard<'x, Face> {
         if !self.faces[index].read().is_loaded() {
             let mut new_face = match &*self.faces[index].read() {
                 FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
@@ -151,7 +148,7 @@ impl FaceGroup {
         })
     }
 
-    pub fn get_mut(&self, index: usize) -> MappedRwLockWriteGuard<Face> {
+    pub fn get_mut<'x>(&'x self, index: usize) -> MappedRwLockWriteGuard<'x, Face> {
         if !self.faces[index].read().is_loaded() {
             let mut new_face = match &*self.faces[index].read() {
                 FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
@@ -331,7 +328,7 @@ extern "system" fn outline_decompose_moveto<B: FlatPathBuilder>(
             vector.y as f32 / 64.0,
         )));
 
-    return 0;
+    0
 }
 extern "system" fn outline_decompose_lineto<B: FlatPathBuilder>(
     to: *const FT_Vector,
@@ -346,7 +343,7 @@ extern "system" fn outline_decompose_lineto<B: FlatPathBuilder>(
             vector.y as f32 / 64.0,
         )));
 
-    return 0;
+    0
 }
 extern "system" fn outline_decompose_conicto<B: PathBuilder>(
     control: *const FT_Vector,
@@ -366,7 +363,7 @@ extern "system" fn outline_decompose_conicto<B: PathBuilder>(
         )),
     );
 
-    return 0;
+    0
 }
 extern "system" fn outline_decompose_cubicto<B: PathBuilder>(
     control: *const FT_Vector,
@@ -390,5 +387,5 @@ extern "system" fn outline_decompose_cubicto<B: PathBuilder>(
         )),
     );
 
-    return 0;
+    0
 }

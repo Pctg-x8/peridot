@@ -8,22 +8,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-baselayer"
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: Run checks
+        run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: "Run checks(mt)"
+        run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -40,6 +54,10 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-cradle-android:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Android)"
     needs:
       - check-baselayer
@@ -52,19 +70,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
@@ -82,16 +98,22 @@ jobs:
         run: cargo install cargo-ndk
       - if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           NDK_PLATFORM_TARGET: '28'
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
-        name: cargo check
+        name: Run checks
         run: "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -120,49 +142,43 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
+        name: Disable man-db triggers for apt-get
+        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
+      - if: 'true'
         name: Add External PPA
         run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
       - if: 'true'
         name: Install extra packages
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
-      - id: llvm-cache
-        if: 'true'
-        name: Initialize LLVM Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-llvm-11"
-          path: "./llvm"
-      - if: 'true'
-        name: Install LLVM
-        uses: "KyleMayes/install-llvm-action@v1"
-        with:
-          cached: "${{ steps.llvm-cache.outputs.cache-hit }}"
-          version: '11'
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
-        name: cargo check
+        name: Run checks
         run: "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -179,6 +195,8 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-cradle-macos:
+    env:
+      PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH: '1'
     name: "Cradle(macOS)"
     needs:
       - check-baselayer
@@ -191,39 +209,40 @@ jobs:
     runs-on: macos-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
-      - if: 'true'
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
+      - env:
+          RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
+        if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
-      - if: 'true'
-        name: Build archiver
-        run: cargo build
-        working-directory: "./tools/archiver"
       - if: 'true'
         name: Install requirements
         run: brew install coreutils
       - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VULKAN_SDK: /Users
         if: 'true'
-        name: cargo check
+        name: Run checks
         run: "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -252,37 +271,41 @@ jobs:
     runs-on: windows-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
-        name: cargo check
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        name: Run checks
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
-        name: cargo check for transparent-back
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        name: Run checks for transparent-back
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -309,24 +332,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
+      - if: 'true'
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - env:
-          TARGET_PATH: "./examples"
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-subdir"
+        name: Run checks
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: examples
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -351,37 +380,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
-        name: Running Rustfmt
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - if: 'true'
+        name: Run rustfmt
         run: cargo fmt -- --check
       - env:
-          RUN_SCRIPT: vulnerabilities_elliminator
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: Running Check - Debugging Weaks
-        uses: "./.github/actions/codeform-checker"
-      - env:
-          RUN_SCRIPT: trailing_newline_checker
-        if: 'true'
-        name: Running Check - Trailing Newline for Source Code Files
-        uses: "./.github/actions/codeform-checker"
-      - env:
-          RUN_SCRIPT: linefeed_checker
-        if: 'true'
-        name: Running Check - Enforce Line Feed to LF only
-        uses: "./.github/actions/codeform-checker"
+        name: Run clippy
+        run: "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+      - if: 'true'
+        name: Run check - Trailing Newline for Source Code Files
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -407,24 +435,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
+      - if: 'true'
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - env:
-          TARGET_PATH: "./modules"
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-subdir"
+        name: Run checks
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: modules
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -450,24 +484,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: 'true'
         name: Checking out
-        uses: "actions/checkout@v4"
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget"
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
+      - if: 'true'
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - env:
-          TARGET_PATH: "./tools"
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: Building as Checking
-        uses: "./.github/actions/checkbuild-subdir"
+        name: Run checks
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: tools
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
       - if: "failure()"
         name: Configure for Slack Notification
         uses: "aws-actions/configure-aws-credentials@v4"
@@ -509,10 +549,7 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - name: Checking out
-        uses: "actions/checkout@v4"
-      - name: "Checking out (HEAD commit)"
-        uses: "actions/checkout@v4"
+      - uses: "actions/checkout@v5"
         with:
           ref: "${{ github.event.pull_request.head.sha }}"
       - name: Configure for Slack Notification

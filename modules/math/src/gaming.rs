@@ -93,7 +93,7 @@ impl Camera {
     }
     /// calculates the camera view matrix
     pub fn view_matrix(&self) -> Matrix4F32 {
-        Matrix4F32::from(-self.rotation.clone()) * Matrix4F32::translation(-self.position.clone())
+        Matrix4F32::from(-self.rotation) * Matrix4F32::translation(-self.position)
     }
     /// calculates the camera transform(view and projection) matrix
     pub fn view_projection_matrix(&self, aspect_wh: f32) -> Matrix4F32 {
@@ -107,7 +107,7 @@ impl Camera {
 
     /// Sets rotation of the camera to look at a point
     pub fn look_at(&mut self, target: Vector3F32) {
-        let eyedir = (target - self.position.clone()).normalize();
+        let eyedir = (target - self.position).normalize();
         let basedir = Vector3(0.0f32, 0.0, 1.0);
 
         let axis = basedir.cross(&eyedir).normalize();

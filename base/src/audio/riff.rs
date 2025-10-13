@@ -81,8 +81,10 @@ impl<F: Read + Seek> RIFFLoader<F> {
     fn read_next_chunk_header(f: &mut F) -> std::io::Result<RIFFChunkHeader> {
         let mut hdr = std::mem::MaybeUninit::uninit();
 
-        f.read_exact(unsafe { std::mem::transmute::<_, &mut [u8; 4 * 2]>(&mut *hdr.as_mut_ptr()) })
-            .map(move |_| unsafe { hdr.assume_init() })
+        f.read_exact(unsafe {
+            std::mem::transmute::<&mut RIFFChunkHeader, &mut [u8; 4 * 2]>(&mut *hdr.as_mut_ptr())
+        })
+        .map(move |_| unsafe { hdr.assume_init() })
     }
     fn seek_fourcc_in_file(f: &mut F, fcc: u32) -> std::io::Result<u64> {
         loop {
@@ -112,7 +114,7 @@ impl<F: Read + Seek> RIFFLoader<F> {
         self.file.seek(SeekFrom::Start(self.riff_chunk_start))?;
         loop {
             let next_hdr = Self::read_next_chunk_header(&mut self.file)?;
-            let chunk_start = self.file.seek(SeekFrom::Current(0))?;
+            let chunk_start = self.file.stream_position()?;
             if next_hdr.fourcc == fcc {
                 return Ok(next_hdr.length);
             }
@@ -130,7 +132,7 @@ impl<F: Read + Seek> RIFFLoader<F> {
         );
         let mut fmt = std::mem::MaybeUninit::uninit();
         self.file.read_exact(unsafe {
-            std::mem::transmute::<_, &mut [u8; 16]>(&mut *fmt.as_mut_ptr())
+            std::mem::transmute::<&mut RIFFWaveFormatData, &mut [u8; 16]>(&mut *fmt.as_mut_ptr())
         })?;
 
         Ok(unsafe { fmt.assume_init() })
@@ -205,7 +207,9 @@ impl<F: InputStream> RIFFStreamingLoader<F> {
 
         self.file
             .read_exact(unsafe {
-                std::mem::transmute::<_, &mut [u8; 4 * 2]>(&mut *hdr.as_mut_ptr())
+                std::mem::transmute::<&mut RIFFChunkHeader, &mut [u8; 4 * 2]>(
+                    &mut *hdr.as_mut_ptr(),
+                )
             })
             .map(move |_| unsafe { hdr.assume_init() })
     }
@@ -227,7 +231,7 @@ impl<F: InputStream> RIFFStreamingLoader<F> {
         );
         let mut fmt = std::mem::MaybeUninit::uninit();
         self.file.read_exact(unsafe {
-            std::mem::transmute::<_, &mut [u8; 16]>(&mut *fmt.as_mut_ptr())
+            std::mem::transmute::<&mut RIFFWaveFormatData, &mut [u8; 16]>(&mut *fmt.as_mut_ptr())
         })?;
         self.file.skip((len - 16) as _)?;
 

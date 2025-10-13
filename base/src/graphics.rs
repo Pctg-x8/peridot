@@ -1,5 +1,5 @@
 use crate::mthelper::{SharedRef, SharedWeakRef};
-use bedrock::{self as br, ResolverInterface, VkHandle, VkRawHandle};
+use bedrock::{self as br, ResolverInterface};
 use br::{Instance, PhysicalDevice};
 use std::{
     collections::HashSet,
@@ -459,7 +459,7 @@ impl VulkanGfx {
 
         let enabled_extension_names = instance_extensions
             .into_iter()
-            .chain(device_extensions.into_iter())
+            .chain(device_extensions)
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
 
@@ -467,8 +467,7 @@ impl VulkanGfx {
         let set_object_name_fn =
             if enabled_extension_names.contains(VulkanExtension::DEBUG_UTILS_EXT.name) {
                 Some(unsafe {
-                    instance
-                        .native_ptr()
+                    br::VkHandle::native_ptr(&instance)
                         .load_function_unconstrainted::<br::vk::PFN_vkSetDebugUtilsObjectNameEXT>()
                 })
             } else {
@@ -480,8 +479,7 @@ impl VulkanGfx {
             debug_instance: debug_instance.map(|x| (
                 x.unmanage().0,
                 unsafe {
-                    instance
-                        .native_ptr()
+                    br::VkHandle::native_ptr(&instance)
                         .load_function_unconstrainted::<br::vk::PFN_vkDestroyDebugUtilsMessengerEXT>()
                 }
             )),
@@ -597,14 +595,12 @@ impl VulkanGfx {
 
         let mut sink = Vec::with_capacity(x as _);
         unsafe {
-            sink.set_len(sink.capacity());
-        }
-        unsafe {
             br::vkfn_wrapper::get_physical_device_surface_formats(
                 self.0.adapter,
                 surface.native_ptr(),
-                &mut sink,
+                sink.spare_capacity_mut(),
             )?;
+            sink.set_len(sink.capacity());
         }
 
         Ok(sink)
@@ -627,14 +623,12 @@ impl VulkanGfx {
 
         let mut sink = Vec::with_capacity(x as _);
         unsafe {
-            sink.set_len(sink.capacity());
-        }
-        unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
                 self.0.adapter,
                 surface.native_ptr(),
-                &mut sink,
+                sink.spare_capacity_mut(),
             )?;
+            sink.set_len(sink.capacity());
         }
 
         Ok(sink)
@@ -647,6 +641,33 @@ impl VulkanGfx {
             .map(|x| x.index())
     }
 
+    /// Sets an object's name for debugging.
+    ///
+    /// On failure, this function logs a warning and does not bail.
+    ///
+    /// # Safety
+    ///
+    /// The object identified by `handle` must be the type of `object_type`.
+    #[cfg(feature = "debug")]
+    #[tracing::instrument(
+        name = "VulkanGfx::dbg_set_object_name_raw",
+        skip(self),
+        fields(handle = handle.raw_handle_value())
+    )]
+    pub unsafe fn dbg_set_object_name_raw(
+        &self,
+        object_type: br::vk::VkObjectType,
+        handle: &(impl br::VkRawHandle + ?Sized),
+        name: &core::ffi::CStr,
+    ) {
+        if let Err(e) = self.set_object_name_raw(object_type, handle, name) {
+            tracing::warn!(cause = ?e, "Failed to set an object's name for debugging");
+        }
+    }
+
+    /// # Safety
+    ///
+    /// The object identified by `handle` must be the type of `object_type`.
     #[cfg(feature = "debug")]
     pub unsafe fn set_object_name_raw(
         &self,
@@ -672,10 +693,28 @@ impl VulkanGfx {
         }
     }
 
+    /// Sets an object's name for debugging.
+    ///
+    /// On failure, this function logs a warning and does not bail.
+    #[cfg(feature = "debug")]
+    #[tracing::instrument(
+        name = "VulkanGfx::dbg_set_object_name",
+        skip(self),
+        fields(object_type = H::TYPE, handle = br::VkRawHandle::raw_handle_value(&handle.native_ptr()))
+    )]
+    pub fn dbg_set_object_name<H>(&self, handle: &H, name: &core::ffi::CStr)
+    where
+        H: br::VkHandle<Handle: br::VkRawHandle> + br::VkObject + ?Sized,
+    {
+        if let Err(e) = self.set_object_name(handle, name) {
+            tracing::warn!(cause = ?e, "Failed to set an object's name for debugging");
+        }
+    }
+
     #[cfg(feature = "debug")]
     pub fn set_object_name(
         &self,
-        object: &(impl br::VkHandle<Handle: br::VkRawHandle> + br::VkObject + ?Sized),
+        object: &(impl br::VkObject<Handle: br::VkRawHandle> + ?Sized),
         name: &core::ffi::CStr,
     ) -> br::Result<()> {
         let Some(ref f) = self.0.set_object_name_fn else {
@@ -692,6 +731,9 @@ impl VulkanGfx {
         }
     }
 
+    /// # Safety
+    ///
+    /// This function is just calling underlying raw api [`bedrock::device::VkDevice::load_function_unconstrainted`].
     #[inline]
     pub unsafe fn load_function<F: br::PFN>(&self) -> F {
         unsafe { self.0.device.load_function_unconstrainted::<F>() }
@@ -729,11 +771,6 @@ impl VulkanGfx {
             .get_or_init(|| unsafe { self.load_function() })
     }
 }
-impl br::DeviceExtCommandFunctionProvider for VulkanGfx {
-    fn cmd_pipeline_barrier_2_khr_fn(&self) -> br::vk::PFN_vkCmdPipelineBarrier2KHR {
-        todo!("vkCmdPipelineBarrier2KHR resolve");
-    }
-}
 impl br::VkHandle for VulkanGfx {
     type Handle = br::vk::VkDevice;
 
@@ -748,31 +785,42 @@ impl br::InstanceChild for VulkanGfx {
         unsafe { core::mem::transmute(self) }
     }
 }
-impl br::Device for VulkanGfx {
-    fn bind_buffer_memory2_khr_fn(&self) -> br::vk::PFN_vkBindBufferMemory2KHR {
-        unimplemented!();
+impl br::Device for VulkanGfx {}
+impl br::DeviceBindMemory2Extension for VulkanGfx {
+    fn bind_buffer_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindBufferMemory2KHR {
+        todo!("vkBindBufferMemory2KHR resolve")
     }
 
-    fn bind_image_memory2_khr_fn(&self) -> br::vk::PFN_vkBindImageMemory2KHR {
-        unimplemented!();
+    fn bind_image_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindImageMemory2KHR {
+        todo!("vkBindImageMemory2KHR resolve")
     }
-
+}
+impl br::DeviceGetMemoryRequirements2Extension for VulkanGfx {
     fn get_buffer_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
-        unimplemented!();
+        todo!("vkGetBufferMemoryRequirements2KHR resolve");
     }
 
     fn get_image_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetImageMemoryRequirements2KHR {
-        unimplemented!();
+        todo!("vkGetImageMemoryRequirements2KHR resolve");
     }
 
     fn get_image_sparse_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetImageSparseMemoryRequirements2KHR {
-        unimplemented!();
+        todo!("vkGetImageSparseMemoryRequirements2KHR resolve");
+    }
+}
+impl br::DeviceSynchronization2Extension for VulkanGfx {
+    fn cmd_pipeline_barrier_2_khr_fn(&self) -> bedrock::vk::PFN_vkCmdPipelineBarrier2KHR {
+        todo!("vkCmdPipelineBarrier2KHR resolve")
+    }
+
+    fn queue_submit2_khr_fn(&self) -> bedrock::vk::PFN_vkQueueSubmit2KHR {
+        todo!("vkQueueSubmit2KHR resolve")
     }
 }
 
@@ -806,22 +854,6 @@ impl Drop for LocalOnetimeSubmitCommandBuffer<'_> {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::free_command_buffers(self.device.0.device, *self.pool, &[self.buffer])
-        }
-    }
-}
-
-struct StandaloneOnetimeSubmitCommandBundle {
-    buffer: br::vk::VkCommandBuffer,
-    pool: br::vk::VkCommandPool,
-    device: VulkanGfx,
-}
-unsafe impl Sync for StandaloneOnetimeSubmitCommandBundle {}
-unsafe impl Send for StandaloneOnetimeSubmitCommandBundle {}
-impl Drop for StandaloneOnetimeSubmitCommandBundle {
-    fn drop(&mut self) {
-        unsafe {
-            // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
-            br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
         }
     }
 }
@@ -907,9 +939,9 @@ impl Graphics {
     /// Submits any commands as transient commands.
     pub fn submit_commands(
         &mut self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<()> {
-        let mut buffers = [br::vk::VkCommandBuffer::NULL];
+        let mut buffers = [core::mem::MaybeUninit::uninit()];
         unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 self.gfx_device.0.device,
@@ -922,7 +954,7 @@ impl Graphics {
             )?;
         }
         let cb = LocalOnetimeSubmitCommandBuffer {
-            buffer: buffers[0],
+            buffer: unsafe { buffers[0].assume_init() },
             pool: &self.cp_onetime_submit,
             device: &self.gfx_device,
         };
@@ -932,10 +964,9 @@ impl Graphics {
                 &br::CommandBufferBeginInfo::new().onetime_submit(),
             )?
         }
-        generator(br::CmdRecord::new(
-            unsafe { br::VkHandleRefMut::dangling(cb.buffer) },
-            &self.gfx_device,
-        ))
+        generator(br::CmdRecord::new(unsafe {
+            br::VkHandleRefMut::dangling(cb.buffer)
+        }))
         .end()?;
         unsafe {
             br::vkfn_wrapper::queue_submit(
@@ -973,7 +1004,7 @@ impl Graphics {
     #[cfg(feature = "mt")]
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<impl core::future::Future<Output = br::Result<()>> + 's> {
         use bedrock::VkHandleMut;
 
@@ -981,10 +1012,16 @@ impl Graphics {
             handle: br::vk::VkFence,
             device: VulkanGfx,
         }
+        unsafe impl Sync for StandaloneFence {}
+        unsafe impl Send for StandaloneFence {}
         impl Drop for StandaloneFence {
             fn drop(&mut self) {
                 unsafe {
-                    br::vkfn_wrapper::destroy_fence(self.device.native_ptr(), self.handle, None);
+                    br::vkfn_wrapper::destroy_fence(
+                        br::VkHandle::native_ptr(&self.device),
+                        self.handle,
+                        None,
+                    );
                 }
             }
         }
@@ -1010,6 +1047,22 @@ impl Graphics {
             }
         }
 
+        struct StandaloneOnetimeSubmitCommandBundle {
+            buffer: br::vk::VkCommandBuffer,
+            pool: br::vk::VkCommandPool,
+            device: VulkanGfx,
+        }
+        unsafe impl Sync for StandaloneOnetimeSubmitCommandBundle {}
+        unsafe impl Send for StandaloneOnetimeSubmitCommandBundle {}
+        impl Drop for StandaloneOnetimeSubmitCommandBundle {
+            fn drop(&mut self) {
+                unsafe {
+                    // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
+                    br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
+                }
+            }
+        }
+
         let mut fence = StandaloneFence {
             handle: unsafe {
                 br::vkfn_wrapper::create_fence(
@@ -1028,8 +1081,8 @@ impl Graphics {
                 None,
             )?
         };
-        let mut cb = [br::vk::VkCommandBuffer::NULL];
-        match unsafe {
+        let mut cb = [core::mem::MaybeUninit::uninit()];
+        if let Err(e) = unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
                 self.gfx_device.0.device,
                 &br::CommandBufferAllocateInfo::new(
@@ -1040,17 +1093,14 @@ impl Graphics {
                 &mut cb,
             )
         } {
-            Ok(()) => (),
-            Err(e) => {
-                unsafe {
-                    br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
-                }
-
-                return Err(e);
+            unsafe {
+                br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
             }
+
+            return Err(e);
         }
         let cb = StandaloneOnetimeSubmitCommandBundle {
-            buffer: cb[0],
+            buffer: unsafe { cb[0].assume_init() },
             pool,
             device: self.gfx_device.clone(),
         };
@@ -1060,10 +1110,9 @@ impl Graphics {
                 &br::CommandBufferBeginInfo::new().onetime_submit(),
             )?
         };
-        generator(br::CmdRecord::new(
-            unsafe { br::VkHandleRefMut::dangling(cb.buffer) },
-            &self.gfx_device,
-        ))
+        generator(br::CmdRecord::new(unsafe {
+            br::VkHandleRefMut::dangling(cb.buffer)
+        }))
         .end()?;
         unsafe {
             br::vkfn_wrapper::queue_submit(

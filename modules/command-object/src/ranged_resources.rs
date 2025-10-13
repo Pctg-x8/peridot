@@ -1,7 +1,6 @@
 use std::ops::Range;
 
 use bedrock as br;
-use br::ImageSubresourceSlice;
 
 #[cfg(feature = "memory-manager-interop")]
 use peridot_memory_manager as pmm;
@@ -31,7 +30,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
         RangedBuffer(&self.0, self.1.clone())
     }
 
-    pub fn make_descriptor_buffer_ref(&self) -> br::DescriptorBufferInfo {
+    pub fn make_descriptor_buffer_ref<'x>(&'x self) -> br::DescriptorBufferInfo<'x> {
         br::DescriptorBufferInfo::new(&self.0, self.1.clone())
     }
 
@@ -98,7 +97,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn copy_to(
         self,
         dest: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -114,7 +113,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn copy_from(
         self,
         src: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -127,7 +126,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn mirror_to(
         self,
         dest: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -143,7 +142,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
     pub fn mirror_from(
         self,
         src: RangedBuffer<impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>>,
-    ) -> impl GraphicsCommand<B::ConcreteDevice>
+    ) -> impl GraphicsCommand
     where
         B: br::DeviceChild,
     {
@@ -158,7 +157,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
         dest: &'s RangedBuffer<
             impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>,
         >,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's
+    ) -> impl GraphicsCommand + 's
     where
         B: br::DeviceChild,
     {
@@ -175,7 +174,7 @@ impl<B: br::Buffer> RangedBuffer<B> {
         src: &'s RangedBuffer<
             impl br::Buffer + br::DeviceChild<ConcreteDevice = B::ConcreteDevice>,
         >,
-    ) -> impl GraphicsCommand<B::ConcreteDevice> + 's
+    ) -> impl GraphicsCommand + 's
     where
         B: br::DeviceChild,
     {
@@ -261,26 +260,35 @@ impl<'s> From<&'s pmm::Buffer> for RangedBuffer<&'s pmm::Buffer> {
     }
 }
 
-pub struct RangedImage<R: br::Image>(br::ImageSubresourceRange<R>);
+pub struct RangedImage<R: br::Image>(R, br::ImageSubresourceRange);
 impl<R: br::Image> RangedImage<R> {
     pub fn single_color_plane(resource: R) -> Self {
-        Self(resource.subresource_range(br::AspectMask::COLOR, 0..1, 0..1))
+        Self(
+            resource,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
     }
 
     pub fn single_depth_stencil_plane(resource: R) -> Self {
-        Self(resource.subresource_range(
-            br::AspectMask::DEPTH | br::AspectMask::STENCIL,
-            0..1,
-            0..1,
-        ))
+        Self(
+            resource,
+            br::ImageSubresourceRange::new(
+                br::AspectMask::DEPTH | br::AspectMask::STENCIL,
+                0..1,
+                0..1,
+            ),
+        )
     }
 
     pub fn single_stencil_plane(resource: R) -> Self {
-        Self(resource.subresource_range(br::AspectMask::STENCIL, 0..1, 0..1))
+        Self(
+            resource,
+            br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
+        )
     }
 
     pub fn barrier(&self, trans: br::LayoutTransition) -> br::ImageMemoryBarrier {
-        self.0.make_ref().memory_barrier(trans)
+        br::ImageMemoryBarrier::new(&self.0, self.1.clone(), trans)
     }
 
     pub fn barrier3(

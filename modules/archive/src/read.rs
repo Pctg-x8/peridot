@@ -1,6 +1,6 @@
 use std::{
     convert::TryFrom,
-    io::{Error as IOError, ErrorKind, IoSliceMut, Read, Result as IOResult},
+    io::{Error as IOError, IoSliceMut, Read, Result as IOResult},
     path::Path,
 };
 
@@ -43,13 +43,11 @@ impl From<ArchiveReadError> for IOError {
         match e {
             ArchiveReadError::IO(e) => e,
             ArchiveReadError::IntegrityCheckFailed => {
-                IOError::new(ErrorKind::Other, "Archive Integrity check failed")
+                IOError::other("Archive Integrity check failed")
             }
-            ArchiveReadError::SignatureMismatch => {
-                IOError::new(ErrorKind::Other, "Archive Signature Mismatch")
-            }
+            ArchiveReadError::SignatureMismatch => IOError::other("Archive Signature Mismatch"),
             ArchiveReadError::Lz4DecompressError(e) => {
-                IOError::new(ErrorKind::Other, format!("Lz4DecompressError: {e:?}"))
+                IOError::other(format!("Lz4DecompressError: {e:?}"))
             }
         }
     }

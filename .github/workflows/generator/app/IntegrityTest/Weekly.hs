@@ -2,8 +2,8 @@
 
 module IntegrityTest.Weekly (weeklyIntegrityTest) where
 
-import Control.Eff (run)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
+import Data.Functor.Identity (runIdentity)
 import Data.Map qualified as M
 import IntegrityTest.Shared
 import SlackNotification
@@ -32,11 +32,14 @@ weeklySlackNotifyProvider = SlackNotificationProvider succ' fail'
           mkParams PostCINotificationsAction.SuccessStatus
 
 weeklyIntegrityTest :: GHA.Workflow
-weeklyIntegrityTest = run $ withSlackNotification weeklySlackNotifyProvider $ do
+weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ do
   let preconditions' =
         M.singleton "preconditions" $
           applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
-            GHA.job [preconditionRecordBeginTimeStamp]
+            GHA.job $
+              flattenSteps
+                [ Step preconditionRecordBeginTimeStamp
+                ]
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 
   checkJobs <- do

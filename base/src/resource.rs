@@ -1,6 +1,6 @@
 use super::*;
 use bedrock as br;
-use br::{ImageChild, ImageSubresourceSlice};
+use br::ImageChild;
 use std::ops::Deref;
 
 mod memory;
@@ -26,6 +26,8 @@ pub enum PixelFormat {
     BGR24 = br::vk::VK_FORMAT_B8G8R8_UNORM,
     RGBA64F = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
     RGB96F = br::vk::VK_FORMAT_R32G32B32_SFLOAT,
+    BC7 = br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
+    ASTC4x4 = br::vk::VK_FORMAT_ASTC_4x4_UNORM_BLOCK,
 }
 impl PixelFormat {
     /// Bits per pixel for each format enums
@@ -35,6 +37,8 @@ impl PixelFormat {
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
             PixelFormat::RGBA64F => 64,
             PixelFormat::RGB96F => 96,
+            PixelFormat::BC7 => 8,     // 8bpp on average
+            PixelFormat::ASTC4x4 => 8, // 8bpp on average
         }
     }
 
@@ -45,7 +49,9 @@ impl PixelFormat {
             | PixelFormat::BGRA32
             | PixelFormat::RGB24
             | PixelFormat::BGR24
-            | PixelFormat::RGB96F => 4,
+            | PixelFormat::RGB96F
+            | PixelFormat::ASTC4x4
+            | PixelFormat::BC7 => 4,
             PixelFormat::RGBA64F => 8,
         }
     }
@@ -65,9 +71,8 @@ impl<Image: br::Image> Texture2D<Image> {
         format: PixelFormat,
         prealloc: &mut BufferPrealloc,
     ) -> br::Result<(UnboundedStandaloneImage, u64)> {
-        let idesc = br::ImageCreateInfo::new(size.clone(), format as _)
-            .sampled()
-            .transfer_dest()
+        let idesc = br::ImageCreateInfo::new(size, format as _)
+            .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
             .init_layout(br::ImageLayout::Preinitialized);
         let bytes_per_pixel = (format.bpp() >> 3) as u64;
         let pixels_stg = prealloc.add(BufferContent::Raw(
@@ -93,9 +98,10 @@ impl<Image: br::Image + br::DeviceChild> Texture2D<Image> {
     pub fn new(img: Image) -> br::Result<Self> {
         let pf = PixelFormat::from(img.format());
 
-        let view_builder = img
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder();
+        let view_builder = br::ImageViewBuilder::new(
+            img,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        );
         let view_builder = match pf {
             PixelFormat::RGB24 => view_builder
                 .with_format_mutation(PixelFormat::RGBA32 as _)
@@ -432,7 +438,7 @@ impl DeviceWorkingTextureAllocator<'_> {
     ) -> DeviceWorkingTexture2DRef {
         self.planes.push(
             br::ImageCreateInfo::new(size, format as _)
-                .usage_with(usage)
+                .with_usage(usage)
                 .init_layout(br::ImageLayout::Preinitialized),
         );
         DeviceWorkingTexture2DRef(self.planes.len() - 1)
@@ -447,7 +453,7 @@ impl DeviceWorkingTextureAllocator<'_> {
     ) -> DeviceWorkingTexture3DRef {
         self.volumes.push(
             br::ImageCreateInfo::new(size, format as _)
-                .usage_with(usage)
+                .with_usage(usage)
                 .init_layout(br::ImageLayout::Preinitialized),
         );
         DeviceWorkingTexture3DRef(self.volumes.len() - 1)
@@ -461,7 +467,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         usage: br::ImageUsageFlags,
     ) -> DeviceWorkingCubeTextureRef {
         let id = br::ImageCreateInfo::new(size, format as _)
-            .usage_with(usage)
+            .with_usage(usage)
             .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6);
@@ -479,7 +485,7 @@ impl DeviceWorkingTextureAllocator<'_> {
         mipmaps: u32,
     ) -> DeviceWorkingCubeTextureRef {
         let id = br::ImageCreateInfo::new(size, format as _)
-            .usage_with(usage)
+            .with_usage(usage)
             .init_layout(br::ImageLayout::Preinitialized)
             .flags(br::ImageFlags::CUBE_COMPATIBLE)
             .array_layers(6)
@@ -631,7 +637,7 @@ impl DeviceWorkingTextureAllocator<'_> {
                     };
 
                     Ok(DeviceWorkingTexture3D {
-                        size: res.size().clone().into(),
+                        size: From::from(*res.size()),
                         format: res.format(),
                         view: view_handle,
                         under: res,

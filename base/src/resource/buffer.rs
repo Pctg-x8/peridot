@@ -317,7 +317,7 @@ impl BufferContent {
 
     pub const fn raw_for_slice<T>(slice: &[T]) -> Self {
         Self::Raw(
-            (core::mem::size_of::<T>() * slice.len()) as _,
+            core::mem::size_of_val(slice) as _,
             core::mem::align_of::<T>() as _,
         )
     }
@@ -341,12 +341,12 @@ impl<'g> BufferPrealloc<'g> {
         }
     }
 
-    pub fn build_desc(&self) -> br::BufferCreateInfo {
+    pub fn build_desc(&self) -> br::BufferCreateInfo<'_> {
         br::BufferCreateInfo::new(self.total as _, self.usage)
     }
 
     /// this ignores usage flags from appended contents
-    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferCreateInfo {
+    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferCreateInfo<'_> {
         br::BufferCreateInfo::new(self.total as _, usage)
     }
 
@@ -406,7 +406,7 @@ impl<'g> BufferPrealloc<'g> {
         let content_align = content.alignment(&self.g.gfx_device);
         self.common_align = self.common_align.lcm(&content_align);
         let offs = super::align2!(self.total, content_align);
-        self.total = offs + content.size() as u64;
+        self.total = offs + content.size();
         self.offsets.push(offs);
 
         offs

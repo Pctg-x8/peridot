@@ -131,6 +131,7 @@ pub trait Font {
 }
 
 #[cfg(not(doc))]
+#[cfg(not(feature = "ci-nolib"))]
 pub type DefaultFont = <DefaultFontProvider as FontProvider>::Font;
 
 /// An asset represents ttf blob

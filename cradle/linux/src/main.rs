@@ -7,7 +7,6 @@ use sound_backend::SoundBackend;
 use std::{ffi::CStr, path::PathBuf, sync::Arc};
 use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
-use tracing::warn;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 mod sound_backend;
@@ -52,17 +51,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
         #[allow(unused_mut)]
         let mut path_segments = path.split('.').peekable();
-
-        #[cfg(feature = "IterationBuild")]
-        if path_segments.peek().map_or(false, |&s| s == "builtin") {
-            // Switch base to external builtin path
-            path_segments.next();
-            let mut apath = self.builtin_asset_basedir.clone();
-            apath.extend(path_segments);
-            apath.set_extension(ext);
-
-            return File::open(apath);
-        }
 
         let mut apath = self.basedir.clone();
         apath.extend(path_segments);
@@ -124,7 +112,7 @@ impl<MainF: Future> GameDriver<MainF> {
         ) -> MainF,
     ) -> Self
     where
-        PP: PointerPositionProvider + 'static,
+        PP: PointerPositionProvider + Send + Sync + 'static,
         SharedMutableRef<PP>: PresenterProvider,
     {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
@@ -140,7 +128,7 @@ impl<MainF: Future> GameDriver<MainF> {
                 al: PlatformAssetLoader::new(),
                 pp: pp.clone(),
             },
-            Default::default(),
+            unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             (event_sender.clone(), event_receiver),
             frame_timing_receiver,
             &event_queue_lifetime_extended,
@@ -214,7 +202,7 @@ impl Drop for EpollTemporaryAddFd<'_> {
 
 fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
-    W: WindowBackend + EventProcessor + PointerPositionProvider + 'static,
+    W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
     SharedMutableRef<W>: PresenterProvider,
 {
     let mut gd = GameDriver::new(window_backend.clone(), |mut engine| async move {
@@ -252,8 +240,9 @@ where
             .expect("Failed to waiting epoll");
         drop(window_backend_temporary_epoll);
 
-        // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
+        // TODO: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 {
+            window_backend.borrow_mut().cancel_read();
             drop(window_backend_readiness_guard);
             let current_geometry = window_backend.borrow().geometry();
             if last_drawn_geometry != current_geometry {
@@ -282,6 +271,10 @@ where
                     &*window_backend.borrow(),
                 );
             }
+        }
+        if rg.is_some() {
+            // no window server events processed
+            window_backend.borrow_mut().cancel_read();
         }
     }
 

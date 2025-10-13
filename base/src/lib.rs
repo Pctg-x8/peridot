@@ -5,7 +5,6 @@ pub use peridot_math as math;
 
 use bedrock::{self as br, VkHandle};
 use parking_lot::RwLock;
-use std::borrow::Cow;
 use std::cell::{Ref, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CStr;
@@ -18,7 +17,6 @@ pub use self::graphics::{
     CBSubmissionType, CommandBundle, DeviceObject, Graphics, InstanceObject, LocalCommandBundle,
     MemoryTypeManager, VulkanExtension, VulkanGfx,
 };
-mod state_track;
 mod window;
 pub use self::window::SurfaceInfo;
 mod resource;
@@ -44,9 +42,6 @@ pub mod mthelper;
 #[allow(unused_imports)]
 use mthelper::DynamicMutabilityProvider;
 use mthelper::{DynamicMut, MappableGuardObject, MappableMutGuardObject};
-
-#[cfg(feature = "derive")]
-pub use peridot_derive::*;
 
 pub trait NativeLinker: Sized {
     type AssetLoader: PlatformAssetLoader;
@@ -86,9 +81,7 @@ pub trait EngineEvents<PL: NativeLinker>: Sized {
 }
 
 impl<PL: NativeLinker> EngineEvents<PL> for () {
-    fn init(_e: &mut Engine<PL>) -> Self {
-        ()
-    }
+    fn init(_e: &mut Engine<PL>) -> Self {}
 }
 
 /// Specifies which type of resource is supports sparse residency?
@@ -179,7 +172,7 @@ pub trait FeatureRequests {
             sparseResidency8Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample8() as _,
             sparseResidency16Samples: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_sample16() as _,
             sparseResidencyAliased: Self::SPARSE_RESIDENCY_SUPPORT_BITS.has_aliased() as _,
-            ..Default::default()
+            ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
         }
     }
 }
@@ -212,10 +205,7 @@ pub struct EngineEventReceiver {
 impl EngineEventReceiver {
     pub async fn wait_for_event(&mut self) -> Option<Event> {
         futures_util::select! {
-            e = self.frame_timing_receiver.next().fuse() => match e {
-                Some(()) => Some(Event::NextFrame),
-                None => None,
-            },
+            e = self.frame_timing_receiver.next().fuse() => e.map(|_| Event::NextFrame),
             e = self.other_events_receiver.next().fuse() => match e {
                 Some(EngineEvent::Shutdown) => Some(Event::Shutdown),
                 Some(EngineEvent::Resize(ns)) => Some(Event::Resize(ns)),
@@ -260,7 +250,7 @@ impl EventQueue {
 
     pub fn enqueue(&self, event: Event) {
         self.queue.borrow_mut().push_back(event);
-        for w in core::mem::replace(&mut *self.queue_waker.borrow_mut(), Vec::new()) {
+        for w in self.queue_waker.replace(Vec::new()) {
             w.wake();
         }
     }
@@ -320,7 +310,7 @@ impl LastRenderingCompletionFence {
     }
 
     #[must_use]
-    pub fn r#use(&mut self) -> br::VkHandleRefMut<br::vk::VkFence> {
+    pub fn r#use<'s>(&'s mut self) -> br::VkHandleRefMut<'s, br::vk::VkFence> {
         self.used = true;
 
         unsafe { br::VkHandleRefMut::dangling(self.handle) }
@@ -373,7 +363,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
         };
 
         Self {
-            ip: InputProcess::new().into(),
+            ip: InputProcess::new(),
             game_timer: GameTimer::new(),
             last_rendering_completion,
             audio_mixer: Arc::new(RwLock::new(audio::Mixer::new())),
@@ -395,6 +385,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
     }
 }
 impl<'q, NL: NativeLinker> Engine<'q, NL> {
+    #[allow(clippy::mut_from_ref)]
     pub fn event_receivers(&self) -> &mut EngineEventReceiver {
         unsafe { &mut *self.receivers.get() }
     }
@@ -437,7 +428,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     pub fn back_buffer_count(&self) -> usize {
         self.presenter.back_buffer_count()
     }
-    pub fn back_buffer(&self, index: usize) -> Option<br::VkHandleRef<br::vk::VkImage>> {
+    pub fn back_buffer<'s>(&'s self, index: usize) -> Option<br::VkHandleRef<'s, br::vk::VkImage>> {
         self.presenter.back_buffer(index)
     }
     pub fn iter_back_buffers<'s>(
@@ -468,7 +459,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
 
     pub fn submit_commands(
         &mut self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<()> {
         self.g.submit_commands(generator)
     }
@@ -486,8 +477,7 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     /// Unlike other futures, commands are submitted **immediately**(even if not awaiting the returned future).
     pub fn submit_commands_async<'s>(
         &'s self,
-        generator: impl for<'a> FnOnce(br::CmdRecord<'a, VulkanGfx>) -> br::CmdRecord<'a, VulkanGfx>
-            + 's,
+        generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a> + 's,
     ) -> br::Result<impl std::future::Future<Output = br::Result<()>> + 's> {
         self.g.submit_commands_async(generator)
     }
@@ -642,7 +632,7 @@ impl<T> LateInit<T> {
     pub fn init(&self, v: T) {
         *self.0.borrow_mut() = v.into();
     }
-    pub fn get(&self) -> Ref<T> {
+    pub fn get<'s>(&'s self) -> Ref<'s, T> {
         Ref::map(self.0.borrow(), |x| x.as_ref().expect("uninitialized"))
     }
 }
@@ -702,7 +692,7 @@ impl<T> Discardable<T> {
             .map_guarded_value(|x| x.as_ref().expect("uninitialized"))
     }
 
-    pub fn get_mut<'v>(&'v self) -> impl Deref<Target = T> + DerefMut + 'v {
+    pub fn get_mut<'v>(&'v self) -> impl DerefMut<Target = T> + 'v {
         self.0
             .borrow_mut()
             .map_guarded_value(|x| x.as_mut().expect("uninitialized"))
@@ -735,14 +725,15 @@ impl GameTimer {
     pub fn new() -> Self {
         GameTimer(None)
     }
+
     pub fn delta_time(&mut self) -> Duration {
-        let d = self
-            .0
-            .as_ref()
-            .map_or_else(|| Duration::new(0, 0), |it| it.elapsed());
+        let d = match self.0 {
+            Some(ref it) => it.elapsed(),
+            None => Duration::new(0, 0),
+        };
         self.0 = InstantTimer::now().into();
 
-        return d;
+        d
     }
 }
 
@@ -769,10 +760,6 @@ impl SubpassDependencyTemplates {
     }
 }
 
-pub trait SpecConstantStorage {
-    fn as_pair(&self) -> (Cow<[br::vk::VkSpecializationMapEntry]>, Cow<[u8]>);
-}
-
 pub struct LayoutedPipeline<Pipeline: br::Pipeline, Layout: br::PipelineLayout>(Pipeline, Layout);
 impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeline, Layout> {
     pub const fn combine(p: Pipeline, layout: Layout) -> Self {
@@ -788,10 +775,7 @@ impl<Pipeline: br::Pipeline, Layout: br::PipelineLayout> LayoutedPipeline<Pipeli
     }
 
     #[inline(always)]
-    pub fn bind<'r, Device: ?Sized>(
-        &self,
-        rec: br::CmdRecord<'r, Device>,
-    ) -> br::CmdRecord<'r, Device> {
+    pub fn bind<'r>(&self, rec: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
         rec.bind_pipeline(br::PipelineBindPoint::Graphics, &self.0)
     }
 }

@@ -362,13 +362,16 @@ impl ArchiveWrite {
         let uncompressed_byte_length_bytes = uncompressed_byte_length.map(u64::to_le_bytes);
 
         let mut write_buffers = Vec::with_capacity(4);
-        write_buffers.push(IoSlice::new(signature));
+        write_buffers.push(std::io::IoSlice::new(signature));
         write_buffers.extend(
             uncompressed_byte_length_bytes
                 .as_ref()
-                .map(|bs| IoSlice::new(&bs[..])),
+                .map(|bs| std::io::IoSlice::new(&bs[..])),
         );
-        write_buffers.extend([IoSlice::new(&checksum_bytes), IoSlice::new(body)]);
+        write_buffers.extend([
+            std::io::IoSlice::new(&checksum_bytes),
+            std::io::IoSlice::new(body),
+        ]);
 
         crate::utils::write_all_vectored_async(writer, &mut write_buffers).await?;
         Ok(())

@@ -3,39 +3,38 @@ use crate::{
     project::{PlatformConfiguration, Project},
 };
 use std::path::PathBuf;
-use structopt::StructOpt;
 
 /// Builds an game
-#[derive(StructOpt, Debug)]
+#[derive(clap::Parser, Debug)]
 pub struct Args {
     /// Path to userlib crate
     userlib_path: PathBuf,
     /// Target Platform
-    #[structopt(long, short = "p", possible_values = &Platform::variants(), case_insensitive = true, required = false)]
+    #[arg(long, short = 'p', value_enum, required = false)]
     platform: Vec<Platform>,
     /// Entry TypeName(default: Game)
-    #[structopt(long, short = "e")]
+    #[arg(long, short = 'e')]
     entry_ty_name: Option<String>,
     /// Asset Directory
-    #[structopt(long, short = "a")]
+    #[arg(long, short = 'a')]
     asset_directory: Option<PathBuf>,
     /// Userlib features
-    #[structopt(long, short = "f")]
+    #[arg(long, short = 'f')]
     feature: Option<Vec<String>>,
     /// Engine features
-    #[structopt(long, short = "F")]
+    #[arg(long, short = 'F')]
     engine_feature: Option<Vec<String>>,
     /// Update dependencies(cargo update) before build
-    #[structopt(long, short = "u")]
+    #[arg(long, short = 'u')]
     update_deps: bool,
-    /// Application Identifier
-    #[structopt(long = "appid")]
+    /// Overriding Application Identifier
+    #[arg(long = "appid")]
     app_package_id: Option<String>,
     /// Use fast build(no copy of builtin-assets)
-    #[structopt(long)]
+    #[arg(long)]
     fast_build: bool,
     /// Release build
-    #[structopt(long)]
+    #[arg(long)]
     release: bool,
 }
 impl Args {
@@ -91,12 +90,12 @@ impl Args {
     }
 }
 
-#[derive(StructOpt, Debug)]
+#[derive(clap::Parser, Debug)]
 pub struct BuildArgs {
-    #[structopt(flatten)]
+    #[command(flatten)]
     base: Args,
     /// Run after build
-    #[structopt(long, short = "r")]
+    #[arg(long, short = 'r')]
     run: bool,
 }
 
