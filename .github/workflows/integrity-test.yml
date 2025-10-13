@@ -242,10 +242,6 @@ jobs:
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Build archiver
-        run: cargo build
-        working-directory: "./tools/archiver"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install requirements
         run: brew install coreutils
       - env:
@@ -309,9 +305,6 @@ jobs:
         name: Build CLI
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Copy thirdparty DLLs
-        run: "Copy-Item -Path thirdparty/ktx/source-repo/build/Debug/ktx.dll -Destination tools/target/debug/ktx.dll\nCopy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang.dll -Destination tools/target/debug/slang.dll\nCopy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"

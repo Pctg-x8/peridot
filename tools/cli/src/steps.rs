@@ -178,6 +178,12 @@ pub fn cargo<'x>(ctx: &'x BuildContext) -> Cargo<'x> {
     }
 }
 
+#[cfg(not(feature = "process-assets"))]
+pub fn package_assets(_: &BuildContext, _: Option<&Path>, output_path: &Path) {
+    eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
+    std::fs::File::create(output_path).expect("Failed to create empty package file");
+}
+#[cfg(feature = "process-assets")]
 pub fn package_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
     // Prerequired build step
     let runtime_assets_path = std::env::temp_dir().join(".peridot/build/runtime-assets");
@@ -212,6 +218,11 @@ pub fn package_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         .expect("Failed to wait peridot-archive");
     crate::shellutil::handle_process_result("peridot-archive", e);
 }
+#[cfg(not(feature = "process-assets"))]
+pub fn merge_assets(_: &BuildContext, _: &Path, _: Option<&Path>) {
+    eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
+}
+#[cfg(feature = "process-assets")]
 pub fn merge_assets(ctx: &BuildContext, stg_directory_path: &Path, user_assets: Option<&Path>) {
     ctx.print_step("Merging assets...");
 
