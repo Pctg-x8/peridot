@@ -13,7 +13,7 @@ authStep =
     "dev-autocd-deployer@docs-peridot.iam.gserviceaccount.com"
 
 buildStep :: GHA.Step
-buildStep = GHA.namedAs "Build docs" $ GHA.actionStep "./.github/actions/build-doc" mempty
+buildStep = GHA.namedAs "Build docs" $ GHA.actionStep "./.github/actions/build-doc" mempty & GHA.env "PERIDOT_BUILD_SKIP_CDEPS" "1"
 
 deployStep :: GHA.Step
 deployStep = GHA.namedAs "Deploy" $ GHA.actionStep "./.github/actions/deployment-dev" mempty

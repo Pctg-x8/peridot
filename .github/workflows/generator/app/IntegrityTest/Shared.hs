@@ -202,6 +202,15 @@ cdepsEnvVars variant =
       RunnerVariantWindows -> GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace)"
       _ -> GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace)"
 
+addPPAStep :: [String] -> GHA.Step
+addPPAStep ppaList = GHA.namedAs "Add External PPA" $ GHA.runStep $ "sudo apt-add-repository -y " <> unwords ppaList
+
+aptInstallStep :: [String] -> GHA.Step
+aptInstallStep packages =
+  GHA.namedAs "install apt packages" $
+    GHA.runStep $
+      "sudo apt-get update && sudo apt-get install -y " <> unwords packages
+
 stdBashStep :: String -> GHA.Step
 stdBashStep command = GHA.runStep command & GHA.stepUseShell "bash --noprofile --norc -eo pipefail {0}"
 
@@ -223,12 +232,12 @@ checkFormats precondition =
           [ Step checkoutStep,
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
-            Step $ GHA.namedAs "Running Rustfmt" $ GHA.runStep "cargo fmt -- --check",
+            Step $ GHA.namedAs "Run rustfmt" $ GHA.runStep "cargo fmt -- --check",
             Step $
-              GHA.namedAs "Running Clippy" $
+              GHA.namedAs "Run clippy" $
                 stdBashStep "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps,
             Step $
-              GHA.namedAs "Running Check - Trailing Newline for Source Code Files" $
+              GHA.namedAs "Run check - Trailing Newline for Source Code Files" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
           ]
     )
@@ -241,10 +250,10 @@ checkBaseLayer precondition =
         <$> [ checkoutStep,
               rustCacheStep,
               setupCargoOutputTranslatorStep,
-              GHA.namedAs "check" $
-                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps,
-              GHA.namedAs "check(mt)" $
-                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps
+              GHA.namedAs "Run tests" $
+                stdBashStep "cargo test --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps,
+              GHA.namedAs "Run tests(mt)" $
+                stdBashStep "cargo test --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps
             ]
     )
 
@@ -258,7 +267,7 @@ checkTools precondition =
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
             Step $
-              GHA.namedAs "check" $
+              GHA.namedAs "Run tests" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "tools"
                   & skipCDeps
@@ -275,7 +284,7 @@ checkModules precondition =
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
             Step $
-              GHA.namedAs "check" $
+              GHA.namedAs "Run tests" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "modules"
                   & skipCDeps
@@ -292,7 +301,7 @@ checkExamples precondition =
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
             Step $
-              GHA.namedAs "check" $
+              GHA.namedAs "Run tests" $
                 GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
                   & GHA.workAt "examples"
                   & skipCDeps
@@ -330,8 +339,8 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
                   Copy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang.dll -Destination tools/target/debug/slang.dll
                   Copy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll
                   """,
-            Step $ GHA.namedAs "cargo check" $ integratedTestStep integratedTestNormalScript,
-            Step $ GHA.namedAs "cargo check for transparent-back" $ integratedTestStep integratedTestTransparentScript
+            Step $ GHA.namedAs "Run tests" $ integratedTestStep integratedTestNormalScript,
+            Step $ GHA.namedAs "Run tests for transparent-back" $ integratedTestStep integratedTestTransparentScript
           ]
 
     integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . skipCDeps . GHA.runStep
@@ -364,7 +373,7 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
 
     integratedTestStep =
       applyModifiers
-        [ GHA.namedAs "cargo check",
+        [ GHA.namedAs "Run tests",
           GHA.stepUseShell "bash",
           GHA.env "VULKAN_SDK" "/Users",
           withBuilderEnv,
@@ -373,15 +382,6 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
           skipCDeps
         ]
         $ GHA.runStep "./tools/target/debug/peridot test examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
-
-addPPAStep :: [String] -> GHA.Step
-addPPAStep ppaList = GHA.namedAs "Add External PPA" $ GHA.runStep $ "sudo apt-add-repository -y " <> unwords ppaList
-
-aptInstallStep :: [String] -> GHA.Step
-aptInstallStep packages =
-  GHA.namedAs "install apt packages" $
-    GHA.runStep $
-      "sudo apt-get update && sudo apt-get install -y " <> unwords packages
 
 checkCradleLinux :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
@@ -402,7 +402,7 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
 
     integratedTestStep =
       applyModifiers
-        [ GHA.namedAs "cargo check",
+        [ GHA.namedAs "Run tests",
           GHA.stepUseShell "bash",
           withBuilderEnv,
           setLibrarySearchPathsUnix,
@@ -431,7 +431,7 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
 
     integratedTestStep =
       applyModifiers
-        [ GHA.namedAs "cargo check",
+        [ GHA.namedAs "Run tests",
           GHA.stepUseShell "bash",
           withBuilderEnv,
           GHA.env "NDK_PLATFORM_TARGET" "28",

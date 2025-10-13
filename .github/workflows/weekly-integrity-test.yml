@@ -25,14 +25,14 @@ jobs:
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: check
-        run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        name: Run tests
+        run: "cargo test --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: "check(mt)"
-        run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        name: "Run tests(mt)"
+        run: "cargo test --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -107,7 +107,7 @@ jobs:
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
-        name: cargo check
+        name: Run tests
         run: "./tools/target/debug/peridot test examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
@@ -172,7 +172,7 @@ jobs:
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
-        name: cargo check
+        name: Run tests
         run: "./tools/target/debug/peridot test examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
@@ -240,7 +240,7 @@ jobs:
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VULKAN_SDK: /Users
         if: 'true'
-        name: cargo check
+        name: Run tests
         run: "./tools/target/debug/peridot test examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
@@ -299,7 +299,7 @@ jobs:
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
-        name: cargo check
+        name: Run tests
         run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
@@ -307,7 +307,7 @@ jobs:
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
-        name: cargo check for transparent-back
+        name: Run tests for transparent-back
         run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -356,7 +356,7 @@ jobs:
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: check
+        name: Run tests
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: examples
       - if: "failure()"
@@ -402,16 +402,16 @@ jobs:
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: 'true'
-        name: Running Rustfmt
+        name: Run rustfmt
         run: cargo fmt -- --check
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: Running Clippy
+        name: Run clippy
         run: "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: 'true'
-        name: Running Check - Trailing Newline for Source Code Files
+        name: Run check - Trailing Newline for Source Code Files
         run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -459,7 +459,7 @@ jobs:
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: check
+        name: Run tests
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: modules
       - if: "failure()"
@@ -508,7 +508,7 @@ jobs:
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: check
+        name: Run tests
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: tools
       - if: "failure()"
