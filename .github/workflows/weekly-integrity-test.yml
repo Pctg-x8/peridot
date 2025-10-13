@@ -17,17 +17,21 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - if: 'true'
-        name: check
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: Run checks
         run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
-      - if: 'true'
-        name: "check(mt)"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: "Run checks(mt)"
         run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: "failure()"
@@ -66,9 +70,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
-      - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
         with:
@@ -78,26 +79,8 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
       - if: 'true'
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
@@ -115,15 +98,16 @@ jobs:
         run: cargo install cargo-ndk
       - if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - env:
           LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           NDK_PLATFORM_TARGET: '28'
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
-        name: cargo check
+        name: Run checks
         run: "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
@@ -146,10 +130,6 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-cradle-linux:
-    env:
-      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
-      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Linux)"
     needs:
       - check-baselayer
@@ -180,36 +160,19 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
-      - if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - env:
           LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
-        name: cargo check
+        name: Run checks
         run: "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
@@ -234,9 +197,6 @@ jobs:
   check-cradle-macos:
     env:
       PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH: '1'
-      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
-      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(macOS)"
     needs:
       - check-baselayer
@@ -258,46 +218,25 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/Library/Caches/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: brew install ccache
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
       - env:
           RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
         if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
-      - if: 'true'
-        name: Build archiver
-        run: cargo build
-        working-directory: "./tools/archiver"
       - if: 'true'
         name: Install requirements
         run: brew install coreutils
       - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VULKAN_SDK: /Users
         if: 'true'
-        name: cargo check
+        name: Run checks
         run: "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
@@ -320,10 +259,6 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-cradle-windows:
-    env:
-      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace) }}"
-      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: "Cradle(Windows)"
     needs:
       - check-baselayer
@@ -345,47 +280,28 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
       - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~\\AppData\\Local\\ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: choco install ccache
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build\necho \"EXPORTS\" | Set-Content build\\Debug\\ktx.def\ndumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def\nlib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64"
-        working-directory: thirdparty/ktx/source-repo
-      - if: 'true'
         name: Build CLI
-        run: cargo build
+        run: cargo build --no-default-features
         working-directory: "./tools/cli"
-      - if: 'true'
-        name: Copy thirdparty DLLs
-        run: "Copy-Item -Path thirdparty/ktx/source-repo/build/Debug/ktx.dll -Destination tools/target/debug/ktx.dll\nCopy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang.dll -Destination tools/target/debug/slang.dll\nCopy-Item -Path thirdparty/slang/source-repo/build/Debug/bin/slang-glslang.dll -Destination tools/target/debug/slang-glslang.dll"
       - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
-        name: cargo check
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        name: Run checks
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VK_SDK_PATH: ''
         if: 'true'
-        name: cargo check for transparent-back
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot test examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        name: Run checks for transparent-back
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
         uses: "actions/checkout@v5"
         with:
@@ -406,10 +322,6 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-examples:
-    env:
-      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
-      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Examples
     needs:
       - check-modules
@@ -420,9 +332,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
-      - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
         with:
@@ -432,31 +341,15 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - if: 'true'
-        name: check
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: Run checks
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: examples
       - if: "failure()"
@@ -479,10 +372,6 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-formats:
-    env:
-      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
-      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Code Formats
     needs:
       - preconditions
@@ -490,9 +379,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: 'true'
-        name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -503,38 +389,22 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: 'true'
-        name: Running Rustfmt
+        name: Run rustfmt
         run: cargo fmt -- --check
-      - if: 'true'
-        name: Running Clippy
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: Run clippy
         run: "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: 'true'
-        name: Running Check - Trailing Newline for Source Code Files
+        name: Run check - Trailing Newline for Source Code Files
         run: "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -556,10 +426,6 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-modules:
-    env:
-      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
-      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Modules
     needs:
       - check-baselayer
@@ -568,9 +434,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: 'true'
-        name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -581,31 +444,15 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - if: 'true'
-        name: check
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: Run checks
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: modules
       - if: "failure()"
@@ -628,10 +475,6 @@ jobs:
           report_name: Weekly Check
           status: failure
   check-tools:
-    env:
-      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
-      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
-      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
     name: Tools
     needs:
       - check-baselayer
@@ -640,9 +483,6 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - if: 'true'
-        name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: 'true'
         name: Checking out
         uses: "actions/checkout@v5"
@@ -653,31 +493,15 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
       - if: 'true'
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - if: 'true'
-        name: check
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: 'true'
+        name: Run checks
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: tools
       - if: "failure()"
@@ -705,29 +529,9 @@ jobs:
       begintime: "${{ steps.begintime.outputs.begintime }}"
     runs-on: ubuntu-latest
     steps:
-      - name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - id: begintime
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
-      - name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
   report-success:
     name: Report as Success
     needs:

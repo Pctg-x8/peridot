@@ -1,11 +1,21 @@
 use std::path::PathBuf;
 
+use build_script_helper::{peridot_build_skip_cdeps, peridot_build_switch_enable};
+
 fn main() {
+    build_cdeps();
+}
+
+fn build_cdeps() {
+    if peridot_build_skip_cdeps() {
+        return;
+    }
+
     let source_repo_path = std::env::current_dir()
         .expect("Failed to get current dir")
         .join("source-repo");
 
-    if std::env::var_os("PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE").is_none_or(|x| x != "1") {
+    if !peridot_build_switch_enable!("TP_SLANG_SKIP_CMAKE") {
         let configure_preset = std::env::var("PERIDOT_BUILD_TP_SLANG_CONFIGURE_PRESET");
         let r = std::process::Command::new("cmake")
             .args(&[

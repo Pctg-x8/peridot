@@ -1,3 +1,3 @@
 #!/bin/bash
 
-cargo check --verbose --features peridot-vg/use-freetype,bedrock/DynamicLoaded
+cargo check --features peridot-vg/use-freetype,bedrock/DynamicLoaded

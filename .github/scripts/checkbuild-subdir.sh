@@ -4,22 +4,18 @@ set -o pipefail
 shopt -s globstar
 
 test_or_check() {
-    for f in ./src/**/*.rs
-    do
-        if grep "#\[test\]" $f > /dev/null
-        then
-            echo "test"
-            exit
-        fi
-    done
-
-    echo "check"
+    if cat ./src/**/*.rs | grep "#\[test\]" > /dev/null
+    then
+        echo "test"
+    else
+        echo "check"
+    fi
 }
 
 for c in **/*/Cargo.toml
 do
     pushd $(dirname $c)
-    
+
     if [ -e ./ci-test.sh ]
     then
         ./ci-test.sh
@@ -29,4 +25,3 @@ do
 
     popd
 done
-
