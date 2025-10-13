@@ -26,7 +26,7 @@ jobs:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
         name: Run tests
-        run: "cargo test --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        run: cargo test --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'

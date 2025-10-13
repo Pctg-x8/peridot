@@ -251,7 +251,7 @@ checkBaseLayer precondition =
               rustCacheStep,
               setupCargoOutputTranslatorStep,
               GHA.namedAs "Run tests" $
-                stdBashStep "cargo test --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps,
+                stdBashStep "cargo test --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json" & skipCDeps,
               GHA.namedAs "Run tests(mt)" $
                 stdBashStep "cargo test --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps
             ]
