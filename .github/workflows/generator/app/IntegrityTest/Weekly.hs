@@ -38,11 +38,7 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
           applyModifiers [GHA.namedAs "Preconditions", preconditionBeginTimestampOutputDef] $
             GHA.job $
               flattenSteps
-                [ Step disableAPTManualUpdateStep,
-                  Step preconditionRecordBeginTimeStamp,
-                  Step checkoutStep,
-                  -- ここでpreBuildCDepsしてキャッシュを温めておく
-                  preBuildCDeps RunnerVariantUbuntu
+                [ Step preconditionRecordBeginTimeStamp
                 ]
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 

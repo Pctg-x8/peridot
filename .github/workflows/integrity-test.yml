@@ -577,15 +577,9 @@ jobs:
       has_workflow_changes: "${{ steps.fileck.outputs.has_workflow_changes }}"
     runs-on: ubuntu-latest
     steps:
-      - name: Disable man-db triggers for apt-get
-        run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - id: begintime
         name: Getting begintime
         run: "echo \"begintime=$(date +%s)\" >> $GITHUB_OUTPUT"
-      - name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - id: fileck
         name: Checking Changed Filenames
         run: |
@@ -616,20 +610,6 @@ jobs:
           echo "HAS_WORKFLOW_CHANGES?$HAS_WORKFLOW_CHANGES"
           echo "has_code_changes=$HAS_CODE_CHANGES" >> $GITHUB_OUTPUT
           echo "has_workflow_changes=$HAS_WORKFLOW_CHANGES" >> $GITHUB_OUTPUT
-      - name: Cache ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE && cmake --build --preset debug"
-        working-directory: thirdparty/slang/source-repo
-      - name: "Pre-build c deps(ktx)"
-        run: "cmake . -B build -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build build"
-        working-directory: thirdparty/ktx/source-repo
   report-success:
     name: Report as Success
     needs:
