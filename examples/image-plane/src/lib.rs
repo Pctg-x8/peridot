@@ -46,6 +46,15 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
+    let async_io_reactor_thread = peridot_archive::native_io::linux::IoReactorThread::spawn();
+
+    let mut resource_container = peridot_archive::ArchiveAsync::open(
+        "/home/pctgx8/devel/peridot/examples/image-plane/assets/resources.par",
+        true,
+    )
+    .await
+    .expect("load resources.par");
+
     let mut image_data: peridot_image::StdTexture2DAsset =
         e.load("images.example").expect("No image found");
     if image_data.0.needs_transcoding() {
@@ -786,6 +795,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     unsafe {
         e.graphics_device().wait().expect("Failed to wait for work");
     }
+
+    drop(async_io_reactor_thread);
 }
 
 #[repr(C)]

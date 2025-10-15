@@ -2,7 +2,7 @@
 name = "peridot-archive"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2024"
 
 [features]
 default = []
@@ -24,6 +24,10 @@ peridot-serialization-utils = { path = "../serialization-utils" }
 async-std = { workspace = true, optional = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 bitflags = "2.8"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+linux-io-uring = { path = "../../platform/linux/io_uring" }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.59"

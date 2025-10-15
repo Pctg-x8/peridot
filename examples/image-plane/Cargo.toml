@@ -22,5 +22,6 @@ peridot-rendering-configuration = { path = "../../modules/rendering-configuratio
 async-std = "1.7"
 parking_lot = "0.12"
 ktx = { path = "../../thirdparty/ktx" }
+peridot-archive = { path = "../../modules/archive", features = ["async-rt-async-std"] }
 
 log = "0.4"

@@ -5,10 +5,10 @@ use std::{
 };
 
 use crate::{
+    AssetEntryHeadingPair, CompressionMethod, ContentFlags,
     entry::AssetNameRef,
     entry_tree::EntryTreePointer,
     native_io::{AsyncNativeFileReader, NativeFileMemoryMapProvider, NativeFileReader},
-    AssetEntryHeadingPair, CompressionMethod, ContentFlags,
 };
 use crc::crc32;
 use libflate::deflate as zlib;
@@ -18,6 +18,10 @@ use peridot_serialization_utils::{VariableUInt, VariableULong};
 type PlatformNativeFileReader = crate::native_io::windows::WindowsNativeFileReader;
 #[cfg(windows)]
 type PlatformNativeFileReaderAsync = crate::native_io::windows::WindowsAsyncNativeFileReader;
+#[cfg(target_os = "linux")]
+type PlatformNativeFileReader = crate::native_io::linux::LinuxNativeFileReader;
+#[cfg(target_os = "linux")]
+type PlatformNativeFileReaderAsync = crate::native_io::linux::LinuxAsyncNativeFileReader;
 
 #[non_exhaustive]
 #[derive(Debug)]
@@ -762,7 +766,7 @@ pub enum ArchiveBinReader<'a> {
 impl std::io::Read for ArchiveBinReader<'_> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
-        match self {
+        match *self {
             Self::OnMemory(ref mut x) => x.read(buf),
             Self::FileStreaming(ref mut x) => x.read(buf),
         }
@@ -776,7 +780,7 @@ pub enum ArchiveBinReaderAsync<'a> {
 impl<'a> ArchiveBinReaderAsync<'a> {
     #[inline]
     pub async fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
-        match self {
+        match *self {
             Self::OnMemory(ref mut x) => x.read(buf),
             Self::FileStreaming(ref mut x) => x.read(buf).await,
         }
@@ -784,7 +788,7 @@ impl<'a> ArchiveBinReaderAsync<'a> {
 
     #[inline]
     pub async fn read_exact(&mut self, buf: &mut [u8]) -> IOResult<()> {
-        match self {
+        match *self {
             Self::OnMemory(ref mut x) => x.read_exact(buf),
             Self::FileStreaming(ref mut x) => x.read_exact(buf).await,
         }
@@ -792,7 +796,7 @@ impl<'a> ArchiveBinReaderAsync<'a> {
 
     #[inline]
     pub async fn read_all(&mut self) -> IOResult<Vec<u8>> {
-        match self {
+        match *self {
             Self::OnMemory(ref mut x) => {
                 let mut sink = Vec::new();
                 x.read_to_end(&mut sink)?;
@@ -869,7 +873,7 @@ impl ArchiveAsync {
 
     #[inline]
     pub fn list_entry(&self, callback: impl FnMut(AssetNameRef)) {
-        match self {
+        match *self {
             Self::OnMemory(ref x) => x.list_entry(callback),
             Self::FileStreaming(ref x) => x.list_entry(callback),
         }
@@ -877,7 +881,7 @@ impl ArchiveAsync {
 
     #[inline]
     pub fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
-        match self {
+        match *self {
             Self::OnMemory(ref x) => x.find_entry(name, ext),
             Self::FileStreaming(ref x) => x.find_entry(name, ext),
         }
@@ -885,7 +889,7 @@ impl ArchiveAsync {
 
     #[inline]
     pub fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> ArchiveBinReaderAsync<'a> {
-        match self {
+        match *self {
             Self::OnMemory(ref x) => ArchiveBinReaderAsync::OnMemory(x.read_bin(heading)),
             Self::FileStreaming(ref x) => ArchiveBinReaderAsync::FileStreaming(x.read_bin(heading)),
         }
@@ -952,7 +956,7 @@ impl Archive {
 
     #[inline]
     pub fn list_entry(&self, callback: impl FnMut(AssetNameRef)) {
-        match self {
+        match *self {
             Self::OnMemory(ref x) => x.list_entry(callback),
             Self::FileStreaming(ref x) => x.list_entry(callback),
         }
@@ -960,7 +964,7 @@ impl Archive {
 
     #[inline]
     pub fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
-        match self {
+        match *self {
             Self::OnMemory(ref x) => x.find_entry(name, ext),
             Self::FileStreaming(ref x) => x.find_entry(name, ext),
         }
@@ -968,7 +972,7 @@ impl Archive {
 
     #[inline]
     pub fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> ArchiveBinReader<'a> {
-        match self {
+        match *self {
             Self::OnMemory(ref x) => ArchiveBinReader::OnMemory(x.read_bin(heading)),
             Self::FileStreaming(ref x) => ArchiveBinReader::FileStreaming(x.read_bin(heading)),
         }

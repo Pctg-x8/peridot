@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["extras/", "cradle/", "examples/", "tools/", "thirdparty/", "build-script-helper/"]
+exclude = ["extras/", "cradle/", "examples/", "tools/", "thirdparty/", "build-script-helper/", "platform/"]
 members = [
     "base",
     "derive",
@@ -36,3 +36,4 @@ manual_async_fn = "allow"
 unwrap_or_default = "allow"
 new_without_default = "allow"
 mem_replace_with_default = "allow"
+

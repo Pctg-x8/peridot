@@ -1,12 +1,11 @@
 //! Peridot Archive
 
-use std::io::prelude::{BufRead, Read};
+use std::io::Cursor;
 use std::io::Result as IOResult;
-use std::io::{Cursor, Seek, SeekFrom};
 
 mod entry;
 mod entry_tree;
-mod native_io;
+pub mod native_io;
 mod utils;
 
 use bitflags::bitflags;
@@ -43,7 +42,7 @@ pub enum WhereArchiveAsync {
 }
 impl WhereArchiveAsync {
     pub async fn on_memory(&mut self) -> IOResult<&[u8]> {
-        let replace_buf = match self {
+        let replace_buf = match *self {
             #[cfg(feature = "async-rt-async-std")]
             Self::FromIO(ref mut r) => {
                 let mut buf = Vec::new();
@@ -56,7 +55,7 @@ impl WhereArchiveAsync {
         if let Some(b) = replace_buf {
             *self = Self::OnMemory(b);
         }
-        let Self::OnMemory(ref b) = self else {
+        let Self::OnMemory(ref b) = *self else {
             unreachable!();
         };
 
@@ -97,7 +96,9 @@ impl async_std::io::Read for EitherArchiveReaderAsync {
         cx: &mut std::task::Context<'_>,
         buf: &mut [u8],
     ) -> std::task::Poll<IOResult<usize>> {
-        match self.get_mut() {
+        use std::io::Read;
+
+        match *self.get_mut() {
             Self::IO(ref mut r) => async_std::io::Read::poll_read(std::pin::Pin::new(r), cx, buf),
             Self::OnMemory(ref mut c) => std::task::Poll::Ready(c.read(buf)),
         }
@@ -109,7 +110,9 @@ impl async_std::io::Read for EitherArchiveReaderAsync {
         cx: &mut std::task::Context<'_>,
         bufs: &mut [std::io::IoSliceMut<'_>],
     ) -> std::task::Poll<IOResult<usize>> {
-        match self.get_mut() {
+        use std::io::Read;
+
+        match *self.get_mut() {
             Self::IO(ref mut r) => {
                 async_std::io::Read::poll_read_vectored(std::pin::Pin::new(r), cx, bufs)
             }
@@ -124,7 +127,9 @@ impl async_std::io::BufRead for EitherArchiveReaderAsync {
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<IOResult<&[u8]>> {
-        match self.get_mut() {
+        use std::io::BufRead;
+
+        match *self.get_mut() {
             Self::IO(ref mut r) => async_std::io::BufRead::poll_fill_buf(std::pin::Pin::new(r), cx),
             Self::OnMemory(ref mut c) => std::task::Poll::Ready(c.fill_buf()),
         }
@@ -132,7 +137,9 @@ impl async_std::io::BufRead for EitherArchiveReaderAsync {
 
     #[inline]
     fn consume(self: std::pin::Pin<&mut Self>, amt: usize) {
-        match self.get_mut() {
+        use std::io::BufRead;
+
+        match *self.get_mut() {
             Self::IO(ref mut r) => async_std::io::BufRead::consume(std::pin::Pin::new(r), amt),
             Self::OnMemory(ref mut c) => c.consume(amt),
         }
@@ -144,9 +151,11 @@ impl async_std::io::Seek for EitherArchiveReaderAsync {
     fn poll_seek(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-        pos: SeekFrom,
+        pos: std::io::SeekFrom,
     ) -> std::task::Poll<IOResult<u64>> {
-        match self.get_mut() {
+        use std::io::Seek;
+
+        match *self.get_mut() {
             Self::IO(ref mut r) => async_std::io::Seek::poll_seek(std::pin::Pin::new(r), cx, pos),
             Self::OnMemory(ref mut c) => std::task::Poll::Ready(c.seek(pos)),
         }
