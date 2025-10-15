@@ -13,7 +13,7 @@ pub fn write_all_vectored(
                 return Err(IOError::new(
                     ErrorKind::WriteZero,
                     "Failed to write whole buffer",
-                ))
+                ));
             }
             Ok(n) => IoSlice::advance_slices(&mut buffers, n),
             Err(e) if e.kind() == ErrorKind::Interrupted => (),
@@ -38,7 +38,7 @@ pub async fn write_all_vectored_async<'b>(
                 return Err(IOError::new(
                     ErrorKind::WriteZero,
                     "Failed to write whole buffer",
-                ))
+                ));
             }
             Ok(n) => IoSlice::advance_slices(&mut buffers, n),
             Err(e) if e.kind() == ErrorKind::Interrupted => (),

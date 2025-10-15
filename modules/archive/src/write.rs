@@ -7,9 +7,9 @@ use std::{
 };
 
 use crate::{
+    CompressionMethod, ContentFlags,
     entry::{AssetEntryHeadingPair, AssetName},
     entry_tree::EntryTreePointer,
-    CompressionMethod, ContentFlags,
 };
 
 pub struct ArchiveWrite {

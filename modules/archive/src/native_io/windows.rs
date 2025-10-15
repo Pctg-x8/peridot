@@ -789,8 +789,8 @@ impl Drop for IoReactorThreadTerminator {
 }
 
 #[cfg(feature = "async-rt-async-std")]
-pub fn spawn_windows_io_reactor_thread(
-) -> (async_std::task::JoinHandle<()>, IoReactorThreadTerminator) {
+pub fn spawn_windows_io_reactor_thread()
+-> (async_std::task::JoinHandle<()>, IoReactorThreadTerminator) {
     use std::{collections::HashMap, sync::Mutex};
 
     let iocp = Arc::new(IoCompletionPort::new(0).expect("Failed to create io completion port"));

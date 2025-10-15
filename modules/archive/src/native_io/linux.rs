@@ -457,7 +457,6 @@ static LINUX_IO_REACTOR_CURRENT_HANDLE: std::sync::RwLock<Option<LinuxIoReactorH
 
 pub struct IoUringContext {
     uring: linux_io_uring::IoUring,
-    params: linux_io_uring::ffi::io_uring_params,
     sq_ptr: *mut core::ffi::c_void,
     sq_size: usize,
     // None for shared with sq
@@ -561,7 +560,6 @@ impl IoUringContext {
 
         Self {
             uring,
-            params,
             sq_ptr,
             sq_size: sring_size,
             cq: if is_shared_cq_sq {
