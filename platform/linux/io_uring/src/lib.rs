@@ -1,7 +1,4 @@
-use std::{
-    io::IoSliceMut,
-    os::fd::{AsRawFd, RawFd},
-};
+use std::os::fd::{AsRawFd, RawFd};
 
 pub mod ffi;
 

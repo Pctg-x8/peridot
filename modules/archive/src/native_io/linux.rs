@@ -155,11 +155,11 @@ impl super::AsyncNativeFileReader for LinuxAsyncNativeFileReader {
     where
         Self: 'a;
     type PosReadFuture<'a, 'b>
-        = core::future::Ready<std::io::Result<usize>>
+        = LinuxAsyncNativeFileReadPosFuture<'a, 'b>
     where
         Self: 'a;
     type ReadVecFuture<'a, 'b, 'b2>
-        = core::future::Ready<std::io::Result<usize>>
+        = LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2>
     where
         Self: 'a,
         'b2: 'b;
@@ -174,7 +174,7 @@ impl super::AsyncNativeFileReader for LinuxAsyncNativeFileReader {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn read_async<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
         LinuxAsyncNativeFileReadFuture {
             fd: self,
@@ -183,19 +183,26 @@ impl super::AsyncNativeFileReader for LinuxAsyncNativeFileReader {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     fn pread_async<'a, 'b>(&'a self, buf: &'b mut [u8], offs: u64) -> Self::PosReadFuture<'a, 'b> {
-        println!("async pread");
-        core::future::ready(Ok(0))
+        LinuxAsyncNativeFileReadPosFuture {
+            fd: self,
+            buf,
+            offs,
+            state: Arc::new(Cell::new(LinuxAsyncNativeFileReadState::Init)),
+        }
     }
 
-    #[inline]
+    #[inline(always)]
     fn readv_async<'a, 'b, 'b2>(
         &'a mut self,
         buf: &'b mut [std::io::IoSliceMut<'b2>],
     ) -> Self::ReadVecFuture<'a, 'b, 'b2> {
-        println!("async readv");
-        core::future::ready(Ok(0))
+        LinuxAsyncNativeFileReadVecFuture {
+            fd: self,
+            iovecs: buf,
+            state: Arc::new(Cell::new(LinuxAsyncNativeFileReadState::Init)),
+        }
     }
 }
 impl super::NativeFileMemoryMapProvider for LinuxAsyncNativeFileReader {
@@ -283,6 +290,7 @@ impl<'a> Future for LinuxAsyncNativeFileReadFuture<'a> {
                             this.buf.as_mut_ptr() as usize as _,
                         );
                         core::ptr::write_volatile(&mut sqe.len, this.buf.len() as _);
+                        // TODO: 毎回mallocするのはちょっとやめたい気もする うまい感じのpoolつくれないか......
                         core::ptr::write_volatile(
                             &mut sqe.user_data,
                             Box::into_raw(Box::new(ReadFutureQueueData::Read {
@@ -295,11 +303,123 @@ impl<'a> Future for LinuxAsyncNativeFileReadFuture<'a> {
                 this.state.set(LinuxAsyncNativeFileReadState::Pending);
                 core::task::Poll::Pending
             }
-            LinuxAsyncNativeFileReadState::Pending => {
-                // still pending
+            LinuxAsyncNativeFileReadState::Pending => core::task::Poll::Pending,
+            LinuxAsyncNativeFileReadState::CompletedSuccess(res) => {
+                this.fd.readptr += res as u64;
+                core::task::Poll::Ready(Ok(res))
+            }
+            LinuxAsyncNativeFileReadState::CompletedFailure(e) => {
+                core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
+            }
+        }
+    }
+}
+
+pub struct LinuxAsyncNativeFileReadPosFuture<'a, 'b> {
+    fd: &'a LinuxAsyncNativeFileReader,
+    buf: &'b mut [u8],
+    offs: u64,
+    state: Arc<Cell<LinuxAsyncNativeFileReadState>>,
+}
+impl<'a, 'b> Future for LinuxAsyncNativeFileReadPosFuture<'a, 'b> {
+    type Output = std::io::Result<usize>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+
+        match this.state.get() {
+            LinuxAsyncNativeFileReadState::Init => {
+                // first call
+                LinuxIoReactorHandle::current()
+                    .expect("no reactor running")
+                    .pusher
+                    .push(|sqe| unsafe {
+                        core::ptr::write_volatile(&mut sqe.fd, this.fd.file.0);
+                        core::ptr::write_volatile(
+                            &mut sqe.opcode,
+                            linux_io_uring::ffi::IORING_OP_READ as _,
+                        );
+                        core::ptr::write_volatile(&mut sqe.union1.off, this.offs);
+                        core::ptr::write_volatile(
+                            &mut sqe.union2.addr,
+                            this.buf.as_mut_ptr() as usize as _,
+                        );
+                        core::ptr::write_volatile(&mut sqe.len, this.buf.len() as _);
+                        // TODO: 毎回mallocするのはちょっとやめたい気もする うまい感じのpoolつくれないか......
+                        core::ptr::write_volatile(
+                            &mut sqe.user_data,
+                            Box::into_raw(Box::new(ReadFutureQueueData::Read {
+                                state: Arc::downgrade(&this.state),
+                                waker: cx.waker().clone(),
+                            })) as usize as _,
+                        );
+                    });
+
                 this.state.set(LinuxAsyncNativeFileReadState::Pending);
                 core::task::Poll::Pending
             }
+            LinuxAsyncNativeFileReadState::Pending => core::task::Poll::Pending,
+            LinuxAsyncNativeFileReadState::CompletedSuccess(res) => {
+                core::task::Poll::Ready(Ok(res))
+            }
+            LinuxAsyncNativeFileReadState::CompletedFailure(e) => {
+                core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
+            }
+        }
+    }
+}
+
+pub struct LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
+    fd: &'a mut LinuxAsyncNativeFileReader,
+    iovecs: &'b mut [std::io::IoSliceMut<'b2>],
+    state: Arc<Cell<LinuxAsyncNativeFileReadState>>,
+}
+impl<'a, 'b, 'b2> Future for LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
+    type Output = std::io::Result<usize>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+
+        match this.state.get() {
+            LinuxAsyncNativeFileReadState::Init => {
+                // first call
+                let p = this.fd.readptr;
+
+                LinuxIoReactorHandle::current()
+                    .expect("no reactor running")
+                    .pusher
+                    .push(|sqe| unsafe {
+                        core::ptr::write_volatile(&mut sqe.fd, this.fd.file.0);
+                        core::ptr::write_volatile(
+                            &mut sqe.opcode,
+                            linux_io_uring::ffi::IORING_OP_READV as _,
+                        );
+                        core::ptr::write_volatile(&mut sqe.union1.off, p);
+                        core::ptr::write_volatile(
+                            &mut sqe.union2.addr,
+                            this.iovecs.as_mut_ptr() as usize as _,
+                        );
+                        core::ptr::write_volatile(&mut sqe.len, this.iovecs.len() as _);
+                        // TODO: 毎回mallocするのはちょっとやめたい気もする うまい感じのpoolつくれないか......
+                        core::ptr::write_volatile(
+                            &mut sqe.user_data,
+                            Box::into_raw(Box::new(ReadFutureQueueData::Read {
+                                state: Arc::downgrade(&this.state),
+                                waker: cx.waker().clone(),
+                            })) as usize as _,
+                        );
+                    });
+
+                this.state.set(LinuxAsyncNativeFileReadState::Pending);
+                core::task::Poll::Pending
+            }
+            LinuxAsyncNativeFileReadState::Pending => core::task::Poll::Pending,
             LinuxAsyncNativeFileReadState::CompletedSuccess(res) => {
                 this.fd.readptr += res as u64;
                 core::task::Poll::Ready(Ok(res))
