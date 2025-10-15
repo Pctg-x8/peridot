@@ -56,8 +56,10 @@ pub trait AsyncNativeFileReader: NativeFileMemoryMapProvider {
         async move {
             const GROW_SIZE: usize = 8192;
 
+            // TODO: あとでspare_capacity_mutをつかった実装に差し変える
             let mut buf = Vec::with_capacity(GROW_SIZE);
             unsafe {
+                #[allow(clippy::uninit_vec)]
                 buf.set_len(GROW_SIZE);
             }
             let mut o = 0;
@@ -73,6 +75,7 @@ pub trait AsyncNativeFileReader: NativeFileMemoryMapProvider {
                 if o >= buf.len() {
                     buf.reserve_exact(GROW_SIZE);
                     unsafe {
+                        #[allow(clippy::uninit_vec)]
                         buf.set_len(buf.capacity());
                     }
                 }
@@ -103,8 +106,10 @@ pub trait NativeFileReader: NativeFileMemoryMapProvider {
     fn read_to_end(&mut self) -> std::io::Result<Vec<u8>> {
         const GROW_SIZE: usize = 8192;
 
+        // TODO: あとでspare_capacity_mutをつかった実装に差し変える
         let mut buf = Vec::with_capacity(GROW_SIZE);
         unsafe {
+            #[allow(clippy::uninit_vec)]
             buf.set_len(GROW_SIZE);
         }
         let mut o = 0;
@@ -120,6 +125,7 @@ pub trait NativeFileReader: NativeFileMemoryMapProvider {
             if o >= buf.len() {
                 buf.reserve_exact(GROW_SIZE);
                 unsafe {
+                    #[allow(clippy::uninit_vec)]
                     buf.set_len(buf.capacity());
                 }
             }
