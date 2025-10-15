@@ -56,15 +56,13 @@ pub trait AsyncNativeFileReader: NativeFileMemoryMapProvider {
         async move {
             const GROW_SIZE: usize = 8192;
 
-            // TODO: あとでspare_capacity_mutをつかった実装に差し変える
             let mut buf = Vec::with_capacity(GROW_SIZE);
-            unsafe {
-                #[allow(clippy::uninit_vec)]
-                buf.set_len(GROW_SIZE);
-            }
             let mut o = 0;
             loop {
-                let r = match self.read_async(&mut buf[o..]).await {
+                let r = match self
+                    .read_async(unsafe { core::mem::transmute(&mut buf.spare_capacity_mut()[o..]) })
+                    .await
+                {
                     Ok(0) => break,
                     Ok(r) => r,
                     Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
@@ -72,16 +70,15 @@ pub trait AsyncNativeFileReader: NativeFileMemoryMapProvider {
                 };
 
                 o += r;
-                if o >= buf.len() {
-                    buf.reserve_exact(GROW_SIZE);
-                    unsafe {
-                        #[allow(clippy::uninit_vec)]
-                        buf.set_len(buf.capacity());
-                    }
+                if o >= buf.capacity() {
+                    buf.reserve_exact(buf.capacity() + GROW_SIZE);
                 }
             }
 
-            buf.truncate(o);
+            unsafe {
+                buf.set_len(o);
+            }
+            buf.shrink_to_fit();
             Ok(buf)
         }
     }
@@ -106,15 +103,12 @@ pub trait NativeFileReader: NativeFileMemoryMapProvider {
     fn read_to_end(&mut self) -> std::io::Result<Vec<u8>> {
         const GROW_SIZE: usize = 8192;
 
-        // TODO: あとでspare_capacity_mutをつかった実装に差し変える
         let mut buf = Vec::with_capacity(GROW_SIZE);
-        unsafe {
-            #[allow(clippy::uninit_vec)]
-            buf.set_len(GROW_SIZE);
-        }
         let mut o = 0;
         loop {
-            let r = match self.read(&mut buf[o..]) {
+            let r = match self
+                .read(unsafe { core::mem::transmute(&mut buf.spare_capacity_mut()[o..]) })
+            {
                 Ok(0) => break,
                 Ok(r) => r,
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
@@ -122,16 +116,15 @@ pub trait NativeFileReader: NativeFileMemoryMapProvider {
             };
 
             o += r;
-            if o >= buf.len() {
-                buf.reserve_exact(GROW_SIZE);
-                unsafe {
-                    #[allow(clippy::uninit_vec)]
-                    buf.set_len(buf.capacity());
-                }
+            if o >= buf.capacity() {
+                buf.reserve_exact(buf.capacity() + GROW_SIZE);
             }
         }
 
-        buf.truncate(o);
+        unsafe {
+            buf.set_len(o);
+        }
+        buf.shrink_to_fit();
         Ok(buf)
     }
 }
