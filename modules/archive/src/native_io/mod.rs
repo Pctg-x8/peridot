@@ -60,7 +60,11 @@ pub trait AsyncNativeFileReader: NativeFileMemoryMapProvider {
             let mut o = 0;
             loop {
                 let r = match self
-                    .read_async(unsafe { core::mem::transmute(&mut buf.spare_capacity_mut()[o..]) })
+                    .read_async(unsafe {
+                        core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+                            &mut buf.spare_capacity_mut()[o..],
+                        )
+                    })
                     .await
                 {
                     Ok(0) => break,
@@ -106,9 +110,11 @@ pub trait NativeFileReader: NativeFileMemoryMapProvider {
         let mut buf = Vec::with_capacity(GROW_SIZE);
         let mut o = 0;
         loop {
-            let r = match self
-                .read(unsafe { core::mem::transmute(&mut buf.spare_capacity_mut()[o..]) })
-            {
+            let r = match self.read(unsafe {
+                core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+                    &mut buf.spare_capacity_mut()[o..],
+                )
+            }) {
                 Ok(0) => break,
                 Ok(r) => r,
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
