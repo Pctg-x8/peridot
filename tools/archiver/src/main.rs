@@ -171,11 +171,14 @@ async fn new(args: &ArgMatches<'_>) {
 }
 
 fn extract(args: &ArgMatches) {
-    let archive = par::Archive::open(
-        args.value_of("arc").expect("arc not found"),
+    let archive = par::Archive::new(
+        par::native_io::PlatformNativeFileReader::open(
+            args.value_of("arc").expect("arc not found"),
+        )
+        .expect("Failed to open archive"),
         args.is_present("check"),
     )
-    .expect("Failed to open archive");
+    .expect("Failed to read archive");
 
     if let Some(apath) = args.value_of("apath") {
         let (name, ext) = match &apath.rsplitn(2, '.').collect::<Vec<_>>()[..] {
@@ -200,8 +203,11 @@ fn extract(args: &ArgMatches) {
     }
 }
 fn list(args: &ArgMatches) {
-    let archive = par::Archive::open(
-        args.value_of("arc").expect("arc not found"),
+    let archive = par::Archive::new(
+        par::native_io::PlatformNativeFileReader::open(
+            args.value_of("arc").expect("arc not found"),
+        )
+        .expect("Failed to open archive"),
         args.is_present("check"),
     )
     .expect("Failed to open archive");
