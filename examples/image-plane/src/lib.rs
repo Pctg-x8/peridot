@@ -7,6 +7,7 @@ use ktx::Texture;
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
+use peridot::FromAsset;
 use peridot::{
     audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, SubpassDependencyTemplates,
 };
@@ -48,8 +49,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let async_io_reactor_thread = peridot_archive::native_io::linux::IoReactorThread::spawn();
 
-    let mut resource_container = peridot_archive::ArchiveAsync::open(
-        "/home/pctgx8/devel/peridot/examples/image-plane/assets/resources.par",
+    let mut resource_container = peridot_archive::ArchiveAsync::new(
+        peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
+            "../../examples/image-plane/assets/resources.par",
+        )
+        .expect("open resources.par"),
         true,
     )
     .await

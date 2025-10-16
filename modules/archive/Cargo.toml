@@ -39,3 +39,8 @@ features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
 ]
+
+[target.'cfg(target_os = "android")'.dependencies]
+crossbeam-deque = "0.8"
+android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
+libc = "0.2"

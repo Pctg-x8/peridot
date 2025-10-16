@@ -1,9 +1,24 @@
 use std::io::Result as IOResult;
 
+#[cfg(target_os = "android")]
+pub mod android;
 #[cfg(target_os = "linux")]
 pub mod linux;
 #[cfg(windows)]
 pub mod windows;
+
+#[cfg(windows)]
+pub type PlatformNativeFileReader = self::windows::WindowsNativeFileReader;
+#[cfg(windows)]
+pub type PlatformNativeFileReaderAsync = self::windows::WindowsAsyncNativeFileReader;
+#[cfg(target_os = "linux")]
+pub type PlatformNativeFileReader = self::linux::NativeFileReader;
+#[cfg(target_os = "linux")]
+pub type PlatformNativeFileReaderAsync = self::linux::AsyncNativeFileReader;
+#[cfg(target_os = "android")]
+pub type PlatformNativeFileReader = self::android::BundledAssetReader;
+#[cfg(target_os = "android")]
+pub type PlatformNativeFileReaderAsync = self::android::BundledAssetAsyncReader;
 
 pub trait NativeFileMemoryMapProvider {
     type MemoryUnmapData;

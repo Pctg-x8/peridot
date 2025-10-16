@@ -1,27 +1,20 @@
 use std::{
     convert::TryFrom,
     io::{Error as IOError, IoSliceMut, Read, Result as IOResult},
-    path::Path,
 };
 
 use crate::{
     AssetEntryHeadingPair, CompressionMethod, ContentFlags,
     entry::AssetNameRef,
     entry_tree::EntryTreePointer,
-    native_io::{AsyncNativeFileReader, NativeFileMemoryMapProvider, NativeFileReader},
+    native_io::{
+        AsyncNativeFileReader, NativeFileMemoryMapProvider, NativeFileReader,
+        PlatformNativeFileReader, PlatformNativeFileReaderAsync,
+    },
 };
 use crc::crc32;
 use libflate::deflate as zlib;
 use peridot_serialization_utils::{VariableUInt, VariableULong};
-
-#[cfg(windows)]
-type PlatformNativeFileReader = crate::native_io::windows::WindowsNativeFileReader;
-#[cfg(windows)]
-type PlatformNativeFileReaderAsync = crate::native_io::windows::WindowsAsyncNativeFileReader;
-#[cfg(target_os = "linux")]
-type PlatformNativeFileReader = crate::native_io::linux::LinuxNativeFileReader;
-#[cfg(target_os = "linux")]
-type PlatformNativeFileReaderAsync = crate::native_io::linux::LinuxAsyncNativeFileReader;
 
 #[non_exhaustive]
 #[derive(Debug)]
@@ -813,15 +806,15 @@ pub enum ArchiveAsync {
     FileStreaming(FileStreamingArchiveAsync),
 }
 impl ArchiveAsync {
-    pub async fn open(
-        path: &(impl AsRef<Path> + ?Sized),
+    /// Creates a new archive reader from a platform-specific blob reader.
+    pub async fn new(
+        mut blob: PlatformNativeFileReaderAsync,
         check_integrity: bool,
     ) -> ArchiveReadResult<Self> {
-        let mut f = PlatformNativeFileReaderAsync::open(path)?;
-        let (comp, crc) = Self::read_file_header(&mut f).await?;
+        let (comp, crc) = Self::read_file_header(&mut blob).await?;
         if check_integrity {
             // read entire file for compute crc32
-            let body = f.read_to_end().await?;
+            let body = blob.read_to_end().await?;
             let input_crc = crc32::checksum_ieee(&body[..]);
             if input_crc != crc {
                 return Err(ArchiveReadError::IntegrityCheckFailed);
@@ -832,11 +825,11 @@ impl ArchiveAsync {
 
         match comp {
             CompressionMethod::None => Ok(Self::FileStreaming(
-                FileStreamingArchiveAsync::new(f).await?,
+                FileStreamingArchiveAsync::new(blob).await?,
             )),
             _ => {
                 // read entire file for decompression
-                let body = f.read_to_end().await?;
+                let body = blob.read_to_end().await?;
                 Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
             }
         }
@@ -901,15 +894,15 @@ pub enum Archive {
     FileStreaming(FileStreamingArchive),
 }
 impl Archive {
-    pub fn open(
-        path: &(impl AsRef<Path> + ?Sized),
+    /// Creates a new archive reader from a platform-specific blob reader.
+    pub fn new(
+        mut blob: PlatformNativeFileReader,
         check_integrity: bool,
     ) -> ArchiveReadResult<Self> {
-        let mut f = PlatformNativeFileReader::open(path)?;
-        let (comp, crc) = Self::read_file_header(&mut f)?;
+        let (comp, crc) = Self::read_file_header(&mut blob)?;
         if check_integrity {
             // read entire file for compute crc32
-            let body = f.read_to_end()?;
+            let body = blob.read_to_end()?;
             let input_crc = crc32::checksum_ieee(&body[..]);
             if input_crc != crc {
                 return Err(ArchiveReadError::IntegrityCheckFailed);
@@ -919,10 +912,10 @@ impl Archive {
         }
 
         match comp {
-            CompressionMethod::None => Ok(Self::FileStreaming(FileStreamingArchive::new(f)?)),
+            CompressionMethod::None => Ok(Self::FileStreaming(FileStreamingArchive::new(blob)?)),
             _ => {
                 // read entire file for decompression
-                let body = f.read_to_end()?;
+                let body = blob.read_to_end()?;
                 Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
             }
         }

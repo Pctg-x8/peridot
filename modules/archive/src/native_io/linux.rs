@@ -16,6 +16,7 @@ impl Drop for File {
     }
 }
 impl File {
+    #[inline]
     pub fn open(pathname: &core::ffi::CStr, flags: core::ffi::c_int) -> std::io::Result<Self> {
         let fd = unsafe { libc::open(pathname.as_ptr(), flags) };
         if fd < 0 {
@@ -24,11 +25,21 @@ impl File {
             Ok(Self(fd))
         }
     }
+
+    #[inline]
+    pub fn lseek64(&self, offset: libc::off64_t, whence: core::ffi::c_int) -> std::io::Result<u64> {
+        let r = unsafe { libc::lseek64(self.0, offset, whence) };
+        if r < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(r.cast_unsigned())
+        }
+    }
 }
 
 #[repr(transparent)]
-pub struct LinuxNativeFileReader(File);
-impl LinuxNativeFileReader {
+pub struct NativeFileReader(File);
+impl NativeFileReader {
     #[inline]
     pub fn open(name: &(impl AsRef<std::path::Path> + ?Sized)) -> std::io::Result<Self> {
         let f = File::open(
@@ -40,15 +51,10 @@ impl LinuxNativeFileReader {
         Ok(Self(f))
     }
 }
-impl super::NativeFileReader for LinuxNativeFileReader {
-    #[inline]
+impl super::NativeFileReader for NativeFileReader {
+    #[inline(always)]
     fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        let r = unsafe { libc::lseek64(self.0.0, 0, libc::SEEK_CUR) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r.cast_unsigned())
-        }
+        self.0.lseek64(0, libc::SEEK_CUR)
     }
 
     #[inline]
@@ -81,8 +87,8 @@ impl super::NativeFileReader for LinuxNativeFileReader {
         }
     }
 }
-impl super::NativeFileMemoryMapProvider for LinuxNativeFileReader {
-    type MemoryUnmapData = LinuxMemoryUnmapData;
+impl super::NativeFileMemoryMapProvider for NativeFileReader {
+    type MemoryUnmapData = MemoryUnmapData;
 
     #[inline]
     fn mmap(
@@ -105,7 +111,7 @@ impl super::NativeFileMemoryMapProvider for LinuxNativeFileReader {
         } else {
             Ok((
                 r,
-                LinuxMemoryUnmapData {
+                MemoryUnmapData {
                     addr: r,
                     len: len as _,
                 },
@@ -124,17 +130,17 @@ impl super::NativeFileMemoryMapProvider for LinuxNativeFileReader {
     }
 }
 
-pub struct LinuxMemoryUnmapData {
+pub struct MemoryUnmapData {
     addr: *mut core::ffi::c_void,
     len: usize,
 }
 
-pub struct LinuxAsyncNativeFileReader {
+pub struct AsyncNativeFileReader {
     file: File,
     // io_uringはファイルポインタすすめてくれないらしいので自前で管理する
     readptr: u64,
 }
-impl LinuxAsyncNativeFileReader {
+impl AsyncNativeFileReader {
     #[inline]
     pub fn open(name: &(impl AsRef<std::path::Path> + ?Sized)) -> std::io::Result<Self> {
         let f = File::open(
@@ -149,47 +155,42 @@ impl LinuxAsyncNativeFileReader {
         })
     }
 }
-impl super::AsyncNativeFileReader for LinuxAsyncNativeFileReader {
+impl super::AsyncNativeFileReader for AsyncNativeFileReader {
     type ReadFuture<'a>
-        = LinuxAsyncNativeFileReadFuture<'a>
+        = AsyncNativeFileReadFuture<'a>
     where
         Self: 'a;
     type PosReadFuture<'a, 'b>
-        = LinuxAsyncNativeFileReadPosFuture<'a, 'b>
+        = AsyncNativeFileReadPosFuture<'a, 'b>
     where
         Self: 'a;
     type ReadVecFuture<'a, 'b, 'b2>
-        = LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2>
+        = AsyncNativeFileReadVecFuture<'a, 'b, 'b2>
     where
         Self: 'a,
         'b2: 'b;
 
-    #[inline]
+    #[inline(always)]
     fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        let r = unsafe { libc::lseek64(self.file.0, 0, libc::SEEK_CUR) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r.cast_unsigned())
-        }
+        Ok(self.readptr)
     }
 
     #[inline(always)]
     fn read_async<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
-        LinuxAsyncNativeFileReadFuture {
+        AsyncNativeFileReadFuture {
             fd: self,
             buf,
-            state: Arc::new(Cell::new(LinuxAsyncNativeFileReadState::Init)),
+            state: Arc::new(Cell::new(AsyncNativeFileReadState::Init)),
         }
     }
 
     #[inline(always)]
     fn pread_async<'a, 'b>(&'a self, buf: &'b mut [u8], offs: u64) -> Self::PosReadFuture<'a, 'b> {
-        LinuxAsyncNativeFileReadPosFuture {
+        AsyncNativeFileReadPosFuture {
             fd: self,
             buf,
             offs,
-            state: Arc::new(Cell::new(LinuxAsyncNativeFileReadState::Init)),
+            state: Arc::new(Cell::new(AsyncNativeFileReadState::Init)),
         }
     }
 
@@ -198,15 +199,15 @@ impl super::AsyncNativeFileReader for LinuxAsyncNativeFileReader {
         &'a mut self,
         buf: &'b mut [std::io::IoSliceMut<'b2>],
     ) -> Self::ReadVecFuture<'a, 'b, 'b2> {
-        LinuxAsyncNativeFileReadVecFuture {
+        AsyncNativeFileReadVecFuture {
             fd: self,
             iovecs: buf,
-            state: Arc::new(Cell::new(LinuxAsyncNativeFileReadState::Init)),
+            state: Arc::new(Cell::new(AsyncNativeFileReadState::Init)),
         }
     }
 }
-impl super::NativeFileMemoryMapProvider for LinuxAsyncNativeFileReader {
-    type MemoryUnmapData = LinuxMemoryUnmapData;
+impl super::NativeFileMemoryMapProvider for AsyncNativeFileReader {
+    type MemoryUnmapData = MemoryUnmapData;
 
     #[inline]
     fn mmap(
@@ -229,7 +230,7 @@ impl super::NativeFileMemoryMapProvider for LinuxAsyncNativeFileReader {
         } else {
             Ok((
                 r,
-                LinuxMemoryUnmapData {
+                MemoryUnmapData {
                     addr: r,
                     len: len as _,
                 },
@@ -249,19 +250,19 @@ impl super::NativeFileMemoryMapProvider for LinuxAsyncNativeFileReader {
 }
 
 #[derive(Clone, Copy)]
-pub enum LinuxAsyncNativeFileReadState {
+pub enum AsyncNativeFileReadState {
     Init,
     Pending,
     CompletedSuccess(usize),
     CompletedFailure(i32),
 }
 
-pub struct LinuxAsyncNativeFileReadFuture<'a> {
-    fd: &'a mut LinuxAsyncNativeFileReader,
+pub struct AsyncNativeFileReadFuture<'a> {
+    fd: &'a mut AsyncNativeFileReader,
     buf: &'a mut [u8],
-    state: Arc<Cell<LinuxAsyncNativeFileReadState>>,
+    state: Arc<Cell<AsyncNativeFileReadState>>,
 }
-impl<'a> Future for LinuxAsyncNativeFileReadFuture<'a> {
+impl<'a> Future for AsyncNativeFileReadFuture<'a> {
     type Output = std::io::Result<usize>;
 
     fn poll(
@@ -271,11 +272,11 @@ impl<'a> Future for LinuxAsyncNativeFileReadFuture<'a> {
         let this = self.get_mut();
 
         match this.state.get() {
-            LinuxAsyncNativeFileReadState::Init => {
+            AsyncNativeFileReadState::Init => {
                 // first call
                 let p = this.fd.readptr;
 
-                LinuxIoReactorHandle::current()
+                IoReactorHandle::current()
                     .expect("no reactor running")
                     .pusher
                     .push(|sqe| unsafe {
@@ -300,28 +301,28 @@ impl<'a> Future for LinuxAsyncNativeFileReadFuture<'a> {
                         );
                     });
 
-                this.state.set(LinuxAsyncNativeFileReadState::Pending);
+                this.state.set(AsyncNativeFileReadState::Pending);
                 core::task::Poll::Pending
             }
-            LinuxAsyncNativeFileReadState::Pending => core::task::Poll::Pending,
-            LinuxAsyncNativeFileReadState::CompletedSuccess(res) => {
+            AsyncNativeFileReadState::Pending => core::task::Poll::Pending,
+            AsyncNativeFileReadState::CompletedSuccess(res) => {
                 this.fd.readptr += res as u64;
                 core::task::Poll::Ready(Ok(res))
             }
-            LinuxAsyncNativeFileReadState::CompletedFailure(e) => {
+            AsyncNativeFileReadState::CompletedFailure(e) => {
                 core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
             }
         }
     }
 }
 
-pub struct LinuxAsyncNativeFileReadPosFuture<'a, 'b> {
-    fd: &'a LinuxAsyncNativeFileReader,
+pub struct AsyncNativeFileReadPosFuture<'a, 'b> {
+    fd: &'a AsyncNativeFileReader,
     buf: &'b mut [u8],
     offs: u64,
-    state: Arc<Cell<LinuxAsyncNativeFileReadState>>,
+    state: Arc<Cell<AsyncNativeFileReadState>>,
 }
-impl<'a, 'b> Future for LinuxAsyncNativeFileReadPosFuture<'a, 'b> {
+impl<'a, 'b> Future for AsyncNativeFileReadPosFuture<'a, 'b> {
     type Output = std::io::Result<usize>;
 
     fn poll(
@@ -331,9 +332,9 @@ impl<'a, 'b> Future for LinuxAsyncNativeFileReadPosFuture<'a, 'b> {
         let this = self.get_mut();
 
         match this.state.get() {
-            LinuxAsyncNativeFileReadState::Init => {
+            AsyncNativeFileReadState::Init => {
                 // first call
-                LinuxIoReactorHandle::current()
+                IoReactorHandle::current()
                     .expect("no reactor running")
                     .pusher
                     .push(|sqe| unsafe {
@@ -358,26 +359,24 @@ impl<'a, 'b> Future for LinuxAsyncNativeFileReadPosFuture<'a, 'b> {
                         );
                     });
 
-                this.state.set(LinuxAsyncNativeFileReadState::Pending);
+                this.state.set(AsyncNativeFileReadState::Pending);
                 core::task::Poll::Pending
             }
-            LinuxAsyncNativeFileReadState::Pending => core::task::Poll::Pending,
-            LinuxAsyncNativeFileReadState::CompletedSuccess(res) => {
-                core::task::Poll::Ready(Ok(res))
-            }
-            LinuxAsyncNativeFileReadState::CompletedFailure(e) => {
+            AsyncNativeFileReadState::Pending => core::task::Poll::Pending,
+            AsyncNativeFileReadState::CompletedSuccess(res) => core::task::Poll::Ready(Ok(res)),
+            AsyncNativeFileReadState::CompletedFailure(e) => {
                 core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
             }
         }
     }
 }
 
-pub struct LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
-    fd: &'a mut LinuxAsyncNativeFileReader,
+pub struct AsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
+    fd: &'a mut AsyncNativeFileReader,
     iovecs: &'b mut [std::io::IoSliceMut<'b2>],
-    state: Arc<Cell<LinuxAsyncNativeFileReadState>>,
+    state: Arc<Cell<AsyncNativeFileReadState>>,
 }
-impl<'a, 'b, 'b2> Future for LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
+impl<'a, 'b, 'b2> Future for AsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
     type Output = std::io::Result<usize>;
 
     fn poll(
@@ -387,11 +386,11 @@ impl<'a, 'b, 'b2> Future for LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
         let this = self.get_mut();
 
         match this.state.get() {
-            LinuxAsyncNativeFileReadState::Init => {
+            AsyncNativeFileReadState::Init => {
                 // first call
                 let p = this.fd.readptr;
 
-                LinuxIoReactorHandle::current()
+                IoReactorHandle::current()
                     .expect("no reactor running")
                     .pusher
                     .push(|sqe| unsafe {
@@ -416,15 +415,15 @@ impl<'a, 'b, 'b2> Future for LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
                         );
                     });
 
-                this.state.set(LinuxAsyncNativeFileReadState::Pending);
+                this.state.set(AsyncNativeFileReadState::Pending);
                 core::task::Poll::Pending
             }
-            LinuxAsyncNativeFileReadState::Pending => core::task::Poll::Pending,
-            LinuxAsyncNativeFileReadState::CompletedSuccess(res) => {
+            AsyncNativeFileReadState::Pending => core::task::Poll::Pending,
+            AsyncNativeFileReadState::CompletedSuccess(res) => {
                 this.fd.readptr += res as u64;
                 core::task::Poll::Ready(Ok(res))
             }
-            LinuxAsyncNativeFileReadState::CompletedFailure(e) => {
+            AsyncNativeFileReadState::CompletedFailure(e) => {
                 core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
             }
         }
@@ -433,29 +432,26 @@ impl<'a, 'b, 'b2> Future for LinuxAsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
 
 pub enum ReadFutureQueueData {
     Read {
-        state: std::sync::Weak<Cell<LinuxAsyncNativeFileReadState>>,
+        state: std::sync::Weak<Cell<AsyncNativeFileReadState>>,
         waker: core::task::Waker,
     },
 }
 
 #[derive(Clone)]
-pub struct LinuxIoReactorHandle {
+pub struct IoReactorHandle {
     pusher: SubmissionQueuePusher,
 }
-impl LinuxIoReactorHandle {
+impl IoReactorHandle {
     #[inline]
     pub fn current() -> Option<Self> {
-        LINUX_IO_REACTOR_CURRENT_HANDLE
-            .write()
-            .expect("poisoned")
-            .clone()
+        IO_REACTOR_CURRENT_HANDLE.write().expect("poisoned").clone()
     }
 }
 
-static LINUX_IO_REACTOR_CURRENT_HANDLE: std::sync::RwLock<Option<LinuxIoReactorHandle>> =
+static IO_REACTOR_CURRENT_HANDLE: std::sync::RwLock<Option<IoReactorHandle>> =
     std::sync::RwLock::new(None);
 
-pub struct IoUringContext {
+struct IoUringContext {
     uring: linux_io_uring::IoUring,
     sq_ptr: *mut core::ffi::c_void,
     sq_size: usize,
@@ -483,18 +479,19 @@ impl Drop for IoUringContext {
     }
 }
 impl IoUringContext {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let mut params = linux_io_uring::ffi::io_uring_params {
             ..unsafe { core::mem::MaybeUninit::zeroed().assume_init() }
         };
         let uring = linux_io_uring::IoUring::new(32, &mut params).expect("IoUring::new");
 
+        let is_shared_cq_sq = (params.features & linux_io_uring::ffi::IORING_FEAT_SINGLE_MMAP) != 0;
         let mut sring_size = params.sq_off.array as usize
             + params.sq_entries as usize * core::mem::size_of::<core::ffi::c_uint>();
         let mut cring_size = params.cq_off.cqes as usize
             + params.cq_entries as usize
                 * core::mem::size_of::<linux_io_uring::ffi::io_uring_cqe>();
-        if (params.features & linux_io_uring::ffi::IORING_FEAT_SINGLE_MMAP) != 0 {
+        if is_shared_cq_sq {
             // can be shared with sring and cring
             let ring_size = sring_size.max(cring_size);
             sring_size = ring_size;
@@ -514,7 +511,6 @@ impl IoUringContext {
             panic!("sq map failed");
         }
 
-        let is_shared_cq_sq = (params.features & linux_io_uring::ffi::IORING_FEAT_SINGLE_MMAP) != 0;
         let cq_ptr = if is_shared_cq_sq {
             sq_ptr
         } else {
@@ -580,37 +576,39 @@ impl IoUringContext {
     }
 
     #[inline(always)]
-    pub const fn sring_tail(&self) -> &AtomicU32 {
+    const fn sring_tail(&self) -> &AtomicU32 {
         unsafe { AtomicU32::from_ptr(self.sring_tail_ptr) }
     }
 
     #[inline(always)]
-    pub const fn cring_head(&self) -> &AtomicU32 {
+    const fn cring_head(&self) -> &AtomicU32 {
         unsafe { AtomicU32::from_ptr(self.cring_head_ptr) }
     }
 
     #[inline(always)]
-    pub const fn cring_tail(&self) -> &AtomicU32 {
+    const fn cring_tail(&self) -> &AtomicU32 {
         unsafe { AtomicU32::from_ptr(self.cring_tail_ptr) }
     }
 }
 
-pub struct CompletionQueueTaker {
+struct CompletionQueueTaker {
     context: Arc<IoUringContext>,
 }
 impl CompletionQueueTaker {
-    pub fn new(context: &Arc<IoUringContext>) -> Self {
+    fn new(context: &Arc<IoUringContext>) -> Self {
         Self {
             context: context.clone(),
         }
     }
 
-    pub fn try_take(&self, process: impl FnOnce(&linux_io_uring::ffi::io_uring_cqe)) -> bool {
-        let head = self
-            .context
-            .cring_head()
-            .load(core::sync::atomic::Ordering::Acquire);
-        if head == unsafe { core::ptr::read_volatile(self.context.cring_tail_ptr) } {
+    fn try_take(&self, process: impl FnOnce(&linux_io_uring::ffi::io_uring_cqe)) -> bool {
+        let head = unsafe { core::ptr::read_volatile(self.context.cring_head_ptr) };
+        if head
+            == self
+                .context
+                .cring_tail()
+                .load(core::sync::atomic::Ordering::Acquire)
+        {
             // empty
             return false;
         }
@@ -625,17 +623,17 @@ impl CompletionQueueTaker {
 }
 
 #[derive(Clone)]
-pub struct SubmissionQueuePusher {
+struct SubmissionQueuePusher {
     context: Arc<IoUringContext>,
 }
 impl SubmissionQueuePusher {
-    pub fn new(context: &Arc<IoUringContext>) -> Self {
+    fn new(context: &Arc<IoUringContext>) -> Self {
         Self {
             context: context.clone(),
         }
     }
 
-    pub fn push(&self, describe_io: impl FnOnce(&mut linux_io_uring::ffi::io_uring_sqe)) {
+    fn push(&self, describe_io: impl FnOnce(&mut linux_io_uring::ffi::io_uring_sqe)) {
         let tail = unsafe { core::ptr::read_volatile(self.context.sring_tail_ptr) };
         let index = tail & unsafe { core::ptr::read(self.context.sring_mask_ptr) };
         describe_io(unsafe { &mut *self.context.sqes.add(index as _) });
@@ -673,7 +671,7 @@ impl IoReactorThread {
         let uring = Arc::new(IoUringContext::new());
         let cq_taker = CompletionQueueTaker::new(&uring);
 
-        *LINUX_IO_REACTOR_CURRENT_HANDLE.write().expect("poisoned") = Some(LinuxIoReactorHandle {
+        *IO_REACTOR_CURRENT_HANDLE.write().expect("poisoned") = Some(IoReactorHandle {
             pusher: SubmissionQueuePusher::new(&uring),
         });
 
@@ -700,9 +698,9 @@ impl IoReactorThread {
                                 ReadFutureQueueData::Read { state, waker } => {
                                     if let Some(st) = state.upgrade() {
                                         st.set(if res < 0 {
-                                            LinuxAsyncNativeFileReadState::CompletedFailure(-res)
+                                            AsyncNativeFileReadState::CompletedFailure(-res)
                                         } else {
-                                            LinuxAsyncNativeFileReadState::CompletedSuccess(
+                                            AsyncNativeFileReadState::CompletedSuccess(
                                                 res.cast_unsigned() as _,
                                             )
                                         });
