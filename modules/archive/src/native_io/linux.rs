@@ -602,7 +602,7 @@ impl CompletionQueueTaker {
     }
 
     fn try_take(&self, process: impl FnOnce(&linux_io_uring::ffi::io_uring_cqe)) -> bool {
-        let head = unsafe { core::ptr::read_volatile(self.context.cring_head_ptr) };
+        let head = unsafe { *self.context.cring_head_ptr };
         if head
             == self
                 .context
@@ -613,7 +613,7 @@ impl CompletionQueueTaker {
             return false;
         }
 
-        let index = head & unsafe { core::ptr::read(self.context.cring_mask_ptr) };
+        let index = head & unsafe { *self.context.cring_mask_ptr };
         process(unsafe { &*self.context.cqes_ptr.add(index as _) });
         self.context
             .cring_head()
@@ -634,8 +634,8 @@ impl SubmissionQueuePusher {
     }
 
     fn push(&self, describe_io: impl FnOnce(&mut linux_io_uring::ffi::io_uring_sqe)) {
-        let tail = unsafe { core::ptr::read_volatile(self.context.sring_tail_ptr) };
-        let index = tail & unsafe { core::ptr::read(self.context.sring_mask_ptr) };
+        let tail = unsafe { *self.context.sring_tail_ptr };
+        let index = tail & unsafe { *self.context.sring_mask_ptr };
         describe_io(unsafe { &mut *self.context.sqes.add(index as _) });
         unsafe {
             core::ptr::write_volatile(self.context.sring_array_head_ptr.add(index as _), index);
@@ -652,7 +652,6 @@ impl SubmissionQueuePusher {
 
 pub struct IoReactorThread {
     join_handle: Option<std::thread::JoinHandle<()>>,
-    terminated: Arc<AtomicBool>,
 }
 impl Drop for IoReactorThread {
     fn drop(&mut self) {
@@ -660,9 +659,18 @@ impl Drop for IoReactorThread {
             // already dropped?
             return;
         };
+        let Some(reactor_handle) = IO_REACTOR_CURRENT_HANDLE.write().expect("poisoned").take()
+        else {
+            // already dropped?
+            return;
+        };
 
-        self.terminated
-            .store(true, core::sync::atomic::Ordering::Release);
+        reactor_handle.pusher.push(|sqe| {
+            sqe.opcode = linux_io_uring::ffi::IORING_OP_MSG_RING as _;
+            sqe.fd = reactor_handle.pusher.context.uring.as_raw_fd();
+            sqe.len = 0;
+            sqe.union1.off = 0;
+        });
         join_handle.join().expect("err in IoReactorThread");
     }
 }
@@ -675,19 +683,33 @@ impl IoReactorThread {
             pusher: SubmissionQueuePusher::new(&uring),
         });
 
-        let terminated = Arc::new(AtomicBool::new(false));
         let join_handle = std::thread::Builder::new()
             .name("peridot-archiver Async FileIO".into())
             .spawn({
-                let terminated = terminated.clone();
+                let uring = uring.clone();
 
                 move || {
-                    while !terminated.load(core::sync::atomic::Ordering::Acquire) {
-                        if !cq_taker.try_take(|cqe| {
+                    let mut terminated = false;
+                    while !terminated {
+                        uring
+                            .uring
+                            .enter(
+                                0,
+                                1,
+                                linux_io_uring::ffi::IORING_ENTER_GETEVENTS,
+                                core::ptr::null_mut(),
+                            )
+                            .expect("uring enter for wait events");
+                        cq_taker.try_take(|cqe| {
                             // process cqe
-                            // kernelで書かれたものを読むのでvolatileじゃないとだめそう(ふつうにreadしただけだと反応しない場合があった)
-                            let res = unsafe { core::ptr::read_volatile(&cqe.res) };
-                            let user_data = unsafe { core::ptr::read_volatile(&cqe.user_data) };
+                            let res = cqe.res;
+                            let user_data = cqe.user_data;
+
+                            if user_data == 0 {
+                                // termination message
+                                terminated = true;
+                                return;
+                            }
 
                             let queue_data: Box<ReadFutureQueueData> = unsafe {
                                 Box::from_raw(core::ptr::with_exposed_provenance_mut(
@@ -709,9 +731,7 @@ impl IoReactorThread {
                                     waker.wake_by_ref();
                                 }
                             }
-                        }) {
-                            std::thread::yield_now();
-                        }
+                        });
                     }
                 }
             })
@@ -719,7 +739,6 @@ impl IoReactorThread {
 
         Self {
             join_handle: Some(join_handle),
-            terminated,
         }
     }
 }
