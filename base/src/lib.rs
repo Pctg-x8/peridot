@@ -491,7 +491,7 @@ impl<PL: NativeLinker> Engine<'_, PL> {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset(self.native_link.asset_loader().get(path, A::EXT)?)
     }
-    pub fn streaming<A: FromStreamingAsset>(&self, path: &str) -> Result<A, A::Error> {
+    pub fn streaming<'a, A: FromStreamingAsset<'a>>(&'a self, path: &str) -> Result<A, A::Error> {
         A::from_asset(
             self.native_link
                 .asset_loader()

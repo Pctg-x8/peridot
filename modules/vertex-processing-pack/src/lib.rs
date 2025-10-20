@@ -124,7 +124,7 @@ impl peridot::LogicalAssetData for PvpContainer {
 impl peridot::FromAsset for PvpContainer {
     type Error = PvpContainerReadError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(
+    fn from_asset<'a, Asset: Read + Seek + 'a>(
         asset: Asset,
     ) -> Result<Self, PvpContainerReadError> {
         PvpContainerReader::new(BufReader::new(asset))?

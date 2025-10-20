@@ -11,7 +11,9 @@ pub use self::entry::{AssetEntryHeadingPair, AssetNameRef};
 mod write;
 pub use self::write::ArchiveWrite;
 mod read;
-pub use self::read::{Archive, ArchiveAsync, ArchiveReadError};
+pub use self::read::{
+    Archive, ArchiveAsync, ArchiveBinReader, ArchiveBinReaderAsync, ArchiveReadError,
+};
 
 #[repr(C)]
 pub struct LinearPaired2u64(u64, u64);

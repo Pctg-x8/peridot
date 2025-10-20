@@ -30,9 +30,7 @@ impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
 impl peridot::FromAsset for CompiledRenderingConfigurationVk {
     type Error = std::io::Error;
 
-    fn from_asset<Asset: std::io::Read + Seek + 'static>(
-        asset: Asset,
-    ) -> Result<Self, Self::Error> {
+    fn from_asset<'a, Asset: std::io::Read + Seek + 'a>(asset: Asset) -> Result<Self, Self::Error> {
         read(&mut std::io::BufReader::new(asset))
     }
 }

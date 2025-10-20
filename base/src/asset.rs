@@ -14,18 +14,22 @@ where
 }
 
 pub trait PlatformAssetLoader {
-    type Asset: Read + Seek + 'static;
-    type StreamingAsset: InputStream + Sync + Send + 'static;
+    type Asset<'a>: Read + Seek + 'a
+    where
+        Self: 'a;
+    type StreamingAsset<'a>: InputStream + Sync + Send + 'a
+    where
+        Self: 'a;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset>;
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset>;
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>>;
+    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>>;
 }
 pub trait LogicalAssetData: Sized {
     const EXT: &'static str;
 }
 pub trait FromAsset: LogicalAssetData {
     type Error: From<IOError>;
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, Self::Error>;
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, Self::Error>;
 
     fn from_archive(
         reader: &mut peridot_archive::Archive,
@@ -43,11 +47,10 @@ pub trait FromAsset: LogicalAssetData {
         Self::from_asset(Cursor::new(buf))
     }
 }
-pub trait FromStreamingAsset: LogicalAssetData {
+pub trait FromStreamingAsset<'a>: LogicalAssetData {
     type Error: From<IOError>;
-    fn from_asset<Asset: InputStream + Sync + Send + 'static>(
-        asset: Asset,
-    ) -> Result<Self, Self::Error>;
+    fn from_asset<Asset: InputStream + Sync + Send + 'a>(asset: Asset)
+        -> Result<Self, Self::Error>;
 }
 
 // Shader Blob //
@@ -71,7 +74,7 @@ impl LogicalAssetData for SpirvShaderBlob {
 impl FromAsset for SpirvShaderBlob {
     type Error = IOError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(mut asset: Asset) -> Result<Self, IOError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(mut asset: Asset) -> Result<Self, IOError> {
         asset.seek(SeekFrom::End(0))?;
         let len = asset.stream_position()? as usize;
         asset.rewind()?;

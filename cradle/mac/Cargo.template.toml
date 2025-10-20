@@ -23,6 +23,7 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "VK_EXT_metal_surface",
 ] }
 peridot = { path = "../../base" }
+peridot-archive = { path = "../../modules/archive" }
 log = "0.4"
 env_logger = "0.5"
 objc = "0.2"

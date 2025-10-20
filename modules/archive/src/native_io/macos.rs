@@ -214,7 +214,7 @@ impl super::MemoryMapBlob for NativeFileReader {
         let r = self
             .0
             .mmap(len, libc::PROT_READ, libc::MAP_PRIVATE, offs as _)?;
-        Ok((r.addr, r))
+        Ok((unsafe { r.start_addr.byte_add(r.offset) }, r))
     }
 
     #[inline(always)]
@@ -224,6 +224,8 @@ impl super::MemoryMapBlob for NativeFileReader {
 }
 
 pub struct NativeFileAsyncReader(OwnedNativeObjectPtr<DispatchIO>);
+unsafe impl Sync for NativeFileAsyncReader {}
+unsafe impl Send for NativeFileAsyncReader {}
 impl NativeFileAsyncReader {
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         unimplemented!()

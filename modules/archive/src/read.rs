@@ -374,6 +374,23 @@ impl std::io::Read for OnMemoryArchiveBinReader<'_> {
         Ok(read_len)
     }
 }
+impl std::io::Seek for OnMemoryArchiveBinReader<'_> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> IOResult<u64> {
+        match pos {
+            std::io::SeekFrom::Current(x) => {
+                self.pointer = (self.pointer as i64 + x) as _;
+            }
+            std::io::SeekFrom::Start(x) => {
+                self.pointer = x;
+            }
+            std::io::SeekFrom::End(x) => {
+                self.pointer = (self.pointer_limit as i64 - x) as _;
+            }
+        }
+
+        Ok(self.pointer)
+    }
+}
 #[cfg(feature = "async-rt-async-std")]
 impl async_std::io::Read for OnMemoryArchiveBinReader<'_> {
     fn poll_read(
@@ -486,6 +503,24 @@ impl<R: RandomReadBlob + MemoryMapBlob> std::io::Read for FileStreamingArchiveBi
         Ok(r as _)
     }
 }
+impl<R: RandomReadBlob + MemoryMapBlob> std::io::Seek for FileStreamingArchiveBinReader<'_, R> {
+    #[inline]
+    fn seek(&mut self, pos: std::io::SeekFrom) -> IOResult<u64> {
+        match pos {
+            std::io::SeekFrom::Current(x) => {
+                self.pointer = (self.pointer as i64 + x) as _;
+            }
+            std::io::SeekFrom::Start(x) => {
+                self.pointer = x;
+            }
+            std::io::SeekFrom::End(x) => {
+                self.pointer = (self.pointer_limit as i64 - x) as _;
+            }
+        }
+
+        Ok(self.pointer)
+    }
+}
 
 pub struct FileStreamingArchiveBinReaderAsync<'a, R: RandomReadBlobAsync + MemoryMapBlob> {
     archive: &'a FileStreamingArchiveAsync<R>,
@@ -536,12 +571,12 @@ pub struct FileStreamingArchiveAsync<R: RandomReadBlobAsync + MemoryMapBlob> {
     pub content_baseptr: u64,
 }
 impl<R: RandomReadBlobAsync + MemoryMapBlob> FileStreamingArchiveAsync<R> {
-    async fn new(handle: R) -> IOResult<Self> {
+    async fn new(handle: R, body_start: u64) -> IOResult<Self> {
         let mut content_flags_buf = [0u8];
         let mut hash_tree_block_len_buf = [0u8; 4];
         let mut exact_match_block_len_buf = [0u8; 8];
 
-        let mut ro = 0;
+        let mut ro = body_start;
         handle
             .readv_all_async(
                 ro,
@@ -652,6 +687,8 @@ pub struct FileStreamingArchive<R: RandomReadBlob + MemoryMapBlob> {
     pub exact_match_block_range: core::ops::Range<usize>,
     pub content_baseptr: u64,
 }
+unsafe impl<R: RandomReadBlob + MemoryMapBlob + Send> Send for FileStreamingArchive<R> {}
+unsafe impl<R: RandomReadBlob + MemoryMapBlob + Sync> Sync for FileStreamingArchive<R> {}
 impl<R: RandomReadBlob + MemoryMapBlob> Drop for FileStreamingArchive<R> {
     fn drop(&mut self) {
         let _ = self
@@ -660,12 +697,12 @@ impl<R: RandomReadBlob + MemoryMapBlob> Drop for FileStreamingArchive<R> {
     }
 }
 impl<R: RandomReadBlob + MemoryMapBlob> FileStreamingArchive<R> {
-    fn new(handle: R) -> IOResult<Self> {
+    fn new(handle: R, body_offset: u64) -> IOResult<Self> {
         let mut content_flags_buf = [0u8];
         let mut hash_tree_block_len_buf = [0u8; 4];
         let mut exact_match_block_len_buf = [0u8; 8];
 
-        let mut ro = 0;
+        let mut ro = body_offset;
         handle.readv_all(
             ro,
             &mut [
@@ -682,7 +719,7 @@ impl<R: RandomReadBlob + MemoryMapBlob> FileStreamingArchive<R> {
 
         let entry_block_start_pos = ro;
         let (entry_mapped_head, entry_unmap_data) = handle.mmap(
-            entry_block_start_pos,
+            dbg!(entry_block_start_pos),
             (hash_tree_block_len + exact_match_block_len)
                 .try_into()
                 .expect("catalog block size is too large"),
@@ -778,6 +815,15 @@ impl<R: RandomReadBlob + MemoryMapBlob> std::io::Read for ArchiveBinReader<'_, R
         }
     }
 }
+impl<R: RandomReadBlob + MemoryMapBlob> std::io::Seek for ArchiveBinReader<'_, R> {
+    #[inline]
+    fn seek(&mut self, pos: std::io::SeekFrom) -> IOResult<u64> {
+        match *self {
+            Self::OnMemory(ref mut x) => x.seek(pos),
+            Self::FileStreaming(ref mut x) => x.seek(pos),
+        }
+    }
+}
 
 pub enum ArchiveBinReaderAsync<'a, R: RandomReadBlobAsync + MemoryMapBlob> {
     OnMemory(OnMemoryArchiveBinReader<'a>),
@@ -838,7 +884,7 @@ impl ArchiveAsync {
         } else {
             match comp {
                 CompressionMethod::None => Ok(Self::FileStreaming(
-                    FileStreamingArchiveAsync::new(blob).await?,
+                    FileStreamingArchiveAsync::new(blob, body_start).await?,
                 )),
                 _ => {
                     // read entire file for decompression
@@ -946,9 +992,9 @@ impl Archive {
             Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
         } else {
             match comp {
-                CompressionMethod::None => {
-                    Ok(Self::FileStreaming(FileStreamingArchive::new(blob)?))
-                }
+                CompressionMethod::None => Ok(Self::FileStreaming(FileStreamingArchive::new(
+                    blob, body_start,
+                )?)),
                 _ => {
                     // read entire file for decompression
                     let body = blob.read_to_end(body_start)?;
