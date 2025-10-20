@@ -64,7 +64,6 @@ impl UnixFile {
         }
     }
 
-    #[inline]
     pub fn mmap(
         &self,
         len: usize,
@@ -72,23 +71,41 @@ impl UnixFile {
         flags: core::ffi::c_int,
         offs: libc::off_t,
     ) -> std::io::Result<UnixFileUnmapData> {
-        let p = unsafe { libc::mmap(core::ptr::null_mut(), len, prot, flags, self.0, offs) };
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        assert!(page_size >= 0, "sysconf(_SC_PAGESIZE) failed");
+        let page_size = page_size.cast_unsigned() as usize;
+        let aligned_offs = offs as usize & !(page_size - 1);
+        let p = unsafe {
+            libc::mmap(
+                core::ptr::null_mut(),
+                len,
+                prot,
+                flags,
+                self.0,
+                aligned_offs as _,
+            )
+        };
         if p == libc::MAP_FAILED {
             Err(std::io::Error::last_os_error())
         } else {
-            Ok(UnixFileUnmapData { addr: p, len })
+            Ok(UnixFileUnmapData {
+                start_addr: p,
+                offset: offs as usize - aligned_offs,
+                len,
+            })
         }
     }
 }
 
 pub struct UnixFileUnmapData {
-    pub addr: *mut core::ffi::c_void,
+    pub start_addr: *mut core::ffi::c_void,
+    pub offset: usize,
     pub len: usize,
 }
 impl UnixFileUnmapData {
     #[inline]
     pub fn unmap(self) -> std::io::Result<()> {
-        let r = unsafe { libc::munmap(self.addr, self.len) };
+        let r = unsafe { libc::munmap(self.start_addr, self.len) };
         if r < 0 {
             Err(std::io::Error::last_os_error())
         } else {
