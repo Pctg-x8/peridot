@@ -44,3 +44,6 @@ features = [
 crossbeam-deque = "0.8"
 android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
