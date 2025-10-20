@@ -56,6 +56,9 @@ pub trait NativeLinker: Sized {
     fn rendering_precision(&self) -> f32 {
         1.0
     }
+
+    fn perf_counter_frequency(&self) -> u64;
+    fn perf_counter_current(&self) -> u64;
 }
 
 pub trait EngineEvents<PL: NativeLinker>: Sized {
@@ -317,6 +320,59 @@ impl LastRenderingCompletionFence {
     }
 }
 
+pub enum PerformanceEventKind {
+    Begin,
+    End,
+    Sample,
+}
+
+pub struct PerformanceEvent {
+    pub marker: PerformanceMarkerHandle,
+    pub kind: PerformanceEventKind,
+    pub counter: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PerformanceMarkerHandle(u64);
+
+pub struct PerformanceMarkerData {
+    pub name: String,
+}
+
+pub struct PerformanceLogger {
+    frequency: u64,
+    markers: Vec<PerformanceMarkerData>,
+    event_buffer: [core::mem::MaybeUninit<PerformanceEvent>; PerformanceLogger::BUFFER_SIZE],
+    buffer_write_ptr: usize,
+}
+impl PerformanceLogger {
+    pub const BUFFER_SIZE: usize = 128;
+
+    pub fn new(freq: u64) -> Self {
+        Self {
+            frequency: freq,
+            markers: Vec::new(),
+            event_buffer: [const { core::mem::MaybeUninit::uninit() }; Self::BUFFER_SIZE],
+            buffer_write_ptr: 0,
+        }
+    }
+
+    pub fn add_marker(&mut self, data: PerformanceMarkerData) -> PerformanceMarkerHandle {
+        self.markers.push(data);
+        PerformanceMarkerHandle(self.markers.len() as u64 - 1)
+    }
+
+    pub fn push(&mut self, event: PerformanceEvent) {
+        if self.buffer_write_ptr >= Self::BUFFER_SIZE {
+            tracing::warn!("TODO: flush perflog");
+            self.buffer_write_ptr = 0;
+        }
+
+        self.event_buffer[self.buffer_write_ptr].write(event);
+        self.buffer_write_ptr += 1;
+    }
+}
+
 pub struct Engine<'q, NL: NativeLinker> {
     native_link: NL,
     presenter: NL::Presenter,
@@ -329,6 +385,9 @@ pub struct Engine<'q, NL: NativeLinker> {
     engine_events_sender: async_std::channel::Sender<EngineEvent>,
     receivers: core::cell::UnsafeCell<EngineEventReceiver>,
     shared_event_queue: &'q EventQueue,
+    perflog: PerformanceLogger,
+    perflog_marker_prepare_frame: PerformanceMarkerHandle,
+    perflog_marker_do_render: PerformanceMarkerHandle,
 }
 impl<'q, PL: NativeLinker> Engine<'q, PL> {
     pub fn new(
@@ -362,11 +421,22 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
             }
         };
 
+        let mut perflog = PerformanceLogger::new(native_link.perf_counter_frequency());
+        let perflog_marker_prepare_frame = perflog.add_marker(PerformanceMarkerData {
+            name: "Frame.Prepare".into(),
+        });
+        let perflog_marker_do_render = perflog.add_marker(PerformanceMarkerData {
+            name: "Frame.Render".into(),
+        });
+
         Self {
             ip: InputProcess::new(),
             game_timer: GameTimer::new(),
             last_rendering_completion,
             audio_mixer: Arc::new(RwLock::new(audio::Mixer::new())),
+            perflog,
+            perflog_marker_prepare_frame,
+            perflog_marker_do_render,
             native_link,
             g,
             presenter,
@@ -486,6 +556,33 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     pub const fn audio_mixer(&self) -> &Arc<RwLock<audio::Mixer>> {
         &self.audio_mixer
     }
+
+    #[inline(always)]
+    pub fn perf_sample_begin(&mut self, marker: PerformanceMarkerHandle) {
+        self.perflog.push(PerformanceEvent {
+            marker,
+            kind: PerformanceEventKind::Begin,
+            counter: self.native_link.perf_counter_current(),
+        });
+    }
+
+    #[inline(always)]
+    pub fn perf_sample_end(&mut self, marker: PerformanceMarkerHandle) {
+        self.perflog.push(PerformanceEvent {
+            marker,
+            kind: PerformanceEventKind::End,
+            counter: self.native_link.perf_counter_current(),
+        });
+    }
+
+    #[inline(always)]
+    pub fn perf_sample(&mut self, marker: PerformanceMarkerHandle) {
+        self.perflog.push(PerformanceEvent {
+            marker,
+            kind: PerformanceEventKind::Sample,
+            counter: self.native_link.perf_counter_current(),
+        });
+    }
 }
 impl<PL: NativeLinker> Engine<'_, PL> {
     pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
@@ -505,6 +602,10 @@ impl<PL: NativeLinker> Engine<'_, PL> {
 }
 impl<PL: NativeLinker> Engine<'_, PL> {
     pub fn prepare_frame(&mut self) -> Result<FrameData, PrepareFrameError> {
+        // TODO: 本当はスコープ単位で自動で計測してくれるのがほしい(最後returnの値構築のあとでsample_endにしたい)
+        // コード上でできる範囲でやろうとするとperflog自体をRwLockとかで囲わないといけなくて面倒なのでもうちょっとうまい仕組みを考えないといけない
+        self.perf_sample_begin(self.perflog_marker_prepare_frame);
+
         if let Err(e) = self.last_rendering_completion.wait() {
             tracing::warn!(cause = ?e, "Failed to wait last command completion");
         }
@@ -512,6 +613,7 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         let dt = self.game_timer.delta_time();
         let backbuffer_index = match self.presenter.next_back_buffer_index() {
             Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
+                self.perf_sample_end(self.perflog_marker_prepare_frame);
                 return Err(PrepareFrameError::FramebufferOutOfDate);
             }
             e => e.expect("Acquiring available back-buffer index failed"),
@@ -519,6 +621,7 @@ impl<PL: NativeLinker> Engine<'_, PL> {
 
         self.ip.prepare_for_frame(dt);
 
+        self.perf_sample_end(self.perflog_marker_prepare_frame);
         Ok(FrameData {
             delta_time: dt,
             backbuffer_index,
@@ -555,6 +658,8 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         copy_submission: Option<SubmissionBatchBuilder>,
         render_submission: SubmissionBatchBuilder,
     ) -> br::Result<()> {
+        self.perf_sample_begin(self.perflog_marker_do_render);
+
         let pr = self.presenter.render_and_present(
             &mut self.g,
             &mut self.last_rendering_completion.r#use(),
@@ -563,7 +668,7 @@ impl<PL: NativeLinker> Engine<'_, PL> {
             copy_submission,
         );
 
-        match pr {
+        let r = match pr {
             Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
                 // Fire resize
                 self.request_resize = true;
@@ -571,7 +676,10 @@ impl<PL: NativeLinker> Engine<'_, PL> {
                 Ok(())
             }
             v => v,
-        }
+        };
+
+        self.perf_sample_end(self.perflog_marker_do_render);
+        r
     }
 
     pub fn wait_for_last_rendering_completion(&mut self) -> br::Result<()> {
