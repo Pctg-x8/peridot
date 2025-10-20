@@ -26,7 +26,6 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 bitflags = "2.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc = "0.2"
 linux-io-uring = { path = "../../platform/linux/io_uring" }
 
 [target.'cfg(windows)'.dependencies.windows]
@@ -45,5 +44,5 @@ crossbeam-deque = "0.8"
 android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
 libc = "0.2"
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"

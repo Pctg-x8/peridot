@@ -1,8 +1,11 @@
 use std::{
+    io::IoSliceMut,
     os::{fd::AsRawFd, unix::ffi::OsStrExt},
     path::Path,
     ptr::NonNull,
 };
+
+use crate::native_io::generic_unix::{UnixFile, UnixFileUnmapData};
 
 // dispatch_io requires block abi: https://clang.llvm.org/docs/Block-ABI-Apple.html
 pub type BlockLiteralFlags = core::ffi::c_int;
@@ -175,35 +178,9 @@ impl DispatchIO {
     }
 }
 
-#[repr(transparent)]
-pub struct UnixFile(std::os::unix::prelude::RawFd);
-impl Drop for UnixFile {
-    fn drop(&mut self) {
-        let r = unsafe { libc::close(self.0) };
-        if r < 0 {
-            let e = std::io::Error::last_os_error();
-            panic!("Error closing file descriptor: {e:?}");
-        }
-    }
-}
-impl UnixFile {
-    pub fn open(path: &core::ffi::CStr, flags: core::ffi::c_int) -> std::io::Result<Self> {
-        let fd = unsafe { libc::open(path.as_ptr(), flags) };
-        if fd < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(Self(fd))
-        }
-    }
-}
-
-pub struct UnixFileUnmapData {
-    addr: *mut core::ffi::c_void,
-    len: usize,
-}
-
 pub struct NativeFileReader(UnixFile);
 impl NativeFileReader {
+    #[inline(always)]
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         Ok(Self(UnixFile::open(
             &std::ffi::CString::new(path.as_ref().as_os_str().as_bytes())
@@ -213,61 +190,36 @@ impl NativeFileReader {
     }
 }
 impl super::RandomReadBlob for NativeFileReader {
-    #[inline]
+    #[inline(always)]
     fn read(&self, offs: u64, buf: &mut [std::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
-        let r = unsafe { libc::pread(self.0.0, buf.as_mut_ptr() as _, buf.len(), offs as _) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r.cast_unsigned())
-        }
+        self.0.pread(offs as _, buf)
     }
 
-    #[inline]
-    fn readv(&self, offs: u64, iovecs: &mut [std::io::IoSliceMut]) -> std::io::Result<usize> {
-        let r =
-            unsafe { libc::preadv(self.0.0, iovecs.as_ptr() as _, iovecs.len() as _, offs as _) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r.cast_unsigned())
-        }
+    #[inline(always)]
+    fn readv(&self, offs: u64, iovecs: &mut [IoSliceMut]) -> std::io::Result<usize> {
+        self.0.preadv(offs as _, unsafe {
+            core::mem::transmute::<&mut [IoSliceMut], &mut [_]>(iovecs)
+        })
     }
 }
 impl super::MemoryMapBlob for NativeFileReader {
     type MemoryUnmapData = UnixFileUnmapData;
 
-    #[inline]
+    #[inline(always)]
     fn mmap(
         &self,
         offs: u64,
         len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
-        let p = unsafe {
-            libc::mmap(
-                core::ptr::null_mut(),
-                len,
-                libc::PROT_READ,
-                libc::MAP_PRIVATE,
-                self.0.0,
-                offs as _,
-            )
-        };
-        if p == libc::MAP_FAILED {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok((p, UnixFileUnmapData { addr: p, len }))
-        }
+        let r = self
+            .0
+            .mmap(len, libc::PROT_READ, libc::MAP_PRIVATE, offs as _)?;
+        Ok((r.addr, r))
     }
 
-    #[inline]
+    #[inline(always)]
     fn munmap(&self, data: Self::MemoryUnmapData) -> std::io::Result<()> {
-        let r = unsafe { libc::munmap(data.addr, data.len) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        data.unmap()
     }
 }
 
