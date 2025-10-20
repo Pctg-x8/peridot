@@ -1,6 +1,7 @@
 use core::ptr::NonNull;
 use std::{
     cell::Cell,
+    path::Path,
     sync::{Arc, RwLock, atomic::AtomicBool},
 };
 
@@ -39,6 +40,11 @@ impl BundledAsset {
 
 #[repr(transparent)]
 pub struct BundledAssetReader(BundledAsset);
+impl BundledAssetReader {
+    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        unimplemented!()
+    }
+}
 impl super::NativeFileReader for BundledAssetReader {
     #[inline(always)]
     fn current_pointer_pos(&self) -> std::io::Result<u64> {
@@ -125,6 +131,11 @@ impl super::NativeFileMemoryMapProvider for BundledAssetReader {
 
 pub struct BundledAssetAsyncReader {
     asset: BundledAsset,
+}
+impl BundledAssetAsyncReader {
+    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        unimplemented!()
+    }
 }
 impl super::AsyncNativeFileReader for BundledAssetAsyncReader {
     type ReadFuture<'a>

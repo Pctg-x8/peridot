@@ -153,7 +153,7 @@ impl LDRImageAsset for WebP {
     }
 }
 
-pub struct StdTexture2DAsset(
+/*pub struct StdTexture2DAsset(
     pub ktx::Owned<ktx::Texture2>,
     #[allow(dead_code)] Pin<Box<[u8]>>,
 );
@@ -172,4 +172,4 @@ impl FromAsset for StdTexture2DAsset {
 
         Ok(Self(container, buf))
     }
-}
+}*/

@@ -1,3 +1,4 @@
+use core::mem::MaybeUninit;
 use std::{
     convert::TryFrom,
     io::{Error as IOError, IoSliceMut, Read, Result as IOResult},
@@ -8,8 +9,8 @@ use crate::{
     entry::AssetNameRef,
     entry_tree::EntryTreePointer,
     native_io::{
-        AsyncNativeFileReader, NativeFileMemoryMapProvider, NativeFileReader,
-        PlatformNativeFileReader, PlatformNativeFileReaderAsync,
+        MemoryMapBlob, PlatformNativeFileReader, PlatformNativeFileReaderAsync, RandomReadBlob,
+        RandomReadBlobAsync,
     },
 };
 use crc::crc32;
@@ -468,37 +469,40 @@ impl OnMemoryArchive {
     }
 }
 
-pub struct FileStreamingArchiveBinReader<'a> {
-    archive: &'a FileStreamingArchive,
+pub struct FileStreamingArchiveBinReader<'a, R: RandomReadBlob + MemoryMapBlob> {
+    archive: &'a FileStreamingArchive<R>,
     pointer: u64,
     pointer_limit: u64,
 }
-impl std::io::Read for FileStreamingArchiveBinReader<'_> {
+impl<R: RandomReadBlob + MemoryMapBlob> std::io::Read for FileStreamingArchiveBinReader<'_, R> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
         let read_len = (buf.len() as u64).min(self.pointer_limit - self.pointer);
-        let r = self
-            .archive
-            .handle
-            .pread(&mut buf[..read_len as _], self.pointer)?;
+        let r = self.archive.handle.read(self.pointer, unsafe {
+            core::mem::transmute::<&mut [u8], &mut [MaybeUninit<u8>]>(&mut buf[..read_len as _])
+        })?;
         self.pointer += r as u64;
 
-        Ok(r)
+        Ok(r as _)
     }
 }
 
-pub struct FileStreamingArchiveBinReaderAsync<'a> {
-    archive: &'a FileStreamingArchiveAsync,
+pub struct FileStreamingArchiveBinReaderAsync<'a, R: RandomReadBlobAsync + MemoryMapBlob> {
+    archive: &'a FileStreamingArchiveAsync<R>,
     pointer: u64,
     pointer_limit: u64,
 }
-impl<'a> FileStreamingArchiveBinReaderAsync<'a> {
+impl<'a, R: RandomReadBlobAsync + MemoryMapBlob> FileStreamingArchiveBinReaderAsync<'a, R> {
     pub async fn read<'b>(&mut self, buf: &'b mut [u8]) -> IOResult<usize> {
         let read_len = (buf.len() as u64).min(self.pointer_limit - self.pointer);
         let bytes = self
             .archive
             .handle
-            .pread_async(&mut buf[..read_len as usize], self.pointer)
+            .read_async(self.pointer, unsafe {
+                core::mem::transmute::<&mut [u8], &mut [MaybeUninit<u8>]>(
+                    &mut buf[..read_len as usize],
+                )
+            })
             .await?;
         self.pointer += bytes as u64;
 
@@ -522,40 +526,44 @@ impl<'a> FileStreamingArchiveBinReaderAsync<'a> {
     }
 }
 
-pub struct FileStreamingArchiveAsync {
-    pub handle: PlatformNativeFileReaderAsync,
+pub struct FileStreamingArchiveAsync<R: RandomReadBlobAsync + MemoryMapBlob> {
+    pub handle: R,
     pub entry_mapped_head: core::sync::atomic::AtomicPtr<core::ffi::c_void>,
-    pub entry_unmap_data:
-        Option<<PlatformNativeFileReaderAsync as NativeFileMemoryMapProvider>::MemoryUnmapData>,
+    pub entry_unmap_data: Option<R::MemoryUnmapData>,
     pub content_flags: ContentFlags,
     pub hash_tree_block_range: core::ops::Range<usize>,
     pub exact_match_block_range: core::ops::Range<usize>,
     pub content_baseptr: u64,
 }
-impl FileStreamingArchiveAsync {
-    async fn new(mut handle: PlatformNativeFileReaderAsync) -> IOResult<Self> {
+impl<R: RandomReadBlobAsync + MemoryMapBlob> FileStreamingArchiveAsync<R> {
+    async fn new(handle: R) -> IOResult<Self> {
         let mut content_flags_buf = [0u8];
         let mut hash_tree_block_len_buf = [0u8; 4];
         let mut exact_match_block_len_buf = [0u8; 8];
 
-        let mut slices = &mut [
-            IoSliceMut::new(&mut content_flags_buf),
-            IoSliceMut::new(&mut hash_tree_block_len_buf),
-            IoSliceMut::new(&mut exact_match_block_len_buf),
-        ][..];
-        while !slices.is_empty() {
-            let r = handle.readv_async(slices).await?;
-            IoSliceMut::advance_slices(&mut slices, r);
-        }
+        let mut ro = 0;
+        handle
+            .readv_all_async(
+                ro,
+                &mut [
+                    IoSliceMut::new(&mut content_flags_buf),
+                    IoSliceMut::new(&mut hash_tree_block_len_buf),
+                    IoSliceMut::new(&mut exact_match_block_len_buf),
+                ],
+            )
+            .await?;
+        ro += 1 + 4 + 8;
 
         let content_flags = ContentFlags::from_bits_retain(content_flags_buf[0]);
         let hash_tree_block_len = (u32::from_le_bytes(hash_tree_block_len_buf) as u64) << 3;
         let exact_match_block_len = u64::from_le_bytes(exact_match_block_len_buf);
 
-        let entry_block_start_pos = handle.current_pointer_pos()?;
+        let entry_block_start_pos = ro;
         let (entry_mapped_head, entry_unmap_data) = handle.mmap(
             entry_block_start_pos,
-            hash_tree_block_len + exact_match_block_len,
+            (hash_tree_block_len + exact_match_block_len)
+                .try_into()
+                .expect("catalog block size is too large"),
         )?;
 
         Ok(Self {
@@ -626,7 +634,7 @@ impl FileStreamingArchiveAsync {
     fn read_bin<'a>(
         &'a self,
         heading: AssetEntryHeadingPair,
-    ) -> FileStreamingArchiveBinReaderAsync<'a> {
+    ) -> FileStreamingArchiveBinReaderAsync<'a, R> {
         FileStreamingArchiveBinReaderAsync {
             archive: self,
             pointer: self.content_baseptr + heading.relative_offset,
@@ -635,47 +643,49 @@ impl FileStreamingArchiveAsync {
     }
 }
 
-pub struct FileStreamingArchive {
-    pub handle: PlatformNativeFileReader,
+pub struct FileStreamingArchive<R: RandomReadBlob + MemoryMapBlob> {
+    pub handle: R,
     pub entry_mapped_head: core::sync::atomic::AtomicPtr<core::ffi::c_void>,
-    pub entry_unmap_data:
-        Option<<PlatformNativeFileReader as NativeFileMemoryMapProvider>::MemoryUnmapData>,
+    pub entry_unmap_data: Option<R::MemoryUnmapData>,
     pub content_flags: ContentFlags,
     pub hash_tree_block_range: core::ops::Range<usize>,
     pub exact_match_block_range: core::ops::Range<usize>,
     pub content_baseptr: u64,
 }
-impl Drop for FileStreamingArchive {
+impl<R: RandomReadBlob + MemoryMapBlob> Drop for FileStreamingArchive<R> {
     fn drop(&mut self) {
         let _ = self
             .handle
             .munmap(self.entry_unmap_data.take().expect("drop twice!"));
     }
 }
-impl FileStreamingArchive {
-    fn new(mut handle: PlatformNativeFileReader) -> IOResult<Self> {
+impl<R: RandomReadBlob + MemoryMapBlob> FileStreamingArchive<R> {
+    fn new(handle: R) -> IOResult<Self> {
         let mut content_flags_buf = [0u8];
         let mut hash_tree_block_len_buf = [0u8; 4];
         let mut exact_match_block_len_buf = [0u8; 8];
 
-        let mut slices = &mut [
-            IoSliceMut::new(&mut content_flags_buf),
-            IoSliceMut::new(&mut hash_tree_block_len_buf),
-            IoSliceMut::new(&mut exact_match_block_len_buf),
-        ][..];
-        while !slices.is_empty() {
-            let r = handle.readv(slices)?;
-            IoSliceMut::advance_slices(&mut slices, r);
-        }
+        let mut ro = 0;
+        handle.readv_all(
+            ro,
+            &mut [
+                IoSliceMut::new(&mut content_flags_buf),
+                IoSliceMut::new(&mut hash_tree_block_len_buf),
+                IoSliceMut::new(&mut exact_match_block_len_buf),
+            ],
+        )?;
+        ro += 1 + 4 + 8;
 
         let content_flags = ContentFlags::from_bits_retain(content_flags_buf[0]);
         let hash_tree_block_len = (u32::from_le_bytes(hash_tree_block_len_buf) as u64) << 3;
         let exact_match_block_len = u64::from_le_bytes(exact_match_block_len_buf);
 
-        let entry_block_start_pos = handle.current_pointer_pos()?;
+        let entry_block_start_pos = ro;
         let (entry_mapped_head, entry_unmap_data) = handle.mmap(
             entry_block_start_pos,
-            hash_tree_block_len + exact_match_block_len,
+            (hash_tree_block_len + exact_match_block_len)
+                .try_into()
+                .expect("catalog block size is too large"),
         )?;
 
         Ok(Self {
@@ -743,7 +753,10 @@ impl FileStreamingArchive {
         )
     }
 
-    fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> FileStreamingArchiveBinReader<'a> {
+    fn read_bin<'a>(
+        &'a self,
+        heading: AssetEntryHeadingPair,
+    ) -> FileStreamingArchiveBinReader<'a, R> {
         FileStreamingArchiveBinReader {
             archive: self,
             pointer: self.content_baseptr + heading.relative_offset,
@@ -752,11 +765,11 @@ impl FileStreamingArchive {
     }
 }
 
-pub enum ArchiveBinReader<'a> {
+pub enum ArchiveBinReader<'a, R: RandomReadBlob + MemoryMapBlob> {
     OnMemory(OnMemoryArchiveBinReader<'a>),
-    FileStreaming(FileStreamingArchiveBinReader<'a>),
+    FileStreaming(FileStreamingArchiveBinReader<'a, R>),
 }
-impl std::io::Read for ArchiveBinReader<'_> {
+impl<R: RandomReadBlob + MemoryMapBlob> std::io::Read for ArchiveBinReader<'_, R> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
         match *self {
@@ -766,11 +779,11 @@ impl std::io::Read for ArchiveBinReader<'_> {
     }
 }
 
-pub enum ArchiveBinReaderAsync<'a> {
+pub enum ArchiveBinReaderAsync<'a, R: RandomReadBlobAsync + MemoryMapBlob> {
     OnMemory(OnMemoryArchiveBinReader<'a>),
-    FileStreaming(FileStreamingArchiveBinReaderAsync<'a>),
+    FileStreaming(FileStreamingArchiveBinReaderAsync<'a, R>),
 }
-impl<'a> ArchiveBinReaderAsync<'a> {
+impl<'a, R: RandomReadBlobAsync + MemoryMapBlob> ArchiveBinReaderAsync<'a, R> {
     #[inline]
     pub async fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
         match *self {
@@ -803,7 +816,7 @@ impl<'a> ArchiveBinReaderAsync<'a> {
 
 pub enum ArchiveAsync {
     OnMemory(OnMemoryArchive),
-    FileStreaming(FileStreamingArchiveAsync),
+    FileStreaming(FileStreamingArchiveAsync<PlatformNativeFileReaderAsync>),
 }
 impl ArchiveAsync {
     /// Creates a new archive reader from a platform-specific blob reader.
@@ -811,57 +824,78 @@ impl ArchiveAsync {
         mut blob: PlatformNativeFileReaderAsync,
         check_integrity: bool,
     ) -> ArchiveReadResult<Self> {
-        let (comp, crc) = Self::read_file_header(&mut blob).await?;
+        let (comp, crc, body_start) = Self::read_file_header(&blob).await?;
         if check_integrity {
             // read entire file for compute crc32
-            let body = blob.read_to_end().await?;
+            let body = blob.read_to_end_async(body_start).await?;
             let input_crc = crc32::checksum_ieee(&body[..]);
             if input_crc != crc {
                 return Err(ArchiveReadError::IntegrityCheckFailed);
             }
 
-            return Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?));
-        }
-
-        match comp {
-            CompressionMethod::None => Ok(Self::FileStreaming(
-                FileStreamingArchiveAsync::new(blob).await?,
-            )),
-            _ => {
-                // read entire file for decompression
-                let body = blob.read_to_end().await?;
-                Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
+            // 全部読んじゃったのでOnMemory扱い
+            Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
+        } else {
+            match comp {
+                CompressionMethod::None => Ok(Self::FileStreaming(
+                    FileStreamingArchiveAsync::new(blob).await?,
+                )),
+                _ => {
+                    // read entire file for decompression
+                    let body = blob.read_to_end_async(body_start).await?;
+                    Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
+                }
             }
         }
     }
 
     async fn read_file_header(
-        reader: &mut (impl AsyncNativeFileReader + ?Sized),
-    ) -> ArchiveReadResult<(CompressionMethod, u32)> {
-        let mut signature = [0u8; 4];
-        reader.read_exact(&mut signature[..]).await.map(drop)?;
-        let mut sink_64_bits = [0u8; 8];
-        let comp = match &signature {
-            b"par " => CompressionMethod::None,
-            b"pard" => reader
-                .read_exact(&mut sink_64_bits)
-                .await
-                .map(|_| CompressionMethod::Zlib(u64::from_le_bytes(sink_64_bits)))?,
-            b"parz" => reader
-                .read_exact(&mut sink_64_bits)
-                .await
-                .map(|_| CompressionMethod::Lz4(u64::from_le_bytes(sink_64_bits)))?,
-            b"par1" => reader
-                .read_exact(&mut sink_64_bits)
-                .await
-                .map(|_| CompressionMethod::Zstd11(u64::from_le_bytes(sink_64_bits)))?,
+        reader: &(impl RandomReadBlobAsync + ?Sized),
+    ) -> ArchiveReadResult<(CompressionMethod, u32, u64)> {
+        let mut read_ptr = 0;
+        let mut signature = [const { MaybeUninit::uninit() }; 4];
+        reader
+            .read_exact_async(read_ptr, &mut signature[..])
+            .await?;
+        read_ptr += 4;
+        let signature = unsafe { core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(signature) };
+        let mut sink_64_bits = [const { MaybeUninit::uninit() }; 8];
+        let comp: CompressionMethod;
+        match &signature {
+            b"par " => {
+                comp = CompressionMethod::None;
+            }
+            b"pard" => {
+                reader.read_exact_async(read_ptr, &mut sink_64_bits).await?;
+                read_ptr += 8;
+                comp = CompressionMethod::Zlib(u64::from_le_bytes(unsafe {
+                    core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
+                }));
+            }
+            b"parz" => {
+                reader.read_exact_async(read_ptr, &mut sink_64_bits).await?;
+                read_ptr += 8;
+                comp = CompressionMethod::Lz4(u64::from_le_bytes(unsafe {
+                    core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
+                }));
+            }
+            b"par1" => {
+                reader.read_exact_async(read_ptr, &mut sink_64_bits).await?;
+                read_ptr += 8;
+                comp = CompressionMethod::Zstd11(u64::from_le_bytes(unsafe {
+                    core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
+                }));
+            }
             _ => return Err(ArchiveReadError::SignatureMismatch),
-        };
+        }
 
-        let mut crc32_bytes = [0u8; 4];
-        reader.read_exact(&mut crc32_bytes).await?;
+        let mut crc32_bytes = [const { MaybeUninit::uninit() }; 4];
+        reader.read_exact_async(read_ptr, &mut crc32_bytes).await?;
+        read_ptr += 4;
+        let crc32_bytes =
+            unsafe { core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(crc32_bytes) };
 
-        Ok((comp, u32::from_le_bytes(crc32_bytes)))
+        Ok((comp, u32::from_le_bytes(crc32_bytes), read_ptr))
     }
 
     #[inline]
@@ -881,7 +915,10 @@ impl ArchiveAsync {
     }
 
     #[inline]
-    pub fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> ArchiveBinReaderAsync<'a> {
+    pub fn read_bin<'a>(
+        &'a self,
+        heading: AssetEntryHeadingPair,
+    ) -> ArchiveBinReaderAsync<'a, PlatformNativeFileReaderAsync> {
         match *self {
             Self::OnMemory(ref x) => ArchiveBinReaderAsync::OnMemory(x.read_bin(heading)),
             Self::FileStreaming(ref x) => ArchiveBinReaderAsync::FileStreaming(x.read_bin(heading)),
@@ -891,60 +928,81 @@ impl ArchiveAsync {
 
 pub enum Archive {
     OnMemory(OnMemoryArchive),
-    FileStreaming(FileStreamingArchive),
+    FileStreaming(FileStreamingArchive<PlatformNativeFileReader>),
 }
 impl Archive {
     /// Creates a new archive reader from a platform-specific blob reader.
-    pub fn new(
-        mut blob: PlatformNativeFileReader,
-        check_integrity: bool,
-    ) -> ArchiveReadResult<Self> {
-        let (comp, crc) = Self::read_file_header(&mut blob)?;
+    pub fn new(blob: PlatformNativeFileReader, check_integrity: bool) -> ArchiveReadResult<Self> {
+        let (comp, crc, body_start) = Self::read_file_header(&blob)?;
         if check_integrity {
             // read entire file for compute crc32
-            let body = blob.read_to_end()?;
+            let body = blob.read_to_end(body_start)?;
             let input_crc = crc32::checksum_ieee(&body[..]);
             if input_crc != crc {
                 return Err(ArchiveReadError::IntegrityCheckFailed);
             }
 
-            return Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?));
-        }
-
-        match comp {
-            CompressionMethod::None => Ok(Self::FileStreaming(FileStreamingArchive::new(blob)?)),
-            _ => {
-                // read entire file for decompression
-                let body = blob.read_to_end()?;
-                Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
+            // 全部読んじゃったのでOnMemory扱い
+            Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
+        } else {
+            match comp {
+                CompressionMethod::None => {
+                    Ok(Self::FileStreaming(FileStreamingArchive::new(blob)?))
+                }
+                _ => {
+                    // read entire file for decompression
+                    let body = blob.read_to_end(body_start)?;
+                    Ok(Self::OnMemory(OnMemoryArchive::new(comp, body)?))
+                }
             }
         }
     }
 
     fn read_file_header(
-        reader: &mut (impl NativeFileReader + ?Sized),
-    ) -> ArchiveReadResult<(CompressionMethod, u32)> {
-        let mut signature = [0u8; 4];
-        reader.read_exact(&mut signature[..]).map(drop)?;
-        let mut sink_64_bits = [0u8; 8];
-        let comp = match &signature {
-            b"par " => CompressionMethod::None,
-            b"pard" => reader
-                .read_exact(&mut sink_64_bits)
-                .map(|_| CompressionMethod::Zlib(u64::from_le_bytes(sink_64_bits)))?,
-            b"parz" => reader
-                .read_exact(&mut sink_64_bits)
-                .map(|_| CompressionMethod::Lz4(u64::from_le_bytes(sink_64_bits)))?,
-            b"par1" => reader
-                .read_exact(&mut sink_64_bits)
-                .map(|_| CompressionMethod::Zstd11(u64::from_le_bytes(sink_64_bits)))?,
+        reader: &(impl RandomReadBlob + ?Sized),
+    ) -> ArchiveReadResult<(CompressionMethod, u32, u64)> {
+        let mut read_ptr = 0;
+        let mut signature = [const { MaybeUninit::uninit() }; 4];
+        reader.read_exact(read_ptr, &mut signature[..])?;
+        read_ptr += 4;
+        let signature = unsafe { core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(signature) };
+        let mut sink_64_bits = [const { MaybeUninit::uninit() }; 8];
+        let comp: CompressionMethod;
+        match &signature {
+            b"par " => {
+                comp = CompressionMethod::None;
+            }
+            b"pard" => {
+                reader.read_exact(read_ptr, &mut sink_64_bits)?;
+                read_ptr += 8;
+                comp = CompressionMethod::Zlib(u64::from_le_bytes(unsafe {
+                    core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
+                }));
+            }
+            b"parz" => {
+                reader.read_exact(read_ptr, &mut sink_64_bits)?;
+                read_ptr += 8;
+                comp = CompressionMethod::Lz4(u64::from_le_bytes(unsafe {
+                    core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
+                }));
+            }
+            b"par1" => {
+                reader.read_exact(read_ptr, &mut sink_64_bits)?;
+                read_ptr += 8;
+                comp = CompressionMethod::Zstd11(u64::from_le_bytes(unsafe {
+                    core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
+                }));
+            }
             _ => return Err(ArchiveReadError::SignatureMismatch),
         };
 
-        let mut crc32_bytes = [0u8; 4];
-        reader.read_exact(&mut crc32_bytes)?;
+        let mut crc32_bytes = [const { MaybeUninit::uninit() }; 4];
+        reader.read_exact(read_ptr, &mut crc32_bytes)?;
+        read_ptr += 4;
+        let crc32_bytes =
+            unsafe { core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(crc32_bytes) };
 
-        Ok((comp, u32::from_le_bytes(crc32_bytes)))
+        Ok((comp, u32::from_le_bytes(crc32_bytes), read_ptr))
     }
 
     #[inline]
@@ -964,7 +1022,10 @@ impl Archive {
     }
 
     #[inline]
-    pub fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> ArchiveBinReader<'a> {
+    pub fn read_bin<'a>(
+        &'a self,
+        heading: AssetEntryHeadingPair,
+    ) -> ArchiveBinReader<'a, PlatformNativeFileReader> {
         match *self {
             Self::OnMemory(ref x) => ArchiveBinReader::OnMemory(x.read_bin(heading)),
             Self::FileStreaming(ref x) => ArchiveBinReader::FileStreaming(x.read_bin(heading)),

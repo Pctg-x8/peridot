@@ -3,7 +3,7 @@ use bedrock::{
 };
 use br::resources::Image;
 use br::Device;
-use ktx::Texture;
+// use ktx::Texture;
 use log::*;
 use parking_lot::RwLock;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
@@ -47,6 +47,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
+    #[cfg(target_os = "linux")]
     let async_io_reactor_thread = peridot_archive::native_io::linux::IoReactorThread::spawn();
 
     let mut resource_container = peridot_archive::ArchiveAsync::new(
@@ -59,7 +60,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     .await
     .expect("load resources.par");
 
-    let mut image_data: peridot_image::StdTexture2DAsset =
+    /*let mut image_data: peridot_image::StdTexture2DAsset =
         e.load("images.example").expect("No image found");
     if image_data.0.needs_transcoding() {
         // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
@@ -75,8 +76,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .image_offset(0, 0, 0)
         .expect("image_offset failed");
     debug!("image: {image_width}x{image_height}");
-    debug!("image data size: {} offs {offs}", image_data.0.data_size());
+    debug!("image data size: {} offs {offs}", image_data.0.data_size());*/
     // debug!("ImageFormat: {:?}", image_data.0.vk_format());
+    let image_data: peridot_image::PNG = unimplemented!();
+    let image_width = 0;
+    let image_height = 0;
+    let offs = 0;
 
     let bgm = Arc::new(RwLock::new(
         e.streaming::<StreamingPlayableWav>("bgm")
@@ -193,11 +198,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             br::BufferUsage::TRANSFER_SRC,
         )
         .expect("Failed to allocate linear image buffer");
-    image_data_stg_buffer
-        .copy_content_from_slice(unsafe {
-            core::slice::from_raw_parts(image_data.0.data().add(offs), image_data.0.data_size())
-        })
-        .expect("Failed to set image data");
+    // image_data_stg_buffer
+    //     .copy_content_from_slice(unsafe {
+    //         core::slice::from_raw_parts(image_data.0.data().add(offs), image_data.0.data_size())
+    //     })
+    //     .expect("Failed to set image data");
 
     let pre_configure_awaiter = e
         .submit_commands_async(|r| {
@@ -800,6 +805,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         e.graphics_device().wait().expect("Failed to wait for work");
     }
 
+    #[cfg(target_os = "linux")]
     drop(async_io_reactor_thread);
 }
 

@@ -1,4 +1,8 @@
-use std::{os::fd::AsRawFd, ptr::NonNull};
+use std::{
+    os::{fd::AsRawFd, unix::ffi::OsStrExt},
+    path::Path,
+    ptr::NonNull,
+};
 
 // dispatch_io requires block abi: https://clang.llvm.org/docs/Block-ABI-Apple.html
 pub type BlockLiteralFlags = core::ffi::c_int;
@@ -171,82 +175,142 @@ impl DispatchIO {
     }
 }
 
-pub struct NativeFileReader(OwnedNativeObjectPtr<DispatchIO>);
-impl super::NativeFileReader for NativeFileReader {
-    fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        unimplemented!()
-    }
-
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        unimplemented!()
-    }
-
-    fn readv(&mut self, buf: &mut [std::io::IoSliceMut]) -> std::io::Result<usize> {
-        unimplemented!()
-    }
-
-    fn pread(&self, buf: &mut [u8], offs: u64) -> std::io::Result<usize> {
-        unimplemented!()
+#[repr(transparent)]
+pub struct UnixFile(std::os::unix::prelude::RawFd);
+impl Drop for UnixFile {
+    fn drop(&mut self) {
+        let r = unsafe { libc::close(self.0) };
+        if r < 0 {
+            let e = std::io::Error::last_os_error();
+            panic!("Error closing file descriptor: {e:?}");
+        }
     }
 }
-impl super::NativeFileMemoryMapProvider for NativeFileReader {
-    type MemoryUnmapData = ();
+impl UnixFile {
+    pub fn open(path: &core::ffi::CStr, flags: core::ffi::c_int) -> std::io::Result<Self> {
+        let fd = unsafe { libc::open(path.as_ptr(), flags) };
+        if fd < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(Self(fd))
+        }
+    }
+}
 
+pub struct UnixFileUnmapData {
+    addr: *mut core::ffi::c_void,
+    len: usize,
+}
+
+pub struct NativeFileReader(UnixFile);
+impl NativeFileReader {
+    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
+        Ok(Self(UnixFile::open(
+            &std::ffi::CString::new(path.as_ref().as_os_str().as_bytes())
+                .expect("nul character in the path"),
+            libc::O_RDONLY,
+        )?))
+    }
+}
+impl super::RandomReadBlob for NativeFileReader {
+    #[inline]
+    fn read(&self, offs: u64, buf: &mut [std::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
+        let r = unsafe { libc::pread(self.0.0, buf.as_mut_ptr() as _, buf.len(), offs as _) };
+        if r < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(r.cast_unsigned())
+        }
+    }
+
+    #[inline]
+    fn readv(&self, offs: u64, iovecs: &mut [std::io::IoSliceMut]) -> std::io::Result<usize> {
+        let r =
+            unsafe { libc::preadv(self.0.0, iovecs.as_ptr() as _, iovecs.len() as _, offs as _) };
+        if r < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(r.cast_unsigned())
+        }
+    }
+}
+impl super::MemoryMapBlob for NativeFileReader {
+    type MemoryUnmapData = UnixFileUnmapData;
+
+    #[inline]
     fn mmap(
         &self,
         offs: u64,
-        len: u64,
+        len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
-        unimplemented!()
+        let p = unsafe {
+            libc::mmap(
+                core::ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE,
+                self.0.0,
+                offs as _,
+            )
+        };
+        if p == libc::MAP_FAILED {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok((p, UnixFileUnmapData { addr: p, len }))
+        }
     }
 
+    #[inline]
     fn munmap(&self, data: Self::MemoryUnmapData) -> std::io::Result<()> {
-        unimplemented!()
+        let r = unsafe { libc::munmap(data.addr, data.len) };
+        if r < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
     }
 }
 
 pub struct NativeFileAsyncReader(OwnedNativeObjectPtr<DispatchIO>);
-impl super::AsyncNativeFileReader for NativeFileAsyncReader {
-    type ReadFuture<'a>
-        = core::future::Ready<std::io::Result<usize>>
-    where
-        Self: 'a;
-    type PosReadFuture<'a, 'b>
-        = core::future::Ready<std::io::Result<usize>>
-    where
-        Self: 'a;
-    type ReadVecFuture<'a, 'b, 'b2>
-        = core::future::Ready<std::io::Result<usize>>
-    where
-        Self: 'a,
-        'b2: 'b;
-
-    fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        unimplemented!()
-    }
-
-    fn read_async<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
-        unimplemented!()
-    }
-
-    fn pread_async<'a, 'b>(&'a self, buf: &'b mut [u8], offs: u64) -> Self::PosReadFuture<'a, 'b> {
-        unimplemented!()
-    }
-
-    fn readv_async<'a, 'b, 'b2>(
-        &'a mut self,
-        buf: &'b mut [std::io::IoSliceMut<'b2>],
-    ) -> Self::ReadVecFuture<'a, 'b, 'b2> {
+impl NativeFileAsyncReader {
+    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         unimplemented!()
     }
 }
-impl super::NativeFileMemoryMapProvider for NativeFileAsyncReader {
+impl super::RandomReadBlobAsync for NativeFileAsyncReader {
+    type ReadFuture<'a, 'b>
+        = core::future::Ready<std::io::Result<usize>>
+    where
+        Self: 'a;
+    type ReadVecFuture<'a, 'b, 'bb>
+        = core::future::Ready<std::io::Result<usize>>
+    where
+        Self: 'a,
+        'bb: 'b;
+
+    fn read_async<'a, 'b>(
+        &'a self,
+        offs: u64,
+        buf: &'b mut [core::mem::MaybeUninit<u8>],
+    ) -> Self::ReadFuture<'a, 'b> {
+        unimplemented!()
+    }
+
+    fn readv_async<'a, 'b, 'bb>(
+        &'a self,
+        offs: u64,
+        buf: &'b mut [std::io::IoSliceMut<'bb>],
+    ) -> Self::ReadVecFuture<'a, 'b, 'bb> {
+        unimplemented!()
+    }
+}
+impl super::MemoryMapBlob for NativeFileAsyncReader {
     type MemoryUnmapData = ();
 
     fn mmap(
         &self,
         offs: u64,
-        len: u64,
+        len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
         unimplemented!()
     }
