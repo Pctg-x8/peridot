@@ -6,6 +6,7 @@ use br::Device;
 // use ktx::Texture;
 use log::*;
 use parking_lot::RwLock;
+use peridot::audio::PreloadedPlayableWav;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
 use peridot::FromAsset;
 use peridot::{
@@ -50,6 +51,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     #[cfg(target_os = "linux")]
     let async_io_reactor_thread = peridot_archive::native_io::linux::IoReactorThread::spawn();
 
+    #[cfg(not(target_os = "macos"))]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
         peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
             "../../examples/image-plane/assets/resources.par",
@@ -78,14 +80,14 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     debug!("image: {image_width}x{image_height}");
     debug!("image data size: {} offs {offs}", image_data.0.data_size());*/
     // debug!("ImageFormat: {:?}", image_data.0.vk_format());
-    let image_data: peridot_image::PNG = unimplemented!();
+    let image_data: peridot_image::PNG = e.load("images.example").expect("no image found");
     let image_width = 0;
     let image_height = 0;
     let offs = 0;
 
+    // TODO: streamingなassetが複数ある時に相性が悪い どうしたものか
     let bgm = Arc::new(RwLock::new(
-        e.streaming::<StreamingPlayableWav>("bgm")
-            .expect("Loading BGM"),
+        e.load::<PreloadedPlayableWav>("bgm").expect("Loading BGM"),
     ));
     e.audio_mixer().write().add_process(bgm.clone());
     e.audio_mixer().write().set_master_volume(0.5);

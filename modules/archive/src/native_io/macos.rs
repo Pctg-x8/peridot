@@ -127,7 +127,7 @@ impl DispatchIO {
         cleanup_handler: F,
     ) -> Option<OwnedNativeObjectPtr<Self>>
     where
-        F: FnMut(core::ffi::c_int),
+        F: Fn(core::ffi::c_int) + Sync + Send,
     {
         #[repr(C)]
         struct BlockLit<F> {
@@ -228,7 +228,26 @@ unsafe impl Sync for NativeFileAsyncReader {}
 unsafe impl Send for NativeFileAsyncReader {}
 impl NativeFileAsyncReader {
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        unimplemented!()
+        let f = UnixFile::open(
+            &std::ffi::CString::new(path.as_ref().as_os_str().as_bytes())
+                .expect("nul character in the path"),
+            libc::O_RDONLY,
+        )?;
+        println!("fileopen");
+        let dio = DispatchIO::new(
+            DISPATCH_IO_RANDOM,
+            &f,
+            DispatchQueue::main().expect("no main dispatch queue"),
+            |_error| {
+                let _ = unsafe { libc::close(f.as_raw_fd()) };
+            },
+        )
+        .ok_or(std::io::Error::other("dispatch_io_create failed"))?;
+        println!("dio");
+        // DispatchIOでcloseするのでこっちではforget
+        core::mem::forget(f);
+
+        Ok(Self(dio))
     }
 }
 impl super::RandomReadBlobAsync for NativeFileAsyncReader {
