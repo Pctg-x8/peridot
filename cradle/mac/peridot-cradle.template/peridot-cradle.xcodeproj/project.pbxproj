@@ -23,7 +23,6 @@
 		4BC8ED2321B3F51600FB4AF9 /* IOSurface.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2221B3F51600FB4AF9 /* IOSurface.framework */; };
 		4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */; };
 		4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */; };
-		4BDF050A2E9B7E8B0001ABD8 /* libktx.4.4.0.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BDF05062E9B7D290001ABD8 /* libktx.4.4.0.dylib */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -63,7 +62,6 @@
 		4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
 		4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInterface.swift; sourceTree = "<group>"; };
-		4BDF05062E9B7D290001ABD8 /* libktx.4.4.0.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libktx.4.4.0.dylib; path = "/Users/pctgx8/devel/peridot/thirdparty/ktx/source-repo/build/libktx.4.4.0.dylib"; sourceTree = "<absolute>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,7 +69,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4BDF050A2E9B7E8B0001ABD8 /* libktx.4.4.0.dylib in Frameworks */,
 				4BB1536027DC9E5A00A214E0 /* libpegamelib.a in Frameworks */,
 				4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */,
 				4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */,

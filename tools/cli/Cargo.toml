@@ -3,11 +3,14 @@ name = "peridot-cli"
 version = "0.1.0"
 description = "Peridot Enigne BuildProcess CLI"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2024"
 
 [features]
 default = ["process-assets"]
-process-assets = ["dep:peridot-rendering-configuration", "dep:peridot-asset-processing"]
+process-assets = [
+    "dep:peridot-rendering-configuration",
+    "dep:peridot-asset-processing",
+]
 
 [[bin]]
 name = "peridot"
