@@ -5,6 +5,7 @@ mod project;
 mod shellutil;
 mod steps;
 mod subcommands;
+mod util_traits;
 
 use clap::Parser;
 
