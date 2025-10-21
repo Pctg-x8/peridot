@@ -89,6 +89,18 @@ impl<'s> ElementWrite for PBXObjectIDRef<'s> {
         w.emit_single(&self.0)
     }
 }
+impl<'s> From<&'s str> for PBXObjectIDRef<'s> {
+    #[inline(always)]
+    fn from(value: &'s str) -> Self {
+        Self(value.into())
+    }
+}
+impl From<String> for PBXObjectIDRef<'_> {
+    #[inline(always)]
+    fn from(value: String) -> Self {
+        Self(value.into())
+    }
+}
 impl<'s> PBXObjectIDRef<'s> {
     #[inline(always)]
     pub fn encode(self) -> Value<'s> {
@@ -186,7 +198,7 @@ impl<'s, T> PBXTypedObjectIDRef<'s, T> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PBXProjectFile<'s> {
-    pub objects: HashMap<&'s str, PBXObject<'s>>,
+    pub objects: HashMap<Cow<'s, str>, PBXObject<'s>>,
     pub root_object: PBXObjectIDRef<'s>,
     pub extras: HashMap<&'s str, Value<'s>>,
 }
@@ -203,7 +215,7 @@ impl<'s> Decodable<'s> for PBXProjectFile<'s> {
                     .into_iter()
                     .map(|(k, v)| {
                         Ok((
-                            k,
+                            Cow::Borrowed(k),
                             v.decode()
                                 .map_err(DecodeError::invalid_attr_element_value("objects"))?,
                         ))
