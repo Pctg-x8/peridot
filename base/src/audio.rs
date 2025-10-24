@@ -401,7 +401,7 @@ pub struct PreloadedPlayableWav {
     state: PlayableAudioState,
 }
 impl super::LogicalAssetData for PreloadedPlayableWav {
-    const EXT: &'static str = "wav";
+    const EXT: &'static str = "pa1-audio";
 }
 impl super::FromAsset for PreloadedPlayableWav {
     type Error = std::io::Error;

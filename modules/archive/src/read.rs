@@ -360,6 +360,7 @@ fn find_entry(
 
 pub struct OnMemoryArchiveBinReader<'a> {
     pub archive: &'a OnMemoryArchive,
+    pub pointer_base: u64,
     pub pointer: u64,
     pub pointer_limit: u64,
 }
@@ -376,19 +377,13 @@ impl std::io::Read for OnMemoryArchiveBinReader<'_> {
 }
 impl std::io::Seek for OnMemoryArchiveBinReader<'_> {
     fn seek(&mut self, pos: std::io::SeekFrom) -> IOResult<u64> {
-        match pos {
-            std::io::SeekFrom::Current(x) => {
-                self.pointer = (self.pointer as i64 + x) as _;
-            }
-            std::io::SeekFrom::Start(x) => {
-                self.pointer = x;
-            }
-            std::io::SeekFrom::End(x) => {
-                self.pointer = (self.pointer_limit as i64 - x) as _;
-            }
-        }
+        self.pointer = match pos {
+            std::io::SeekFrom::Current(x) => (self.pointer as i64 + x) as _,
+            std::io::SeekFrom::Start(x) => self.pointer_base + x,
+            std::io::SeekFrom::End(x) => (self.pointer_limit as i64 + x) as _,
+        };
 
-        Ok(self.pointer)
+        Ok(self.pointer - self.pointer_base)
     }
 }
 #[cfg(feature = "async-rt-async-std")]
@@ -478,6 +473,7 @@ impl OnMemoryArchive {
     fn read_bin<'a>(&'a self, heading: AssetEntryHeadingPair) -> OnMemoryArchiveBinReader<'a> {
         OnMemoryArchiveBinReader {
             archive: self,
+            pointer_base: self.content_baseptr as u64 + heading.relative_offset,
             pointer: self.content_baseptr as u64 + heading.relative_offset,
             pointer_limit: self.content_baseptr as u64
                 + heading.relative_offset
@@ -488,6 +484,7 @@ impl OnMemoryArchive {
 
 pub struct FileStreamingArchiveBinReader<'a, R: RandomReadBlob + MemoryMapBlob> {
     archive: &'a FileStreamingArchive<R>,
+    pointer_base: u64,
     pointer: u64,
     pointer_limit: u64,
 }
@@ -506,24 +503,19 @@ impl<R: RandomReadBlob + MemoryMapBlob> std::io::Read for FileStreamingArchiveBi
 impl<R: RandomReadBlob + MemoryMapBlob> std::io::Seek for FileStreamingArchiveBinReader<'_, R> {
     #[inline]
     fn seek(&mut self, pos: std::io::SeekFrom) -> IOResult<u64> {
-        match pos {
-            std::io::SeekFrom::Current(x) => {
-                self.pointer = (self.pointer as i64 + x) as _;
-            }
-            std::io::SeekFrom::Start(x) => {
-                self.pointer = x;
-            }
-            std::io::SeekFrom::End(x) => {
-                self.pointer = (self.pointer_limit as i64 - x) as _;
-            }
-        }
+        self.pointer = match pos {
+            std::io::SeekFrom::Current(x) => (self.pointer as i64 + x) as _,
+            std::io::SeekFrom::Start(x) => self.pointer_base + x,
+            std::io::SeekFrom::End(x) => (self.pointer_limit as i64 + x) as _,
+        };
 
-        Ok(self.pointer)
+        Ok(self.pointer - self.pointer_base)
     }
 }
 
 pub struct FileStreamingArchiveBinReaderAsync<'a, R: RandomReadBlobAsync + MemoryMapBlob> {
     archive: &'a FileStreamingArchiveAsync<R>,
+    pointer_base: u64,
     pointer: u64,
     pointer_limit: u64,
 }
@@ -558,6 +550,17 @@ impl<'a, R: RandomReadBlobAsync + MemoryMapBlob> FileStreamingArchiveBinReaderAs
         self.read_exact(&mut b).await?;
 
         Ok(b)
+    }
+
+    #[inline]
+    pub async fn seek(&mut self, pos: std::io::SeekFrom) -> IOResult<u64> {
+        self.pointer = match pos {
+            std::io::SeekFrom::Current(x) => (self.pointer as i64 + x) as _,
+            std::io::SeekFrom::Start(x) => self.pointer_base + x,
+            std::io::SeekFrom::End(x) => (self.pointer_limit as i64 + x) as _,
+        };
+
+        Ok(self.pointer - self.pointer_base)
     }
 }
 
@@ -672,6 +675,7 @@ impl<R: RandomReadBlobAsync + MemoryMapBlob> FileStreamingArchiveAsync<R> {
     ) -> FileStreamingArchiveBinReaderAsync<'a, R> {
         FileStreamingArchiveBinReaderAsync {
             archive: self,
+            pointer_base: self.content_baseptr + heading.relative_offset,
             pointer: self.content_baseptr + heading.relative_offset,
             pointer_limit: self.content_baseptr + heading.relative_offset + heading.byte_length,
         }
@@ -796,6 +800,7 @@ impl<R: RandomReadBlob + MemoryMapBlob> FileStreamingArchive<R> {
     ) -> FileStreamingArchiveBinReader<'a, R> {
         FileStreamingArchiveBinReader {
             archive: self,
+            pointer_base: self.content_baseptr + heading.relative_offset,
             pointer: self.content_baseptr + heading.relative_offset,
             pointer_limit: self.content_baseptr + heading.relative_offset + heading.byte_length,
         }
