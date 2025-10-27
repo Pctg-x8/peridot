@@ -14,3 +14,4 @@ workspace = true
 
 [dependencies]
 async-std = { workspace = true, optional = true }
+peridot-native-io = { path = "../native-io" }

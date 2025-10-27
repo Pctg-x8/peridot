@@ -138,6 +138,77 @@ impl VariableUInt {
         }
     }
 
+    fn decode_bytes_limited(bytes: &[u8]) -> Option<(Self, usize)> {
+        let (mut v, mut shifts, mut consumed) = (0u32, 0usize, 0);
+        while consumed < bytes.len() {
+            let (ve, has_next) = (bytes[consumed] & 0x7f, bytes[consumed] & 0x80 != 0);
+            consumed += 1;
+            v |= (ve as u32) << shifts;
+            shifts += 7;
+
+            if !has_next {
+                // here is last byte
+                return Some((Self(v), consumed));
+            }
+        }
+
+        None
+    }
+
+    pub fn read_at(
+        reader: &(impl peridot_native_io::RandomReadBlob + ?Sized),
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        const MAX_LENGTH: usize = 32usize.div_ceil(7); // 32bit全部が7bitずつ入ったときが最大長
+
+        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
+        let mut rpos = pos;
+        let mut buf = Vec::with_capacity(MAX_LENGTH);
+        while buf.len() < buf.capacity() {
+            match reader.read(rpos, buf.spare_capacity_mut()) {
+                Ok(r) => {
+                    unsafe {
+                        buf.set_len(buf.len() + r);
+                    }
+                    rpos += r as u64;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableUInt?"))
+    }
+
+    pub async fn read_at_async(
+        reader: &(impl peridot_native_io::RandomReadBlobAsync + ?Sized),
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        const MAX_LENGTH: usize = 32usize.div_ceil(7); // 32bit全部が7bitずつ入ったときが最大長
+
+        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
+        let mut rpos = pos;
+        let mut buf = Vec::with_capacity(MAX_LENGTH);
+        while buf.len() < buf.capacity() {
+            match reader.read_async(rpos, buf.spare_capacity_mut()).await {
+                Ok(r) => {
+                    unsafe {
+                        buf.set_len(buf.len() + r);
+                    }
+                    rpos += r as u64;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableUInt?"))
+    }
+
     #[cfg(feature = "async-rt-async-std")]
     pub async fn read_async(
         reader: &mut (impl async_std::io::BufRead + ?Sized + Unpin),
@@ -308,6 +379,77 @@ impl VariableULong {
             }
         }
     }
+
+    fn decode_bytes_limited(bytes: &[u8]) -> Option<(Self, usize)> {
+        let (mut v, mut shifts, mut consumed) = (0u64, 0usize, 0);
+        while consumed < bytes.len() {
+            let (ve, has_next) = (bytes[consumed] & 0x7f, bytes[consumed] & 0x80 != 0);
+            consumed += 1;
+            v |= (ve as u64) << shifts;
+            shifts += 7;
+
+            if !has_next {
+                // here is last byte
+                return Some((Self(v), consumed));
+            }
+        }
+
+        None
+    }
+
+    pub fn read_at(
+        reader: &(impl peridot_native_io::RandomReadBlob + ?Sized),
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        const MAX_LENGTH: usize = 64usize.div_ceil(7); // 64bit全部が7bitずつ入ったときが最大長
+
+        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
+        let mut rpos = pos;
+        let mut buf = Vec::with_capacity(MAX_LENGTH);
+        while buf.len() < buf.capacity() {
+            match reader.read(rpos, buf.spare_capacity_mut()) {
+                Ok(r) => {
+                    unsafe {
+                        buf.set_len(buf.len() + r);
+                    }
+                    rpos += r as u64;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableULong?"))
+    }
+
+    pub async fn read_at_async(
+        reader: &(impl peridot_native_io::RandomReadBlobAsync + ?Sized),
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        const MAX_LENGTH: usize = 64usize.div_ceil(7); // 64bit全部が7bitずつ入ったときが最大長
+
+        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
+        let mut rpos = pos;
+        let mut buf = Vec::with_capacity(MAX_LENGTH);
+        while buf.len() < buf.capacity() {
+            match reader.read_async(rpos, buf.spare_capacity_mut()).await {
+                Ok(r) => {
+                    unsafe {
+                        buf.set_len(buf.len() + r);
+                    }
+                    rpos += r as u64;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableULong?"))
+    }
 }
 
 /// a utf-8 string representation leading its byte length as `VariableUInt`.
@@ -373,11 +515,15 @@ impl<'s> PascalStr<'s> {
         Ok((PascalStr(s), bytelength_len + bytelength as usize))
     }
 
+    /// # Safety
+    /// The input bytes must be valid-formed UTF-8 sequence.
     pub unsafe fn from_bytes_head_unchecked(bytes: &'s [u8]) -> (Self, usize) {
         let (VariableUInt(bytelength), bytelength_len) = VariableUInt::from_bytes_head(bytes);
-        let s = core::str::from_utf8_unchecked(
-            &bytes[bytelength_len..bytelength_len + bytelength as usize],
-        );
+        let s = unsafe {
+            core::str::from_utf8_unchecked(
+                &bytes[bytelength_len..bytelength_len + bytelength as usize],
+            )
+        };
 
         (PascalStr(s), bytelength_len + bytelength as usize)
     }
