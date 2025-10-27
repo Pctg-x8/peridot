@@ -196,7 +196,7 @@ impl peridot::FromAsset for ShaderPackAsset {
     type Error = AssetReadError;
 
     #[inline(always)]
-    fn from_asset<Asset: std::io::Read + std::io::Seek + 'static>(
+    fn from_asset<'a, Asset: std::io::Read + std::io::Seek + 'a>(
         asset: Asset,
     ) -> Result<Self, Self::Error> {
         ShaderPackAsset::read(&mut std::io::BufReader::new(asset))

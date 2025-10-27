@@ -142,7 +142,7 @@ impl peridot::LogicalAssetData for TTFBlob {
 impl peridot::FromAsset for TTFBlob {
     type Error = std::io::Error;
 
-    fn from_asset<Asset: std::io::Read + std::io::Seek + 'static>(
+    fn from_asset<'a, Asset: std::io::Read + std::io::Seek + 'a>(
         mut asset: Asset,
     ) -> Result<Self, Self::Error> {
         let mut bin = Vec::new();

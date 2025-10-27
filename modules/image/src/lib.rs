@@ -72,7 +72,7 @@ impl LogicalAssetData for HDR {
 impl FromAsset for PNG {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::png::PngDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(PNG)
@@ -81,7 +81,7 @@ impl FromAsset for PNG {
 impl FromAsset for TGA {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::tga::TgaDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(TGA)
@@ -90,7 +90,7 @@ impl FromAsset for TGA {
 impl FromAsset for TIFF {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::tiff::TiffDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(TIFF)
@@ -99,7 +99,7 @@ impl FromAsset for TIFF {
 impl FromAsset for WebP {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::webp::WebPDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(WebP)
@@ -108,7 +108,7 @@ impl FromAsset for WebP {
 impl FromAsset for BMP {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::bmp::BmpDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(BMP)
@@ -117,7 +117,7 @@ impl FromAsset for BMP {
 impl FromAsset for HDR {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         let reader = HdrDecoder::new(BufReader::new(asset))?;
 
         Ok(Self {
@@ -163,7 +163,7 @@ impl LogicalAssetData for StdTexture2DAsset {
 impl FromAsset for StdTexture2DAsset {
     type Error = std::io::Error;
 
-    fn from_asset<Asset: Read + Seek + 'static>(mut asset: Asset) -> Result<Self, Self::Error> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(mut asset: Asset) -> Result<Self, Self::Error> {
         let mut buf = Vec::new();
         asset.read_to_end(&mut buf).expect("Failed to read");
         let buf = Pin::new(buf.into_boxed_slice());
