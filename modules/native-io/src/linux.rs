@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, atomic::AtomicU32},
 };
 
-use crate::native_io::generic_unix::{UnixFile, UnixFileUnmapData};
+use crate::generic_unix::{UnixFile, UnixFileUnmapData};
 
 #[repr(transparent)]
 pub struct File(RawFd);

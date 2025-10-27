@@ -5,16 +5,15 @@ use std::{
 };
 
 use crate::{
-    AssetEntryHeadingPair, CompressionMethod, ContentFlags,
-    entry::AssetNameRef,
+    AssetEntryHeadingPair, CompressionMethod, ContentFlags, entry::AssetNameRef,
     entry_tree::EntryTreePointer,
-    native_io::{
-        MemoryMapBlob, PlatformNativeFileReader, PlatformNativeFileReaderAsync, RandomReadBlob,
-        RandomReadBlobAsync,
-    },
 };
 use crc::crc32;
 use libflate::deflate as zlib;
+use peridot_native_io::{
+    MemoryMapBlob, PlatformNativeFileReader, PlatformNativeFileReaderAsync, RandomReadBlob,
+    RandomReadBlobAsync,
+};
 use peridot_serialization_utils::{VariableUInt, VariableULong};
 
 #[non_exhaustive]

@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicPtr, AtomicUsize},
 };
 
-use crate::native_io::generic_unix::{UnixFile, UnixFileUnmapData};
+use crate::generic_unix::{UnixFile, UnixFileUnmapData};
 
 // dispatch_io requires block abi: https://clang.llvm.org/docs/Block-ABI-Apple.html
 pub type BlockLiteralFlags = core::ffi::c_int;

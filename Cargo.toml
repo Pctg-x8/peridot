@@ -15,7 +15,8 @@ members = [
     "modules/memory-manager",
     "modules/semantic-shader",
     "modules/rendering-configuration",
-    "modules/asset-processing"
+    "modules/asset-processing",
+    "modules/native-io"
 ]
 
 [workspace.dependencies]
@@ -36,4 +37,3 @@ manual_async_fn = "allow"
 unwrap_or_default = "allow"
 new_without_default = "allow"
 mem_replace_with_default = "allow"
-
