@@ -1,14 +1,12 @@
 use std::{
     cell::Cell,
-    os::fd::AsRawFd,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU32},
-    },
+    os::fd::{AsRawFd, RawFd},
+    path::Path,
+    sync::{Arc, atomic::AtomicU32},
 };
 
 #[repr(transparent)]
-pub struct File(std::os::unix::prelude::RawFd);
+pub struct File(RawFd);
 impl Drop for File {
     #[inline]
     fn drop(&mut self) {
@@ -38,10 +36,10 @@ impl File {
 }
 
 #[repr(transparent)]
-pub struct NativeFileReader(File);
-impl NativeFileReader {
+pub struct NativeFileBlobRandomReader(File);
+impl NativeFileBlobRandomReader {
     #[inline]
-    pub fn open(name: &(impl AsRef<std::path::Path> + ?Sized)) -> std::io::Result<Self> {
+    pub fn open(name: impl AsRef<Path>) -> std::io::Result<Self> {
         let f = File::open(
             &std::ffi::CString::new(name.as_ref().to_str().expect("invalid utf-8 sequence"))
                 .expect("invalid for cstr"),
@@ -51,15 +49,10 @@ impl NativeFileReader {
         Ok(Self(f))
     }
 }
-impl super::NativeFileReader for NativeFileReader {
-    #[inline(always)]
-    fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        self.0.lseek64(0, libc::SEEK_CUR)
-    }
-
+impl super::RandomReadBlob for NativeFileBlobRandomReader {
     #[inline]
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let r = unsafe { libc::read(self.0.0, buf.as_mut_ptr() as _, buf.len()) };
+    fn read(&self, pos: u64, buf: &mut [core::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
+        let r = unsafe { libc::pread(self.0.0, buf.as_mut_ptr() as _, buf.len(), pos as _) };
         if r < 0 {
             Err(std::io::Error::last_os_error())
         } else {
@@ -68,18 +61,8 @@ impl super::NativeFileReader for NativeFileReader {
     }
 
     #[inline]
-    fn readv(&mut self, buf: &mut [std::io::IoSliceMut]) -> std::io::Result<usize> {
-        let r = unsafe { libc::readv(self.0.0, buf.as_mut_ptr() as _, buf.len() as _) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r.cast_unsigned())
-        }
-    }
-
-    #[inline]
-    fn pread(&self, buf: &mut [u8], offs: u64) -> std::io::Result<usize> {
-        let r = unsafe { libc::pread64(self.0.0, buf.as_mut_ptr() as _, buf.len(), offs as _) };
+    fn readv(&self, pos: u64, buf: &mut [std::io::IoSliceMut]) -> std::io::Result<usize> {
+        let r = unsafe { libc::preadv(self.0.0, buf.as_mut_ptr() as _, buf.len() as _, pos as _) };
         if r < 0 {
             Err(std::io::Error::last_os_error())
         } else {
@@ -87,19 +70,19 @@ impl super::NativeFileReader for NativeFileReader {
         }
     }
 }
-impl super::NativeFileMemoryMapProvider for NativeFileReader {
+impl super::MemoryMapBlob for NativeFileBlobRandomReader {
     type MemoryUnmapData = MemoryUnmapData;
 
     #[inline]
     fn mmap(
         &self,
         offs: u64,
-        len: u64,
+        len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
         let r = unsafe {
             libc::mmap(
                 core::ptr::null_mut(),
-                len as _,
+                len,
                 libc::PROT_READ,
                 libc::MAP_PRIVATE,
                 self.0.0,
@@ -109,13 +92,7 @@ impl super::NativeFileMemoryMapProvider for NativeFileReader {
         if r == libc::MAP_FAILED {
             Err(std::io::Error::last_os_error())
         } else {
-            Ok((
-                r,
-                MemoryUnmapData {
-                    addr: r,
-                    len: len as _,
-                },
-            ))
+            Ok((r, MemoryUnmapData { addr: r, len }))
         }
     }
 
@@ -135,33 +112,21 @@ pub struct MemoryUnmapData {
     len: usize,
 }
 
-pub struct AsyncNativeFileReader {
-    file: File,
-    // io_uringはファイルポインタすすめてくれないらしいので自前で管理する
-    readptr: u64,
-}
-impl AsyncNativeFileReader {
+#[repr(transparent)]
+pub struct NativeFileAsyncBlobRandomReader(File);
+impl NativeFileAsyncBlobRandomReader {
     #[inline]
-    pub fn open(name: &(impl AsRef<std::path::Path> + ?Sized)) -> std::io::Result<Self> {
-        let f = File::open(
+    pub fn open(name: impl AsRef<Path>) -> std::io::Result<Self> {
+        Ok(Self(File::open(
             &std::ffi::CString::new(name.as_ref().to_str().expect("invalid utf-8 sequence"))
                 .expect("invalid for cstr"),
             libc::O_CLOEXEC | libc::O_NONBLOCK,
-        )?;
-
-        Ok(Self {
-            file: f,
-            readptr: 0,
-        })
+        )?))
     }
 }
-impl super::AsyncNativeFileReader for AsyncNativeFileReader {
-    type ReadFuture<'a>
-        = AsyncNativeFileReadFuture<'a>
-    where
-        Self: 'a;
-    type PosReadFuture<'a, 'b>
-        = AsyncNativeFileReadPosFuture<'a, 'b>
+impl super::RandomReadBlobAsync for NativeFileAsyncBlobRandomReader {
+    type ReadFuture<'a, 'b>
+        = AsyncNativeFileReadFuture<'a, 'b>
     where
         Self: 'a;
     type ReadVecFuture<'a, 'b, 'b2>
@@ -171,70 +136,56 @@ impl super::AsyncNativeFileReader for AsyncNativeFileReader {
         'b2: 'b;
 
     #[inline(always)]
-    fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        Ok(self.readptr)
-    }
-
-    #[inline(always)]
-    fn read_async<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
+    fn read_async<'a, 'b>(
+        &'a self,
+        pos: u64,
+        buf: &'b mut [core::mem::MaybeUninit<u8>],
+    ) -> Self::ReadFuture<'a, 'b> {
         AsyncNativeFileReadFuture {
             fd: self,
+            pos,
             buf,
-            state: Arc::new(Cell::new(AsyncNativeFileReadState::Init)),
-        }
-    }
-
-    #[inline(always)]
-    fn pread_async<'a, 'b>(&'a self, buf: &'b mut [u8], offs: u64) -> Self::PosReadFuture<'a, 'b> {
-        AsyncNativeFileReadPosFuture {
-            fd: self,
-            buf,
-            offs,
             state: Arc::new(Cell::new(AsyncNativeFileReadState::Init)),
         }
     }
 
     #[inline(always)]
     fn readv_async<'a, 'b, 'b2>(
-        &'a mut self,
+        &'a self,
+        pos: u64,
         buf: &'b mut [std::io::IoSliceMut<'b2>],
     ) -> Self::ReadVecFuture<'a, 'b, 'b2> {
         AsyncNativeFileReadVecFuture {
             fd: self,
+            pos,
             iovecs: buf,
             state: Arc::new(Cell::new(AsyncNativeFileReadState::Init)),
         }
     }
 }
-impl super::NativeFileMemoryMapProvider for AsyncNativeFileReader {
+impl super::MemoryMapBlob for NativeFileAsyncBlobRandomReader {
     type MemoryUnmapData = MemoryUnmapData;
 
     #[inline]
     fn mmap(
         &self,
         offs: u64,
-        len: u64,
+        len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
         let r = unsafe {
             libc::mmap(
                 core::ptr::null_mut(),
-                len as _,
+                len,
                 libc::PROT_READ,
                 libc::MAP_PRIVATE,
-                self.file.0,
+                self.0.0,
                 offs as _,
             )
         };
         if r == libc::MAP_FAILED {
             Err(std::io::Error::last_os_error())
         } else {
-            Ok((
-                r,
-                MemoryUnmapData {
-                    addr: r,
-                    len: len as _,
-                },
-            ))
+            Ok((r, MemoryUnmapData { addr: r, len }))
         }
     }
 
@@ -257,72 +208,13 @@ pub enum AsyncNativeFileReadState {
     CompletedFailure(i32),
 }
 
-pub struct AsyncNativeFileReadFuture<'a> {
-    fd: &'a mut AsyncNativeFileReader,
-    buf: &'a mut [u8],
+pub struct AsyncNativeFileReadFuture<'a, 'b> {
+    fd: &'a NativeFileAsyncBlobRandomReader,
+    pos: u64,
+    buf: &'b mut [core::mem::MaybeUninit<u8>],
     state: Arc<Cell<AsyncNativeFileReadState>>,
 }
-impl<'a> Future for AsyncNativeFileReadFuture<'a> {
-    type Output = std::io::Result<usize>;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let this = self.get_mut();
-
-        match this.state.get() {
-            AsyncNativeFileReadState::Init => {
-                // first call
-                let p = this.fd.readptr;
-
-                IoReactorHandle::current()
-                    .expect("no reactor running")
-                    .pusher
-                    .push(|sqe| unsafe {
-                        core::ptr::write_volatile(&mut sqe.fd, this.fd.file.0);
-                        core::ptr::write_volatile(
-                            &mut sqe.opcode,
-                            linux_io_uring::ffi::IORING_OP_READ as _,
-                        );
-                        core::ptr::write_volatile(&mut sqe.union1.off, p);
-                        core::ptr::write_volatile(
-                            &mut sqe.union2.addr,
-                            this.buf.as_mut_ptr() as usize as _,
-                        );
-                        core::ptr::write_volatile(&mut sqe.len, this.buf.len() as _);
-                        // TODO: 毎回mallocするのはちょっとやめたい気もする うまい感じのpoolつくれないか......
-                        core::ptr::write_volatile(
-                            &mut sqe.user_data,
-                            Box::into_raw(Box::new(ReadFutureQueueData::Read {
-                                state: Arc::downgrade(&this.state),
-                                waker: cx.waker().clone(),
-                            })) as usize as _,
-                        );
-                    });
-
-                this.state.set(AsyncNativeFileReadState::Pending);
-                core::task::Poll::Pending
-            }
-            AsyncNativeFileReadState::Pending => core::task::Poll::Pending,
-            AsyncNativeFileReadState::CompletedSuccess(res) => {
-                this.fd.readptr += res as u64;
-                core::task::Poll::Ready(Ok(res))
-            }
-            AsyncNativeFileReadState::CompletedFailure(e) => {
-                core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
-            }
-        }
-    }
-}
-
-pub struct AsyncNativeFileReadPosFuture<'a, 'b> {
-    fd: &'a AsyncNativeFileReader,
-    buf: &'b mut [u8],
-    offs: u64,
-    state: Arc<Cell<AsyncNativeFileReadState>>,
-}
-impl<'a, 'b> Future for AsyncNativeFileReadPosFuture<'a, 'b> {
+impl<'a, 'b> Future for AsyncNativeFileReadFuture<'a, 'b> {
     type Output = std::io::Result<usize>;
 
     fn poll(
@@ -338,12 +230,12 @@ impl<'a, 'b> Future for AsyncNativeFileReadPosFuture<'a, 'b> {
                     .expect("no reactor running")
                     .pusher
                     .push(|sqe| unsafe {
-                        core::ptr::write_volatile(&mut sqe.fd, this.fd.file.0);
+                        core::ptr::write_volatile(&mut sqe.fd, this.fd.0.0);
                         core::ptr::write_volatile(
                             &mut sqe.opcode,
                             linux_io_uring::ffi::IORING_OP_READ as _,
                         );
-                        core::ptr::write_volatile(&mut sqe.union1.off, this.offs);
+                        core::ptr::write_volatile(&mut sqe.union1.off, this.pos);
                         core::ptr::write_volatile(
                             &mut sqe.union2.addr,
                             this.buf.as_mut_ptr() as usize as _,
@@ -372,7 +264,8 @@ impl<'a, 'b> Future for AsyncNativeFileReadPosFuture<'a, 'b> {
 }
 
 pub struct AsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
-    fd: &'a mut AsyncNativeFileReader,
+    fd: &'a NativeFileAsyncBlobRandomReader,
+    pos: u64,
     iovecs: &'b mut [std::io::IoSliceMut<'b2>],
     state: Arc<Cell<AsyncNativeFileReadState>>,
 }
@@ -388,18 +281,17 @@ impl<'a, 'b, 'b2> Future for AsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
         match this.state.get() {
             AsyncNativeFileReadState::Init => {
                 // first call
-                let p = this.fd.readptr;
 
                 IoReactorHandle::current()
                     .expect("no reactor running")
                     .pusher
                     .push(|sqe| unsafe {
-                        core::ptr::write_volatile(&mut sqe.fd, this.fd.file.0);
+                        core::ptr::write_volatile(&mut sqe.fd, this.fd.0.0);
                         core::ptr::write_volatile(
                             &mut sqe.opcode,
                             linux_io_uring::ffi::IORING_OP_READV as _,
                         );
-                        core::ptr::write_volatile(&mut sqe.union1.off, p);
+                        core::ptr::write_volatile(&mut sqe.union1.off, this.pos);
                         core::ptr::write_volatile(
                             &mut sqe.union2.addr,
                             this.iovecs.as_mut_ptr() as usize as _,
@@ -419,10 +311,7 @@ impl<'a, 'b, 'b2> Future for AsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
                 core::task::Poll::Pending
             }
             AsyncNativeFileReadState::Pending => core::task::Poll::Pending,
-            AsyncNativeFileReadState::CompletedSuccess(res) => {
-                this.fd.readptr += res as u64;
-                core::task::Poll::Ready(Ok(res))
-            }
+            AsyncNativeFileReadState::CompletedSuccess(res) => core::task::Poll::Ready(Ok(res)),
             AsyncNativeFileReadState::CompletedFailure(e) => {
                 core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
             }

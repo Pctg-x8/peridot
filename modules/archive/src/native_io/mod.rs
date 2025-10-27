@@ -17,9 +17,9 @@ pub type PlatformNativeFileReader = self::windows::NativeFileBlobRandomReader;
 #[cfg(windows)]
 pub type PlatformNativeFileReaderAsync = self::windows::NativeFileBlobAsyncRandomReader;
 #[cfg(target_os = "linux")]
-pub type PlatformNativeFileReader = self::linux::NativeFileReader;
+pub type PlatformNativeFileReader = self::linux::NativeFileBlobRandomReader;
 #[cfg(target_os = "linux")]
-pub type PlatformNativeFileReaderAsync = self::linux::AsyncNativeFileReader;
+pub type PlatformNativeFileReaderAsync = self::linux::NativeFileAsyncBlobRandomReader;
 #[cfg(target_os = "android")]
 pub type PlatformNativeFileReader = self::android::BundledAssetReader;
 #[cfg(target_os = "android")]
