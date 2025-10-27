@@ -9,10 +9,7 @@ use log::*;
 use parking_lot::RwLock;
 use peridot::audio::PreloadedPlayableWav;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
-use peridot::FromAsset;
-use peridot::{
-    audio::StreamingPlayableWav, CBSubmissionType, CommandBundle, SubpassDependencyTemplates,
-};
+use peridot::{CBSubmissionType, CommandBundle, SubpassDependencyTemplates};
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_rendering_configuration as prc;
@@ -213,11 +210,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             br::BufferUsage::TRANSFER_SRC,
         )
         .expect("Failed to allocate linear image buffer");
-    // image_data_stg_buffer
-    //     .copy_content_from_slice(unsafe {
-    //         core::slice::from_raw_parts(image_data.0.data().add(offs), image_data.0.data_size())
-    //     })
-    //     .expect("Failed to set image data");
+    image_data_stg_buffer
+        .copy_content_from_slice(unsafe {
+            core::slice::from_raw_parts(image_data.0.data().add(offs), image_data.0.data_size())
+        })
+        .expect("Failed to set image data");
 
     let pre_configure_awaiter = e
         .submit_commands_async(|r| {
