@@ -27,7 +27,7 @@ impl BundledAsset {
         }
     }
 
-    pub fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+    pub fn read(&self, buf: &mut [core::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
         let r =
             unsafe { android::AAsset_read(self.0.as_ptr(), buf.as_mut_ptr() as _, buf.len() as _) };
         if r < 0 {
@@ -39,46 +39,31 @@ impl BundledAsset {
 }
 
 #[repr(transparent)]
-pub struct BundledAssetReader(BundledAsset);
-impl BundledAssetReader {
+pub struct BundledAssetRandomReader(BundledAsset);
+impl BundledAssetRandomReader {
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         unimplemented!()
     }
 }
-impl super::NativeFileReader for BundledAssetReader {
-    #[inline(always)]
-    fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        self.0.seek64(0, libc::SEEK_CUR)
-    }
-
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.0.read(buf)
-    }
-
-    fn pread(&self, buf: &mut [u8], offs: u64) -> std::io::Result<usize> {
+impl super::RandomReadBlob for BundledAssetRandomReader {
+    fn read(&self, pos: u64, buf: &mut [core::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
         // preadないのでseekしてからreadする
         let o0 = self.0.seek64(0, libc::SEEK_CUR)?;
-        self.0.seek64(offs as _, libc::SEEK_SET)?;
+        self.0.seek64(pos as _, libc::SEEK_SET)?;
         let r = self.0.read(buf)?;
         self.0.seek64(o0 as _, libc::SEEK_SET)?;
         Ok(r)
     }
 
-    fn readv(&mut self, buf: &mut [std::io::IoSliceMut]) -> std::io::Result<usize> {
-        // readvないのでふつうにreadを呼ぶ
-        match buf.first_mut() {
-            Some(b) => self.0.read(b),
-            None => Ok(0),
-        }
-    }
+    // no readv support for android
 }
-impl super::NativeFileMemoryMapProvider for BundledAssetReader {
+impl super::MemoryMapBlob for BundledAssetRandomReader {
     type MemoryUnmapData = BundledAssetUnmapData;
 
     fn mmap(
         &self,
         offs: u64,
-        len: u64,
+        len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
         let mut start = core::mem::MaybeUninit::uninit();
         let mut length = core::mem::MaybeUninit::uninit();
@@ -129,21 +114,17 @@ impl super::NativeFileMemoryMapProvider for BundledAssetReader {
     }
 }
 
-pub struct BundledAssetAsyncReader {
+pub struct BundledAssetAsyncRandomReader {
     asset: BundledAsset,
 }
-impl BundledAssetAsyncReader {
+impl BundledAssetAsyncRandomReader {
     pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
         unimplemented!()
     }
 }
-impl super::AsyncNativeFileReader for BundledAssetAsyncReader {
-    type ReadFuture<'a>
-        = BundledAssetReadFuture<'a, 'a>
-    where
-        Self: 'a;
-    type PosReadFuture<'a, 'b>
-        = BundledAssetReadPosFuture<'a, 'b>
+impl super::RandomReadBlobAsync for BundledAssetAsyncRandomReader {
+    type ReadFuture<'a, 'b>
+        = BundledAssetReadFuture<'a, 'b>
     where
         Self: 'a;
     type ReadVecFuture<'a, 'b, 'b2>
@@ -153,49 +134,43 @@ impl super::AsyncNativeFileReader for BundledAssetAsyncReader {
         'b2: 'b;
 
     #[inline(always)]
-    fn current_pointer_pos(&self) -> std::io::Result<u64> {
-        self.asset.seek64(0, libc::SEEK_CUR)
-    }
-
-    #[inline(always)]
-    fn read_async<'a>(&'a mut self, buf: &'a mut [u8]) -> Self::ReadFuture<'a> {
-        BundledAssetReadFuture {
-            asset: &mut self.asset,
-            buf,
-            state: Arc::new(Cell::new(BundledAssetReadState::Init)),
-        }
-    }
-
-    #[inline(always)]
-    fn pread_async<'a, 'b>(&'a self, buf: &'b mut [u8], offs: u64) -> Self::PosReadFuture<'a, 'b> {
+    fn read_async<'a, 'b>(
+        &'a self,
+        pos: u64,
+        buf: &'b mut [core::mem::MaybeUninit<u8>],
+    ) -> Self::ReadFuture<'a, 'b> {
         // TODO: これスレッドセーフじゃないのでなにかしらロックとる必要がある
-        BundledAssetReadPosFuture {
+        BundledAssetReadFuture {
             asset: &self.asset,
+            pos,
             buf,
-            offset: offs,
             state: Arc::new(Cell::new(BundledAssetReadState::Init)),
         }
     }
 
     #[inline(always)]
     fn readv_async<'a, 'b, 'b2>(
-        &'a mut self,
+        &'a self,
+        pos: u64,
         buf: &'b mut [std::io::IoSliceMut<'b2>],
     ) -> Self::ReadVecFuture<'a, 'b, 'b2> {
         BundledAssetReadFuture {
-            asset: &mut self.asset,
-            buf: buf.first_mut().map_or(&mut [], |x| x),
+            asset: &self.asset,
+            pos,
+            buf: buf.first_mut().map_or(&mut [], |x| unsafe {
+                core::mem::transmute::<&mut [_], &mut [core::mem::MaybeUninit<_>]>(x)
+            }),
             state: Arc::new(Cell::new(BundledAssetReadState::Init)),
         }
     }
 }
-impl super::NativeFileMemoryMapProvider for BundledAssetAsyncReader {
+impl super::MemoryMapBlob for BundledAssetAsyncRandomReader {
     type MemoryUnmapData = BundledAssetUnmapData;
 
     fn mmap(
         &self,
         offs: u64,
-        len: u64,
+        len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
         let mut start = core::mem::MaybeUninit::uninit();
         let mut length = core::mem::MaybeUninit::uninit();
@@ -261,50 +236,12 @@ enum BundledAssetReadState {
 }
 
 pub struct BundledAssetReadFuture<'a, 'b> {
-    asset: &'a mut BundledAsset,
-    buf: &'b mut [u8],
+    asset: &'a BundledAsset,
+    pos: u64,
+    buf: &'b mut [core::mem::MaybeUninit<u8>],
     state: Arc<Cell<BundledAssetReadState>>,
 }
 impl<'a, 'b> Future for BundledAssetReadFuture<'a, 'b> {
-    type Output = std::io::Result<usize>;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let this = self.get_mut();
-
-        match this.state.get() {
-            BundledAssetReadState::Init => {
-                IoWorkerHandle::current().expect("no worker running").post(
-                    BackgroundTask::ReadAsset {
-                        asset: this.asset.0,
-                        ptr: this.buf.as_mut_ptr() as _,
-                        len: this.buf.len(),
-                        state_store: Arc::downgrade(&this.state),
-                        waker: cx.waker().clone(),
-                    },
-                );
-
-                this.state.set(BundledAssetReadState::Pending);
-                core::task::Poll::Pending
-            }
-            BundledAssetReadState::Pending => core::task::Poll::Pending,
-            BundledAssetReadState::CompleteSuccess(x) => core::task::Poll::Ready(Ok(x)),
-            BundledAssetReadState::CompleteFailed(e) => {
-                core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
-            }
-        }
-    }
-}
-
-pub struct BundledAssetReadPosFuture<'a, 'b> {
-    asset: &'a BundledAsset,
-    buf: &'b mut [u8],
-    offset: u64,
-    state: Arc<Cell<BundledAssetReadState>>,
-}
-impl<'a, 'b> Future for BundledAssetReadPosFuture<'a, 'b> {
     type Output = std::io::Result<usize>;
 
     fn poll(
@@ -320,7 +257,7 @@ impl<'a, 'b> Future for BundledAssetReadPosFuture<'a, 'b> {
                         asset: this.asset.0,
                         ptr: this.buf.as_mut_ptr() as _,
                         len: this.buf.len(),
-                        offset: this.offset,
+                        offset: this.pos,
                         state_store: Arc::downgrade(&this.state),
                         waker: cx.waker().clone(),
                     },
@@ -339,13 +276,6 @@ impl<'a, 'b> Future for BundledAssetReadPosFuture<'a, 'b> {
 }
 
 enum BackgroundTask {
-    ReadAsset {
-        asset: NonNull<android::AAsset>,
-        ptr: *mut core::ffi::c_void,
-        len: usize,
-        state_store: std::sync::Weak<Cell<BundledAssetReadState>>,
-        waker: core::task::Waker,
-    },
     ReadAssetPos {
         asset: NonNull<android::AAsset>,
         ptr: *mut core::ffi::c_void,
@@ -449,27 +379,6 @@ impl BackgroundIoWorkerPool {
                                     .and_then(|x| x.success())
                                 });
                                 match task {
-                                    Some(BackgroundTask::ReadAsset {
-                                        asset,
-                                        ptr,
-                                        len,
-                                        state_store,
-                                        waker,
-                                    }) => {
-                                        if let Some(state_store) = state_store.upgrade() {
-                                            let r = unsafe {
-                                                android::AAsset_read(asset.as_ptr(), ptr, len)
-                                            };
-                                            state_store.set(if r < 0 {
-                                                BundledAssetReadState::CompleteFailed(-r)
-                                            } else {
-                                                BundledAssetReadState::CompleteSuccess(
-                                                    r.cast_unsigned() as _,
-                                                )
-                                            });
-                                            waker.wake();
-                                        }
-                                    }
                                     Some(BackgroundTask::ReadAssetPos {
                                         asset,
                                         ptr,
