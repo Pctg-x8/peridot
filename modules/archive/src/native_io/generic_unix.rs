@@ -1,8 +1,8 @@
 use core::mem::MaybeUninit;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, RawFd};
 
 #[repr(transparent)]
-pub struct UnixFile(std::os::unix::prelude::RawFd);
+pub struct UnixFile(RawFd);
 impl Drop for UnixFile {
     #[inline]
     fn drop(&mut self) {
@@ -15,7 +15,7 @@ impl Drop for UnixFile {
 }
 impl AsRawFd for UnixFile {
     #[inline(always)]
-    fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
+    fn as_raw_fd(&self) -> RawFd {
         self.0
     }
 }

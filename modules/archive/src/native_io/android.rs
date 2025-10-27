@@ -41,7 +41,7 @@ impl BundledAsset {
 #[repr(transparent)]
 pub struct BundledAssetRandomReader(BundledAsset);
 impl BundledAssetRandomReader {
-    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
+    pub fn open(_path: impl AsRef<Path>) -> std::io::Result<Self> {
         unimplemented!()
     }
 }
@@ -79,7 +79,7 @@ impl super::MemoryMapBlob for BundledAssetRandomReader {
         let p = unsafe {
             libc::mmap(
                 core::ptr::null_mut(),
-                len as _,
+                len,
                 libc::PROT_READ,
                 libc::MAP_PRIVATE,
                 fd,
@@ -118,7 +118,7 @@ pub struct BundledAssetAsyncRandomReader {
     asset: BundledAsset,
 }
 impl BundledAssetAsyncRandomReader {
-    pub fn open(path: impl AsRef<Path>) -> std::io::Result<Self> {
+    pub fn open(_path: impl AsRef<Path>) -> std::io::Result<Self> {
         unimplemented!()
     }
 }
@@ -186,7 +186,7 @@ impl super::MemoryMapBlob for BundledAssetAsyncRandomReader {
         let p = unsafe {
             libc::mmap(
                 core::ptr::null_mut(),
-                len as _,
+                len,
                 libc::PROT_READ,
                 libc::MAP_PRIVATE,
                 fd,
