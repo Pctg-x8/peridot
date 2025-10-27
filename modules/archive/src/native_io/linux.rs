@@ -5,6 +5,8 @@ use std::{
     sync::{Arc, atomic::AtomicU32},
 };
 
+use crate::native_io::generic_unix::{UnixFile, UnixFileUnmapData};
+
 #[repr(transparent)]
 pub struct File(RawFd);
 impl Drop for File {
@@ -36,74 +38,49 @@ impl File {
 }
 
 #[repr(transparent)]
-pub struct NativeFileBlobRandomReader(File);
+pub struct NativeFileBlobRandomReader(UnixFile);
 impl NativeFileBlobRandomReader {
-    #[inline]
+    #[inline(always)]
     pub fn open(name: impl AsRef<Path>) -> std::io::Result<Self> {
-        let f = File::open(
+        Ok(Self(UnixFile::open(
             &std::ffi::CString::new(name.as_ref().to_str().expect("invalid utf-8 sequence"))
                 .expect("invalid for cstr"),
             libc::O_CLOEXEC,
-        )?;
-
-        Ok(Self(f))
+        )?))
     }
 }
 impl super::RandomReadBlob for NativeFileBlobRandomReader {
-    #[inline]
+    #[inline(always)]
     fn read(&self, pos: u64, buf: &mut [core::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
-        let r = unsafe { libc::pread(self.0.0, buf.as_mut_ptr() as _, buf.len(), pos as _) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r.cast_unsigned())
-        }
+        self.0.pread(pos as _, buf)
     }
 
-    #[inline]
+    #[inline(always)]
     fn readv(&self, pos: u64, buf: &mut [std::io::IoSliceMut]) -> std::io::Result<usize> {
-        let r = unsafe { libc::preadv(self.0.0, buf.as_mut_ptr() as _, buf.len() as _, pos as _) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(r.cast_unsigned())
-        }
+        self.0.preadv(pos as _, unsafe {
+            core::mem::transmute::<&mut [std::io::IoSliceMut], &mut [libc::iovec]>(buf)
+        })
     }
 }
 impl super::MemoryMapBlob for NativeFileBlobRandomReader {
-    type MemoryUnmapData = MemoryUnmapData;
+    type MemoryUnmapData = UnixFileUnmapData;
 
-    #[inline]
+    #[inline(always)]
     fn mmap(
         &self,
         offs: u64,
         len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
-        let r = unsafe {
-            libc::mmap(
-                core::ptr::null_mut(),
-                len,
-                libc::PROT_READ,
-                libc::MAP_PRIVATE,
-                self.0.0,
-                offs as _,
-            )
-        };
-        if r == libc::MAP_FAILED {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok((r, MemoryUnmapData { addr: r, len }))
-        }
+        let r = self
+            .0
+            .mmap(len, libc::PROT_READ, libc::MAP_PRIVATE, offs as _)?;
+
+        Ok((r.data_addr(), r))
     }
 
-    #[inline]
+    #[inline(always)]
     fn munmap(&self, data: Self::MemoryUnmapData) -> std::io::Result<()> {
-        let r = unsafe { libc::munmap(data.addr, data.len) };
-        if r < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+        data.unmap()
     }
 }
 

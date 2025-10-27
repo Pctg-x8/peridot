@@ -103,6 +103,11 @@ pub struct UnixFileUnmapData {
     pub len: usize,
 }
 impl UnixFileUnmapData {
+    #[inline(always)]
+    pub const fn data_addr(&self) -> *mut core::ffi::c_void {
+        unsafe { self.start_addr.byte_add(self.offset) }
+    }
+
     #[inline]
     pub fn unmap(self) -> std::io::Result<()> {
         let r = unsafe { libc::munmap(self.start_addr, self.len) };
