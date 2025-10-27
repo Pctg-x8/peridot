@@ -384,8 +384,8 @@ pub struct RIFFLoaderAsync<F: peridot_native_io::RandomReadBlobAsync> {
     subchunk_offsets: BTreeMap<Fourcc, (u64, u32)>,
 }
 impl<F: peridot_native_io::RandomReadBlobAsync> RIFFLoaderAsync<F> {
-    pub async fn new(mut reader: F) -> std::io::Result<Self> {
-        let riff_chunk_start = seek_next_fourcc_async(&mut reader, 0, Fourcc::RIFF).await?
+    pub async fn new(reader: F) -> std::io::Result<Self> {
+        let riff_chunk_start = seek_next_fourcc_async(&reader, 0, Fourcc::RIFF).await?
             + RIFFChunkHeader::BYTE_LENGTH as u64;
 
         Ok(Self {

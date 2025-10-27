@@ -142,9 +142,7 @@ pub trait RandomReadBlobAsync {
         async move {
             let mut o = 0;
             while o < buf.len() {
-                let r = self
-                    .read_async(offs + o as u64, &mut buf[o as usize..])
-                    .await?;
+                let r = self.read_async(offs + o as u64, &mut buf[o..]).await?;
                 o += r;
             }
 

@@ -1017,31 +1017,28 @@ impl Archive {
         read_ptr += 4;
         let signature = unsafe { core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(signature) };
         let mut sink_64_bits = [const { MaybeUninit::uninit() }; 8];
-        let comp: CompressionMethod;
-        match &signature {
-            b"par " => {
-                comp = CompressionMethod::None;
-            }
+        let comp = match &signature {
+            b"par " => CompressionMethod::None,
             b"pard" => {
                 reader.read_exact(read_ptr, &mut sink_64_bits)?;
                 read_ptr += 8;
-                comp = CompressionMethod::Zlib(u64::from_le_bytes(unsafe {
+                CompressionMethod::Zlib(u64::from_le_bytes(unsafe {
                     core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
-                }));
+                }))
             }
             b"parz" => {
                 reader.read_exact(read_ptr, &mut sink_64_bits)?;
                 read_ptr += 8;
-                comp = CompressionMethod::Lz4(u64::from_le_bytes(unsafe {
+                CompressionMethod::Lz4(u64::from_le_bytes(unsafe {
                     core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
-                }));
+                }))
             }
             b"par1" => {
                 reader.read_exact(read_ptr, &mut sink_64_bits)?;
                 read_ptr += 8;
-                comp = CompressionMethod::Zstd11(u64::from_le_bytes(unsafe {
+                CompressionMethod::Zstd11(u64::from_le_bytes(unsafe {
                     core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
-                }));
+                }))
             }
             _ => return Err(ArchiveReadError::SignatureMismatch),
         };
