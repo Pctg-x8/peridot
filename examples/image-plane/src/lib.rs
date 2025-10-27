@@ -64,14 +64,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     )
     .await
     .expect("load resources.par");
-    println!(
-        "{:?}",
-        std::env::current_exe()
-            .expect("current_exe")
-            .parent()
-            .expect("no parent")
-            .join("../../../../../../../../examples/image-plane/assets/resources.par"),
-    );
     #[cfg(target_os = "macos")]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
         peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
@@ -79,7 +71,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 .expect("current_exe")
                 .parent()
                 .expect("no parent")
-                .join("../../../../../../../../examples/image-plane/assets/resources.par"),
+                .join("../Resources/assets.par"),
         )
         .expect("open resources.par"),
         true,

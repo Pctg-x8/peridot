@@ -64,8 +64,8 @@ impl UnixFile {
         }
     }
 
-    pub fn mmap(
-        &self,
+    pub unsafe fn mmap_raw(
+        fd: RawFd,
         len: usize,
         prot: core::ffi::c_int,
         flags: core::ffi::c_int,
@@ -81,7 +81,7 @@ impl UnixFile {
                 len,
                 prot,
                 flags,
-                self.0,
+                fd,
                 aligned_offs as _,
             )
         };
@@ -94,6 +94,16 @@ impl UnixFile {
                 len,
             })
         }
+    }
+
+    pub fn mmap(
+        &self,
+        len: usize,
+        prot: core::ffi::c_int,
+        flags: core::ffi::c_int,
+        offs: libc::off_t,
+    ) -> std::io::Result<UnixFileUnmapData> {
+        unsafe { Self::mmap_raw(self.0, len, prot, flags, offs) }
     }
 }
 
