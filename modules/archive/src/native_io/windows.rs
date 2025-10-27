@@ -8,8 +8,8 @@ use std::{
 use windows::{
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, GENERIC_READ, HANDLE,
-            INVALID_HANDLE_VALUE,
+            CloseHandle, ERROR_HANDLE_EOF, ERROR_IO_INCOMPLETE, ERROR_IO_PENDING, GENERIC_READ,
+            HANDLE, INVALID_HANDLE_VALUE,
         },
         Security::SECURITY_ATTRIBUTES,
         Storage::FileSystem::{
@@ -39,7 +39,6 @@ struct File(HANDLE);
 impl Drop for File {
     #[inline(always)]
     fn drop(&mut self) {
-        println!("drop file");
         let _ = unsafe { CloseHandle(self.0) };
     }
 }
@@ -101,10 +100,8 @@ impl File {
     ) -> windows::core::Result<u32> {
         let mut transferred_byte_count = 0;
 
-        unsafe {
-            GetOverlappedResult(self.0, overlapped, &mut transferred_byte_count, wait)
-                .map(move |_| transferred_byte_count)
-        }
+        unsafe { GetOverlappedResult(self.0, overlapped, &mut transferred_byte_count, wait) }
+            .map(move |_| transferred_byte_count)
     }
 }
 
@@ -332,6 +329,12 @@ impl NativeFileBlobAsyncRandomReader {
             None,
         )?;
 
+        IoReactorHandle::current()
+            .expect("no io reactor running")
+            .iocp
+            .add(h.handle(), IO_COMPLETION_KEY_GENERIC_IO)
+            .expect("iocp add");
+
         Ok(Self(h))
     }
 }
@@ -360,46 +363,44 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
                     overlapped: Box::new(init_overlapped(this.pos, HANDLE(core::ptr::null_mut()))),
                 };
 
+                let mut transferred = 0;
                 let r = unsafe {
-                    this.handle
-                        .0
-                        .read(Some(this.buf), None, Some(state.overlapped.as_mut()))
+                    this.handle.0.read(
+                        Some(this.buf),
+                        Some(&mut transferred),
+                        Some(state.overlapped.as_mut()),
+                    )
                 };
-                if let Err(e) = r
-                    && e.code() != ERROR_IO_PENDING.to_hresult()
-                {
-                    return core::task::Poll::Ready(Err(e.into()));
-                }
 
-                println!(
-                    "postr {:?} {:p}",
-                    this.handle.0.handle(),
-                    state.overlapped.as_mut()
-                );
-                IoReactorHandle::current()
-                    .expect("no reactor running")
-                    .request_register(OverlappedIoRegistrationRequest {
-                        file: this.handle.0.handle(),
-                        overlapped: state.overlapped.as_mut(),
-                        waker: cx.waker().clone(),
-                    })
-                    .expect("Failed to register file handle to io reactor");
-                this.pending_state = Some(state);
-                core::task::Poll::Pending
+                match r {
+                    // completed synchronously
+                    Ok(()) => core::task::Poll::Ready(Ok(transferred as _)),
+                    Err(e) if e.code() == ERROR_IO_PENDING.to_hresult() => {
+                        // working
+                        IoReactorHandle::current()
+                            .expect("no reactor running")
+                            .request_register(OverlappedIoRegistrationRequest {
+                                file: this.handle.0.handle(),
+                                overlapped: state.overlapped.as_mut(),
+                                waker: cx.waker().clone(),
+                            })
+                            .expect("Failed to register file handle to io reactor");
+                        this.pending_state = Some(state);
+                        core::task::Poll::Pending
+                    }
+                    // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
+                    Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
+                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
+                    ),
+                    Err(e) => core::task::Poll::Ready(Err(e.into())),
+                }
             }
             Some(ref mut state) => match this
                 .handle
                 .0
                 .get_overlapped_result(state.overlapped.as_ref(), false)
             {
-                Ok(transferred) => {
-                    println!(
-                        "compr {:?} {:p} {transferred}",
-                        this.handle.0.handle(),
-                        state.overlapped.as_mut()
-                    );
-                    core::task::Poll::Ready(Ok(transferred as _))
-                }
+                Ok(transferred) => core::task::Poll::Ready(Ok(transferred as _)),
                 Err(e)
                     if e.code() == ERROR_IO_PENDING.to_hresult()
                         || e.code() == ERROR_IO_INCOMPLETE.to_hresult() =>
@@ -415,6 +416,10 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
                         .expect("Failed to register file handle to io reactor");
                     core::task::Poll::Pending
                 }
+                // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
+                Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
+                    Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
+                ),
                 Err(e) => core::task::Poll::Ready(Err(e.into())),
             },
         }
@@ -443,32 +448,40 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
                 };
 
                 // windows has no actual vectored read support
+                let mut transferred = 0;
                 let r = unsafe {
                     this.handle.0.read(
                         Some(core::mem::transmute::<
                             &mut [_],
                             &mut [core::mem::MaybeUninit<_>],
                         >(&mut this.buf[0])),
-                        None,
+                        Some(&mut transferred),
                         Some(state.overlapped.as_mut()),
                     )
                 };
-                if let Err(e) = r
-                    && e.code() != ERROR_IO_PENDING.to_hresult()
-                {
-                    return core::task::Poll::Ready(Err(e.into()));
-                }
 
-                IoReactorHandle::current()
-                    .expect("no reactor running")
-                    .request_register(OverlappedIoRegistrationRequest {
-                        file: this.handle.0.handle(),
-                        overlapped: state.overlapped.as_mut(),
-                        waker: cx.waker().clone(),
-                    })
-                    .expect("Failed to register file handle to io reactor");
-                this.pending_state = Some(state);
-                core::task::Poll::Pending
+                match r {
+                    // completed synchronously
+                    Ok(()) => core::task::Poll::Ready(Ok(transferred as _)),
+                    Err(e) if e.code() == ERROR_IO_PENDING.to_hresult() => {
+                        // working
+                        IoReactorHandle::current()
+                            .expect("no reactor running")
+                            .request_register(OverlappedIoRegistrationRequest {
+                                file: this.handle.0.handle(),
+                                overlapped: state.overlapped.as_mut(),
+                                waker: cx.waker().clone(),
+                            })
+                            .expect("Failed to register file handle to io reactor");
+                        this.pending_state = Some(state);
+                        core::task::Poll::Pending
+                    }
+                    // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
+                    Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
+                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
+                    ),
+                    Err(e) => core::task::Poll::Ready(Err(e.into())),
+                }
             }
             Some(ref mut state) => match this
                 .handle
@@ -491,6 +504,10 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
                         .expect("Failed to register file handle to io reactor");
                     core::task::Poll::Pending
                 }
+                // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
+                Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
+                    Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
+                ),
                 Err(e) => core::task::Poll::Ready(Err(e.into())),
             },
         }
@@ -659,9 +676,6 @@ pub fn spawn_io_reactor_thread() -> IoReactorThreadTerminator {
                     );
 
                     for r in reqs {
-                        println!("postreq {:?} {:p}", r.file, r.overlapped);
-                        iocp.add(r.file, IO_COMPLETION_KEY_GENERIC_IO)
-                            .expect("Failed to bind file handle");
                         waker_for_overlapped.insert(r.overlapped, r.waker);
                     }
 
@@ -686,7 +700,6 @@ pub fn spawn_io_reactor_thread() -> IoReactorThreadTerminator {
                         }
 
                         if let Some(w) = waker_for_overlapped.remove(&c.lpOverlapped) {
-                            println!("wake {:p}", c.lpOverlapped);
                             w.wake();
                         }
                     }
