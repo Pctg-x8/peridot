@@ -207,7 +207,7 @@ pub trait RandomReadBlob {
                 buf.set_len(o);
             }
             if o >= buf.capacity() {
-                buf.reserve_exact(buf.capacity() + GROW_SIZE);
+                buf.reserve_exact(GROW_SIZE);
             }
         }
 
@@ -300,7 +300,7 @@ pub trait RandomReadBlobAsync {
                     buf.set_len(o);
                 }
                 if o >= buf.capacity() {
-                    buf.reserve_exact(buf.capacity() + GROW_SIZE);
+                    buf.reserve_exact(GROW_SIZE);
                 }
             }
 
