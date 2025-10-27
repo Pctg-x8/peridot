@@ -27,11 +27,13 @@ impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
     const EXT: &'static str = "pa1-rendering-configuration";
 }
 #[cfg(feature = "with-loader-impl")]
-impl peridot::FromAsset for CompiledRenderingConfigurationVk {
+impl peridot::FromAssetBlob for CompiledRenderingConfigurationVk {
     type Error = std::io::Error;
 
-    fn from_asset<'a, Asset: std::io::Read + Seek + 'a>(asset: Asset) -> Result<Self, Self::Error> {
-        read(&mut std::io::BufReader::new(asset))
+    fn from_asset_blob<'a, Blob: peridot::AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
+        read(&mut std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
     }
 }
 
