@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use pbxproj::{Decodable, ElementWrite};
 
@@ -6,6 +7,7 @@ use crate::manifest::*;
 use crate::project::PlatformConfiguration;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
+use crate::util_traits::DirectoryPathExt;
 
 pub fn build(
     options: &super::BuildOptions,
@@ -72,7 +74,7 @@ pub fn build(
     });
 
     if postlink {
-        build_app_bundle(&ctx, options.appid);
+        build_app_bundle(&ctx, options, options.appid);
     }
     if after_run {
         let executable_path = ctx
@@ -83,7 +85,7 @@ pub fn build(
     }
 }
 
-fn build_app_bundle(ctx: &steps::BuildContext, identifier: &str) {
+fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, identifier: &str) {
     ctx.print_step("Building app bundle...");
 
     let xcode_project_dir_path = ctx.cradle_directory.join("peridot-cradle");
@@ -111,9 +113,9 @@ fn build_app_bundle(ctx: &steps::BuildContext, identifier: &str) {
     )
     .expect("Failed to move assets archive");
     let rust_library_path = xcode_project_dir_path.join("rlibs");
-    if !rust_library_path.exists() {
-        std::fs::create_dir_all(&rust_library_path).expect("Failed to create rust library path");
-    }
+    rust_library_path
+        .ensure_directory()
+        .expect("check or create `rlibs` directory");
     std::fs::rename(
         ctx.cradle_directory.join("target/debug/libpegamelib.a"),
         rust_library_path.join("libpegamelib.a"),
@@ -163,6 +165,91 @@ fn build_app_bundle(ctx: &steps::BuildContext, identifier: &str) {
         );
     }
 
+    // search extra-libs and import to link
+    let extra_libs_dir = options.userlib.join("extra-libs");
+    if extra_libs_dir.exists() {
+        let target_paths = extra_libs_dir
+            .read_dir_recursive()
+            .expect("initiate read_dir")
+            .filter(|x| {
+                x.as_ref().is_ok_and(|x| {
+                    x.file_name()
+                        .to_str()
+                        .is_some_and(|x| x.starts_with("lib") && x.ends_with(".dylib"))
+                })
+            })
+            .map(|x| x.map(|x| x.path()))
+            .collect::<Result<Vec<_>, _>>()
+            .expect("enumerating external libs");
+        let mut additional_build_files = Vec::with_capacity(target_paths.len());
+        for (n, p) in target_paths.iter().enumerate() {
+            let fileref_id = format!("peridot_tweak_extlib_fileref_{n}");
+            let buildfile_id = format!("peridot_tweak_extlib_buildfile_{n}");
+
+            pbxproj.objects.insert(
+                Cow::Owned(fileref_id.clone()),
+                pbxproj::PBXObject::FileReference(pbxproj::PBXFileReference {
+                    name: Some(
+                        p.file_name()
+                            .expect("no file name")
+                            .to_str()
+                            .expect("invalid charcode")
+                            .to_owned()
+                            .into(),
+                    ),
+                    path: p.to_str().expect("invalid charcode").to_owned().into(),
+                    source_tree: "<absolute>".into(),
+                    last_known_file_type: Some("compiled.mach-o.dylib".into()),
+                    extras: HashMap::new(),
+                }),
+            );
+            pbxproj.objects.insert(
+                Cow::Owned(buildfile_id.clone()),
+                pbxproj::PBXObject::BuildFile(pbxproj::PBXBuildFile {
+                    file_ref: pbxproj::PBXObjectIDRef::from(fileref_id),
+                    settings: None,
+                    extras: HashMap::new(),
+                }),
+            );
+
+            additional_build_files.push(buildfile_id);
+        }
+        let link_phase_ids = pbxproj
+            .root_project()
+            .targets
+            .iter()
+            .flat_map(
+                |t| match t.entity(&pbxproj).expect("no target entity found") {
+                    pbxproj::PBXObject::NativeTarget(t) => t
+                        .build_phases
+                        .iter()
+                        .filter_map(|p| {
+                            match p.entity(&pbxproj).expect("no build phase entity found") {
+                                pbxproj::PBXObject::FrameworksBuildPhase(_) => Some(p),
+                                _ => None,
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                    t => {
+                        eprintln!("unknown target type: {t:?}");
+                        Vec::new()
+                    }
+                },
+            )
+            .cloned()
+            .collect::<Vec<_>>();
+        for t in link_phase_ids {
+            match t.entity_mut(&mut pbxproj).expect("no target entity found") {
+                pbxproj::PBXObject::FrameworksBuildPhase(t) => {
+                    t.files
+                        .extend(additional_build_files.iter().map(|x| x.to_owned().into()));
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    // writeback final pbxproj
     pbxproj
         .write(&mut pbxproj::Writer::new(
             std::fs::File::options()
