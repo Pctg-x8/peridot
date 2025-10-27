@@ -5,6 +5,11 @@ use std::fs::{metadata, read, read_dir};
 use std::io::prelude::Write;
 use std::io::{Read, Result as IOResult};
 
+#[cfg(windows)]
+pub type GlobAcceptedPath = String;
+#[cfg(not(windows))]
+pub type GlobAcceptedPath = PathBuf;
+
 #[derive(Parser)]
 #[command(name = "extract")]
 pub struct CmdExtract {
@@ -41,7 +46,7 @@ pub struct CmdNew {
     pub basedir: Option<PathBuf>,
     /// Input File/Directory
     #[arg(required = true)]
-    pub ifiled: Vec<PathBuf>,
+    pub ifiled: Vec<GlobAcceptedPath>,
     /// Describes the compression method
     #[arg(short = 'c', long = "compress", value_name("METHOD"), value_enum)]
     pub cmethod: Option<CompressionMethod>,
@@ -79,11 +84,12 @@ async fn main() {
 async fn new(args: CmdNew) {
     #[cfg(windows)]
     let directory_walker = args.ifiled.iter().flat_map(|f| {
+        // Windowsはどうやらglobをシェルが分解してくれない？ので自前で分解する
         if f.contains('*') {
             let glb = glob::glob(f).expect("glob match");
             Box::new(glb.flat_map(|f| extract_directory(&f.expect("filename decode err"))))
         } else {
-            extract_directory(f)
+            extract_directory(&std::path::PathBuf::from(f))
         }
     });
     #[cfg(not(windows))]

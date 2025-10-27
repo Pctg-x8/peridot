@@ -13,9 +13,9 @@ pub mod macos;
 pub mod windows;
 
 #[cfg(windows)]
-pub type PlatformNativeFileReader = self::windows::WindowsNativeFileReader;
+pub type PlatformNativeFileReader = self::windows::NativeFileBlobRandomReader;
 #[cfg(windows)]
-pub type PlatformNativeFileReaderAsync = self::windows::WindowsAsyncNativeFileReader;
+pub type PlatformNativeFileReaderAsync = self::windows::NativeFileBlobAsyncRandomReader;
 #[cfg(target_os = "linux")]
 pub type PlatformNativeFileReader = self::linux::NativeFileReader;
 #[cfg(target_os = "linux")]
