@@ -4,7 +4,6 @@ use bedrock::{
 use br::resources::Image;
 use br::Device;
 use ktx::Texture;
-// use ktx::Texture;
 use log::*;
 use parking_lot::RwLock;
 use peridot::audio::PreloadedPlayableWav;
