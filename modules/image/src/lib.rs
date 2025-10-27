@@ -153,7 +153,7 @@ impl LDRImageAsset for WebP {
     }
 }
 
-/*pub struct StdTexture2DAsset(
+pub struct StdTexture2DAsset(
     pub ktx::Owned<ktx::Texture2>,
     #[allow(dead_code)] Pin<Box<[u8]>>,
 );
@@ -163,7 +163,7 @@ impl LogicalAssetData for StdTexture2DAsset {
 impl FromAsset for StdTexture2DAsset {
     type Error = std::io::Error;
 
-    fn from_asset<Asset: Read + Seek + 'static>(mut asset: Asset) -> Result<Self, Self::Error> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(mut asset: Asset) -> Result<Self, Self::Error> {
         let mut buf = Vec::new();
         asset.read_to_end(&mut buf).expect("Failed to read");
         let buf = Pin::new(buf.into_boxed_slice());
@@ -172,4 +172,4 @@ impl FromAsset for StdTexture2DAsset {
 
         Ok(Self(container, buf))
     }
-}*/
+}

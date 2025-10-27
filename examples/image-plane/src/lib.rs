@@ -3,6 +3,7 @@ use bedrock::{
 };
 use br::resources::Image;
 use br::Device;
+use ktx::Texture;
 // use ktx::Texture;
 use log::*;
 use parking_lot::RwLock;
@@ -63,8 +64,30 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     )
     .await
     .expect("load resources.par");
+    println!(
+        "{:?}",
+        std::env::current_exe()
+            .expect("current_exe")
+            .parent()
+            .expect("no parent")
+            .join("../../../../../../../../examples/image-plane/assets/resources.par"),
+    );
+    #[cfg(target_os = "macos")]
+    let mut resource_container = peridot_archive::ArchiveAsync::new(
+        peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
+            std::env::current_exe()
+                .expect("current_exe")
+                .parent()
+                .expect("no parent")
+                .join("../../../../../../../../examples/image-plane/assets/resources.par"),
+        )
+        .expect("open resources.par"),
+        true,
+    )
+    .await
+    .expect("load resources.par");
 
-    /*let mut image_data: peridot_image::StdTexture2DAsset =
+    let mut image_data: peridot_image::StdTexture2DAsset =
         e.load("images.example").expect("No image found");
     if image_data.0.needs_transcoding() {
         // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
@@ -80,12 +103,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .image_offset(0, 0, 0)
         .expect("image_offset failed");
     debug!("image: {image_width}x{image_height}");
-    debug!("image data size: {} offs {offs}", image_data.0.data_size());*/
+    debug!("image data size: {} offs {offs}", image_data.0.data_size());
     // debug!("ImageFormat: {:?}", image_data.0.vk_format());
-    let image_data: peridot_image::PNG = e.load("images.example").expect("no image found");
-    let image_width = 0;
-    let image_height = 0;
-    let offs = 0;
 
     // TODO: streamingなassetが複数ある時に相性が悪い どうしたものか
     let bgm = Arc::new(RwLock::new(
