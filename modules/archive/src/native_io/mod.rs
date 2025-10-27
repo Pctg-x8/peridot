@@ -244,7 +244,7 @@ pub trait RandomReadBlobAsync {
     ) -> impl core::future::Future<Output = IOResult<()>> + use<'a, 'b, Self> {
         async move {
             let mut o = 0;
-            while !buf.is_empty() {
+            while o < buf.len() {
                 let r = self
                     .read_async(offs + o as u64, &mut buf[o as usize..])
                     .await?;
