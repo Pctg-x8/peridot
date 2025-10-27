@@ -48,25 +48,3 @@ pub async fn write_all_vectored_async<'b>(
 
     Ok(())
 }
-
-#[cfg(feature = "async-rt-async-std")]
-struct ReadVFuture<'r, 'bs, 'b, R: 'r + ?Sized> {
-    reader: &'r mut R,
-    buffers: &'bs mut [std::io::IoSliceMut<'b>],
-}
-#[cfg(feature = "async-rt-async-std")]
-impl<'r, 'bs, 'b, R: 'r + ?Sized> std::future::Future for ReadVFuture<'r, 'bs, 'b, R>
-where
-    R: async_std::io::Read + Unpin,
-{
-    type Output = IOResult<usize>;
-
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        let Self { reader, buffers } = &mut *self;
-
-        async_std::io::Read::poll_read_vectored(std::pin::Pin::new(reader), cx, buffers)
-    }
-}

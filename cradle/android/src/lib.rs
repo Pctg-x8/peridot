@@ -328,10 +328,10 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset = native_wrapper::Asset;
-    type StreamingAsset = native_wrapper::Asset;
+    type Asset<'a> = native_wrapper::Asset;
+    type StreamingAsset<'a> = native_wrapper::Asset;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<native_wrapper::Asset> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
@@ -341,7 +341,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             .open(&path_str, AASSET_MODE_RANDOM)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<native_wrapper::Asset> {
+
+    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);

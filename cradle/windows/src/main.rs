@@ -321,10 +321,10 @@ impl AssetProvider {
     }
 }
 impl peridot::PlatformAssetLoader for AssetProvider {
-    type Asset = std::fs::File;
-    type StreamingAsset = std::fs::File;
+    type Asset<'a> = std::fs::File;
+    type StreamingAsset<'a> = std::fs::File;
 
-    fn get(&self, path: &str, ext: &str) -> std::io::Result<Self::Asset> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::Asset<'a>> {
         #[allow(unused_mut)]
         let mut segments = path.split('.').peekable();
 
@@ -347,7 +347,12 @@ impl peridot::PlatformAssetLoader for AssetProvider {
 
         std::fs::File::open(&p)
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> std::io::Result<Self::StreamingAsset> {
+
+    fn get_streaming<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> std::io::Result<Self::StreamingAsset<'a>> {
         #[allow(unused_mut)]
         let mut segments = path.split('.').peekable();
 

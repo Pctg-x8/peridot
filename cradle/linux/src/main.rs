@@ -45,10 +45,10 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset = File;
-    type StreamingAsset = File;
+    type Asset<'a> = File;
+    type StreamingAsset<'a> = File;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
         #[allow(unused_mut)]
         let mut path_segments = path.split('.').peekable();
 
@@ -58,7 +58,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
 
         File::open(apath)
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
+
+    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
         self.get(path, ext)
     }
 }
