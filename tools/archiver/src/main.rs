@@ -159,7 +159,8 @@ async fn new(args: CmdNew) {
 
 fn extract(args: CmdExtract) {
     let archive = par::Archive::new(
-        par::native_io::PlatformNativeFileReader::open(&args.arc).expect("Failed to open archive"),
+        peridot_native_io::PlatformNativeFileReader::open(&args.arc)
+            .expect("Failed to open archive"),
         args.check,
     )
     .expect("Failed to read archive");
@@ -186,7 +187,8 @@ fn extract(args: CmdExtract) {
 }
 fn list(args: CmdList) {
     let archive = par::Archive::new(
-        par::native_io::PlatformNativeFileReader::open(&args.arc).expect("Failed to open archive"),
+        peridot_native_io::PlatformNativeFileReader::open(&args.arc)
+            .expect("Failed to open archive"),
         args.check,
     )
     .expect("Failed to open archive");
