@@ -506,6 +506,43 @@ impl PascalString {
             .map(|s| Self(s.to_owned()))
             .map_err(IOError::other)
     }
+
+    pub fn read_at(
+        reader: &(impl peridot_native_io::RandomReadBlob + ?Sized),
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        let (VariableUInt(byte_length), str_head) = VariableUInt::read_at(reader, pos)?;
+        let mut bytes = Vec::with_capacity(byte_length as _);
+        reader.read_exact(pos + str_head as u64, bytes.spare_capacity_mut())?;
+        unsafe {
+            bytes.set_len(byte_length as _);
+        }
+
+        match from_utf8(&bytes[..]) {
+            Ok(x) => Ok((Self(x.to_owned()), str_head + byte_length as usize)),
+            Err(e) => Err(IOError::other(e)),
+        }
+    }
+
+    pub async fn read_at_async(
+        reader: &(impl peridot_native_io::RandomReadBlobAsync + ?Sized),
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        let (VariableUInt(byte_length), str_head) =
+            VariableUInt::read_at_async(reader, pos).await?;
+        let mut bytes = Vec::with_capacity(byte_length as _);
+        reader
+            .read_exact_async(pos + str_head as u64, bytes.spare_capacity_mut())
+            .await?;
+        unsafe {
+            bytes.set_len(byte_length as _);
+        }
+
+        match from_utf8(&bytes[..]) {
+            Ok(x) => Ok((Self(x.to_owned()), str_head + byte_length as usize)),
+            Err(e) => Err(IOError::other(e)),
+        }
+    }
 }
 impl<'s> PascalStr<'s> {
     pub fn from_bytes_head(bytes: &'s [u8]) -> Result<(Self, usize), core::str::Utf8Error> {
