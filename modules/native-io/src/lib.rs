@@ -1,6 +1,9 @@
 use core::mem::MaybeUninit;
 use std::io::{IoSliceMut, Result as IOResult};
 
+mod adapter;
+pub use adapter::*;
+
 #[cfg(target_os = "android")]
 pub mod android;
 #[cfg(unix)]
@@ -28,6 +31,16 @@ pub type PlatformNativeFileReaderAsync = self::android::BundledAssetAsyncRandomR
 pub type PlatformNativeFileReader = self::macos::NativeFileReader;
 #[cfg(target_os = "macos")]
 pub type PlatformNativeFileReaderAsync = self::macos::NativeFileAsyncReader;
+
+/// Metadata Accessor for an Blob(synchronous).
+pub trait BlobMetadata {
+    fn byte_length(&self) -> std::io::Result<u64>;
+}
+
+/// Metadata Accessor for an Blob(asynchronous).
+pub trait BlobMetadataAsync {
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>>;
+}
 
 /// Read-only random accessible Blob operations(synchronous).
 pub trait RandomReadBlob {

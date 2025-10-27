@@ -393,7 +393,7 @@ use std::io::Result as IOResult;
 
 // Reading Asset //
 
-use std::io::{ErrorKind, Read, Seek};
+use std::io::{ErrorKind, Read};
 /// An WaveFile as AudioSource which all of audio data is in the memory.
 pub struct PreloadedPlayableWav {
     samples: Vec<[f32; 2]>,
@@ -403,10 +403,11 @@ pub struct PreloadedPlayableWav {
 impl super::LogicalAssetData for PreloadedPlayableWav {
     const EXT: &'static str = "pa1-audio";
 }
-impl super::FromAsset for PreloadedPlayableWav {
+impl super::FromAssetBlob for PreloadedPlayableWav {
     type Error = std::io::Error;
-    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> IOResult<Self> {
-        let mut loader = RIFFLoader::new(asset)?;
+
+    fn from_asset_blob<'a, Blob: crate::AssetBlob + 'a>(blob: Blob) -> IOResult<Self> {
+        let mut loader = RIFFLoader::new(blob)?;
         let fmt = loader.read_fmt()?;
         let data = WaveSamples::from(loader.read_data_uncompressed(&fmt)?).into();
 
@@ -415,6 +416,25 @@ impl super::FromAsset for PreloadedPlayableWav {
             current_smp: 0,
             state: PlayableAudioState::Ready,
         })
+    }
+}
+impl super::FromAssetBlobAsync for PreloadedPlayableWav {
+    type Error = std::io::Error;
+
+    fn from_asset_blob_async<'a, Blob: crate::AssetBlobAsync + 'a>(
+        blob: Blob,
+    ) -> impl core::future::Future<Output = Result<Self, Self::Error>> {
+        async move {
+            let mut loader = RIFFLoaderAsync::new(blob).await?;
+            let fmt = loader.read_fmt().await?;
+            let data = WaveSamples::from(loader.extract_data_uncompressed(&fmt).await?).into();
+
+            Ok(Self {
+                samples: data,
+                current_smp: 0,
+                state: PlayableAudioState::Ready,
+            })
+        }
     }
 }
 impl Processor for PreloadedPlayableWav {

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use bedrock::{self as br, ShaderModule};
+#[cfg(feature = "with-loader-impl")]
+use peridot::AssetBlob;
 use peridot_serialization_utils::VariableUInt;
 
 /// Represents the semantic of a vertex shader input.
@@ -192,14 +194,14 @@ impl peridot::LogicalAssetData for ShaderPackAsset {
     const EXT: &'static str = "pss";
 }
 #[cfg(feature = "with-loader-impl")]
-impl peridot::FromAsset for ShaderPackAsset {
+impl peridot::FromAssetBlob for ShaderPackAsset {
     type Error = AssetReadError;
 
     #[inline(always)]
-    fn from_asset<'a, Asset: std::io::Read + std::io::Seek + 'a>(
-        asset: Asset,
-    ) -> Result<Self, Self::Error> {
-        ShaderPackAsset::read(&mut std::io::BufReader::new(asset))
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
+        ShaderPackAsset::read(&mut std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
     }
 }
 

@@ -49,6 +49,15 @@ impl NativeFileBlobRandomReader {
         )?))
     }
 }
+impl super::BlobMetadata for NativeFileBlobRandomReader {
+    fn byte_length(&self) -> std::io::Result<u64> {
+        let mut stat = core::mem::MaybeUninit::uninit();
+        self.0.stat64(&mut stat)?;
+        let stat = unsafe { stat.assume_init_ref() };
+
+        Ok(stat.st_size.cast_unsigned())
+    }
+}
 impl super::RandomReadBlob for NativeFileBlobRandomReader {
     #[inline(always)]
     fn read(&self, pos: u64, buf: &mut [core::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
@@ -99,6 +108,16 @@ impl NativeFileAsyncBlobRandomReader {
                 .expect("invalid for cstr"),
             libc::O_CLOEXEC | libc::O_NONBLOCK,
         )?))
+    }
+}
+impl super::BlobMetadataAsync for NativeFileAsyncBlobRandomReader {
+    #[inline(always)]
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>> {
+        AsyncNativeFileByteLengthFuture {
+            fd: self,
+            buf: core::mem::MaybeUninit::uninit(),
+            state: Arc::new(Cell::new(AsyncNativeFileReadState::Init)),
+        }
     }
 }
 impl super::RandomReadBlobAsync for NativeFileAsyncBlobRandomReader {
@@ -289,6 +308,69 @@ impl<'a, 'b, 'b2> Future for AsyncNativeFileReadVecFuture<'a, 'b, 'b2> {
             }
             AsyncNativeFileReadState::Pending => core::task::Poll::Pending,
             AsyncNativeFileReadState::CompletedSuccess(res) => core::task::Poll::Ready(Ok(res)),
+            AsyncNativeFileReadState::CompletedFailure(e) => {
+                core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
+            }
+        }
+    }
+}
+
+const EMPTY_CSTR: &'static core::ffi::CStr =
+    unsafe { core::ffi::CStr::from_bytes_with_nul_unchecked(&[0]) };
+
+pub struct AsyncNativeFileByteLengthFuture<'a> {
+    fd: &'a NativeFileAsyncBlobRandomReader,
+    buf: core::mem::MaybeUninit<libc::statx>,
+    state: Arc<Cell<AsyncNativeFileReadState>>,
+}
+impl<'a> Future for AsyncNativeFileByteLengthFuture<'a> {
+    type Output = std::io::Result<u64>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+
+        match this.state.get() {
+            AsyncNativeFileReadState::Init => {
+                // first call
+                IoReactorHandle::current()
+                    .expect("no reactor running")
+                    .pusher
+                    .push(|sqe| unsafe {
+                        core::ptr::write_volatile(&mut sqe.fd, this.fd.0.0);
+                        core::ptr::write_volatile(
+                            &mut sqe.opcode,
+                            linux_io_uring::ffi::IORING_OP_STATX as _,
+                        );
+                        core::ptr::write_volatile(&mut sqe.union2.addr, EMPTY_CSTR.as_ptr() as _);
+                        core::ptr::write_volatile(
+                            &mut sqe.union3.statx_flags,
+                            libc::AT_EMPTY_PATH as _,
+                        );
+                        core::ptr::write_volatile(&mut sqe.len, libc::STATX_SIZE);
+                        core::ptr::write_volatile(
+                            &mut sqe.union1.off,
+                            this.buf.as_mut_ptr().addr() as _,
+                        );
+                        // TODO: 毎回mallocするのはちょっとやめたい気もする うまい感じのpoolつくれないか......
+                        core::ptr::write_volatile(
+                            &mut sqe.user_data,
+                            Box::into_raw(Box::new(ReadFutureQueueData::Read {
+                                state: Arc::downgrade(&this.state),
+                                waker: cx.waker().clone(),
+                            })) as usize as _,
+                        );
+                    });
+
+                this.state.set(AsyncNativeFileReadState::Pending);
+                core::task::Poll::Pending
+            }
+            AsyncNativeFileReadState::Pending => core::task::Poll::Pending,
+            AsyncNativeFileReadState::CompletedSuccess(_) => {
+                core::task::Poll::Ready(Ok(unsafe { this.buf.assume_init_ref().stx_size }))
+            }
             AsyncNativeFileReadState::CompletedFailure(e) => {
                 core::task::Poll::Ready(Err(std::io::Error::from_raw_os_error(e)))
             }

@@ -2,12 +2,12 @@
 
 extern crate bedrock;
 extern crate peridot_serialization_utils;
+#[cfg(feature = "with-loader-impl")]
+use peridot::AssetBlob;
 use peridot_serialization_utils::*;
 
 use bedrock as br;
 use std::fs::File;
-#[cfg(feature = "with-loader-impl")]
-use std::io::Read;
 use std::io::{
     BufRead, BufReader, Cursor, Error as IOError, Result as IOResult, Seek, SeekFrom, Write,
 };
@@ -121,15 +121,17 @@ impl peridot::LogicalAssetData for PvpContainer {
     const EXT: &'static str = "pvp";
 }
 #[cfg(feature = "with-loader-impl")]
-impl peridot::FromAsset for PvpContainer {
+impl peridot::FromAssetBlob for PvpContainer {
     type Error = PvpContainerReadError;
 
-    fn from_asset<'a, Asset: Read + Seek + 'a>(
-        asset: Asset,
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(
+        blob: Blob,
     ) -> Result<Self, PvpContainerReadError> {
-        PvpContainerReader::new(BufReader::new(asset))?
-            .into_container()
-            .map_err(From::from)
+        PvpContainerReader::new(BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))?
+        .into_container()
+        .map_err(From::from)
     }
 }
 
