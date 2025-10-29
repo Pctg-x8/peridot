@@ -30,10 +30,22 @@ impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
 impl peridot::FromAssetBlob for CompiledRenderingConfigurationVk {
     type Error = std::io::Error;
 
+    #[inline(always)]
     fn from_asset_blob<'a, Blob: peridot::AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
         read(&mut std::io::BufReader::new(
             peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
         ))
+    }
+}
+#[cfg(feature = "with-loader-impl")]
+impl peridot::FromAssetBlobAsync for CompiledRenderingConfigurationVk {
+    type Error = std::io::Error;
+
+    #[inline(always)]
+    fn from_asset_blob_async<'a, Blob: peridot::AssetBlobAsync + 'a>(
+        blob: Blob,
+    ) -> impl core::future::Future<Output = Result<Self, Self::Error>> {
+        async move { read_async(&blob).await }
     }
 }
 
@@ -246,6 +258,94 @@ pub fn write(
 
     writes += header.write(sink)?;
     Ok(writes)
+}
+
+pub async fn read_async(
+    source: &(
+         impl peridot_native_io::RandomReadBlobAsync + peridot_native_io::BlobMetadataAsync + ?Sized
+     ),
+) -> std::io::Result<CompiledRenderingConfigurationVk> {
+    let header_pos = source.byte_length_async().await? - file::Header::BYTE_LENGTH as u64;
+    let (header, _swap_bytes) = file::Header::read_async(
+        &mut peridot_native_io::BufferedRandomBlobReader::new(&source),
+        header_pos,
+    )
+    .await?;
+    let property_directory =
+        file::PropertyDirectory::read_async(core::pin::pin!(futures_util::io::BufReader::new(
+            peridot_native_io::RandomBlobAsyncReadSeekAdapter::new(&source)
+        )))
+        .await?;
+    let shading_pass_directory =
+        file::ShadingPassDirectory::read_async(core::pin::pin!(futures_util::io::BufReader::new(
+            peridot_native_io::RandomBlobAsyncReadSeekAdapter::with_pos(
+                &source,
+                header.shading_pass_directory_offset
+            )
+        )))
+        .await?;
+
+    let mut result = CompiledRenderingConfigurationVk {
+        property_mappings: HashMap::with_capacity(property_directory.entries.len()),
+        descriptor_set_bindings: property_directory.descriptor_set_bindings,
+        push_constant_buffer_size_bytes: property_directory.push_constant_buffer_size_bytes,
+        passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
+    };
+    for (n, t, m) in property_directory.entries {
+        match result.property_mappings.entry(n) {
+            std::collections::hash_map::Entry::Vacant(x) => {
+                x.insert((t, m));
+            }
+            std::collections::hash_map::Entry::Occupied(x) => {
+                panic!("conflicting property: {}", x.key());
+            }
+        }
+    }
+    for (n, p) in shading_pass_directory.entries {
+        match result.passes.entry(n) {
+            std::collections::hash_map::Entry::Vacant(x) => match p {
+                file::ShadingPassDirectoryEntry::SimpleDeriveBuiltin(name) => {
+                    x.insert(ShadingPassVk::SimpleDeriveBuiltinPass { name });
+                }
+                file::ShadingPassDirectoryEntry::Located(loc) => {
+                    let pass_data = file::ShadingPassVk::read_async(core::pin::pin!(
+                        futures_util::io::BufReader::new(
+                            peridot_native_io::RandomBlobAsyncReadSeekAdapter::with_pos(
+                                &source, loc
+                            )
+                        )
+                    ))
+                    .await?;
+
+                    let mut vertex_semantic_to_location =
+                        HashMap::with_capacity(pass_data.vertex_semantic_to_location.len());
+                    for (n, l) in pass_data.vertex_semantic_to_location {
+                        match vertex_semantic_to_location.entry(n) {
+                            std::collections::hash_map::Entry::Vacant(x) => {
+                                x.insert(l);
+                            }
+                            std::collections::hash_map::Entry::Occupied(x) => {
+                                panic!("conflicting vertex semantic: {:?}", x.key());
+                            }
+                        }
+                    }
+
+                    x.insert(ShadingPassVk::Custom {
+                        option_overrides: pass_data.option_overrides,
+                        vertex_semantic_to_location,
+                        vertex_entry_point_name: pass_data.vertex_entry_point_name,
+                        fragment_entry_point_name: pass_data.fragment_entry_point_name,
+                        code: pass_data.code,
+                    });
+                }
+            },
+            std::collections::hash_map::Entry::Occupied(x) => {
+                panic!("conflicting pass: {}", x.key());
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 pub fn read(

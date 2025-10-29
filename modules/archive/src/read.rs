@@ -871,7 +871,7 @@ pub enum ArchiveAsync {
 impl ArchiveAsync {
     /// Creates a new archive reader from a platform-specific blob reader.
     pub async fn new(
-        mut blob: PlatformNativeFileReaderAsync,
+        blob: PlatformNativeFileReaderAsync,
         check_integrity: bool,
     ) -> ArchiveReadResult<Self> {
         let (comp, crc, body_start) = Self::read_file_header(&blob).await?;

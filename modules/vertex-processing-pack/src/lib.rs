@@ -197,95 +197,107 @@ impl core::fmt::Display for PvpContainerReadError {
     }
 }
 
-#[cfg(feature = "async-rt-async-std")]
-pub struct PvpContainerReaderAsync<R: async_std::io::BufRead + async_std::io::Seek> {
+pub struct PvpContainerReaderAsync<R: peridot_native_io::RandomReadBlobAsync> {
     vb_offset: u64,
     va_offset: u64,
     vsh_offset: u64,
     fsh_offset: Option<u64>,
     reader: R,
 }
-#[cfg(feature = "async-rt-async-std")]
-impl<R: async_std::io::BufRead + async_std::io::Seek + Unpin> PvpContainerReaderAsync<R> {
-    pub async fn new(mut reader: R) -> Result<Self, PvpContainerReadError> {
+impl<R: peridot_native_io::RandomReadBlobAsync> PvpContainerReaderAsync<R> {
+    pub async fn new(reader: R) -> Result<Self, PvpContainerReadError> {
         let mut signature = [0u8; 4];
-        async_std::io::ReadExt::read_exact(&mut reader, &mut signature).await?;
-        if &signature != b"PVP\x01" {
+        reader
+            .read_exact_async(0, unsafe {
+                core::mem::transmute::<&mut [_], &mut [core::mem::MaybeUninit<_>]>(&mut signature)
+            })
+            .await?;
+        if signature != *b"PVP\x01" {
             return Err(PvpContainerReadError::InvalidSignature);
         }
 
-        let VariableUInt(va_offset) = VariableUInt::read_async(&mut reader).await?;
-        let VariableUInt(vsh_offset) = VariableUInt::read_async(&mut reader).await?;
-        let VariableUInt(fsh_offset_0) = VariableUInt::read_async(&mut reader).await?;
-        let blob_offset = async_std::io::SeekExt::seek(&mut reader, SeekFrom::Current(0)).await?;
+        let mut rp = 4u64;
+        let (VariableUInt(va_offset), l) = VariableUInt::read_at_async(&reader, rp).await?;
+        rp += l as u64;
+        let (VariableUInt(vsh_offset), l) = VariableUInt::read_at_async(&reader, rp).await?;
+        rp += l as u64;
+        let (VariableUInt(fsh_offset), l) = VariableUInt::read_at_async(&reader, rp).await?;
+        rp += l as u64;
 
+        let blob_offset = rp;
         Ok(Self {
             vb_offset: blob_offset,
             va_offset: va_offset as u64 + blob_offset,
             vsh_offset: vsh_offset as u64 + blob_offset,
-            fsh_offset: if fsh_offset_0 == 0 {
+            fsh_offset: if fsh_offset == 0 {
                 None
             } else {
-                Some(fsh_offset_0 as u64 + blob_offset)
+                Some(fsh_offset as u64 + blob_offset)
             },
             reader,
         })
     }
 
     pub async fn read_vertex_bindings(
-        &mut self,
+        &self,
     ) -> IOResult<Vec<br::vk::VkVertexInputBindingDescription>> {
-        async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(self.vb_offset)).await?;
-        Vec::binary_deserialize_async(&mut self.reader).await
+        Ok(
+            Vec::binary_deserialize_at_async(&self.reader, self.vb_offset)
+                .await?
+                .0,
+        )
     }
 
     pub async fn read_vertex_attributes(
-        &mut self,
+        &self,
     ) -> IOResult<Vec<br::vk::VkVertexInputAttributeDescription>> {
-        async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(self.va_offset)).await?;
-        Vec::binary_deserialize_async(&mut self.reader).await
+        Ok(
+            Vec::binary_deserialize_at_async(&self.reader, self.va_offset)
+                .await?
+                .0,
+        )
     }
 
-    pub async fn read_vertex_shader(&mut self) -> IOResult<Vec<u32>> {
-        async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(self.vsh_offset)).await?;
-        SpvBinary::binary_deserialize_async(&mut self.reader)
-            .await
-            .map(|x| x.0)
+    pub async fn read_vertex_shader(&self) -> IOResult<Vec<u32>> {
+        Ok(
+            SpvBinary::binary_deserialize_at_async(&self.reader, self.vsh_offset)
+                .await?
+                .0
+                 .0,
+        )
     }
 
     pub fn is_fragment_stage_provided(&self) -> bool {
         self.fsh_offset.is_some()
     }
 
-    pub async fn read_fragment_shader(&mut self) -> IOResult<Option<Vec<u32>>> {
+    pub async fn read_fragment_shader(&self) -> IOResult<Option<Vec<u32>>> {
         let Some(o) = self.fsh_offset else {
             return Ok(None);
         };
 
-        async_std::io::SeekExt::seek(&mut self.reader, SeekFrom::Start(o)).await?;
-        SpvBinary::binary_deserialize_async(&mut self.reader)
-            .await
-            .map(|x| Some(x.0))
+        Ok(Some(
+            SpvBinary::binary_deserialize_at_async(&self.reader, o)
+                .await?
+                .0
+                 .0,
+        ))
     }
 
-    pub async fn into_container(mut self) -> IOResult<PvpContainer> {
+    pub async fn into_container(self) -> IOResult<PvpContainer> {
+        let (vertex_bindings, vertex_attributes, vertex_shader, fragment_shader) = futures_util::try_join!(
+            self.read_vertex_bindings(),
+            self.read_vertex_attributes(),
+            self.read_vertex_shader(),
+            self.read_fragment_shader()
+        )?;
+
         Ok(PvpContainer {
-            vertex_bindings: self.read_vertex_bindings().await?,
-            vertex_attributes: self.read_vertex_attributes().await?,
-            vertex_shader: self.read_vertex_shader().await?,
-            fragment_shader: self.read_fragment_shader().await?,
+            vertex_bindings,
+            vertex_attributes,
+            vertex_shader,
+            fragment_shader,
         })
-    }
-}
-#[cfg(feature = "async-rt-async-std")]
-impl PvpContainerReaderAsync<async_std::io::BufReader<async_std::fs::File>> {
-    pub async fn from_file(
-        path: impl AsRef<async_std::path::Path>,
-    ) -> Result<Self, PvpContainerReadError> {
-        Self::new(async_std::io::BufReader::new(
-            async_std::fs::File::open(path).await?,
-        ))
-        .await
     }
 }
 
@@ -371,16 +383,19 @@ trait BinarySerializeVkStructures {
     where
         Self: Sized;
 }
-#[cfg(feature = "async-rt-async-std")]
 trait AsyncBinarySerializeVkStructures {
     // つかってないやつ
     // fn binary_serialize_async<'s>(
     //     &'s self,
     //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
     // ) -> impl std::future::Future<Output = IOResult<usize>> + 's;
-    fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
+    fn binary_deserialize_at_async<
+        'r,
+        Source: peridot_native_io::RandomReadBlobAsync + ?Sized + 'r,
+    >(
+        source: &'r Source,
+        pos: u64,
+    ) -> impl core::future::Future<Output = IOResult<(Self, usize)>> + use<'r, Source, Self>
     where
         Self: Sized;
 }
@@ -414,7 +429,6 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
         })
     }
 }
-#[cfg(feature = "async-rt-async-std")]
 impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
     // fn binary_serialize_async<'s>(
     //     &'s self,
@@ -429,22 +443,33 @@ impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputBindingDescriptio
     //     }
     // }
 
-    fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
-    where
-        Self: Sized,
-    {
+    fn binary_deserialize_at_async<
+        'r,
+        Source: peridot_native_io::RandomReadBlobAsync + ?Sized + 'r,
+    >(
+        source: &'r Source,
+        pos: u64,
+    ) -> impl core::future::Future<Output = IOResult<(Self, usize)>> + use<'r, Source> {
         async move {
-            let VariableUInt(input_rate) = VariableUInt::read_async(source).await?;
-            let VariableUInt(binding) = VariableUInt::read_async(source).await?;
-            let VariableUInt(stride) = VariableUInt::read_async(source).await?;
+            let mut read_size = 0usize;
+            let (VariableUInt(input_rate), l) =
+                VariableUInt::read_at_async(source, pos + read_size as u64).await?;
+            read_size += l;
+            let (VariableUInt(binding), l) =
+                VariableUInt::read_at_async(source, pos + read_size as u64).await?;
+            read_size += l;
+            let (VariableUInt(stride), l) =
+                VariableUInt::read_at_async(source, pos + read_size as u64).await?;
+            read_size += l;
 
-            Ok(Self {
-                inputRate: input_rate as _,
-                binding: binding as _,
-                stride: stride as _,
-            })
+            Ok((
+                Self {
+                    inputRate: input_rate as _,
+                    binding: binding as _,
+                    stride: stride as _,
+                },
+                read_size,
+            ))
         }
     }
 }
@@ -485,7 +510,6 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
         })
     }
 }
-#[cfg(feature = "async-rt-async-std")]
 impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
     // fn binary_serialize_async<'s>(
     //     &'s self,
@@ -501,24 +525,37 @@ impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescript
     //     }
     // }
 
-    fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
-    where
-        Self: Sized,
-    {
+    fn binary_deserialize_at_async<
+        'r,
+        Source: peridot_native_io::RandomReadBlobAsync + ?Sized + 'r,
+    >(
+        source: &'r Source,
+        pos: u64,
+    ) -> impl core::future::Future<Output = IOResult<(Self, usize)>> + use<'r, Source> {
         async move {
-            let VariableUInt(location) = VariableUInt::read_async(source).await?;
-            let VariableUInt(binding) = VariableUInt::read_async(source).await?;
-            let VariableUInt(offset) = VariableUInt::read_async(source).await?;
-            let VariableUInt(format) = VariableUInt::read_async(source).await?;
+            let mut read_size = 0usize;
+            let (VariableUInt(location), l) =
+                VariableUInt::read_at_async(source, pos + read_size as u64).await?;
+            read_size += l;
+            let (VariableUInt(binding), l) =
+                VariableUInt::read_at_async(source, pos + read_size as u64).await?;
+            read_size += l;
+            let (VariableUInt(offset), l) =
+                VariableUInt::read_at_async(source, pos + read_size as u64).await?;
+            read_size += l;
+            let (VariableUInt(format), l) =
+                VariableUInt::read_at_async(source, pos + read_size as u64).await?;
+            read_size += l;
 
-            Ok(Self {
-                location: location as _,
-                binding: binding as _,
-                offset: offset as _,
-                format: format as _,
-            })
+            Ok((
+                Self {
+                    location: location as _,
+                    binding: binding as _,
+                    offset: offset as _,
+                    format: format as _,
+                },
+                read_size,
+            ))
         }
     }
 }
@@ -544,7 +581,6 @@ impl<T: BinarySerializeVkStructures> BinarySerializeVkStructures for Vec<T> {
         Ok(vs)
     }
 }
-#[cfg(feature = "async-rt-async-std")]
 impl<T: AsyncBinarySerializeVkStructures> AsyncBinarySerializeVkStructures for Vec<T> {
     // fn binary_serialize_async<'s>(
     //     &'s self,
@@ -560,21 +596,26 @@ impl<T: AsyncBinarySerializeVkStructures> AsyncBinarySerializeVkStructures for V
     //     }
     // }
 
-    fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
-    where
-        Self: Sized,
-    {
+    fn binary_deserialize_at_async<
+        'r,
+        Source: peridot_native_io::RandomReadBlobAsync + ?Sized + 'r,
+    >(
+        source: &'r Source,
+        pos: u64,
+    ) -> impl core::future::Future<Output = IOResult<(Self, usize)>> + use<'r, Source, T> {
         async move {
-            let VariableUInt(element_count) = VariableUInt::read_async(source).await?;
+            let mut read_size = 0usize;
+            let (VariableUInt(element_count), l) = VariableUInt::read_at_async(source, pos).await?;
+            read_size += l;
 
             let mut xs = Vec::with_capacity(element_count as _);
             for _ in 0..element_count {
-                xs.push(T::binary_deserialize_async(source).await?);
+                let (v, l) = T::binary_deserialize_at_async(source, pos + read_size as u64).await?;
+                xs.push(v);
+                read_size += l;
             }
 
-            Ok(xs)
+            Ok((xs, read_size))
         }
     }
 }
@@ -610,7 +651,6 @@ impl BinarySerializeVkStructures for SpvBinary {
             .map(|_| Self(buf))
     }
 }
-#[cfg(feature = "async-rt-async-std")]
 impl AsyncBinarySerializeVkStructures for SpvBinary {
     // fn binary_serialize_async<'s>(
     //     &'s self,
@@ -627,24 +667,32 @@ impl AsyncBinarySerializeVkStructures for SpvBinary {
     //     }
     // }
 
-    fn binary_deserialize_async<'r>(
-        source: &'r mut (impl async_std::io::BufRead + Unpin + ?Sized),
-    ) -> impl std::future::Future<Output = IOResult<Self>> + 'r
-    where
-        Self: Sized,
-    {
+    fn binary_deserialize_at_async<
+        'r,
+        Source: peridot_native_io::RandomReadBlobAsync + ?Sized + 'r,
+    >(
+        source: &'r Source,
+        pos: u64,
+    ) -> impl core::future::Future<Output = IOResult<(Self, usize)>> + use<'r, Source> {
         async move {
-            let VariableUInt(len) = VariableUInt::read_async(source).await?;
+            let mut read_size = 0usize;
+            let (VariableUInt(len), l) = VariableUInt::read_at_async(source, pos).await?;
+            read_size += l;
+
             let mut buf = Vec::with_capacity(len as _);
-            async_std::io::ReadExt::read_exact(source, unsafe {
-                core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.capacity() << 2)
-            })
-            .await?;
+            source
+                .read_exact_async(pos + read_size as u64, unsafe {
+                    core::slice::from_raw_parts_mut(
+                        buf.spare_capacity_mut().as_mut_ptr() as _,
+                        buf.capacity() << 2,
+                    )
+                })
+                .await?;
             unsafe {
-                buf.set_len(buf.capacity());
+                buf.set_len(len as _);
             }
 
-            Ok(Self(buf))
+            Ok((Self(buf), read_size + len as usize))
         }
     }
 }

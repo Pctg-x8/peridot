@@ -3,7 +3,9 @@ use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::str::from_utf8;
 
 use core::pin::Pin;
-use futures_io::{AsyncBufRead, AsyncRead};
+use futures_io::AsyncBufRead;
+use peridot_native_io::{BufferedRandomBlobReader, RandomReadBlobAsync};
+use pinned_futures_helper::read_exact_async_pinned;
 
 /// u32 to break apart into bytes
 pub struct UIntFragmentIterator(Option<u32>);
@@ -199,6 +201,22 @@ impl VariableUInt {
         assert!(consumed <= buf.len(), "too long VariableUInt");
         Ok((v, consumed))
     }
+
+    pub async fn read_at_buffered_async(
+        reader: &mut BufferedRandomBlobReader<impl RandomReadBlobAsync>,
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        let (mut v, mut shifts, mut reads) = (0u32, 0usize, 0usize);
+        loop {
+            let b = reader.read_byte_at_async(pos + reads as u64).await?;
+            v |= ((b & 0x7f) as u32) << shifts;
+            shifts += 7;
+            reads += 1;
+            if b & 0x80 == 0 {
+                break Ok((Self(v), reads));
+            }
+        }
+    }
 }
 
 /// octet variadic unsigned long integer
@@ -343,6 +361,22 @@ impl VariableULong {
         assert!(consumed <= buf.len(), "too long VariableULong");
         Ok((v, consumed))
     }
+
+    pub async fn read_at_buffered_async(
+        reader: &mut BufferedRandomBlobReader<impl RandomReadBlobAsync>,
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        let (mut v, mut shifts, mut reads) = (0u64, 0usize, 0usize);
+        loop {
+            let b = reader.read_byte_at_async(pos + reads as u64).await?;
+            v |= ((b & 0x7f) as u64) << shifts;
+            shifts += 7;
+            reads += 1;
+            if b & 0x80 == 0 {
+                break Ok((Self(v), reads));
+            }
+        }
+    }
 }
 
 /// a utf-8 string representation leading its byte length as `VariableUInt`.
@@ -428,6 +462,26 @@ impl PascalString {
             Err(e) => Err(IOError::other(e)),
         }
     }
+
+    pub async fn read_at_buffered_async(
+        reader: &mut BufferedRandomBlobReader<impl RandomReadBlobAsync>,
+        pos: u64,
+    ) -> IOResult<(Self, usize)> {
+        let (VariableUInt(byte_length), str_head) =
+            VariableUInt::read_at_buffered_async(reader, pos).await?;
+        let mut bytes = Vec::with_capacity(byte_length as _);
+        reader
+            .read_exact_at_async(pos + str_head as u64, bytes.spare_capacity_mut())
+            .await?;
+        unsafe {
+            bytes.set_len(byte_length as _);
+        }
+
+        match from_utf8(&bytes[..]) {
+            Ok(x) => Ok((Self(x.to_owned()), str_head + byte_length as usize)),
+            Err(e) => Err(IOError::other(e)),
+        }
+    }
 }
 impl<'s> PascalStr<'s> {
     pub fn from_bytes_head(bytes: &'s [u8]) -> Result<(Self, usize), core::str::Utf8Error> {
@@ -470,28 +524,6 @@ impl<'s> PascalStr<'s> {
 
         Ok(len_bytes + self.0.len())
     }
-}
-
-async fn read_exact_async_pinned(
-    mut reader: Pin<&mut (impl AsyncRead + ?Sized)>,
-    buf: &mut [core::mem::MaybeUninit<u8>],
-) -> IOResult<()> {
-    let mut ro = 0;
-    while ro < buf.len() {
-        let read = core::future::poll_fn(|cx| {
-            reader.as_mut().poll_read(cx, unsafe {
-                core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(&mut buf[ro..])
-            })
-        })
-        .await?;
-        if read == 0 {
-            return Err(ErrorKind::UnexpectedEof.into());
-        }
-
-        ro += read;
-    }
-
-    Ok(())
 }
 
 /// `buf.capacity()`以下で読めるだけ読む

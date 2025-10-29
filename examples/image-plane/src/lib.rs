@@ -46,13 +46,13 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
     #[cfg(windows)]
-    let async_io_reactor_thread = peridot_archive::native_io::windows::spawn_io_reactor_thread();
+    let async_io_reactor_thread = peridot::native_io::windows::spawn_io_reactor_thread();
     #[cfg(target_os = "linux")]
-    let async_io_reactor_thread = peridot_archive::native_io::linux::IoReactorThread::spawn();
+    let async_io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
 
     #[cfg(not(target_os = "macos"))]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
+        peridot::native_io::PlatformNativeFileReaderAsync::open(
             "../../examples/image-plane/assets/resources.par",
         )
         .expect("open resources.par"),
@@ -62,7 +62,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     .expect("load resources.par");
     #[cfg(target_os = "macos")]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
+        peridot::native_io::PlatformNativeFileReaderAsync::open(
             std::env::current_exe()
                 .expect("current_exe")
                 .parent()
@@ -96,7 +96,9 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     // TODO: streamingなassetが複数ある時に相性が悪い どうしたものか
     let bgm = Arc::new(RwLock::new(
-        e.load::<PreloadedPlayableWav>("bgm").expect("Loading BGM"),
+        e.load_async::<PreloadedPlayableWav>("bgm")
+            .await
+            .expect("Loading BGM"),
     ));
     e.audio_mixer().write().add_process(bgm.clone());
     e.audio_mixer().write().set_master_volume(0.5);
@@ -369,7 +371,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .expect("Creating Sampler");
     let single_smp_refs = [smp.as_transparent_ref()];
     let rc: prc::CompiledRenderingConfigurationVk = e
-        .load("builtin.rendering_configuration.unlit_image")
+        .load_async("builtin.rendering_configuration.unlit_image")
+        .await
         .expect("Loading rendering configuration");
     let dsl_rc = br::DescriptorSetLayoutObject::new(
         e.graphics().device().clone(),

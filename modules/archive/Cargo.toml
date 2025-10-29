@@ -23,5 +23,6 @@ zstd = "0.4"
 peridot-serialization-utils = { path = "../serialization-utils" }
 peridot-native-io = { path = "../native-io" }
 async-std = { workspace = true, optional = true }
+futures-io = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 bitflags = "2.8"

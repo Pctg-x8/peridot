@@ -15,7 +15,7 @@ use windows::{
         Storage::FileSystem::{
             CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_CREATION_DISPOSITION, FILE_FLAG_OVERLAPPED,
             FILE_FLAG_RANDOM_ACCESS, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE, FILE_SHARE_READ,
-            OPEN_EXISTING, ReadFile,
+            GetFileSizeEx, OPEN_EXISTING, ReadFile,
         },
         System::{
             IO::{
@@ -290,19 +290,35 @@ impl super::MemoryMapBlob for NativeFileBlobRandomReader {
         Ok(())
     }
 }
+impl super::BlobMetadata for NativeFileBlobRandomReader {
+    fn byte_length(&self) -> std::io::Result<u64> {
+        let mut size = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetFileSizeEx(self.0.handle(), size.as_mut_ptr())?;
+        }
+
+        Ok(unsafe { size.assume_init().cast_unsigned() })
+    }
+}
 impl super::RandomReadBlob for NativeFileBlobRandomReader {
     #[inline]
     fn read(&self, pos: u64, buf: &mut [core::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
         let mut read_bytes = 0;
-        unsafe {
+        let r = unsafe {
             self.0.read(
                 Some(buf),
                 Some(&mut read_bytes),
                 Some(&mut init_overlapped(pos, HANDLE(core::ptr::null_mut()))),
-            )?;
+            )
+        };
+        match r {
+            Ok(()) => Ok(read_bytes as _),
+            // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
+            Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => {
+                Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e))
+            }
+            Err(e) => Err(e.into()),
         }
-
-        Ok(read_bytes as _)
     }
 
     // no native readv support for Windows
@@ -551,6 +567,17 @@ impl super::MemoryMapBlob for NativeFileBlobAsyncRandomReader {
         FileMapping::unmap(data.base_addr)?;
 
         Ok(())
+    }
+}
+impl super::BlobMetadataAsync for NativeFileBlobAsyncRandomReader {
+    #[inline(always)]
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>> {
+        async move {
+            let mut size = core::mem::MaybeUninit::uninit();
+            unsafe { GetFileSizeEx(self.0.handle(), size.as_mut_ptr())? };
+
+            Ok(unsafe { size.assume_init().cast_unsigned() })
+        }
     }
 }
 impl super::RandomReadBlobAsync for NativeFileBlobAsyncRandomReader {

@@ -24,7 +24,7 @@ members = [
     "modules/semantic-shader",
     "modules/rendering-configuration",
     "modules/asset-processing",
-    "modules/native-io",
+    "modules/native-io", "base-lib/pinned-futures-helper",
 ]
 
 [workspace.dependencies]

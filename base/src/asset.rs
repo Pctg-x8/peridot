@@ -37,6 +37,7 @@ pub trait LogicalAssetData: Sized {
 }
 
 pub trait AssetBlob: peridot_native_io::RandomReadBlob + peridot_native_io::BlobMetadata {}
+impl AssetBlob for peridot_native_io::PlatformNativeFileReader {}
 
 pub trait FromAssetBlob: LogicalAssetData {
     type Error: From<IOError>;
@@ -53,6 +54,7 @@ pub trait AssetBlobAsync:
     peridot_native_io::RandomReadBlobAsync + peridot_native_io::BlobMetadataAsync
 {
 }
+impl AssetBlobAsync for peridot_native_io::PlatformNativeFileReaderAsync {}
 
 pub trait FromAssetBlobAsync: LogicalAssetData {
     type Error: From<IOError>;

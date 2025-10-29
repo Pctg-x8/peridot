@@ -60,9 +60,14 @@ pub struct RandomBlobAsyncReadSeekAdapter<'r, R: crate::RandomReadBlobAsync + 'r
 impl<'r, R: crate::RandomReadBlobAsync + 'r> RandomBlobAsyncReadSeekAdapter<'r, R> {
     #[inline(always)]
     pub const fn new(inner: &'r R) -> Self {
+        Self::with_pos(inner, 0)
+    }
+
+    #[inline(always)]
+    pub const fn with_pos(inner: &'r R, pos: u64) -> Self {
         Self {
             inner,
-            pos: 0,
+            pos,
             state: RandomBlobAsyncReadSeekAdapterState::Idle,
         }
     }

@@ -321,9 +321,14 @@ impl AssetProvider {
     }
 }
 impl peridot::PlatformAssetLoader for AssetProvider {
-    type Asset<'a> = std::fs::File;
+    type Asset<'a> = peridot::native_io::windows::NativeFileBlobRandomReader;
+    type AssetBlobAsync<'a>
+        = peridot::native_io::windows::NativeFileBlobAsyncRandomReader
+    where
+        Self: 'a;
     type StreamingAsset<'a> = std::fs::File;
 
+    #[tracing::instrument(name = "AssetProvider(windows)::get", skip(self))]
     fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::Asset<'a>> {
         #[allow(unused_mut)]
         let mut segments = path.split('.').peekable();
@@ -335,17 +340,48 @@ impl peridot::PlatformAssetLoader for AssetProvider {
             let mut p = self.builtin_assets_base.clone();
             p.extend(segments);
             p.set_extension(ext);
-            log::debug!("Loading Builtin Asset: {:?}", p);
+            tracing::debug!(realpath = ?p, "Loading Builtin Asset");
 
-            return std::fs::File::open(&p);
+            return peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p);
         }
 
         let mut p = self.base.clone();
         p.extend(segments);
         p.set_extension(ext);
-        log::debug!("Loading Asset: {:?}", p);
+        tracing::debug!(realpath = ?p, "Loading Asset");
 
-        std::fs::File::open(&p)
+        peridot::native_io::windows::NativeFileBlobRandomReader::open(&p)
+    }
+
+    #[tracing::instrument(name = "AssetProvider(windows)::get_async", skip(self))]
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = std::io::Result<Self::AssetBlobAsync<'a>>> {
+        async move {
+            #[allow(unused_mut)]
+            let mut segments = path.split('.').peekable();
+
+            #[cfg(feature = "IterationBuild")]
+            if segments.peek().map_or(false, |&s| s == "builtin") {
+                let _ = segments.next();
+
+                let mut p = self.builtin_assets_base.clone();
+                p.extend(segments);
+                p.set_extension(ext);
+                tracing::debug!(realpath = ?p, "Loading Builtin Asset");
+
+                return peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p);
+            }
+
+            let mut p = self.base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+            tracing::debug!(realpath = ?p, "Loading Asset");
+
+            peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p)
+        }
     }
 
     fn get_streaming<'a>(

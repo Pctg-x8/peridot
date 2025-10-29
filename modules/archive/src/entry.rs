@@ -1,3 +1,5 @@
+use core::pin::Pin;
+use futures_io::AsyncBufRead;
 use std::{
     hash::{Hash, Hasher},
     io::{BufRead, IoSlice, Result as IOResult, Write},
@@ -76,11 +78,8 @@ impl AssetEntryHeadingPair {
         })
     }
 
-    #[cfg(feature = "async-rt-async-std")]
-    pub async fn read_async(
-        reader: &mut (impl async_std::io::BufRead + Unpin + ?Sized),
-    ) -> IOResult<Self> {
-        let VariableULong(byte_length) = VariableULong::read_async(reader).await?;
+    pub async fn read_async(mut reader: Pin<&mut (impl AsyncBufRead + ?Sized)>) -> IOResult<Self> {
+        let VariableULong(byte_length) = VariableULong::read_async(reader.as_mut()).await?;
         let VariableULong(relative_offset) = VariableULong::read_async(reader).await?;
 
         Ok(Self {
