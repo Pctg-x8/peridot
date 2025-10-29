@@ -2,7 +2,8 @@ use core::pin::Pin;
 use image::codecs::hdr::{HdrDecoder, HdrMetadata};
 use image::{ImageDecoder, ImageError, ImageResult};
 use peridot::{
-    AssetBlob, DecodedPixelData, FromAssetBlob, LDRImageAsset, LogicalAssetData, PixelFormat,
+    AssetBlob, DecodedPixelData, FromAssetBlob, FromAssetBlobAsync, LDRImageAsset,
+    LogicalAssetData, PixelFormat,
 };
 use std::io::BufReader;
 
@@ -179,10 +180,26 @@ impl FromAssetBlob for StdTexture2DAsset {
 
     fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
         let buf = blob.read_to_end(0)?;
-        let buf = Pin::new(buf.into_boxed_slice());
+        let buf = Box::into_pin(buf.into_boxed_slice());
         let container = ktx::Texture2::from_memory(&buf, ktx::TextureCreateFlags::empty())
             .expect("Failed to load ktx2");
 
         Ok(Self(container, buf))
+    }
+}
+impl FromAssetBlobAsync for StdTexture2DAsset {
+    type Error = std::io::Error;
+
+    fn from_asset_blob_async<'a, Blob: peridot::AssetBlobAsync + 'a>(
+        blob: Blob,
+    ) -> impl core::future::Future<Output = Result<Self, Self::Error>> {
+        async move {
+            let buf = blob.read_to_end_async(0).await?;
+            let buf = Box::into_pin(buf.into_boxed_slice());
+            let container = ktx::Texture2::from_memory(&buf, ktx::TextureCreateFlags::empty())
+                .expect("Failed to load ktx2");
+
+            Ok(Self(container, buf))
+        }
     }
 }

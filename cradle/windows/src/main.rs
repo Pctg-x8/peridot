@@ -322,10 +322,7 @@ impl AssetProvider {
 }
 impl peridot::PlatformAssetLoader for AssetProvider {
     type Asset<'a> = peridot::native_io::windows::NativeFileBlobRandomReader;
-    type AssetBlobAsync<'a>
-        = peridot::native_io::windows::NativeFileBlobAsyncRandomReader
-    where
-        Self: 'a;
+    type AssetBlobAsync<'a> = peridot::native_io::windows::NativeFileBlobAsyncRandomReader;
     type StreamingAsset<'a> = std::fs::File;
 
     #[tracing::instrument(name = "AssetProvider(windows)::get", skip(self))]

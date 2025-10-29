@@ -75,8 +75,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     .await
     .expect("load resources.par");
 
-    let mut image_data: peridot_image::StdTexture2DAsset =
-        e.load("images.example").expect("No image found");
+    let (mut image_data, bgm): (peridot_image::StdTexture2DAsset, PreloadedPlayableWav) =
+        futures_util::try_join!(e.load_async("images.example"), e.load_async("bgm"))
+            .expect("asset loading");
+
     if image_data.0.needs_transcoding() {
         // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
         image_data
@@ -95,11 +97,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     // debug!("ImageFormat: {:?}", image_data.0.vk_format());
 
     // TODO: streamingなassetが複数ある時に相性が悪い どうしたものか
-    let bgm = Arc::new(RwLock::new(
-        e.load_async::<PreloadedPlayableWav>("bgm")
-            .await
-            .expect("Loading BGM"),
-    ));
+    let bgm = Arc::new(RwLock::new(bgm));
     e.audio_mixer().write().add_process(bgm.clone());
     e.audio_mixer().write().set_master_volume(0.5);
 

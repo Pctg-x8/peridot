@@ -27,5 +27,6 @@ ktx = { path = "../../thirdparty/ktx" }
 peridot-archive = { path = "../../modules/archive", features = [
     "async-rt-async-std",
 ] }
+futures-util = "0.3"
 
 log = "0.4"
