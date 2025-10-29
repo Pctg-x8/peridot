@@ -49,7 +49,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let async_io_reactor_thread = peridot::native_io::windows::spawn_io_reactor_thread();
     #[cfg(target_os = "linux")]
     let async_io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
+    #[cfg(target_os = "android")]
+    let async_io_reactor_thread = peridot::native_io::android::BackgroundIoWorkerPool::spawn();
 
+    #[cfg(not(target_os = "android"))]
     #[cfg(not(target_os = "macos"))]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
         peridot::native_io::PlatformNativeFileReaderAsync::open(
@@ -60,6 +63,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     )
     .await
     .expect("load resources.par");
+    #[cfg(not(target_os = "android"))]
     #[cfg(target_os = "macos")]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
         peridot::native_io::PlatformNativeFileReaderAsync::open(

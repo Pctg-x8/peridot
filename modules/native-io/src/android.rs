@@ -41,11 +41,6 @@ impl BundledAsset {
 #[repr(transparent)]
 pub struct BundledAssetRandomReader(BundledAsset);
 impl BundledAssetRandomReader {
-    pub fn open(_path: impl AsRef<Path>) -> std::io::Result<Self> {
-        unimplemented!()
-    }
-}
-impl BundledAssetRandomReader {
     #[inline(always)]
     pub const fn from_asset_ptr(asset: NonNull<android::AAsset>) -> Self {
         Self(BundledAsset(asset))
@@ -135,11 +130,6 @@ impl BundledAssetAsyncRandomReader {
         Self {
             asset: BundledAsset(asset),
         }
-    }
-}
-impl BundledAssetAsyncRandomReader {
-    pub fn open(_path: impl AsRef<Path>) -> std::io::Result<Self> {
-        unimplemented!()
     }
 }
 impl super::BlobMetadataAsync for BundledAssetAsyncRandomReader {
