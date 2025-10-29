@@ -3,6 +3,8 @@ use std::io::{IoSliceMut, Result as IOResult};
 
 mod adapter;
 pub use adapter::*;
+mod buffered;
+pub use buffered::*;
 
 #[cfg(target_os = "android")]
 pub mod android;
@@ -111,6 +113,39 @@ pub trait RandomReadBlob {
         Ok(buf)
     }
 }
+impl<'t, T> RandomReadBlob for &'t T
+where
+    T: RandomReadBlob + ?Sized + 't,
+{
+    #[inline(always)]
+    fn read(&self, pos: u64, buf: &mut [MaybeUninit<u8>]) -> std::io::Result<usize> {
+        T::read(*self, pos, buf)
+    }
+
+    #[inline(always)]
+    fn readv(&self, offs: u64, iovecs: &mut [IoSliceMut]) -> std::io::Result<usize> {
+        T::readv(*self, offs, iovecs)
+    }
+
+    #[inline(always)]
+    fn read_exact(&self, offs: u64, buf: &mut [MaybeUninit<u8>]) -> std::io::Result<()> {
+        T::read_exact(*self, offs, buf)
+    }
+
+    #[inline(always)]
+    fn read_to_end(&self, offs: u64) -> std::io::Result<Vec<u8>> {
+        T::read_to_end(*self, offs)
+    }
+
+    #[inline(always)]
+    fn readv_all<'a, 'b, 'bb>(
+        &'a self,
+        offs: u64,
+        iovecs: &'b mut [IoSliceMut<'bb>],
+    ) -> std::io::Result<()> {
+        T::readv_all(*self, offs, iovecs)
+    }
+}
 
 /// Read-only random accessible Blob operations(asynchronous).
 pub trait RandomReadBlobAsync {
@@ -171,7 +206,7 @@ pub trait RandomReadBlobAsync {
     }
 
     fn read_to_end_async<'a>(
-        &'a mut self,
+        &'a self,
         offs: u64,
     ) -> impl core::future::Future<Output = IOResult<Vec<u8>>> + use<'a, Self> {
         async move {
@@ -204,6 +239,64 @@ pub trait RandomReadBlobAsync {
         }
     }
 }
+impl<'t, T> RandomReadBlobAsync for &'t T
+where
+    T: RandomReadBlobAsync + ?Sized + 't,
+{
+    type ReadFuture<'a, 'b>
+        = T::ReadFuture<'a, 'b>
+    where
+        Self: 'a;
+    type ReadVecFuture<'a, 'b, 'bb>
+        = T::ReadVecFuture<'a, 'b, 'bb>
+    where
+        Self: 'a,
+        'bb: 'b;
+
+    #[inline(always)]
+    fn read_async<'a, 'b>(
+        &'a self,
+        offs: u64,
+        buf: &'b mut [MaybeUninit<u8>],
+    ) -> Self::ReadFuture<'a, 'b> {
+        T::read_async(*self, offs, buf)
+    }
+
+    #[inline(always)]
+    fn readv_async<'a, 'b, 'bb>(
+        &'a self,
+        offs: u64,
+        iovecs: &'b mut [IoSliceMut<'bb>],
+    ) -> Self::ReadVecFuture<'a, 'b, 'bb> {
+        T::readv_async(*self, offs, iovecs)
+    }
+
+    #[inline(always)]
+    fn read_exact_async<'a, 'b>(
+        &'a self,
+        offs: u64,
+        buf: &'b mut [MaybeUninit<u8>],
+    ) -> impl core::future::Future<Output = IOResult<()>> + use<'a, 'b, 't, T> {
+        T::read_exact_async(*self, offs, buf)
+    }
+
+    #[inline(always)]
+    fn read_to_end_async<'a>(
+        &'a self,
+        offs: u64,
+    ) -> impl core::future::Future<Output = IOResult<Vec<u8>>> + use<'a, 't, T> {
+        T::read_to_end_async(*self, offs)
+    }
+
+    #[inline(always)]
+    fn readv_all_async<'a, 'b, 'bb>(
+        &'a self,
+        offs: u64,
+        iovecs: &'b mut [IoSliceMut<'bb>],
+    ) -> impl core::future::Future<Output = std::io::Result<()>> + use<'a, 'b, 'bb, 't, T> {
+        T::readv_all_async(*self, offs, iovecs)
+    }
+}
 
 /// An Blob object that can be mapped into a memory.
 pub trait MemoryMapBlob {
@@ -215,4 +308,24 @@ pub trait MemoryMapBlob {
         len: usize,
     ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)>;
     fn munmap(&self, data: Self::MemoryUnmapData) -> std::io::Result<()>;
+}
+impl<'t, T> MemoryMapBlob for &'t T
+where
+    T: MemoryMapBlob + ?Sized + 't,
+{
+    type MemoryUnmapData = T::MemoryUnmapData;
+
+    #[inline(always)]
+    fn mmap(
+        &self,
+        offs: u64,
+        len: usize,
+    ) -> std::io::Result<(*mut core::ffi::c_void, Self::MemoryUnmapData)> {
+        T::mmap(*self, offs, len)
+    }
+
+    #[inline(always)]
+    fn munmap(&self, data: Self::MemoryUnmapData) -> std::io::Result<()> {
+        T::munmap(*self, data)
+    }
 }
