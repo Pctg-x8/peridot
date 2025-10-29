@@ -328,7 +328,8 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset<'a> = native_wrapper::Asset;
+    type Asset<'a> = peridot::native_io::android::BundledAssetRandomReader;
+    type AssetBlobAsync<'a> = peridot::native_io::android::BundledAssetAsyncRandomReader;
     type StreamingAsset<'a> = native_wrapper::Asset;
 
     fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
@@ -336,10 +337,37 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
-        self.amgr
-            .write()
-            .open(&path_str, AASSET_MODE_RANDOM)
-            .ok_or(IOError::new(ErrorKind::NotFound, ""))
+        Ok(
+            peridot::native_io::android::BundledAssetRandomReader::from_asset_ptr(
+                self.amgr
+                    .write()
+                    .open(&path_str, AASSET_MODE_RANDOM)
+                    .ok_or(IOError::new(ErrorKind::NotFound, ""))?
+                    .leak(),
+            ),
+        )
+    }
+
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
+        async move {
+            let mut path_str = path.replace(".", "/");
+            path_str.push('.');
+            path_str.push_str(ext);
+            let path_str = CString::new(path_str).expect("converting path");
+            Ok(
+                peridot::native_io::android::BundledAssetAsyncRandomReader::from_asset_ptr(
+                    self.amgr
+                        .write()
+                        .open(&path_str, AASSET_MODE_RANDOM)
+                        .ok_or(IOError::new(ErrorKind::NotFound, ""))?
+                        .leak(),
+                ),
+            )
+        }
     }
 
     fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {

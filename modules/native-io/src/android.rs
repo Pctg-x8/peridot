@@ -45,6 +45,18 @@ impl BundledAssetRandomReader {
         unimplemented!()
     }
 }
+impl BundledAssetRandomReader {
+    #[inline(always)]
+    pub const fn from_asset_ptr(asset: NonNull<android::AAsset>) -> Self {
+        Self(BundledAsset(asset))
+    }
+}
+impl super::BlobMetadata for BundledAssetRandomReader {
+    #[inline]
+    fn byte_length(&self) -> std::io::Result<u64> {
+        Ok(unsafe { android::AAsset_getLength64(self.0.0.as_ptr()).cast_unsigned() })
+    }
+}
 impl super::RandomReadBlob for BundledAssetRandomReader {
     fn read(&self, pos: u64, buf: &mut [core::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
         // preadないのでseekしてからreadする
@@ -118,8 +130,22 @@ pub struct BundledAssetAsyncRandomReader {
     asset: BundledAsset,
 }
 impl BundledAssetAsyncRandomReader {
+    #[inline(always)]
+    pub const fn from_asset_ptr(asset: NonNull<android::AAsset>) -> Self {
+        Self {
+            asset: BundledAsset(asset),
+        }
+    }
+}
+impl BundledAssetAsyncRandomReader {
     pub fn open(_path: impl AsRef<Path>) -> std::io::Result<Self> {
         unimplemented!()
+    }
+}
+impl super::BlobMetadataAsync for BundledAssetAsyncRandomReader {
+    #[inline]
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>> {
+        async move { Ok(unsafe { android::AAsset_getLength64(self.asset.0.as_ptr()).cast_unsigned() }) }
     }
 }
 impl super::RandomReadBlobAsync for BundledAssetAsyncRandomReader {
