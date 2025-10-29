@@ -2,6 +2,9 @@ use std::io::prelude::{BufRead, Write};
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::str::from_utf8;
 
+use core::pin::Pin;
+use futures_io::{AsyncBufRead, AsyncRead};
+
 /// u32 to break apart into bytes
 pub struct UIntFragmentIterator(Option<u32>);
 impl From<u32> for UIntFragmentIterator {
@@ -36,6 +39,8 @@ impl Iterator for UIntFragmentIterator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VariableUInt(pub u32);
 impl VariableUInt {
+    pub const MAX_BYTE_LENGTH: usize = 32usize.div_ceil(7); // 32bit全部が7bitずつ入ったときが最大長
+
     pub fn from_bytes_head(bytes: &[u8]) -> (Self, usize) {
         let (mut v, mut shifts, mut read_bytes) = (0u32, 0u8, 0usize);
         for b in bytes {
@@ -103,6 +108,37 @@ impl VariableUInt {
         }
     }
 
+    pub async fn read_async(mut reader: Pin<&mut (impl AsyncBufRead + ?Sized)>) -> IOResult<Self> {
+        let (mut v, mut shifts) = (0u32, 0usize);
+
+        loop {
+            let done = core::future::poll_fn(|cx| {
+                let mut available = core::task::ready!(reader.as_mut().poll_fill_buf(cx))?;
+
+                let (mut consumed, mut done) = (0, false);
+                while !available.is_empty() {
+                    v |= ((available[0] & 0x7f) as u32) << shifts;
+                    shifts += 7;
+                    consumed += 1;
+                    if (available[0] & 0x80) == 0 {
+                        done = true;
+                        break;
+                    }
+
+                    available = &available[1..];
+                }
+
+                reader.as_mut().consume(consumed);
+                core::task::Poll::Ready(Ok::<_, IOError>(done))
+            })
+            .await?;
+
+            if done {
+                return Ok(Self(v));
+            }
+        }
+    }
+
     pub fn read_with_byte_count(reader: &mut (impl BufRead + ?Sized)) -> IOResult<(Self, usize)> {
         let (mut v, mut shifts, mut byte_count) = (0u32, 0usize, 0usize);
         loop {
@@ -138,117 +174,30 @@ impl VariableUInt {
         }
     }
 
-    fn decode_bytes_limited(bytes: &[u8]) -> Option<(Self, usize)> {
-        let (mut v, mut shifts, mut consumed) = (0u32, 0usize, 0);
-        while consumed < bytes.len() {
-            let (ve, has_next) = (bytes[consumed] & 0x7f, bytes[consumed] & 0x80 != 0);
-            consumed += 1;
-            v |= (ve as u32) << shifts;
-            shifts += 7;
-
-            if !has_next {
-                // here is last byte
-                return Some((Self(v), consumed));
-            }
-        }
-
-        None
-    }
-
     pub fn read_at(
         reader: &(impl peridot_native_io::RandomReadBlob + ?Sized),
         pos: u64,
     ) -> IOResult<(Self, usize)> {
-        const MAX_LENGTH: usize = 32usize.div_ceil(7); // 32bit全部が7bitずつ入ったときが最大長
+        // 読めるだけ読む（ケツの方だとMAX_BYTE_LENGTH未満しかない場合は全然ある）
+        let mut buf = Vec::with_capacity(Self::MAX_BYTE_LENGTH);
+        read_at_try_fill_capacity(reader, pos, &mut buf)?;
 
-        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
-        let mut rpos = pos;
-        let mut buf = Vec::with_capacity(MAX_LENGTH);
-        while buf.len() < buf.capacity() {
-            match reader.read(rpos, buf.spare_capacity_mut()) {
-                Ok(r) => {
-                    unsafe {
-                        buf.set_len(buf.len() + r);
-                    }
-                    rpos += r as u64;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    break;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableUInt?"))
+        let (v, consumed) = Self::from_bytes_head(&buf);
+        assert!(consumed <= buf.len(), "too long VariableUInt");
+        Ok((v, consumed))
     }
 
     pub async fn read_at_async(
         reader: &(impl peridot_native_io::RandomReadBlobAsync + ?Sized),
         pos: u64,
     ) -> IOResult<(Self, usize)> {
-        const MAX_LENGTH: usize = 32usize.div_ceil(7); // 32bit全部が7bitずつ入ったときが最大長
+        // 読めるだけ読む（ケツの方だとMAX_BYTE_LENGTH未満しかない場合は全然ある）
+        let mut buf = Vec::with_capacity(Self::MAX_BYTE_LENGTH);
+        read_at_try_fill_capacity_async(reader, pos, &mut buf).await?;
 
-        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
-        let mut rpos = pos;
-        let mut buf = Vec::with_capacity(MAX_LENGTH);
-        while buf.len() < buf.capacity() {
-            match reader.read_async(rpos, buf.spare_capacity_mut()).await {
-                Ok(r) => {
-                    unsafe {
-                        buf.set_len(buf.len() + r);
-                    }
-                    rpos += r as u64;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    break;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableUInt?"))
-    }
-
-    #[cfg(feature = "async-rt-async-std")]
-    pub async fn read_async(
-        reader: &mut (impl async_std::io::BufRead + ?Sized + Unpin),
-    ) -> IOResult<Self> {
-        let (mut v, mut shifts) = (0u32, 0usize);
-
-        loop {
-            let done = std::future::poll_fn(|cx| {
-                let available = match std::task::ready!(async_std::io::BufRead::poll_fill_buf(
-                    std::pin::Pin::new(reader),
-                    cx
-                )) {
-                    Ok(v) => v,
-                    Err(e) if e.kind() == ErrorKind::Interrupted => {
-                        return std::task::Poll::Ready(Ok(false))
-                    }
-                    Err(e) => return std::task::Poll::Ready(Err(e)),
-                };
-                let (mut consumed, mut done) = (0, false);
-                while consumed < available.len() {
-                    v |= ((available[consumed] & 0x7f) as u32) << shifts;
-                    shifts += 7;
-                    consumed += 1;
-
-                    if (available[consumed - 1] & 0x80) == 0 {
-                        // last byte
-                        done = true;
-                        break;
-                    }
-                }
-
-                async_std::io::BufRead::consume(std::pin::Pin::new(reader), consumed);
-                std::task::Poll::Ready(Ok(done))
-            })
-            .await?;
-
-            if done {
-                break Ok(VariableUInt(v));
-            }
-        }
+        let (v, consumed) = Self::from_bytes_head(&buf);
+        assert!(consumed <= buf.len(), "too long VariableUInt");
+        Ok((v, consumed))
     }
 }
 
@@ -257,6 +206,8 @@ impl VariableUInt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VariableULong(pub u64);
 impl VariableULong {
+    pub const MAX_BYTE_LENGTH: usize = 64usize.div_ceil(7); // 64bit全部が7bitずつ入ったときが最大長
+
     pub fn to_bytes(&self) -> Vec<u8> {
         if self.0 == 0 {
             return vec![0];
@@ -337,24 +288,12 @@ impl VariableULong {
         }
     }
 
-    #[cfg(feature = "async-rt-async-std")]
-    pub async fn read_async(
-        reader: &mut (impl async_std::io::BufRead + ?Sized + Unpin),
-    ) -> IOResult<Self> {
+    pub async fn read_async(mut reader: Pin<&mut (impl AsyncBufRead + ?Sized)>) -> IOResult<Self> {
         let (mut v, mut shifts) = (0u64, 0usize);
 
         loop {
-            let done = std::future::poll_fn(|cx| {
-                let available = match std::task::ready!(async_std::io::BufRead::poll_fill_buf(
-                    std::pin::Pin::new(reader),
-                    cx
-                )) {
-                    Ok(v) => v,
-                    Err(e) if e.kind() == ErrorKind::Interrupted => {
-                        return std::task::Poll::Ready(Ok(false))
-                    }
-                    Err(e) => return std::task::Poll::Ready(Err(e)),
-                };
+            let done = core::future::poll_fn(|cx| {
+                let available = core::task::ready!(reader.as_mut().poll_fill_buf(cx))?;
 
                 let (mut consumed, mut done) = (0, false);
                 for b in available {
@@ -363,92 +302,46 @@ impl VariableULong {
                     consumed += 1;
 
                     if b & 0x80 == 0 {
-                        // last byte
                         done = true;
                         break;
                     }
                 }
 
-                async_std::io::BufRead::consume(std::pin::Pin::new(reader), consumed);
-                std::task::Poll::Ready(Ok(done))
+                reader.as_mut().consume(consumed);
+                core::task::Poll::Ready(Ok::<_, IOError>(done))
             })
             .await?;
 
             if done {
-                break Ok(Self(v));
+                return Ok(Self(v));
             }
         }
-    }
-
-    fn decode_bytes_limited(bytes: &[u8]) -> Option<(Self, usize)> {
-        let (mut v, mut shifts, mut consumed) = (0u64, 0usize, 0);
-        while consumed < bytes.len() {
-            let (ve, has_next) = (bytes[consumed] & 0x7f, bytes[consumed] & 0x80 != 0);
-            consumed += 1;
-            v |= (ve as u64) << shifts;
-            shifts += 7;
-
-            if !has_next {
-                // here is last byte
-                return Some((Self(v), consumed));
-            }
-        }
-
-        None
     }
 
     pub fn read_at(
         reader: &(impl peridot_native_io::RandomReadBlob + ?Sized),
         pos: u64,
     ) -> IOResult<(Self, usize)> {
-        const MAX_LENGTH: usize = 64usize.div_ceil(7); // 64bit全部が7bitずつ入ったときが最大長
+        // 読めるだけ読む（ケツの方だとMAX_BYTE_LENGTH未満しかない場合は全然ある）
+        let mut buf = Vec::with_capacity(Self::MAX_BYTE_LENGTH);
+        read_at_try_fill_capacity(reader, pos, &mut buf)?;
 
-        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
-        let mut rpos = pos;
-        let mut buf = Vec::with_capacity(MAX_LENGTH);
-        while buf.len() < buf.capacity() {
-            match reader.read(rpos, buf.spare_capacity_mut()) {
-                Ok(r) => {
-                    unsafe {
-                        buf.set_len(buf.len() + r);
-                    }
-                    rpos += r as u64;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    break;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableULong?"))
+        let (v, consumed) = Self::from_bytes_head(&buf);
+        assert!(consumed <= buf.len(), "too long VariableULong");
+        Ok((v, consumed))
     }
 
     pub async fn read_at_async(
         reader: &(impl peridot_native_io::RandomReadBlobAsync + ?Sized),
         pos: u64,
     ) -> IOResult<(Self, usize)> {
-        const MAX_LENGTH: usize = 64usize.div_ceil(7); // 64bit全部が7bitずつ入ったときが最大長
+        // 読めるだけ読む（ケツの方だとMAX_BYTE_LENGTH未満しかない場合は全然ある）
+        let mut buf = Vec::with_capacity(Self::MAX_BYTE_LENGTH);
+        read_at_try_fill_capacity_async(reader, pos, &mut buf).await?;
 
-        // 読めるだけ読む（ケツの方だとMAX_LENGTH未満しかない場合は全然ある）
-        let mut rpos = pos;
-        let mut buf = Vec::with_capacity(MAX_LENGTH);
-        while buf.len() < buf.capacity() {
-            match reader.read_async(rpos, buf.spare_capacity_mut()).await {
-                Ok(r) => {
-                    unsafe {
-                        buf.set_len(buf.len() + r);
-                    }
-                    rpos += r as u64;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    break;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-
-        Ok(Self::decode_bytes_limited(&buf).expect("too long VariableULong?"))
+        let (v, consumed) = Self::from_bytes_head(&buf);
+        assert!(consumed <= buf.len(), "too long VariableULong");
+        Ok((v, consumed))
     }
 }
 
@@ -485,26 +378,18 @@ impl PascalString {
             .map_err(IOError::other)
     }
 
-    #[cfg(feature = "async-rt-async-std")]
-    pub async fn read_async(
-        reader: &mut (impl async_std::io::BufRead + ?Sized + Unpin),
-    ) -> IOResult<Self> {
-        let VariableUInt(byte_length) = VariableUInt::read_async(reader).await?;
-
-        let mut bytes = Vec::<u8>::with_capacity(byte_length as _);
-        async_std::io::ReadExt::read_exact(reader, unsafe {
-            core::mem::transmute::<&mut [core::mem::MaybeUninit<u8>], &mut [u8]>(
-                bytes.spare_capacity_mut(),
-            )
-        })
-        .await?;
+    pub async fn read_async(mut reader: Pin<&mut (impl AsyncBufRead + ?Sized)>) -> IOResult<Self> {
+        let VariableUInt(byte_length) = VariableUInt::read_async(reader.as_mut()).await?;
+        let mut bytes = Vec::with_capacity(byte_length as _);
+        read_exact_async_pinned(reader, bytes.spare_capacity_mut()).await?;
         unsafe {
-            bytes.set_len(bytes.capacity());
+            bytes.set_len(byte_length as _);
         }
 
-        from_utf8(&bytes[..])
-            .map(|s| Self(s.to_owned()))
-            .map_err(IOError::other)
+        match from_utf8(&bytes) {
+            Ok(x) => Ok(Self(x.to_owned())),
+            Err(e) => Err(IOError::other(e)),
+        }
     }
 
     pub fn read_at(
@@ -585,4 +470,76 @@ impl<'s> PascalStr<'s> {
 
         Ok(len_bytes + self.0.len())
     }
+}
+
+async fn read_exact_async_pinned(
+    mut reader: Pin<&mut (impl AsyncRead + ?Sized)>,
+    buf: &mut [core::mem::MaybeUninit<u8>],
+) -> IOResult<()> {
+    let mut ro = 0;
+    while ro < buf.len() {
+        let read = core::future::poll_fn(|cx| {
+            reader.as_mut().poll_read(cx, unsafe {
+                core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(&mut buf[ro..])
+            })
+        })
+        .await?;
+        if read == 0 {
+            return Err(ErrorKind::UnexpectedEof.into());
+        }
+
+        ro += read;
+    }
+
+    Ok(())
+}
+
+/// `buf.capacity()`以下で読めるだけ読む
+fn read_at_try_fill_capacity(
+    reader: &(impl peridot_native_io::RandomReadBlob + ?Sized),
+    pos: u64,
+    buf: &mut Vec<u8>,
+) -> IOResult<()> {
+    let mut rpos = pos;
+    while buf.len() < buf.capacity() {
+        match reader.read(rpos, buf.spare_capacity_mut()) {
+            Ok(r) => {
+                unsafe {
+                    buf.set_len(buf.len() + r);
+                }
+                rpos += r as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
+}
+
+/// `buf.capacity()`以下で読めるだけ読む（非同期）
+async fn read_at_try_fill_capacity_async(
+    reader: &(impl peridot_native_io::RandomReadBlobAsync + ?Sized),
+    pos: u64,
+    buf: &mut Vec<u8>,
+) -> IOResult<()> {
+    let mut rpos = pos;
+    while buf.len() < buf.capacity() {
+        match reader.read_async(rpos, buf.spare_capacity_mut()).await {
+            Ok(r) => {
+                unsafe {
+                    buf.set_len(buf.len() + r);
+                }
+                rpos += r as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Ok(())
 }

@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-exclude = ["extras/", "cradle/", "examples/", "tools/", "thirdparty/", "build-script-helper/", "platform/"]
+exclude = [
+    "extras/",
+    "cradle/",
+    "examples/",
+    "tools/",
+    "thirdparty/",
+    "build-script-helper/",
+    "platform/",
+]
 members = [
     "base",
     "derive",
@@ -16,7 +24,7 @@ members = [
     "modules/semantic-shader",
     "modules/rendering-configuration",
     "modules/asset-processing",
-    "modules/native-io"
+    "modules/native-io",
 ]
 
 [workspace.dependencies]
@@ -24,6 +32,7 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 tracing = "0.1"
 async-std = "1.13"
 futures-util = "0.3"
+futures-io = "0.3"
 cfg-if = "1.0"
 thiserror = "2.0"
 
