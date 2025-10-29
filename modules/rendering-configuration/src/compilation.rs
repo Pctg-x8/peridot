@@ -20,11 +20,14 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
     let mut state = ParserState::new(ctx);
     let mut toplevel_elements = Vec::new();
     while !state.is_finished() {
-        let Some(top) = ToplevelElement::parse(&mut state) else {
-            break;
-        };
-
-        toplevel_elements.push(top);
+        match ToplevelElement::parse(&mut state) {
+            Ok(Some(top)) => toplevel_elements.push(top),
+            Ok(None) => break,
+            Err(e) => {
+                tracing::error!(reason = ?e, "Failed to parse rendering configuration source");
+                return None;
+            }
+        }
     }
 
     let rc = RenderingConfiguration::new(toplevel_elements);

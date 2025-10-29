@@ -24,7 +24,8 @@ members = [
     "modules/semantic-shader",
     "modules/rendering-configuration",
     "modules/asset-processing",
-    "modules/native-io", "base-lib/pinned-futures-helper",
+    "modules/native-io",
+    "base-lib/pinned-futures-helper",
 ]
 
 [workspace.dependencies]
@@ -41,6 +42,7 @@ unwrap_used = "deny"
 manual_div_ceil = "allow"
 needless_lifetimes = "allow"
 manual_async_fn = "allow"
+upper_case_acronyms = "allow"
 
 # defaultは基本使わない方針なのでそれ関係のlintは無視する
 unwrap_or_default = "allow"
