@@ -1,12 +1,15 @@
 use std::path::PathBuf;
 
-use build_script_helper::{peridot_build_skip_cdeps, peridot_build_switch_enable};
+use build_script_helper::{
+    peridot_build_skip_cdeps, peridot_build_switch_enable, peridot_build_watch_skip_cdeps,
+};
 
 fn main() {
     build_cdeps();
 }
 
 fn build_cdeps() {
+    peridot_build_watch_skip_cdeps();
     if peridot_build_skip_cdeps() {
         return;
     }
@@ -44,7 +47,9 @@ fn build_cdeps() {
             ))
             // aarch64ではSSEつかえないので切る
             .arg("-DBASISU_SUPPORT_SSE=OFF")
-            .arg("-GNinja");
+            .arg("-GNinja")
+            // shared libだとsoをapkに封入する必要があって面倒なのでstatic libにする
+            .arg("-DBUILD_SHARED_LIBS=OFF");
         }
 
         let r = cmd
