@@ -123,10 +123,20 @@ impl<F: peridot_native_io::RandomReadBlob> RIFFLoader<F> {
     pub fn new(reader: F) -> std::io::Result<Self> {
         let riff_chunk_start =
             seek_next_fourcc(&reader, 0, Fourcc::RIFF)? + RIFFChunkHeader::BYTE_LENGTH as u64;
+        let mut file_type = core::mem::MaybeUninit::<u32>::uninit();
+        reader.read_exact(riff_chunk_start, unsafe {
+            &mut *file_type
+                .as_mut_ptr()
+                .cast::<[core::mem::MaybeUninit<u8>; 4]>()
+        })?;
+        assert!(
+            unsafe { file_type.assume_init().to_le_bytes() == *b"WAVE" },
+            "not a WAVE file"
+        );
 
         Ok(RIFFLoader {
             reader,
-            riff_chunk_start,
+            riff_chunk_start: riff_chunk_start + 4,
             riff_subchunk_offsets: BTreeMap::new(),
         })
     }
@@ -387,10 +397,22 @@ impl<F: peridot_native_io::RandomReadBlobAsync> RIFFLoaderAsync<F> {
     pub async fn new(reader: F) -> std::io::Result<Self> {
         let riff_chunk_start = seek_next_fourcc_async(&reader, 0, Fourcc::RIFF).await?
             + RIFFChunkHeader::BYTE_LENGTH as u64;
+        let mut file_type = core::mem::MaybeUninit::<u32>::uninit();
+        reader
+            .read_exact_async(riff_chunk_start, unsafe {
+                &mut *file_type
+                    .as_mut_ptr()
+                    .cast::<[core::mem::MaybeUninit<u8>; 4]>()
+            })
+            .await?;
+        assert!(
+            unsafe { file_type.assume_init().to_le_bytes() == *b"WAVE" },
+            "not a WAVE file"
+        );
 
         Ok(Self {
             reader,
-            riff_chunk_start,
+            riff_chunk_start: riff_chunk_start + 4,
             subchunk_offsets: BTreeMap::new(),
         })
     }
