@@ -336,6 +336,13 @@ impl NativeFileReader {
         )?))
     }
 }
+impl super::BlobMetadata for NativeFileReader {
+    fn byte_length(&self) -> std::io::Result<u64> {
+        let mut st = core::mem::MaybeUninit::uninit();
+        self.0.stat(&mut st)?;
+        Ok(unsafe { st.assume_init_ref().st_size.cast_unsigned() })
+    }
+}
 impl super::RandomReadBlob for NativeFileReader {
     #[inline(always)]
     fn read(&self, offs: u64, buf: &mut [std::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
@@ -397,6 +404,15 @@ impl NativeFileAsyncReader {
         core::mem::forget(f);
 
         Ok(Self { dch: dio, fd })
+    }
+}
+impl super::BlobMetadataAsync for NativeFileAsyncReader {
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>> {
+        async move {
+            let mut st = core::mem::MaybeUninit::uninit();
+            UnixFile::stat_raw(self.fd, &mut st)?;
+            Ok(unsafe { st.assume_init_ref().st_size.cast_unsigned() })
+        }
     }
 }
 impl super::RandomReadBlobAsync for NativeFileAsyncReader {
@@ -489,6 +505,9 @@ impl<'a, 'b> core::future::Future for NativeFileReadFuture<'a, 'b> {
         match unsafe { *this.state.get() } {
             NativeFileReadState::Init => {
                 *this.state.get_mut() = NativeFileReadState::Pending;
+                let id = this as *mut _ as usize;
+                let fd = this.f.fd;
+                println!("read req {} {} {fd} {id}", this.pos, this.buf.len());
                 this.f.dch.read(
                     this.pos as _,
                     this.buf.len(),
@@ -501,6 +520,7 @@ impl<'a, 'b> core::future::Future for NativeFileReadFuture<'a, 'b> {
                         let transferred_accum = AtomicUsize::new(0);
 
                         move |done, data, error| {
+                            println!("read ret {done} {data:p} {error} {fd} {id}");
                             if error != 0 {
                                 // err
                                 unsafe {

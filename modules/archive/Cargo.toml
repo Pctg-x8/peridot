@@ -26,3 +26,4 @@ async-std = { workspace = true, optional = true }
 futures-io = { workspace = true }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 bitflags = "2.8"
+pin-project = "1.1"

@@ -65,6 +65,25 @@ impl UnixFile {
     }
 
     #[inline]
+    pub fn stat_raw(
+        fd: RawFd,
+        buf: &mut core::mem::MaybeUninit<libc::stat>,
+    ) -> std::io::Result<()> {
+        let r = unsafe { libc::fstat(fd, buf.as_mut_ptr()) };
+        if r < 0 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    #[inline]
+    pub fn stat(&self, buf: &mut core::mem::MaybeUninit<libc::stat>) -> std::io::Result<()> {
+        Self::stat_raw(self.0, buf)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[inline]
     pub fn stat64_raw(
         fd: RawFd,
         buf: &mut core::mem::MaybeUninit<libc::stat64>,
@@ -77,6 +96,7 @@ impl UnixFile {
         }
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[inline]
     pub fn stat64(&self, buf: &mut core::mem::MaybeUninit<libc::stat64>) -> std::io::Result<()> {
         Self::stat64_raw(self.0, buf)

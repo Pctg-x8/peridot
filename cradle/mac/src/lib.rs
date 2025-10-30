@@ -8,10 +8,12 @@ use bedrock as br;
 use br::{InstanceChild, PhysicalDevice, SurfaceCreateInfo, VkHandle};
 use core::future::Future;
 use peridot::mthelper::SharedRef;
+use std::cell::UnsafeCell;
 use std::ffi::CStr;
 use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::pin::Pin;
+use std::sync::RwLock;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::{Layer, Registry};
 
@@ -109,7 +111,9 @@ impl<R: Read + Seek> Seek for ReaderView<R> {
     }
 }
 pub struct PlatformAssetLoader {
+    par_path: CocoaObject<NSString>,
     par: peridot_archive::Archive,
+    par_async: UnsafeCell<Option<peridot_archive::ArchiveAsync>>,
 }
 impl PlatformAssetLoader {
     fn new() -> Self {
@@ -123,7 +127,7 @@ impl PlatformAssetLoader {
 
         PlatformAssetLoader {
             par: peridot_archive::Archive::new(
-                peridot_archive::native_io::PlatformNativeFileReader::open(&par_path.to_str())
+                peridot::native_io::PlatformNativeFileReader::open(&par_path.to_str())
                     .expect("Failed to open primary asset"),
                 false,
             )
@@ -144,15 +148,21 @@ impl PlatformAssetLoader {
                 _ => IOError::other("PrimaryArchive read error"),
             })
             .expect("Failed to intiialize primary asset reader"),
+            par_path,
+            par_async: UnsafeCell::new(None),
         }
     }
 }
 use peridot::archive as par;
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type Asset<'a> =
-        peridot_archive::ArchiveBinReader<'a, peridot_archive::native_io::PlatformNativeFileReader>;
+        peridot_archive::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
+    type AssetBlobAsync<'a> = peridot_archive::ArchiveBinReaderAsync<
+        'a,
+        peridot::native_io::PlatformNativeFileReaderAsync,
+    >;
     type StreamingAsset<'a> =
-        par::ArchiveBinReader<'a, peridot_archive::native_io::PlatformNativeFileReader>;
+        par::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
 
     fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
         let Some(entry) = self.par.find_entry(path, ext) else {
@@ -163,6 +173,60 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         };
 
         Ok(self.par.read_bin(entry))
+    }
+
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
+        async move {
+            // TODO: NativeLinkerのnewのタイミングで非同期処理走らせられないのでここで遅延初期化している
+            // ただスレッドセーフではないので（おもにライフタイムの問題）、macでの初期化シーケンスを見直してlaunch_fでも非同期処理を使えるようにしたほうがいいように見える
+            // （Grand Central Dispatchのループとば別軸で動かせるようにする必要がある）
+            if unsafe { &*self.par_async.get() }.is_none() {
+                unsafe {
+                    *self.par_async.get() = Some(
+                        peridot_archive::ArchiveAsync::new(
+                            peridot::native_io::PlatformNativeFileReaderAsync::open(
+                                &self.par_path.to_str(),
+                            )
+                            .expect("Failed to open primary asset"),
+                            false,
+                        )
+                        .await
+                        .map_err(|e| match e {
+                            peridot::archive::ArchiveReadError::IO(e) => e,
+                            peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
+                                error!("PrimaryArchive integrity check failed!");
+                                IOError::other("PrimaryArchive read error")
+                            }
+                            peridot::archive::ArchiveReadError::SignatureMismatch => {
+                                error!("PrimaryArchive signature mismatch!");
+                                IOError::other("PrimaryArchive read error")
+                            }
+                            peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
+                                error!("lz4 decompress error: {:?}", e);
+                                IOError::other("PrimaryArchive read error")
+                            }
+                            _ => IOError::other("PrimaryArchive read error"),
+                        })
+                        .expect("Failed to intiialize primary asset reader"),
+                    );
+                }
+            }
+
+            let par_async = unsafe { (&*self.par_async.get()).as_ref().unwrap_unchecked() };
+
+            let Some(entry) = par_async.find_entry(path, ext) else {
+                return Err(IOError::new(
+                    ErrorKind::NotFound,
+                    "not in primary asset package",
+                ));
+            };
+
+            Ok(par_async.read_bin(entry))
+        }
     }
 
     fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
