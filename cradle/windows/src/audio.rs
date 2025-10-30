@@ -262,13 +262,19 @@ impl NativeAudioEngine {
                 let srv: IAudioRenderClient = aclient.service().expect("No Render Service");
                 mixer.write().set_sample_rate(samples_per_sec as _);
 
-                log::info!("Starting AudioRender...");
+                tracing::info!("Starting AudioRender...");
                 aclient.start().expect("Starting AudioRender");
                 mixer.write().start();
                 while !exit_state_th.load(Ordering::Acquire) {
                     let pad = aclient.current_padding().expect("Current Padding");
                     let available_frames = process_frames - pad;
                     let bufp = unsafe { srv.GetBuffer(available_frames).expect("Get Buffer") };
+                    if bufp.is_null() {
+                        // バッファが準備できてない場合などで稀にnullが来るっぽい
+                        std::thread::yield_now();
+                        continue;
+                    }
+
                     let buf = unsafe {
                         std::slice::from_raw_parts_mut(
                             bufp as *mut f32,
