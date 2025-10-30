@@ -152,6 +152,42 @@ impl PlatformAssetLoader {
             par_async: UnsafeCell::new(None),
         }
     }
+
+    async fn post_init(&self) {
+        // TODO: これスレッドセーフではないので（おもにライフタイムの問題）、macでの初期化シーケンスを見直してlaunch_fでも非同期処理を使えるようにしたほうがいいように見える
+        // （Grand Central Dispatchのループとば別軸で動かせるようにする必要がある）
+        if unsafe { &*self.par_async.get() }.is_none() {
+            unsafe {
+                *self.par_async.get() = Some(
+                    peridot_archive::ArchiveAsync::new(
+                        peridot::native_io::PlatformNativeFileReaderAsync::open(
+                            &self.par_path.to_str(),
+                        )
+                        .expect("Failed to open primary asset"),
+                        false,
+                    )
+                    .await
+                    .map_err(|e| match e {
+                        peridot::archive::ArchiveReadError::IO(e) => e,
+                        peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
+                            error!("PrimaryArchive integrity check failed!");
+                            IOError::other("PrimaryArchive read error")
+                        }
+                        peridot::archive::ArchiveReadError::SignatureMismatch => {
+                            error!("PrimaryArchive signature mismatch!");
+                            IOError::other("PrimaryArchive read error")
+                        }
+                        peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
+                            error!("lz4 decompress error: {:?}", e);
+                            IOError::other("PrimaryArchive read error")
+                        }
+                        _ => IOError::other("PrimaryArchive read error"),
+                    })
+                    .expect("Failed to intiialize primary asset reader"),
+                );
+            }
+        }
+    }
 }
 use peridot::archive as par;
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
@@ -181,41 +217,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         ext: &str,
     ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
         async move {
-            // TODO: NativeLinkerのnewのタイミングで非同期処理走らせられないのでここで遅延初期化している
-            // ただスレッドセーフではないので（おもにライフタイムの問題）、macでの初期化シーケンスを見直してlaunch_fでも非同期処理を使えるようにしたほうがいいように見える
-            // （Grand Central Dispatchのループとば別軸で動かせるようにする必要がある）
-            if unsafe { &*self.par_async.get() }.is_none() {
-                unsafe {
-                    *self.par_async.get() = Some(
-                        peridot_archive::ArchiveAsync::new(
-                            peridot::native_io::PlatformNativeFileReaderAsync::open(
-                                &self.par_path.to_str(),
-                            )
-                            .expect("Failed to open primary asset"),
-                            false,
-                        )
-                        .await
-                        .map_err(|e| match e {
-                            peridot::archive::ArchiveReadError::IO(e) => e,
-                            peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
-                                error!("PrimaryArchive integrity check failed!");
-                                IOError::other("PrimaryArchive read error")
-                            }
-                            peridot::archive::ArchiveReadError::SignatureMismatch => {
-                                error!("PrimaryArchive signature mismatch!");
-                                IOError::other("PrimaryArchive read error")
-                            }
-                            peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
-                                error!("lz4 decompress error: {:?}", e);
-                                IOError::other("PrimaryArchive read error")
-                            }
-                            _ => IOError::other("PrimaryArchive read error"),
-                        })
-                        .expect("Failed to intiialize primary asset reader"),
-                    );
-                }
-            }
-
             let par_async = unsafe { (&*self.par_async.get()).as_ref().unwrap_unchecked() };
 
             let Some(entry) = par_async.find_entry(path, ext) else {
@@ -682,6 +683,7 @@ pub extern "C" fn launch_game(
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set log subscriber");
 
     launch_f(initialization_context, v, |mut engine| async move {
+        engine.internal_asset_loader().post_init().await;
         userlib::game_main(&mut engine).await;
     });
 }

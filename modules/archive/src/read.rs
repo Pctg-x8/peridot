@@ -1352,12 +1352,10 @@ impl ArchiveAsync {
 
     #[inline]
     pub fn find_entry(&self, name: &str, ext: &str) -> Option<AssetEntryHeadingPair> {
-        let r = match *self {
+        match *self {
             Self::OnMemory(ref x) => x.find_entry(name, ext),
             Self::FileStreaming(ref x) => x.find_entry(name, ext),
-        };
-        println!("find_entry {name} {ext} {r:?}");
-        r
+        }
     }
 
     #[inline]

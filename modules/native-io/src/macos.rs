@@ -505,9 +505,6 @@ impl<'a, 'b> core::future::Future for NativeFileReadFuture<'a, 'b> {
         match unsafe { *this.state.get() } {
             NativeFileReadState::Init => {
                 *this.state.get_mut() = NativeFileReadState::Pending;
-                let id = this as *mut _ as usize;
-                let fd = this.f.fd;
-                println!("read req {} {} {fd} {id}", this.pos, this.buf.len());
                 this.f.dch.read(
                     this.pos as _,
                     this.buf.len(),
@@ -520,7 +517,6 @@ impl<'a, 'b> core::future::Future for NativeFileReadFuture<'a, 'b> {
                         let transferred_accum = AtomicUsize::new(0);
 
                         move |done, data, error| {
-                            println!("read ret {done} {data:p} {error} {fd} {id}");
                             if error != 0 {
                                 // err
                                 unsafe {

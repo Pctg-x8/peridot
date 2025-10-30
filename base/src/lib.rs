@@ -490,6 +490,11 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
 }
 impl<PL: NativeLinker> Engine<'_, PL> {
     #[inline(always)]
+    pub fn internal_asset_loader(&self) -> &PL::AssetLoader {
+        self.native_link.asset_loader()
+    }
+
+    #[inline(always)]
     pub fn load<A: FromAssetBlob>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset_blob(self.native_link.asset_loader().get(path, A::EXT)?)
     }
