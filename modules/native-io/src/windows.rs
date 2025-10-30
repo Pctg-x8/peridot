@@ -686,7 +686,7 @@ pub fn spawn_io_reactor_thread() -> IoReactorThreadTerminator {
     });
 
     let thread = std::thread::Builder::new()
-        .name("Windows IO Reactor".into())
+        .name("Peridot NativeIO Reactor".into())
         .spawn({
             let iocp = iocp.clone();
 

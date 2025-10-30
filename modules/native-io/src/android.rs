@@ -375,11 +375,11 @@ impl BackgroundIoWorkerPool {
         let termination = Arc::new(AtomicBool::new(false));
         let threads = workers
             .into_iter()
-            .zip(other_stealer_sets.into_iter())
+            .zip(other_stealer_sets)
             .enumerate()
             .map(|(n, (w, other_stealers))| {
                 std::thread::Builder::new()
-                    .name(format!("peridot-archive Background IO Worker #{n}"))
+                    .name(format!("Peridot Background NativeIO Worker #{n}"))
                     .spawn({
                         let injector = injector.clone();
                         let termination = termination.clone();

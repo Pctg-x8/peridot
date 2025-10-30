@@ -53,6 +53,8 @@ fn launch<F: core::future::Future>(
     window: native_wrapper::Window,
     usercode_launcher: impl FnOnce(peridot::Engine<'static, NativeLink>) -> F,
 ) -> NativeCallData {
+    let bgio_worker = peridot::native_io::android::BackgroundIoWorkerPool::spawn();
+
     let (event_sender, event_receiver) = async_std::channel::unbounded();
     let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
 
@@ -91,6 +93,7 @@ fn launch<F: core::future::Future>(
         frame_timing_sender,
         event_queue,
         usercode_thread,
+        bgio_worker,
         _pinned: core::marker::PhantomPinned,
     });
 
@@ -160,6 +163,7 @@ struct Game<F> {
     frame_timing_sender: async_std::channel::Sender<()>,
     event_queue: Pin<Box<peridot::EventQueue>>,
     usercode_thread: Pin<Box<F>>,
+    bgio_worker: peridot::native_io::android::BackgroundIoWorkerPool,
     // self-referential struct
     _pinned: core::marker::PhantomPinned,
 }

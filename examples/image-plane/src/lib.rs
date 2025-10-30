@@ -45,13 +45,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-    #[cfg(windows)]
-    let async_io_reactor_thread = peridot::native_io::windows::spawn_io_reactor_thread();
-    #[cfg(target_os = "linux")]
-    let async_io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
-    #[cfg(target_os = "android")]
-    let async_io_reactor_thread = peridot::native_io::android::BackgroundIoWorkerPool::spawn();
-
     #[cfg(not(target_os = "android"))]
     #[cfg(not(target_os = "macos"))]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
@@ -820,9 +813,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     unsafe {
         e.graphics_device().wait().expect("Failed to wait for work");
     }
-
-    #[cfg(any(target_os = "linux", windows))]
-    drop(async_io_reactor_thread);
 }
 
 #[repr(C)]

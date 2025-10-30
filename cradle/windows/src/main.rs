@@ -163,6 +163,7 @@ async fn main() {
     }
 
     let w = Arc::new(RwLock::new(ThreadsafeWindowOps(w)));
+    let io_reactor_thread = peridot::native_io::windows::spawn_io_reactor_thread();
 
     // Resizeをここに入れると詰まるので対策が必要（結局個別のイベントバスになるのか.......
     let (events_sender, events_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
@@ -238,6 +239,8 @@ async fn main() {
             break;
         }
     }
+
+    drop(io_reactor_thread);
 }
 
 extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

@@ -294,6 +294,8 @@ fn main() {
         .with(env_filter)
         .init();
 
+    let io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
+
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
             run_with_window_backend(make_shared_mutable_ref(
@@ -325,5 +327,6 @@ fn main() {
         return;
     }
 
+    drop(io_reactor_thread);
     panic!("No suitable window backend");
 }

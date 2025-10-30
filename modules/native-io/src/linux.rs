@@ -632,7 +632,7 @@ impl IoReactorThread {
         });
 
         let join_handle = std::thread::Builder::new()
-            .name("peridot-archiver Async FileIO".into())
+            .name("Peridot NativeIO Reactor".into())
             .spawn({
                 let uring = uring.clone();
 
