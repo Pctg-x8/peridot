@@ -21,28 +21,29 @@ struct UniqueRawSliceMut<T> {
     length: usize,
 }
 impl<T> UniqueRawSliceMut<T> {
+    #[allow(clippy::mut_from_ref)]
     unsafe fn as_slice_mut(&self) -> &mut [T] {
-        std::slice::from_raw_parts_mut(self.ptr, self.length)
+        unsafe { std::slice::from_raw_parts_mut(self.ptr, self.length) }
     }
     unsafe fn as_slice(&self) -> &[T] {
-        std::slice::from_raw_parts(self.ptr, self.length)
+        unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 }
 unsafe impl<T> Sync for UniqueRawSliceMut<T> {}
 unsafe impl<T> Send for UniqueRawSliceMut<T> {}
 
-struct BoxedInputStream(Box<dyn InputStream + Sync + Send>);
-impl BoxedInputStream {
-    fn new(stream: impl InputStream + Sync + Send + 'static) -> Self {
+struct BoxedInputStream<'a>(Box<dyn InputStream + Sync + Send + 'a>);
+impl<'a> BoxedInputStream<'a> {
+    fn new(stream: impl InputStream + Sync + Send + 'a) -> Self {
         BoxedInputStream(Box::new(stream))
     }
 }
-impl InputStream for BoxedInputStream {
+impl InputStream for BoxedInputStream<'_> {
     fn skip(&mut self, fwd: u64) -> IOResult<u64> {
         self.0.skip(fwd)
     }
 }
-impl Read for BoxedInputStream {
+impl Read for BoxedInputStream<'_> {
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
         self.0.read(buf)
     }
@@ -88,11 +89,15 @@ impl Mixer {
     }
     fn setup_process_frames(&mut self, frames: u32) {
         let frames_dup = frames << 1;
-        self.subprocess_buffers =
-            Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
-        unsafe {
-            self.subprocess_buffers
-                .set_len(frames_dup as usize * self.parallelize as usize);
+        // 未初期化でいいからメモリ領域がほしい 実際につかうまでには初期化されるので一旦allow
+        #[allow(clippy::uninit_vec)]
+        {
+            self.subprocess_buffers =
+                Vec::<f32>::with_capacity(frames_dup as usize * self.parallelize as usize);
+            unsafe {
+                self.subprocess_buffers
+                    .set_len(frames_dup as usize * self.parallelize as usize);
+            }
         }
         self.subprocess_buffers_refs = (0..self.parallelize)
             .map(|i| unsafe {
@@ -219,17 +224,19 @@ impl WaveSamples {
         }
     }
 }
-impl Into<Vec<f32>> for WaveSamples {
-    fn into(self) -> Vec<f32> {
-        match self {
+impl From<WaveSamples> for Vec<f32> {
+    #[inline]
+    fn from(value: WaveSamples) -> Self {
+        match value {
             WaveSamples::Mono(v) => v,
             WaveSamples::Stereo(v) => v.into_iter().map(|x| (x[0] + x[1]) * 0.5).collect(),
         }
     }
 }
-impl Into<Vec<[f32; 2]>> for WaveSamples {
-    fn into(self) -> Vec<[f32; 2]> {
-        match self {
+impl From<WaveSamples> for Vec<[f32; 2]> {
+    #[inline]
+    fn from(value: WaveSamples) -> Self {
+        match value {
             WaveSamples::Mono(v) => v.into_iter().map(|x| [x; 2]).collect(),
             WaveSamples::Stereo(v) => v,
         }
@@ -394,11 +401,11 @@ pub struct PreloadedPlayableWav {
     state: PlayableAudioState,
 }
 impl super::LogicalAssetData for PreloadedPlayableWav {
-    const EXT: &'static str = "wav";
+    const EXT: &'static str = "pa1-audio";
 }
 impl super::FromAsset for PreloadedPlayableWav {
     type Error = std::io::Error;
-    fn from_asset<Asset: Read + Seek>(asset: Asset) -> IOResult<Self> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> IOResult<Self> {
         let mut loader = RIFFLoader::new(asset)?;
         let fmt = loader.read_fmt()?;
         let data = WaveSamples::from(loader.read_data_uncompressed(&fmt)?).into();
@@ -421,7 +428,7 @@ impl Processor for PreloadedPlayableWav {
             .iter()
             .enumerate()
         {
-            flattened_buffer[(n << 1) + 0] = s[0];
+            flattened_buffer[n << 1] = s[0];
             flattened_buffer[(n << 1) + 1] = s[1];
         }
         self.current_smp += fill_count;
@@ -431,8 +438,8 @@ impl Processor for PreloadedPlayableWav {
 const WAV_STREAMING_DEFAULT_BUFFER_SAMPLES: usize = 8192;
 
 /// An WaveFile as AudioSource which streaming audio data from disk. Default buffering rate is 8192smp/buf
-pub struct StreamingPlayableWav {
-    loader: RIFFStreamingLoader<BoxedInputStream>,
+pub struct StreamingPlayableWav<'a> {
+    loader: RIFFStreamingLoader<BoxedInputStream<'a>>,
     fmt: RIFFWaveFormatData,
     buffered_samples: Box<[[f32; 2]]>,
     current_smp: usize,
@@ -440,23 +447,26 @@ pub struct StreamingPlayableWav {
     buffer_length: usize,
     state: PlayableAudioState,
 }
-impl super::LogicalAssetData for StreamingPlayableWav {
-    const EXT: &'static str = "wav";
+impl super::LogicalAssetData for StreamingPlayableWav<'_> {
+    const EXT: &'static str = "pa1-audio";
 }
-impl super::FromStreamingAsset for StreamingPlayableWav {
+impl<'a> super::FromStreamingAsset<'a> for StreamingPlayableWav<'a> {
     type Error = std::io::Error;
-    fn from_asset<Asset: super::InputStream + Sync + Send + 'static>(
-        asset: Asset,
-    ) -> IOResult<Self> {
+    fn from_asset<Asset: super::InputStream + Sync + Send + 'a>(asset: Asset) -> IOResult<Self> {
         let mut loader = RIFFStreamingLoader::from(BoxedInputStream::new(asset));
         loader.file.skip(4 * 3)?;
         let fmt = loader.read_fmt()?;
         tracing::debug!(?fmt);
         loader.seek_data()?;
         // initial buffering
-        let mut buffered_samples = Vec::with_capacity(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
-        unsafe {
-            buffered_samples.set_len(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
+        let mut buffered_samples;
+        // 未初期化でいいからメモリ領域がほしい 実際につかうまでには初期化されるので一旦allow
+        #[allow(clippy::uninit_vec)]
+        {
+            buffered_samples = Vec::with_capacity(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
+            unsafe {
+                buffered_samples.set_len(WAV_STREAMING_DEFAULT_BUFFER_SAMPLES * 2);
+            }
         }
         let mut buffered_samples = buffered_samples.into_boxed_slice();
         let buffer_length = match loader.read_data_uncompressed(&fmt, buffered_samples.len()) {
@@ -482,7 +492,7 @@ impl super::FromStreamingAsset for StreamingPlayableWav {
         })
     }
 }
-impl Processor for StreamingPlayableWav {
+impl Processor for StreamingPlayableWav<'_> {
     fn process(&mut self, flattened_buffer: &mut [f32]) {
         if self.state != PlayableAudioState::Playing {
             return;
@@ -494,7 +504,7 @@ impl Processor for StreamingPlayableWav {
                 .iter()
                 .enumerate()
             {
-                flattened_buffer[(n << 1) + 0] = s[0];
+                flattened_buffer[n << 1] = s[0];
                 flattened_buffer[(n << 1) + 1] = s[1];
             }
             self.buffered_smp += frames;
@@ -515,7 +525,7 @@ impl Processor for StreamingPlayableWav {
             .iter()
             .enumerate()
         {
-            flattened_buffer[((n + frames) << 1) + 0] = s[0];
+            flattened_buffer[(n + frames) << 1] = s[0];
             flattened_buffer[((n + frames) << 1) + 1] = s[1];
         }
 
@@ -524,7 +534,7 @@ impl Processor for StreamingPlayableWav {
         self.buffered_smp += left_frames;
     }
 }
-impl StreamingPlayableWav {
+impl StreamingPlayableWav<'_> {
     fn buffer(&mut self) {
         let loaded = match self
             .loader
@@ -547,7 +557,7 @@ impl PreloadedPlayableWav {
         self.state = PlayableAudioState::Playing;
     }
 }
-impl StreamingPlayableWav {
+impl StreamingPlayableWav<'_> {
     pub fn play(&mut self) {
         self.state = PlayableAudioState::Playing;
     }

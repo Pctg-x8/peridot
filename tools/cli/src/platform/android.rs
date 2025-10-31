@@ -42,10 +42,10 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
     );
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
-    steps::merge_assets(
+    steps::process_assets(
         &ctx,
-        &ctx.cradle_directory.join("assets"),
         options.ext_asset_path.as_deref(),
+        &ctx.cradle_directory.join("assets"),
     );
 
     ctx.within_cradle_dir(|| {

@@ -1,0 +1,22 @@
+[package]
+name = "peridot-rendering-configuration"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+with-loader-impl = ["dep:peridot"]
+with-asset-processing = ["dep:peridot-asset-processing", "compilation"]
+compilation = ["dep:slang", "dep:thiserror"]
+
+[dependencies]
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot = { path = "../../base", optional = true }
+peridot-semantic-shader = { path = "../semantic-shader", default-features = false }
+slang = { path = "../../thirdparty/slang", optional = true }
+thiserror = { workspace = true, optional = true }
+tracing = { workspace = true }
+peridot-asset-processing = { path = "../asset-processing", optional = true }
+
+[lints]
+workspace = true

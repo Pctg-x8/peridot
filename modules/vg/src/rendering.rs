@@ -127,13 +127,16 @@ impl ModelData for Context {
 
     fn stage_data_into(
         &self,
-        mem: &br::MappedMemoryRange<impl br::DeviceMemoryMut + ?Sized>,
+        mem: &br::MappedMemory<impl br::DeviceMemoryMut + ?Sized>,
         offsets: ContextPreallocOffsets,
     ) -> RendererParams {
         unsafe { self.write_data_into(mem.get_mut(0) as _, offsets) }
     }
 }
 impl Context {
+    /// # Safety
+    ///
+    /// The pointer must be valid and have enough valid region.
     pub unsafe fn write_data_into(
         &self,
         ptr: *mut u8,
@@ -149,8 +152,8 @@ impl Context {
         let (mut interior_index_offset, mut curve_index_offset) = (0u32, 0u32);
         for (n, (v, st, ext)) in self.meshes().iter().enumerate() {
             transforms_stg[n] = GlyphTransform {
-                st: st.clone(),
-                ext: ext.clone(),
+                st: *st,
+                ext: *ext,
                 pad: [0.0; 2],
             };
             let ii_start = interior_index_offset;
@@ -220,21 +223,19 @@ impl Context {
         }
     }
 }
-impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for RendererParams {
-    type Extras = RendererExternalInstances<'e, Device>;
+impl<'e, ExtFnProvider: br::Device + 'e> DefaultRenderCommands<'e, ExtFnProvider>
+    for RendererParams
+{
+    type Extras = RendererExternalInstances<'e, ExtFnProvider>;
 
-    fn default_render_commands<
-        'r,
-        NL: NativeLinker,
-        CB: br::VkHandleMut<Handle = br::vk::VkCommandBuffer> + ?Sized,
-    >(
+    fn default_render_commands<'r, NL: NativeLinker>(
         &self,
         e: &Engine<NL>,
-        cmd: br::CmdRecord<'r, CB, Device>,
-        buffer: &(impl br::Buffer + br::DeviceChild<ConcreteDevice = Device> + ?Sized),
+        cmd: br::CmdRecord<'r>,
+        buffer: &(impl br::Buffer + ?Sized),
         extras: Self::Extras,
-    ) -> br::CmdRecord<'r, CB, Device> {
-        let renderscale = extras.target_pixels.clone() * e.rendering_precision().recip();
+    ) -> br::CmdRecord<'r> {
+        let renderscale = extras.target_pixels * e.rendering_precision().recip();
         let cmd = cmd
             .bind_pipeline(
                 br::PipelineBindPoint::Graphics,
@@ -256,7 +257,7 @@ impl<'e, Device: br::Device + 'e> DefaultRenderCommands<'e, Device> for Renderer
                 br::PipelineBindPoint::Graphics,
                 extras.interior_pipeline.layout(),
                 0,
-                &[extras.transform_buffer_descriptor_set.into()],
+                &[extras.transform_buffer_descriptor_set],
                 &[],
             )
             .bind_vertex_buffers(
@@ -355,13 +356,10 @@ impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = D
     }
 }
 impl<Device: br::Device, Buffer: br::Buffer + br::DeviceChild<ConcreteDevice = Device>>
-    GraphicsCommand<Device> for RenderVG<Device, Buffer>
+    GraphicsCommand for RenderVG<Device, Buffer>
 {
-    fn execute<'r>(
-        &self,
-        cb: br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device>,
-    ) -> br::CmdRecord<'r, dyn br::VkHandleMut<Handle = br::vk::VkCommandBuffer>, Device> {
-        let render_scale = self.target_pixels.clone() * self.rendering_precision.recip();
+    fn execute<'r>(&self, cb: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
+        let render_scale = self.target_pixels * self.rendering_precision.recip();
 
         let common_configs = (
             PushConstant::for_vertex(self.interior_pipeline.layout(), 0, render_scale),

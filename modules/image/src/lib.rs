@@ -1,3 +1,4 @@
+use core::pin::Pin;
 use image::codecs::hdr::{HdrDecoder, HdrMetadata};
 use image::{ImageDecoder, ImageError, ImageResult};
 use peridot::{DecodedPixelData, FromAsset, LDRImageAsset, LogicalAssetData, PixelFormat};
@@ -10,10 +11,14 @@ where
     let color = decoder.color_type();
     let (w, h) = decoder.dimensions();
     let mut pixels = Vec::with_capacity(decoder.total_bytes() as _);
+    decoder.read_image(unsafe {
+        core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+            pixels.spare_capacity_mut(),
+        )
+    })?;
     unsafe {
-        pixels.set_len(decoder.total_bytes() as _);
+        pixels.set_len(pixels.capacity());
     }
-    decoder.read_image(&mut pixels)?;
 
     Ok(DecodedPixelData {
         pixels,
@@ -43,7 +48,7 @@ pub struct WebP(pub DecodedPixelData);
 pub struct BMP(pub DecodedPixelData);
 pub struct HDR {
     pub pixel_data: DecodedPixelData,
-    pub hdr_metadata: HdrMetadata
+    pub hdr_metadata: HdrMetadata,
 }
 
 impl LogicalAssetData for PNG {
@@ -67,7 +72,7 @@ impl LogicalAssetData for HDR {
 impl FromAsset for PNG {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::png::PngDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(PNG)
@@ -76,7 +81,7 @@ impl FromAsset for PNG {
 impl FromAsset for TGA {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::tga::TgaDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(TGA)
@@ -85,7 +90,7 @@ impl FromAsset for TGA {
 impl FromAsset for TIFF {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::tiff::TiffDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(TIFF)
@@ -94,7 +99,7 @@ impl FromAsset for TIFF {
 impl FromAsset for WebP {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::webp::WebPDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(WebP)
@@ -103,7 +108,7 @@ impl FromAsset for WebP {
 impl FromAsset for BMP {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         image::codecs::bmp::BmpDecoder::new(std::io::BufReader::new(asset))
             .and_then(load_image)
             .map(BMP)
@@ -112,7 +117,7 @@ impl FromAsset for BMP {
 impl FromAsset for HDR {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
+    fn from_asset<'a, Asset: Read + Seek + 'a>(asset: Asset) -> Result<Self, ImageError> {
         let reader = HdrDecoder::new(BufReader::new(asset))?;
 
         Ok(Self {
@@ -145,5 +150,26 @@ impl LDRImageAsset for TIFF {
 impl LDRImageAsset for WebP {
     fn into_pixel_data_info(self) -> DecodedPixelData {
         self.0
+    }
+}
+
+pub struct StdTexture2DAsset(
+    pub ktx::Owned<ktx::Texture2>,
+    #[allow(dead_code)] Pin<Box<[u8]>>,
+);
+impl LogicalAssetData for StdTexture2DAsset {
+    const EXT: &'static str = "pa1-texture2d";
+}
+impl FromAsset for StdTexture2DAsset {
+    type Error = std::io::Error;
+
+    fn from_asset<'a, Asset: Read + Seek + 'a>(mut asset: Asset) -> Result<Self, Self::Error> {
+        let mut buf = Vec::new();
+        asset.read_to_end(&mut buf).expect("Failed to read");
+        let buf = Pin::new(buf.into_boxed_slice());
+        let container = ktx::Texture2::from_memory(&buf, ktx::TextureCreateFlags::empty())
+            .expect("Failed to load ktx2");
+
+        Ok(Self(container, buf))
     }
 }

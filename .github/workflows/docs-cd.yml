@@ -7,14 +7,16 @@ jobs:
       id-token: write
     runs-on: ubuntu-latest
     steps:
-      - uses: "actions/checkout@v4"
+      - uses: "actions/checkout@v5"
         with:
           ref: dev
       - uses: "google-github-actions/auth@v1"
         with:
           service_account: "dev-autocd-deployer@docs-peridot.iam.gserviceaccount.com"
           workload_identity_provider: projects/488336166113/locations/global/workloadIdentityPools/github-actions-oidc-federation/providers/github-actions
-      - name: Build docs
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        name: Build docs
         uses: "./.github/actions/build-doc"
       - name: Deploy
         uses: "./.github/actions/deployment-dev"

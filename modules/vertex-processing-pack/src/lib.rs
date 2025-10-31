@@ -13,13 +13,52 @@ use std::io::{
 };
 use std::path::Path;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PvpContainer {
     pub vertex_bindings: Vec<br::vk::VkVertexInputBindingDescription>,
     pub vertex_attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
     pub vertex_shader: Vec<u32>,
     pub fragment_shader: Option<Vec<u32>>,
 }
+impl PartialEq for PvpContainer {
+    fn eq(&self, other: &Self) -> bool {
+        if self.vertex_shader != other.vertex_shader {
+            return false;
+        }
+
+        if self.fragment_shader != other.fragment_shader {
+            return false;
+        }
+
+        if !self
+            .vertex_bindings
+            .iter()
+            .zip(other.vertex_bindings.iter())
+            .all(|(a, b)| {
+                a.binding == b.binding && a.inputRate == b.inputRate && a.stride == b.stride
+            })
+        {
+            return false;
+        }
+
+        if !self
+            .vertex_attributes
+            .iter()
+            .zip(other.vertex_attributes.iter())
+            .all(|(a, b)| {
+                a.binding == b.binding
+                    && a.location == b.location
+                    && a.format == b.format
+                    && a.offset == b.offset
+            })
+        {
+            return false;
+        }
+
+        true
+    }
+}
+impl Eq for PvpContainer {}
 impl PvpContainer {
     pub fn empty() -> Self {
         PvpContainer {
@@ -31,17 +70,17 @@ impl PvpContainer {
     }
 
     pub fn write<W: Write>(&self, writer: &mut W) -> IOResult<()> {
-        writer.write(b"PVP\x01")?; // ヘッダ(シグネチャとバージョン)
+        writer.write_all(b"PVP\x01")?; // ヘッダ(シグネチャとバージョン)
 
         // バイナリを裏で構築しつつオフセット値を書き出す
         let mut blob = Cursor::new(Vec::new());
         self.vertex_bindings.binary_serialize(&mut blob)?;
-        VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
+        VariableUInt((blob.stream_position()?) as _).write(writer)?;
         self.vertex_attributes.binary_serialize(&mut blob)?;
-        VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
+        VariableUInt((blob.stream_position()?) as _).write(writer)?;
         SpvBinary::from_ref(&self.vertex_shader).binary_serialize(&mut blob)?;
         if let Some(ref b) = self.fragment_shader {
-            VariableUInt((blob.seek(SeekFrom::Current(0))?) as _).write(writer)?;
+            VariableUInt((blob.stream_position()?) as _).write(writer)?;
             SpvBinary::from_ref(b).binary_serialize(&mut blob)?;
         } else {
             VariableUInt(0).write(writer)?;
@@ -85,7 +124,7 @@ impl peridot::LogicalAssetData for PvpContainer {
 impl peridot::FromAsset for PvpContainer {
     type Error = PvpContainerReadError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(
+    fn from_asset<'a, Asset: Read + Seek + 'a>(
         asset: Asset,
     ) -> Result<Self, PvpContainerReadError> {
         PvpContainerReader::new(BufReader::new(asset))?
@@ -120,9 +159,7 @@ impl<Device: br::Device + Clone> PvpShaderModules<Device> {
     pub fn pipeline_vertex_shader_stage<'d, 's>(&'d self) -> br::PipelineShaderStage<'d, 's> {
         use br::ShaderModule;
 
-        self.vertex
-            .with_entry_point(c"main")
-            .on_stage(br::ShaderStage::Vertex)
+        self.vertex.on_stage(br::ShaderStage::Vertex, c"main")
     }
 
     pub fn pipeline_fragment_shader_stage<'d, 's>(
@@ -130,10 +167,9 @@ impl<Device: br::Device + Clone> PvpShaderModules<Device> {
     ) -> Option<br::PipelineShaderStage<'d, 's>> {
         use br::ShaderModule;
 
-        self.fragment.as_ref().map(|x| {
-            x.with_entry_point(c"main")
-                .on_stage(br::ShaderStage::Fragment)
-        })
+        self.fragment
+            .as_ref()
+            .map(|x| x.on_stage(br::ShaderStage::Fragment, c"main"))
     }
 }
 
@@ -269,9 +305,9 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
         let VariableUInt(va_offset) = VariableUInt::read(&mut reader)?;
         let VariableUInt(vsh_offset) = VariableUInt::read(&mut reader)?;
         let VariableUInt(fsh_offset_0) = VariableUInt::read(&mut reader)?;
-        let blob_offset = reader.seek(SeekFrom::Current(0))? as u64;
+        let blob_offset = reader.stream_position()?;
 
-        return Ok(PvpContainerReader {
+        Ok(PvpContainerReader {
             vb_offset: blob_offset,
             va_offset: va_offset as u64 + blob_offset,
             vsh_offset: vsh_offset as u64 + blob_offset,
@@ -281,7 +317,7 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
                 Some(fsh_offset_0 as u64 + blob_offset)
             },
             reader,
-        });
+        })
     }
 
     pub fn read_vertex_bindings(
@@ -368,11 +404,12 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
         let VariableUInt(input_rate) = VariableUInt::read(source)?;
         let VariableUInt(binding) = VariableUInt::read(source)?;
         let VariableUInt(stride) = VariableUInt::read(source)?;
-        return Ok(br::vk::VkVertexInputBindingDescription {
+
+        Ok(br::vk::VkVertexInputBindingDescription {
             inputRate: input_rate as _,
             binding: binding as _,
             stride: stride as _,
-        });
+        })
     }
 }
 #[cfg(feature = "async-rt-async-std")]
@@ -437,12 +474,13 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
         let VariableUInt(binding) = VariableUInt::read(source)?;
         let VariableUInt(offset) = VariableUInt::read(source)?;
         let VariableUInt(format) = VariableUInt::read(source)?;
-        return Ok(br::vk::VkVertexInputAttributeDescription {
+
+        Ok(br::vk::VkVertexInputAttributeDescription {
             location: location as _,
             binding: binding as _,
             offset: offset as _,
             format: format as _,
-        });
+        })
     }
 }
 #[cfg(feature = "async-rt-async-std")]
@@ -488,7 +526,8 @@ impl<T: BinarySerializeVkStructures> BinarySerializeVkStructures for Vec<T> {
         for x in self {
             write_bytes += x.binary_serialize(sink)?;
         }
-        return Ok(write_bytes);
+
+        Ok(write_bytes)
     }
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>
     where
@@ -499,7 +538,8 @@ impl<T: BinarySerializeVkStructures> BinarySerializeVkStructures for Vec<T> {
         for _ in 0..element_count {
             vs.push(T::binary_unserialize(source)?);
         }
-        return Ok(vs);
+
+        Ok(vs)
     }
 }
 #[cfg(feature = "async-rt-async-std")]
@@ -552,7 +592,7 @@ impl BinarySerializeVkStructures for SpvBinary {
             core::slice::from_raw_parts(self.0.as_ptr() as *const u8, self.0.len() << 2)
         })?;
 
-        Ok(w0 + self.0.len() << 2)
+        Ok(w0 + (self.0.len() << 2))
     }
 
     fn binary_unserialize<R: BufRead>(source: &mut R) -> IOResult<Self>
@@ -594,13 +634,13 @@ impl AsyncBinarySerializeVkStructures for SpvBinary {
         async move {
             let VariableUInt(len) = VariableUInt::read_async(source).await?;
             let mut buf = Vec::with_capacity(len as _);
-            unsafe {
-                buf.set_len(len as _);
-            }
             async_std::io::ReadExt::read_exact(source, unsafe {
-                core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.len() << 2)
+                core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, buf.capacity() << 2)
             })
             .await?;
+            unsafe {
+                buf.set_len(buf.capacity());
+            }
 
             Ok(Self(buf))
         }

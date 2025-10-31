@@ -1,0 +1,11 @@
+[package]
+name = "peridot-asset-processor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+peridot-asset-processing = { path = "../../modules/asset-processing" }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = ["with-asset-processing"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }

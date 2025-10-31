@@ -1,3 +1,5 @@
 #!/bin/bash
 
-cargo test --verbose --features use-freetype,bedrock/DynamicLoaded
+set -o pipefail
+
+cargo test --features ci-nolib,bedrock/DynamicLoaded --message-format=json | $HOME/.local/bin/cargo-json-gha-translator

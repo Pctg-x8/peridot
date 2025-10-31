@@ -2,9 +2,9 @@
 
 module IntegrityTest.PullRequestTriggered (integrityTest) where
 
-import Control.Eff (run)
 import CustomAction.PostCINotifications qualified as PostCINotificationsAction
 import Data.Function ((&))
+import Data.Functor.Identity (runIdentity)
 import Data.Map qualified as M
 import IntegrityTest.Shared
 import SlackNotification
@@ -56,10 +56,14 @@ preconditions =
       GHA.jobForwardingStepOutput "fileck" "has_code_changes",
       GHA.jobForwardingStepOutput "fileck" "has_workflow_changes"
     ]
-    $ GHA.job [preconditionRecordBeginTimeStamp, collectChangesStep]
+    $ GHA.job
+    $ flattenSteps
+      [ Step preconditionRecordBeginTimeStamp,
+        Step $ GHA.identifiedAs "fileck" collectChangesStep
+      ]
   where
     collectChangesStep =
-      applyModifiers [GHA.namedAs "Checking Changed Filenames", GHA.identifiedAs "fileck"] $
+      GHA.namedAs "Checking Changed Filenames" $
         GHA.runStep $
           "\
           \HAS_CODE_CHANGES=0\n\
@@ -99,7 +103,7 @@ preconditions =
     apiRequest = "curl -s -H " <> apiRequestAuthHeader <> " -X POST -d \"$POSTDATA\" https://api.github.com/graphql"
 
 integrityTest :: GHA.Workflow
-integrityTest = run $ withSlackNotification slackNotifyProvider do
+integrityTest = runIdentity $ withSlackReport slackNotifyProvider do
   let preconditions' = M.singleton "preconditions" preconditions
   reportSuccessJob' <- M.singleton "report-success" <$> reportSuccessJob
 

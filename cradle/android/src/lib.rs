@@ -8,7 +8,7 @@ mod native_wrapper;
 mod userlib;
 
 use android::{AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
-use bedrock as br;
+use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
 use std::ffi::CStr;
@@ -41,59 +41,170 @@ fn init_logger() {
     }));
 }
 
-struct Game {
+static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
+    |data| core::task::RawWaker::new(data, &USERCODE_WAKER_VTABLE),
+    |data| {},
+    |data| {},
+    |data| {},
+);
+
+fn launch<F: core::future::Future>(
+    asset_manager: native_wrapper::AssetManager,
+    window: native_wrapper::Window,
+    usercode_launcher: impl FnOnce(peridot::Engine<'static, NativeLink>) -> F,
+) -> NativeCallData {
+    let (event_sender, event_receiver) = async_std::channel::unbounded();
+    let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
+
+    let event_queue = Box::pin(peridot::EventQueue::new());
+    let event_queue_lifetime_extended: &'static peridot::EventQueue =
+        unsafe { &*(&*event_queue as *const _) };
+    let nl = NativeLink {
+        al: PlatformAssetLoader::new(asset_manager),
+        w: window,
+    };
+    let mut engine = peridot::Engine::new(
+        userlib::APP_IDENTIFIER,
+        userlib::APP_VERSION,
+        nl,
+        unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
+        (event_sender.clone(), event_receiver),
+        frame_timing_receiver,
+        event_queue_lifetime_extended,
+    );
+    let snd = NativeAudioEngine::new(engine.audio_mixer());
+    let pos_cache = SharedRef::new(DynamicMut::new(TouchPositionCache::new()));
+    engine.input_mut().set_nativelink(Box::new(InputNativeLink {
+        pos_cache: pos_cache.clone(),
+    }));
+    engine.post_init();
+
+    let engine_input = engine.input().clone();
+    let usercode_thread = Box::pin(usercode_launcher(engine));
+
+    let driver = Box::new(Game {
+        engine_input,
+        snd,
+        stopping_render: false,
+        pos_cache,
+        event_sender,
+        frame_timing_sender,
+        event_queue,
+        usercode_thread,
+        _pinned: core::marker::PhantomPinned,
+    });
+
+    extern "C" fn fin<F: core::future::Future>(inst_ptr: *mut core::ffi::c_void) {
+        let mut inst = unsafe { Box::from_raw(inst_ptr as *mut Game<F>) };
+        inst.event_queue.enqueue(peridot::Event::Shutdown);
+        while !inst.step() {}
+    }
+    extern "C" fn update<F: core::future::Future>(inst_ptr: *mut core::ffi::c_void) {
+        let inst = unsafe { &mut *(inst_ptr as *mut Game<F>) };
+        inst.event_queue.enqueue(peridot::Event::NextFrame);
+        inst.step();
+    }
+    extern "C" fn process_touch_down_event<F: core::future::Future>(
+        inst_ptr: *mut core::ffi::c_void,
+        id: u32,
+    ) {
+        let inst = unsafe { &mut *(inst_ptr as *mut Game<F>) };
+        inst.engine_input
+            .dispatch_button_event(peridot::NativeButtonInput::Touch(id), true);
+    }
+    extern "C" fn process_touch_up_event<F: core::future::Future>(
+        inst_ptr: *mut core::ffi::c_void,
+        id: u32,
+    ) {
+        let inst = unsafe { &mut *(inst_ptr as *mut Game<F>) };
+        inst.engine_input
+            .dispatch_button_event(peridot::NativeButtonInput::Touch(id), false);
+    }
+    extern "C" fn set_touch_position_absolute<F: core::future::Future>(
+        inst_ptr: *mut core::ffi::c_void,
+        id: u32,
+        x: f32,
+        y: f32,
+    ) {
+        let inst = unsafe { &mut *(inst_ptr as *mut Game<F>) };
+
+        inst.pos_cache.borrow_mut().set(id as _, x, y);
+        inst.engine_input.dispatch_analog_event(
+            peridot::NativeAnalogInput::TouchMoveX(id),
+            x,
+            true,
+        );
+        inst.engine_input.dispatch_analog_event(
+            peridot::NativeAnalogInput::TouchMoveY(id),
+            y,
+            true,
+        );
+    }
+
+    NativeCallData {
+        inst_ptr: Box::into_raw(driver) as _,
+        finalize: fin::<F>,
+        update: update::<F>,
+        process_touch_down_event: process_touch_down_event::<F>,
+        process_touch_up_event: process_touch_up_event::<F>,
+        set_touch_position_absolute: set_touch_position_absolute::<F>,
+    }
+}
+
+struct Game<F> {
     engine_input: peridot::InputProcess,
     snd: NativeAudioEngine,
     stopping_render: bool,
     pos_cache: SharedRef<DynamicMut<TouchPositionCache>>,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
     frame_timing_sender: async_std::channel::Sender<()>,
-    usercode_thread: async_std::task::JoinHandle<()>,
+    event_queue: Pin<Box<peridot::EventQueue>>,
+    usercode_thread: Pin<Box<F>>,
+    // self-referential struct
+    _pinned: core::marker::PhantomPinned,
 }
-impl Game {
-    fn new(asset_manager: native_wrapper::AssetManager, window: native_wrapper::Window) -> Self {
-        let (event_sender, event_receiver) = async_std::channel::unbounded();
-        let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
-
-        let nl = NativeLink {
-            al: PlatformAssetLoader::new(asset_manager),
-            w: window,
+impl<F: core::future::Future> Game<F> {
+    fn step(&mut self) -> bool {
+        let waker = unsafe {
+            core::task::Waker::from_raw(core::task::RawWaker::new(
+                core::ptr::null(),
+                &USERCODE_WAKER_VTABLE,
+            ))
         };
-        let mut engine = peridot::Engine::new(
-            userlib::APP_IDENTIFIER,
-            userlib::APP_VERSION,
-            nl,
-            Default::default(),
-            (event_sender.clone(), event_receiver),
-            frame_timing_receiver,
-        );
-        let snd = NativeAudioEngine::new(engine.audio_mixer());
-        let pos_cache = SharedRef::new(DynamicMut::new(TouchPositionCache::new()));
-        engine.input_mut().set_nativelink(Box::new(InputNativeLink {
-            pos_cache: pos_cache.clone(),
-        }));
-        engine.post_init();
 
-        let engine_input = engine.input().clone();
-        let usercode_thread = async_std::task::spawn(async move {
-            userlib::game_main(&mut engine).await;
-        });
+        self.usercode_thread
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&waker))
+            .is_ready()
+    }
+}
 
-        Self {
-            engine_input,
-            snd,
-            stopping_render: false,
-            pos_cache,
-            event_sender,
-            frame_timing_sender,
-            usercode_thread,
+struct Surface {
+    gfx_device: peridot::VulkanGfx,
+    handle: br::vk::VkSurfaceKHR,
+}
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(
+                self.gfx_device.instance().native_ptr(),
+                self.handle,
+                None,
+            );
         }
+    }
+}
+impl br::VkHandle for Surface {
+    type Handle = br::vk::VkSurfaceKHR;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
     }
 }
 
 struct Presenter {
     window: native_wrapper::Window,
-    sc: peridot::IntegratedSwapchain<br::SurfaceObject<peridot::InstanceObject>>,
+    sc: peridot::IntegratedSwapchain<Surface>,
 }
 unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
@@ -103,16 +214,17 @@ impl Presenter {
         render_queue_family_index: u32,
         window: native_wrapper::Window,
     ) -> Self {
-        let obj = unsafe {
-            br::SurfaceObject::new(
-                g.adapter(),
-                &br::vk::VkAndroidSurfaceCreateInfoKHR::new(window.as_ptr()),
-            )
-            .expect("Failed to create Surface")
+        let obj = Surface {
+            handle: unsafe {
+                br::AndroidSurfaceCreateInfo::new(window.as_ptr())
+                    .execute(g.device().instance(), None)
+                    .expect("Failed to create surface")
+            },
+            gfx_device: g.device().clone(),
         };
         let supported = g
-            .adapter()
-            .surface_support(render_queue_family_index, &obj)
+            .device()
+            .surface_support(&obj)
             .expect("Failed to query surface availability");
         if !supported {
             panic!("Vulkan Surface is not supported by this adapter");
@@ -129,50 +241,56 @@ impl Presenter {
     }
 }
 impl peridot::PlatformPresenter for Presenter {
-    type BackBuffer = br::ImageViewObject<
-        br::SwapchainImage<
-            SharedRef<
-                br::SurfaceSwapchainObject<
-                    peridot::DeviceObject,
-                    br::SurfaceObject<peridot::InstanceObject>,
-                >,
-            >,
-        >,
-    >;
-
+    #[inline(always)]
     fn format(&self) -> br::vk::VkFormat {
         self.sc.format()
     }
+
+    #[inline(always)]
     fn back_buffer_count(&self) -> usize {
         self.sc.back_buffer_count()
     }
-    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>> {
+
+    #[inline(always)]
+    fn back_buffer_size(&self) -> peridot::math::Vector2<u32> {
+        self.sc.back_buffer_size()
+    }
+
+    #[inline(always)]
+    fn back_buffer(&self, index: usize) -> Option<br::VkHandleRef<br::vk::VkImage>> {
         self.sc.back_buffer(index)
     }
 
-    fn emit_initialize_back_buffer_commands<
-        'r,
-        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-    >(
+    #[inline(always)]
+    fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, CB, peridot::DeviceObject>,
-    ) -> br::CmdRecord<'r, CB, peridot::DeviceObject> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         self.sc.emit_initialize_back_buffer_commands(recorder)
     }
+
+    #[inline(always)]
     fn next_back_buffer_index(&mut self) -> br::Result<u32> {
         self.sc.acquire_next_back_buffer_index()
     }
+
+    #[inline(always)]
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.sc.requesting_back_buffer_layout()
     }
-    fn render_and_present<'s>(
+
+    #[inline(always)]
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut peridot::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         backbuffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
-    ) -> br::Result<()> {
+        render_submission: peridot::SubmissionBatchBuilder<'r>,
+        update_submission: Option<peridot::SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
         self.sc.render_and_present(
             g,
             last_render_fence,
@@ -181,7 +299,8 @@ impl peridot::PlatformPresenter for Presenter {
             update_submission,
         )
     }
-    /// Returns whether re-initializing is needed for backbuffer resources
+
+    #[inline(always)]
     fn resize(&mut self, g: &peridot::Graphics, new_size: peridot::math::Vector2<u32>) -> bool {
         self.sc.resize(g, new_size);
         // WSI integrated swapchain needs reinitializing backbuffer resource
@@ -209,10 +328,10 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset = native_wrapper::Asset;
-    type StreamingAsset = native_wrapper::Asset;
+    type Asset<'a> = native_wrapper::Asset;
+    type StreamingAsset<'a> = native_wrapper::Asset;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<native_wrapper::Asset> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
@@ -222,7 +341,8 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
             .open(&path_str, AASSET_MODE_RANDOM)
             .ok_or(IOError::new(ErrorKind::NotFound, ""))
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<native_wrapper::Asset> {
+
+    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
@@ -291,6 +411,16 @@ use jni::{
     JNIEnv,
 };
 
+struct NativeCallData {
+    inst_ptr: *mut core::ffi::c_void,
+    finalize: extern "C" fn(inst_ptr: *mut core::ffi::c_void),
+    update: extern "C" fn(inst_ptr: *mut core::ffi::c_void),
+    process_touch_down_event: extern "C" fn(inst_ptr: *mut core::ffi::c_void, id: u32),
+    process_touch_up_event: extern "C" fn(inst_ptr: *mut core::ffi::c_void, id: u32),
+    set_touch_position_absolute:
+        extern "C" fn(inst_ptr: *mut core::ffi::c_void, id: u32, x: f32, y: f32),
+}
+
 #[no_mangle]
 pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_init<'e>(
     mut env: JNIEnv<'e>,
@@ -305,11 +435,13 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_init<'e>(
         .expect("No native window associated to the surface");
     let am = native_wrapper::AssetManager::from_java(&env, &asset_manager)
         .expect("Failed to get AndroidAssetManager native object");
-    let e = Game::new(am, window);
+    let ncd = launch(am, window, |mut e| async move {
+        userlib::game_main(&mut e).await;
+    });
 
-    let ptr = Box::into_raw(Box::new(e));
+    let ptr = Box::into_raw(Box::new(ncd));
     unsafe {
-        env.new_direct_byte_buffer(ptr as *mut u8, core::mem::size_of::<Game>())
+        env.new_direct_byte_buffer(ptr as *mut u8, core::mem::size_of::<NativeCallData>())
             .expect("Creating DirectByteBuffer failed")
     }
 }
@@ -323,17 +455,9 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_fin(
     let bytes = e
         .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let e = unsafe { Box::from_raw(bytes as *mut Game) };
+    let ncd = unsafe { Box::from_raw(bytes as *mut NativeCallData) };
 
-    async_std::task::block_on(async move {
-        if e.event_sender
-            .send(peridot::EngineEvent::Shutdown)
-            .await
-            .is_ok()
-        {
-            e.usercode_thread.await;
-        }
-    });
+    (ncd.finalize)(ncd.inst_ptr);
 }
 #[no_mangle]
 pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_update(
@@ -344,15 +468,9 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_update(
     let bytes = e
         .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let e = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
+    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
 
-    match e.frame_timing_sender.try_send(()) {
-        Ok(_) => (),
-        Err(async_std::channel::TrySendError::Full(_)) => (),
-        Err(async_std::channel::TrySendError::Closed(_)) => {
-            tracing::warn!("Frame Timing channel was closed!");
-        }
-    }
+    (ncd.update)(ncd.inst_ptr);
 }
 
 mod audio_backend;
@@ -432,10 +550,9 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchDownEvent(
     let bytes = e
         .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
+    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
 
-    gd.engine_input
-        .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), true);
+    (ncd.process_touch_down_event)(ncd.inst_ptr, id as _);
 }
 #[no_mangle]
 pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchUpEvent(
@@ -447,10 +564,9 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchUpEvent(
     let bytes = e
         .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
+    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
 
-    gd.engine_input
-        .dispatch_button_event(peridot::NativeButtonInput::Touch(id as _), false);
+    (ncd.process_touch_up_event)(ncd.inst_ptr, id as _);
 }
 #[no_mangle]
 pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
@@ -464,11 +580,7 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_setTouchPositionAbsolut
     let bytes = e
         .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
-    let gd = unsafe { (bytes as *mut Game).as_mut().expect("null ptr?") };
+    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
 
-    gd.pos_cache.borrow_mut().set(id as _, x, y);
-    gd.engine_input
-        .dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveX(id as _), x, true);
-    gd.engine_input
-        .dispatch_analog_event(peridot::NativeAnalogInput::TouchMoveY(id as _), y, true);
+    (ncd.set_touch_position_absolute)(ncd.inst_ptr, id as _, x, y);
 }

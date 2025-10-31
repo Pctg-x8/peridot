@@ -41,7 +41,7 @@ impl Context {
 impl Context {
     pub fn set_transform(&mut self, tf: Transform2D<f32>) -> &mut Self {
         self.current_transform = tf;
-        return self;
+        self
     }
     pub fn reset_transform(&mut self) -> &mut Self {
         self.set_transform(Transform2D::identity())
@@ -49,15 +49,15 @@ impl Context {
 
     pub fn translate(&mut self, Vector2(x, y): Vector2F32) -> &mut Self {
         self.current_transform = self.current_transform.post_translate(Vector2D::new(x, y));
-        return self;
+        self
     }
     pub fn rotate(&mut self, rad: f32) -> &mut Self {
         self.current_transform = self.current_transform.post_rotate(Angle::radians(rad));
-        return self;
+        self
     }
     pub fn scale(&mut self, Vector2(x, y): Vector2F32) -> &mut Self {
         self.current_transform = self.current_transform.post_scale(x, y);
-        return self;
+        self
     }
 }
 
@@ -71,7 +71,7 @@ pub struct FigureContext<'c> {
     fill_rule: FillRule,
 }
 impl Context {
-    pub fn begin_figure(&mut self, fill_rule: FillRule) -> FigureContext {
+    pub fn begin_figure<'x>(&'x mut self, fill_rule: FillRule) -> FigureContext<'x> {
         FigureContext {
             ctx: self,
             partitioner: Partitioner::new(),
@@ -467,7 +467,7 @@ impl<'c> FigureContext<'c> {
             .meshes
             .push((self.partitioner.into_mesh(), st, ext));
 
-        return self.ctx;
+        self.ctx
     }
 }
 impl<'c> FlatPathBuilder for FigureContext<'c> {
