@@ -313,10 +313,7 @@ impl super::RandomReadBlob for NativeFileBlobRandomReader {
         };
         match r {
             Ok(()) => Ok(read_bytes as _),
-            // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
-            Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => {
-                Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e))
-            }
+            Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => Ok(0),
             Err(e) => Err(e.into()),
         }
     }
@@ -404,10 +401,9 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
                         this.pending_state = Some(state);
                         core::task::Poll::Pending
                     }
-                    // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
-                    Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
-                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
-                    ),
+                    Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => {
+                        core::task::Poll::Ready(Ok(0))
+                    }
                     Err(e) => core::task::Poll::Ready(Err(e.into())),
                 }
             }
@@ -432,10 +428,9 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
                         .expect("Failed to register file handle to io reactor");
                     core::task::Poll::Pending
                 }
-                // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
-                Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
-                    Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
-                ),
+                Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => {
+                    core::task::Poll::Ready(Ok(0))
+                }
                 Err(e) => core::task::Poll::Ready(Err(e.into())),
             },
         }
@@ -493,9 +488,9 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
                         core::task::Poll::Pending
                     }
                     // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
-                    Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
-                        Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
-                    ),
+                    Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => {
+                        core::task::Poll::Ready(Ok(0))
+                    }
                     Err(e) => core::task::Poll::Ready(Err(e.into())),
                 }
             }
@@ -521,9 +516,9 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
                     core::task::Poll::Pending
                 }
                 // ERROR_HANDLE_EOFがUnexpectedEofのkindになってくれないらしいので手動で変換
-                Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => core::task::Poll::Ready(
-                    Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, e)),
-                ),
+                Err(e) if e.code() == ERROR_HANDLE_EOF.to_hresult() => {
+                    core::task::Poll::Ready(Ok(0))
+                }
                 Err(e) => core::task::Poll::Ready(Err(e.into())),
             },
         }
