@@ -6,39 +6,6 @@ use crate::{audio::Int24, InputStream};
 
 use super::WaveSamplesInFile;
 
-macro_rules! ReadWaveData {
-    ($this: expr, [$e: expr; $c: expr]) => {{
-        let len = $this.jump_chunk(Fourcc::from_bytes(b"data"))?;
-        let mut bytes = vec![[$e; $c]; len as usize / std::mem::size_of_val(&$e) / $c];
-        let buf = unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut u8, len as _) };
-        $this.file.read_exact(buf).map(move |_| bytes)
-    }};
-    ($this: expr, $e: expr) => {{
-        let len = $this.jump_chunk(Fourcc::from_bytes(b"data"))?;
-        let mut bytes = vec![$e; len as usize / std::mem::size_of_val(&$e)];
-        let buf = unsafe { std::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut u8, len as _) };
-        $this.file.read_exact(buf).map(move |_| bytes)
-    }};
-    ($this: expr, [$e: expr; $c: expr]; $smp: expr) => {{
-        let mut bytes = vec![[$e; $c]; $smp as usize];
-        let buf = unsafe
-        {
-            let len = $smp as usize * $c * std::mem::size_of_val(&$e);
-            std::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut u8, len)
-        };
-        $this.file.read(buf).map(move |v| { bytes.truncate(v / ($c * std::mem::size_of_val(&$e))); bytes })
-    }};
-    ($this: expr, $e: expr; $smp: expr) => {{
-        let mut bytes = vec![$e; $smp as usize];
-        let buf = unsafe
-        {
-            let len = $smp as usize * std::mem::size_of_val(&$e);
-            std::slice::from_raw_parts_mut(bytes.as_mut_ptr() as *mut u8, len)
-        };
-        $this.file.read(buf).map(move |v| { bytes.truncate(v / std::mem::size_of_val(&$e)); bytes })
-    }}
-}
-
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Fourcc(u32);
@@ -116,28 +83,25 @@ pub struct RIFFWaveFormatData {
 
 pub struct RIFFLoader<F: peridot_native_io::RandomReadBlob> {
     reader: F,
-    riff_chunk_start: u64,
     riff_subchunk_offsets: BTreeMap<Fourcc, (u64, u32)>,
+    subchunk_nondiscover_head: u64,
 }
 impl<F: peridot_native_io::RandomReadBlob> RIFFLoader<F> {
     pub fn new(reader: F) -> std::io::Result<Self> {
         let riff_chunk_start =
             seek_next_fourcc(&reader, 0, Fourcc::RIFF)? + RIFFChunkHeader::BYTE_LENGTH as u64;
         let mut file_type = core::mem::MaybeUninit::<u32>::uninit();
-        reader.read_exact(riff_chunk_start, unsafe {
-            &mut *file_type
-                .as_mut_ptr()
-                .cast::<[core::mem::MaybeUninit<u8>; 4]>()
-        })?;
-        assert!(
-            unsafe { file_type.assume_init().to_le_bytes() == *b"WAVE" },
+        reader.read_exact(riff_chunk_start, b32m_uninit(&mut file_type))?;
+        assert_eq!(
+            unsafe { file_type.assume_init().to_le_bytes() },
+            *b"WAVE",
             "not a WAVE file"
         );
 
         Ok(RIFFLoader {
             reader,
-            riff_chunk_start: riff_chunk_start + 4,
             riff_subchunk_offsets: BTreeMap::new(),
+            subchunk_nondiscover_head: riff_chunk_start + 4,
         })
     }
 
@@ -146,25 +110,28 @@ impl<F: peridot_native_io::RandomReadBlob> RIFFLoader<F> {
             return Ok((c + RIFFChunkHeader::BYTE_LENGTH as u64, l));
         }
 
-        let mut pos = self.riff_chunk_start;
         loop {
-            let next_hdr = RIFFChunkHeader::read(&self.reader, pos)?;
+            let next_hdr = RIFFChunkHeader::read(&self.reader, self.subchunk_nondiscover_head)?;
+            let chunk_pos = self.subchunk_nondiscover_head;
             let old_chunk = self
                 .riff_subchunk_offsets
-                .insert(next_hdr.fourcc, (pos, next_hdr.length));
+                .insert(next_hdr.fourcc, (chunk_pos, next_hdr.length));
             if let Some(c) = old_chunk {
                 tracing::warn!(
                     fourcc = ?next_hdr.fourcc,
                     old_position = c.0,
-                    new_position = pos,
+                    new_position = chunk_pos,
                     "multiple chunk with same fourcc found, some information may lack"
                 );
             }
-            if next_hdr.fourcc == fcc {
-                return Ok((pos + RIFFChunkHeader::BYTE_LENGTH as u64, next_hdr.length));
-            }
+            self.subchunk_nondiscover_head += next_hdr.total_byte_length() as u64;
 
-            pos += next_hdr.total_byte_length() as u64;
+            if next_hdr.fourcc == fcc {
+                return Ok((
+                    chunk_pos + RIFFChunkHeader::BYTE_LENGTH as u64,
+                    next_hdr.length,
+                ));
+            }
         }
     }
 
@@ -217,19 +184,6 @@ impl<F: peridot_native_io::RandomReadBlob> RIFFLoader<F> {
         &mut self,
         fmt: &RIFFWaveFormatData,
     ) -> std::io::Result<WaveSamplesInFile> {
-        fn slice_i24_value(s: &[u8]) -> Int24 {
-            assert!(s.len() == 3, "Unable to cast &[u8] as i24");
-
-            let vu = s[0] as u32 | ((s[1] as u32) << 8) | ((s[2] as u32) << 16);
-            // 符号拡張する
-            let fill_one = s[2] & 0x80 != 0;
-            Int24(if fill_one {
-                (vu | 0xff_000000) as _
-            } else {
-                vu as _
-            })
-        }
-
         match (fmt.num_channels, fmt.bits_per_sample, fmt.encoding) {
             (1, 8, 0x01) => Ok(WaveSamplesInFile::Mono8(self.read_data()?)),
             (1, 16, 0x01) => Ok(WaveSamplesInFile::Mono16(self.read_data_typed()?)),
@@ -267,6 +221,7 @@ impl<F: peridot_native_io::RandomReadBlob> RIFFLoader<F> {
     }
 }
 
+// TODO: Streamingといいつつチャンク探すのに前後しないといけないのでちょっと考え直したほうが良さそう（wavそのまま使わないとか）
 pub struct RIFFStreamingLoader<F: InputStream> {
     pub file: F,
 }
@@ -313,11 +268,36 @@ impl<F: InputStream> RIFFStreamingLoader<F> {
     }
 
     fn read_data(&mut self, max_bytes: usize) -> std::io::Result<Vec<u8>> {
-        let mut bytes = vec![0u8; max_bytes];
-        self.file.read(&mut bytes).map(move |v| {
-            bytes.truncate(v);
-            bytes
-        })
+        let mut bytes = Vec::with_capacity(max_bytes);
+        let v = self.file.read(unsafe {
+            core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+                bytes.spare_capacity_mut(),
+            )
+        })?;
+        unsafe {
+            bytes.set_len(v);
+        }
+        Ok(bytes)
+    }
+
+    fn read_data_typed<T>(&mut self, max_samples: usize) -> std::io::Result<Vec<T>> {
+        let mut samples = Vec::with_capacity(max_samples);
+        let v = self.file.read(unsafe {
+            std::slice::from_raw_parts_mut(
+                samples.spare_capacity_mut().as_mut_ptr().cast::<u8>(),
+                max_samples * core::mem::size_of::<T>(),
+            )
+        })?;
+        assert_eq!(
+            v % core::mem::size_of::<T>(),
+            0,
+            "read buf length not aligned"
+        );
+
+        unsafe {
+            samples.set_len(v / core::mem::size_of::<T>());
+        }
+        Ok(samples)
     }
 
     pub fn read_data_uncompressed(
@@ -325,59 +305,54 @@ impl<F: InputStream> RIFFStreamingLoader<F> {
         fmt: &RIFFWaveFormatData,
         max_samples: usize,
     ) -> std::io::Result<WaveSamplesInFile> {
-        fn slice_i24_value(s: &[u8]) -> Int24 {
-            assert!(s.len() == 3, "Unable to cast &[u8] as i24");
-
-            let vu = s[0] as u32 | ((s[1] as u32) << 8) | ((s[2] as u32) << 16);
-            // 符号拡張する
-            let fillone = s[2] & 0x80 != 0;
-            Int24(if fillone {
-                (vu | 0xff_000000) as _
-            } else {
-                vu as _
-            })
-        }
-
         match (fmt.num_channels, fmt.bits_per_sample, fmt.encoding) {
-            (1, 8, 0x01) => self.read_data(max_samples).map(WaveSamplesInFile::Mono8),
-            (1, 16, 0x01) => ReadWaveData!(self, 0i16; max_samples).map(WaveSamplesInFile::Mono16),
-            (1, 32, 0x01) => ReadWaveData!(self, 0i32; max_samples).map(WaveSamplesInFile::Mono32),
-            (1, 64, 0x01) => ReadWaveData!(self, 0i64; max_samples).map(WaveSamplesInFile::Mono64),
-            (1, 32, 0x03) => ReadWaveData!(self, 0f32; max_samples).map(WaveSamplesInFile::MonoF32),
-            (1, 64, 0x03) => ReadWaveData!(self, 0f64; max_samples).map(WaveSamplesInFile::MonoF64),
-            (2, 8, 0x01) => {
-                ReadWaveData!(self, [0u8; 2]; max_samples).map(WaveSamplesInFile::Stereo8)
-            }
-            (2, 16, 0x01) => {
-                ReadWaveData!(self, [0i16; 2]; max_samples).map(WaveSamplesInFile::Stereo16)
-            }
-            (2, 32, 0x01) => {
-                ReadWaveData!(self, [0i32; 2]; max_samples).map(WaveSamplesInFile::Stereo32)
-            }
-            (2, 64, 0x01) => {
-                ReadWaveData!(self, [0i64; 2]; max_samples).map(WaveSamplesInFile::Stereo64)
-            }
-            (2, 32, 0x03) => {
-                ReadWaveData!(self, [0f32; 2]; max_samples).map(WaveSamplesInFile::StereoF32)
-            }
-            (2, 64, 0x03) => {
-                ReadWaveData!(self, [0f64; 2]; max_samples).map(WaveSamplesInFile::StereoF64)
-            }
-            (1, 24, 0x01) => {
-                let b = self.read_data(max_samples / 3)?;
-                Ok(WaveSamplesInFile::Mono24(
-                    b.chunks(3).map(slice_i24_value).collect(),
-                ))
-            }
-            (2, 24, 0x01) => {
-                let b = self.read_data(max_samples / (3 * 2))?;
-                Ok(WaveSamplesInFile::Stereo24(
-                    b.chunks(3 * 2)
-                        .map(|bs| [slice_i24_value(&bs[..3]), slice_i24_value(&bs[3..])])
-                        .collect(),
-                ))
-            }
-            (ch, b, f) => unimplemented!("unhandleable triple: ch={ch} bits={b} fmt={f}"),
+            (1, 8, 0x01) => Ok(WaveSamplesInFile::Mono8(self.read_data(max_samples)?)),
+            (1, 16, 0x01) => Ok(WaveSamplesInFile::Mono16(
+                self.read_data_typed(max_samples)?,
+            )),
+            (1, 32, 0x01) => Ok(WaveSamplesInFile::Mono32(
+                self.read_data_typed(max_samples)?,
+            )),
+            (1, 64, 0x01) => Ok(WaveSamplesInFile::Mono64(
+                self.read_data_typed(max_samples)?,
+            )),
+            (1, 32, 0x03) => Ok(WaveSamplesInFile::MonoF32(
+                self.read_data_typed(max_samples)?,
+            )),
+            (1, 64, 0x03) => Ok(WaveSamplesInFile::MonoF64(
+                self.read_data_typed(max_samples)?,
+            )),
+            (2, 8, 0x01) => Ok(WaveSamplesInFile::Stereo8(
+                self.read_data_typed(max_samples)?,
+            )),
+            (2, 16, 0x01) => Ok(WaveSamplesInFile::Stereo16(
+                self.read_data_typed(max_samples)?,
+            )),
+            (2, 32, 0x01) => Ok(WaveSamplesInFile::Stereo32(
+                self.read_data_typed(max_samples)?,
+            )),
+            (2, 64, 0x01) => Ok(WaveSamplesInFile::Stereo64(
+                self.read_data_typed(max_samples)?,
+            )),
+            (2, 32, 0x03) => Ok(WaveSamplesInFile::StereoF32(
+                self.read_data_typed(max_samples)?,
+            )),
+            (2, 64, 0x03) => Ok(WaveSamplesInFile::StereoF64(
+                self.read_data_typed(max_samples)?,
+            )),
+            (1, 24, 0x01) => Ok(WaveSamplesInFile::Mono24(
+                self.read_data(max_samples / 3)?
+                    .chunks(3)
+                    .map(slice_i24_value)
+                    .collect(),
+            )),
+            (2, 24, 0x01) => Ok(WaveSamplesInFile::Stereo24(
+                self.read_data(max_samples / (3 * 2))?
+                    .chunks(3 * 2)
+                    .map(|bs| [slice_i24_value(&bs[..3]), slice_i24_value(&bs[3..])])
+                    .collect(),
+            )),
+            (ch, b, f) => unimplemented!("unhandled triple: ch={ch} bits={b} fmt={f}"),
         }
     }
 }
@@ -390,8 +365,8 @@ impl<F: InputStream> From<F> for RIFFStreamingLoader<F> {
 
 pub struct RIFFLoaderAsync<F: peridot_native_io::RandomReadBlobAsync> {
     reader: F,
-    riff_chunk_start: u64,
     subchunk_offsets: BTreeMap<Fourcc, (u64, u32)>,
+    subchunk_nondiscover_head: u64,
 }
 impl<F: peridot_native_io::RandomReadBlobAsync> RIFFLoaderAsync<F> {
     pub async fn new(reader: F) -> std::io::Result<Self> {
@@ -399,21 +374,18 @@ impl<F: peridot_native_io::RandomReadBlobAsync> RIFFLoaderAsync<F> {
             + RIFFChunkHeader::BYTE_LENGTH as u64;
         let mut file_type = core::mem::MaybeUninit::<u32>::uninit();
         reader
-            .read_exact_async(riff_chunk_start, unsafe {
-                &mut *file_type
-                    .as_mut_ptr()
-                    .cast::<[core::mem::MaybeUninit<u8>; 4]>()
-            })
+            .read_exact_async(riff_chunk_start, b32m_uninit(&mut file_type))
             .await?;
-        assert!(
-            unsafe { file_type.assume_init().to_le_bytes() == *b"WAVE" },
+        assert_eq!(
+            unsafe { file_type.assume_init().to_le_bytes() },
+            *b"WAVE",
             "not a WAVE file"
         );
 
         Ok(Self {
             reader,
-            riff_chunk_start: riff_chunk_start + 4,
             subchunk_offsets: BTreeMap::new(),
+            subchunk_nondiscover_head: riff_chunk_start + 4,
         })
     }
 
@@ -423,29 +395,29 @@ impl<F: peridot_native_io::RandomReadBlobAsync> RIFFLoaderAsync<F> {
             return Ok((c + RIFFChunkHeader::BYTE_LENGTH as u64, l));
         }
 
-        let mut seek_ptr = self.riff_chunk_start;
         loop {
-            let next_hdr = RIFFChunkHeader::read_async(&self.reader, seek_ptr).await?;
+            let next_hdr =
+                RIFFChunkHeader::read_async(&self.reader, self.subchunk_nondiscover_head).await?;
+            let chunk_pos = self.subchunk_nondiscover_head;
             let old_chunk = self
                 .subchunk_offsets
-                .insert(next_hdr.fourcc, (seek_ptr, next_hdr.length));
+                .insert(next_hdr.fourcc, (chunk_pos, next_hdr.length));
             if let Some(c) = old_chunk {
                 tracing::warn!(
                     fourcc = ?next_hdr.fourcc,
                     old_position = c.0,
-                    new_position = seek_ptr,
+                    new_position = chunk_pos,
                     "multiple chunk with same fourcc found, some information may lack"
                 );
             }
+            self.subchunk_nondiscover_head += next_hdr.total_byte_length() as u64;
 
             if next_hdr.fourcc == target {
                 return Ok((
-                    seek_ptr + RIFFChunkHeader::BYTE_LENGTH as u64,
+                    chunk_pos + RIFFChunkHeader::BYTE_LENGTH as u64,
                     next_hdr.length,
                 ));
             }
-
-            seek_ptr += next_hdr.total_byte_length() as u64;
         }
     }
 
@@ -496,19 +468,6 @@ impl<F: peridot_native_io::RandomReadBlobAsync> RIFFLoaderAsync<F> {
         &mut self,
         fmt: &RIFFWaveFormatData,
     ) -> std::io::Result<WaveSamplesInFile> {
-        fn slice_i24_value(s: &[u8]) -> Int24 {
-            assert!(s.len() == 3, "Unable to cast &[u8] as i24");
-
-            let vu = s[0] as u32 | ((s[1] as u32) << 8) | ((s[2] as u32) << 16);
-            // 符号拡張する
-            let fill_one = s[2] & 0x80 != 0;
-            Int24(if fill_one {
-                (vu | 0xff_000000) as _
-            } else {
-                vu as _
-            })
-        }
-
         match (fmt.num_channels, fmt.bits_per_sample, fmt.encoding) {
             (1, 8, 0x01) => Ok(WaveSamplesInFile::Mono8(self.read_data().await?)),
             (1, 16, 0x01) => Ok(WaveSamplesInFile::Mono16(self.read_data_typed().await?)),
@@ -579,4 +538,23 @@ async fn seek_next_fourcc_async(
 
         init_pos += next_hdr.total_byte_length() as u64;
     }
+}
+
+const fn b32m_uninit<'a>(
+    x: &'a mut core::mem::MaybeUninit<u32>,
+) -> &'a mut [core::mem::MaybeUninit<u8>; 4] {
+    unsafe { core::mem::transmute(x) }
+}
+
+fn slice_i24_value(s: &[u8]) -> Int24 {
+    assert!(s.len() == 3, "Unable to cast &[u8] as i24");
+
+    let vu = s[0] as u32 | ((s[1] as u32) << 8) | ((s[2] as u32) << 16);
+    // 符号拡張する
+    let fill_one = s[2] & 0x80 != 0;
+    Int24(if fill_one {
+        (vu | 0xff_000000) as _
+    } else {
+        vu as _
+    })
 }
