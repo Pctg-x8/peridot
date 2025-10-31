@@ -1,7 +1,10 @@
 //! peridot-cradle for android platform
 
-use br::PhysicalDevice;
-use log::*;
+use std::ffi::CStr;
+use std::ffi::CString;
+use std::io::{ErrorKind, Result as IOResult};
+use std::pin::Pin;
+use std::sync::Arc;
 
 mod native_wrapper;
 #[allow(dead_code)]
@@ -11,9 +14,6 @@ use android::{AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
-use std::ffi::CStr;
-use std::pin::Pin;
-use std::sync::Arc;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -43,9 +43,9 @@ fn init_logger() {
 
 static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |data| core::task::RawWaker::new(data, &USERCODE_WAKER_VTABLE),
-    |data| {},
-    |data| {},
-    |data| {},
+    |_data| {},
+    |_data| {},
+    |_data| {},
 );
 
 fn launch<F: core::future::Future>(
@@ -53,8 +53,10 @@ fn launch<F: core::future::Future>(
     window: native_wrapper::Window,
     usercode_launcher: impl FnOnce(peridot::Engine<'static, NativeLink>) -> F,
 ) -> NativeCallData {
+    let bgio_worker = peridot::native_io::android::BackgroundIoWorkerPool::spawn();
+
     let (event_sender, event_receiver) = async_std::channel::unbounded();
-    let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
+    let (_, frame_timing_receiver) = async_std::channel::bounded(1);
 
     let event_queue = Box::pin(peridot::EventQueue::new());
     let event_queue_lifetime_extended: &'static peridot::EventQueue =
@@ -84,13 +86,11 @@ fn launch<F: core::future::Future>(
 
     let driver = Box::new(Game {
         engine_input,
-        snd,
-        stopping_render: false,
+        _snd: snd,
         pos_cache,
-        event_sender,
-        frame_timing_sender,
         event_queue,
         usercode_thread,
+        _bgio_worker: bgio_worker,
         _pinned: core::marker::PhantomPinned,
     });
 
@@ -153,12 +153,10 @@ fn launch<F: core::future::Future>(
 
 struct Game<F> {
     engine_input: peridot::InputProcess,
-    snd: NativeAudioEngine,
-    stopping_render: bool,
+    _snd: NativeAudioEngine,
     pos_cache: SharedRef<DynamicMut<TouchPositionCache>>,
-    event_sender: async_std::channel::Sender<peridot::EngineEvent>,
-    frame_timing_sender: async_std::channel::Sender<()>,
     event_queue: Pin<Box<peridot::EventQueue>>,
+    _bgio_worker: peridot::native_io::android::BackgroundIoWorkerPool,
     usercode_thread: Pin<Box<F>>,
     // self-referential struct
     _pinned: core::marker::PhantomPinned,
@@ -209,11 +207,7 @@ struct Presenter {
 unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
 impl Presenter {
-    pub fn new(
-        g: &peridot::Graphics,
-        render_queue_family_index: u32,
-        window: native_wrapper::Window,
-    ) -> Self {
+    pub fn new(g: &peridot::Graphics, window: native_wrapper::Window) -> Self {
         let obj = Surface {
             handle: unsafe {
                 br::AndroidSurfaceCreateInfo::new(window.as_ptr())
@@ -257,7 +251,7 @@ impl peridot::PlatformPresenter for Presenter {
     }
 
     #[inline(always)]
-    fn back_buffer(&self, index: usize) -> Option<br::VkHandleRef<br::vk::VkImage>> {
+    fn back_buffer<'a>(&'a self, index: usize) -> Option<br::VkHandleRef<'a, br::vk::VkImage>> {
         self.sc.back_buffer(index)
     }
 
@@ -313,8 +307,6 @@ impl peridot::PlatformPresenter for Presenter {
     }
 }
 
-use std::ffi::CString;
-use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 struct PlatformAssetLoader {
     amgr: RwLock<native_wrapper::AssetManager>,
 }
@@ -328,18 +320,46 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset<'a> = native_wrapper::Asset;
+    type AssetBlob<'a> = peridot::native_io::android::BundledAssetRandomReader;
+    type AssetBlobAsync<'a> = peridot::native_io::android::BundledAssetAsyncRandomReader;
     type StreamingAsset<'a> = native_wrapper::Asset;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);
         let path_str = CString::new(path_str).expect("converting path");
-        self.amgr
-            .write()
-            .open(&path_str, AASSET_MODE_RANDOM)
-            .ok_or(IOError::new(ErrorKind::NotFound, ""))
+        Ok(
+            peridot::native_io::android::BundledAssetRandomReader::from_asset_ptr(
+                self.amgr
+                    .write()
+                    .open(&path_str, AASSET_MODE_RANDOM)
+                    .ok_or(ErrorKind::NotFound)?
+                    .leak(),
+            ),
+        )
+    }
+
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
+        async move {
+            let mut path_str = path.replace(".", "/");
+            path_str.push('.');
+            path_str.push_str(ext);
+            let path_str = CString::new(path_str).expect("converting path");
+            Ok(
+                peridot::native_io::android::BundledAssetAsyncRandomReader::from_asset_ptr(
+                    self.amgr
+                        .write()
+                        .open(&path_str, AASSET_MODE_RANDOM)
+                        .ok_or(ErrorKind::NotFound)?
+                        .leak(),
+                ),
+            )
+        }
     }
 
     fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
@@ -350,7 +370,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         self.amgr
             .write()
             .open(&path_str, AASSET_MODE_STREAMING)
-            .ok_or(IOError::new(ErrorKind::NotFound, ""))
+            .ok_or(ErrorKind::NotFound.into())
     }
 }
 
@@ -374,7 +394,7 @@ impl peridot::NativeLinker for NativeLink {
         &self.al
     }
     fn new_presenter(&self, g: &peridot::Graphics) -> Presenter {
-        Presenter::new(g, g.graphics_queue_family_index(), self.w.clone())
+        Presenter::new(g, self.w.clone())
     }
 }
 
@@ -451,7 +471,7 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_fin(
     _: JClass,
     obj: JByteBuffer,
 ) {
-    info!("Finalizing NativeGameEngine...");
+    tracing::info!("Finalizing NativeGameEngine...");
     let bytes = e
         .get_direct_buffer_address(&obj)
         .expect("Getting Pointer from DirectByteBuffer failed");
@@ -479,7 +499,7 @@ struct Generator(Arc<RwLock<peridot::audio::Mixer>>);
 impl audio_backend::aaudio::DataCallback for Generator {
     fn callback(
         &mut self,
-        stream_ptr: *mut audio_backend::aaudio::native::AAudioStream,
+        _stream_ptr: *mut audio_backend::aaudio::native::AAudioStream,
         buf: *mut libc::c_void,
         frames: usize,
     ) -> audio_backend::aaudio::CallbackResult {
@@ -535,8 +555,10 @@ impl NativeAudioEngine {
 impl Drop for NativeAudioEngine {
     fn drop(&mut self) {
         self.generator.0.write().stop();
-        self.stream.request_stop();
-        trace!("NativeAudioEngine end");
+        if let Err(e) = self.stream.request_stop() {
+            tracing::warn!(reason = ?e, "Stopping NativeAudioEngine stream failed");
+        }
+        tracing::trace!("NativeAudioEngine end");
     }
 }
 

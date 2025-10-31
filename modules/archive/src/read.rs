@@ -5,17 +5,17 @@ use std::{
 };
 
 use crate::{
-    AssetEntryHeadingPair, CompressionMethod, ContentFlags,
-    entry::AssetNameRef,
+    AssetEntryHeadingPair, CompressionMethod, ContentFlags, entry::AssetNameRef,
     entry_tree::EntryTreePointer,
-    native_io::{
-        MemoryMapBlob, PlatformNativeFileReader, PlatformNativeFileReaderAsync, RandomReadBlob,
-        RandomReadBlobAsync,
-    },
 };
 use crc::crc32;
 use libflate::deflate as zlib;
+use peridot_native_io::{
+    MemoryMapBlob, PlatformNativeFileReader, PlatformNativeFileReaderAsync, RandomReadBlob,
+    RandomReadBlobAsync,
+};
 use peridot_serialization_utils::{VariableUInt, VariableULong};
+use pin_project::pin_project;
 
 #[non_exhaustive]
 #[derive(Debug)]
@@ -358,11 +358,88 @@ fn find_entry(
     None
 }
 
+pub struct OnMemoryArchiveBinReadFuture<'a, 'b, 'aa> {
+    reader: &'a OnMemoryArchiveBinReader<'aa>,
+    pos: u64,
+    buf: &'b mut [MaybeUninit<u8>],
+}
+impl<'a, 'b, 'aa> Future for OnMemoryArchiveBinReadFuture<'a, 'b, 'aa> {
+    type Output = std::io::Result<usize>;
+
+    #[inline(always)]
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+
+        std::task::Poll::Ready(this.reader.read_at(this.pos, this.buf))
+    }
+}
+
+pub struct OnMemoryArchiveBinReadVecFuture<'a, 'b, 'aa, 'bb> {
+    reader: &'a OnMemoryArchiveBinReader<'aa>,
+    pos: u64,
+    buf: &'b mut [IoSliceMut<'bb>],
+}
+impl<'a, 'b, 'aa, 'bb> Future for OnMemoryArchiveBinReadVecFuture<'a, 'b, 'aa, 'bb> {
+    type Output = std::io::Result<usize>;
+
+    #[inline(always)]
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+
+        std::task::Poll::Ready(this.reader.readv_at(this.pos, this.buf))
+    }
+}
+
 pub struct OnMemoryArchiveBinReader<'a> {
     pub archive: &'a OnMemoryArchive,
     pub pointer_base: u64,
     pub pointer: u64,
     pub pointer_limit: u64,
+}
+impl OnMemoryArchiveBinReader<'_> {
+    fn read_at(&self, pos: u64, buf: &mut [MaybeUninit<u8>]) -> std::io::Result<usize> {
+        let pos_abs = self
+            .pointer_base
+            .checked_add(pos)
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
+        let left_available = self
+            .pointer_limit
+            .checked_sub(pos_abs)
+            .and_then(|x| usize::try_from(x).ok())
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
+        let archive_buf_offset =
+            usize::try_from(pos_abs).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+
+        let read_len = buf.len().min(left_available);
+        if read_len > 0 {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    self.archive.block.as_ptr().add(archive_buf_offset),
+                    buf.as_mut_ptr().cast::<u8>(),
+                    read_len,
+                );
+            }
+        }
+
+        Ok(read_len)
+    }
+
+    fn readv_at(&self, pos: u64, buf: &mut [IoSliceMut]) -> std::io::Result<usize> {
+        let pos_abs = self
+            .pointer_base
+            .checked_add(pos)
+            .ok_or(std::io::ErrorKind::InvalidInput)?;
+        let archive_buf_offset =
+            usize::try_from(pos_abs).map_err(|_| std::io::ErrorKind::InvalidInput)?;
+
+        std::io::Cursor::new(&self.archive.block[archive_buf_offset..]).read_vectored(buf)
+    }
 }
 impl std::io::Read for OnMemoryArchiveBinReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
@@ -488,6 +565,51 @@ pub struct FileStreamingArchiveBinReader<'a, R: RandomReadBlob + MemoryMapBlob> 
     pointer: u64,
     pointer_limit: u64,
 }
+impl<R: RandomReadBlob + MemoryMapBlob> FileStreamingArchiveBinReader<'_, R> {
+    fn read_at(&self, pos: u64, buf: &mut [MaybeUninit<u8>]) -> std::io::Result<usize> {
+        let pos_abs = self
+            .pointer_base
+            .checked_add(pos)
+            .ok_or(std::io::ErrorKind::InvalidInput)?
+            .min(self.pointer_limit);
+        let max_readable = usize::try_from(self.pointer_limit - pos_abs)
+            .unwrap_or(buf.len())
+            .min(buf.len());
+
+        self.archive.handle.read(pos_abs, &mut buf[..max_readable])
+    }
+
+    fn readv_at(&self, pos: u64, mut buf: &mut [IoSliceMut]) -> std::io::Result<usize> {
+        let pos_abs = self
+            .pointer_base
+            .checked_add(pos)
+            .ok_or(std::io::ErrorKind::InvalidInput)?
+            .min(self.pointer_limit);
+
+        if let Some(mut max_readable) = usize::try_from(self.pointer_limit - pos_abs).ok() {
+            // truncate iovecs for max_readable
+            let mut avail_count = 0;
+            while avail_count < buf.len() && max_readable > 0 {
+                if let Some(rem) = max_readable.checked_sub(buf[avail_count].len()) {
+                    // take full
+                    max_readable = rem;
+                    avail_count += 1;
+                    continue;
+                }
+
+                // final
+                buf[avail_count] = IoSliceMut::new(unsafe {
+                    core::slice::from_raw_parts_mut(buf[avail_count].as_mut_ptr(), max_readable)
+                });
+                avail_count += 1;
+                break;
+            }
+            buf = &mut buf[..avail_count];
+        }
+
+        self.archive.handle.readv(pos_abs, buf)
+    }
+}
 impl<R: RandomReadBlob + MemoryMapBlob> std::io::Read for FileStreamingArchiveBinReader<'_, R> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
@@ -510,6 +632,151 @@ impl<R: RandomReadBlob + MemoryMapBlob> std::io::Seek for FileStreamingArchiveBi
         };
 
         Ok(self.pointer - self.pointer_base)
+    }
+}
+
+#[pin_project(project = FileStreamingArchiveBinReadFutureStateP)]
+enum FileStreamingArchiveBinReadFutureState<F> {
+    Idle,
+    Pending(#[pin] F),
+}
+
+#[pin_project]
+pub struct FileStreamingArchiveBinReadFuture<
+    'a,
+    'aa,
+    'b,
+    R: RandomReadBlobAsync + MemoryMapBlob + 'aa,
+> {
+    reader: &'a FileStreamingArchiveBinReaderAsync<'aa, R>,
+    pos: u64,
+    buf: &'b mut [MaybeUninit<u8>],
+    #[pin]
+    state: FileStreamingArchiveBinReadFutureState<R::ReadFuture<'aa, 'b>>,
+}
+impl<'a, 'aa, 'b, R: RandomReadBlobAsync + MemoryMapBlob> Future
+    for FileStreamingArchiveBinReadFuture<'a, 'aa, 'b, R>
+{
+    type Output = std::io::Result<usize>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let mut this = self.project();
+
+        loop {
+            match this.state.as_mut().project() {
+                FileStreamingArchiveBinReadFutureStateP::Idle => {
+                    let pos_abs = this
+                        .reader
+                        .pointer_base
+                        .checked_add(*this.pos)
+                        .ok_or(std::io::ErrorKind::InvalidInput)?
+                        .min(this.reader.pointer_limit);
+                    let max_readable = usize::try_from(this.reader.pointer_limit - pos_abs)
+                        .unwrap_or(this.buf.len())
+                        .min(this.buf.len());
+                    println!("read async {pos_abs} {max_readable}");
+
+                    this.state
+                        .set(FileStreamingArchiveBinReadFutureState::Pending(
+                            this.reader.archive.handle.read_async(pos_abs, unsafe {
+                                core::mem::transmute(&mut this.buf[..max_readable])
+                            }),
+                        ));
+                }
+                FileStreamingArchiveBinReadFutureStateP::Pending(f) => {
+                    let r = core::task::ready!(f.poll(cx));
+                    this.state.set(FileStreamingArchiveBinReadFutureState::Idle);
+                    return core::task::Poll::Ready(r);
+                }
+            }
+        }
+    }
+}
+
+#[pin_project]
+pub struct FileStreamingArchiveBinReadVecFuture<
+    'a,
+    'aa,
+    'b,
+    'bb,
+    R: RandomReadBlobAsync + MemoryMapBlob + 'aa,
+> where
+    'bb: 'b,
+{
+    reader: &'a FileStreamingArchiveBinReaderAsync<'aa, R>,
+    pos: u64,
+    buf: &'b mut [IoSliceMut<'bb>],
+    #[pin]
+    state: FileStreamingArchiveBinReadFutureState<R::ReadVecFuture<'aa, 'b, 'bb>>,
+}
+impl<'a, 'aa, 'b, 'bb, R: RandomReadBlobAsync + MemoryMapBlob> Future
+    for FileStreamingArchiveBinReadVecFuture<'a, 'aa, 'b, 'bb, R>
+where
+    'bb: 'b,
+{
+    type Output = std::io::Result<usize>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let mut this = self.project();
+
+        loop {
+            match this.state.as_mut().project() {
+                FileStreamingArchiveBinReadFutureStateP::Idle => {
+                    let pos_abs = this
+                        .reader
+                        .pointer_base
+                        .checked_add(*this.pos)
+                        .ok_or(std::io::ErrorKind::InvalidInput)?
+                        .min(this.reader.pointer_limit);
+
+                    let mut buf = &mut this.buf[..];
+                    if let Some(mut max_readable) =
+                        usize::try_from(this.reader.pointer_limit - pos_abs).ok()
+                    {
+                        // truncate iovecs for max_readable
+                        let mut avail_count = 0;
+                        while avail_count < buf.len() && max_readable > 0 {
+                            if let Some(rem) = max_readable.checked_sub(buf[avail_count].len()) {
+                                // take full
+                                max_readable = rem;
+                                avail_count += 1;
+                                continue;
+                            }
+
+                            // final
+                            buf[avail_count] = IoSliceMut::new(unsafe {
+                                core::slice::from_raw_parts_mut(
+                                    buf[avail_count].as_mut_ptr(),
+                                    max_readable,
+                                )
+                            });
+                            avail_count += 1;
+                            break;
+                        }
+                        buf = &mut buf[..avail_count];
+                    }
+
+                    this.state
+                        .set(FileStreamingArchiveBinReadFutureState::Pending(
+                            this.reader
+                                .archive
+                                .handle
+                                .readv_async(pos_abs, unsafe { core::mem::transmute(buf) }),
+                        ));
+                }
+                FileStreamingArchiveBinReadFutureStateP::Pending(f) => {
+                    let r = core::task::ready!(f.poll(cx));
+                    this.state.set(FileStreamingArchiveBinReadFutureState::Idle);
+                    return core::task::Poll::Ready(r);
+                }
+            }
+        }
     }
 }
 
@@ -811,6 +1078,33 @@ pub enum ArchiveBinReader<'a, R: RandomReadBlob + MemoryMapBlob> {
     OnMemory(OnMemoryArchiveBinReader<'a>),
     FileStreaming(FileStreamingArchiveBinReader<'a, R>),
 }
+impl<R: RandomReadBlob + MemoryMapBlob> peridot_native_io::BlobMetadata
+    for ArchiveBinReader<'_, R>
+{
+    fn byte_length(&self) -> std::io::Result<u64> {
+        match self {
+            Self::OnMemory(r) => Ok(r.pointer_limit - r.pointer_base),
+            Self::FileStreaming(r) => Ok(r.pointer_limit - r.pointer_base),
+        }
+    }
+}
+impl<R: RandomReadBlob + MemoryMapBlob> peridot_native_io::RandomReadBlob
+    for ArchiveBinReader<'_, R>
+{
+    fn read(&self, pos: u64, buf: &mut [MaybeUninit<u8>]) -> std::io::Result<usize> {
+        match self {
+            Self::OnMemory(r) => r.read_at(pos, buf),
+            Self::FileStreaming(r) => r.read_at(pos, buf),
+        }
+    }
+
+    fn readv(&self, offs: u64, iovecs: &mut [IoSliceMut]) -> std::io::Result<usize> {
+        match self {
+            Self::OnMemory(r) => r.readv_at(offs, iovecs),
+            Self::FileStreaming(r) => r.readv_at(offs, iovecs),
+        }
+    }
+}
 impl<R: RandomReadBlob + MemoryMapBlob> std::io::Read for ArchiveBinReader<'_, R> {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
@@ -830,9 +1124,108 @@ impl<R: RandomReadBlob + MemoryMapBlob> std::io::Seek for ArchiveBinReader<'_, R
     }
 }
 
+#[pin_project(project = EnumDispatchFP)]
+pub enum EnumDispatchF<OnMemoryF, FileStreamingF> {
+    OnMemory(#[pin] OnMemoryF),
+    FileStreaming(#[pin] FileStreamingF),
+}
+impl<OnMemoryF, FileStreamingF> Future for EnumDispatchF<OnMemoryF, FileStreamingF>
+where
+    OnMemoryF: Future,
+    FileStreamingF: Future<Output = OnMemoryF::Output>,
+{
+    type Output = OnMemoryF::Output;
+
+    #[inline]
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match self.project() {
+            EnumDispatchFP::OnMemory(f) => f.poll(cx),
+            EnumDispatchFP::FileStreaming(f) => f.poll(cx),
+        }
+    }
+}
+
 pub enum ArchiveBinReaderAsync<'a, R: RandomReadBlobAsync + MemoryMapBlob> {
     OnMemory(OnMemoryArchiveBinReader<'a>),
     FileStreaming(FileStreamingArchiveBinReaderAsync<'a, R>),
+}
+impl<R: RandomReadBlobAsync + MemoryMapBlob> peridot_native_io::BlobMetadataAsync
+    for ArchiveBinReaderAsync<'_, R>
+{
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>> {
+        async move {
+            match self {
+                Self::OnMemory(r) => Ok(r.pointer_limit - r.pointer_base),
+                Self::FileStreaming(r) => Ok(r.pointer_limit - r.pointer_base),
+            }
+        }
+    }
+}
+impl<'aa, R: RandomReadBlobAsync + MemoryMapBlob + 'aa> peridot_native_io::RandomReadBlobAsync
+    for ArchiveBinReaderAsync<'aa, R>
+{
+    type ReadFuture<'a, 'b>
+        = EnumDispatchF<
+        OnMemoryArchiveBinReadFuture<'a, 'b, 'aa>,
+        FileStreamingArchiveBinReadFuture<'a, 'aa, 'b, R>,
+    >
+    where
+        Self: 'a;
+    type ReadVecFuture<'a, 'b, 'bb>
+        = EnumDispatchF<
+        OnMemoryArchiveBinReadVecFuture<'a, 'b, 'aa, 'bb>,
+        FileStreamingArchiveBinReadVecFuture<'a, 'aa, 'b, 'bb, R>,
+    >
+    where
+        Self: 'a,
+        'bb: 'b;
+
+    fn read_async<'a, 'b>(
+        &'a self,
+        offs: u64,
+        buf: &'b mut [MaybeUninit<u8>],
+    ) -> Self::ReadFuture<'a, 'b> {
+        match self {
+            Self::OnMemory(r) => EnumDispatchF::OnMemory(OnMemoryArchiveBinReadFuture {
+                reader: r,
+                pos: offs,
+                buf,
+            }),
+            Self::FileStreaming(r) => {
+                EnumDispatchF::FileStreaming(FileStreamingArchiveBinReadFuture {
+                    reader: r,
+                    pos: offs,
+                    buf,
+                    state: FileStreamingArchiveBinReadFutureState::Idle,
+                })
+            }
+        }
+    }
+
+    fn readv_async<'a, 'b, 'bb>(
+        &'a self,
+        offs: u64,
+        iovecs: &'b mut [IoSliceMut<'bb>],
+    ) -> Self::ReadVecFuture<'a, 'b, 'bb> {
+        match self {
+            Self::OnMemory(r) => EnumDispatchF::OnMemory(OnMemoryArchiveBinReadVecFuture {
+                reader: r,
+                pos: offs,
+                buf: iovecs,
+            }),
+            Self::FileStreaming(r) => {
+                EnumDispatchF::FileStreaming(FileStreamingArchiveBinReadVecFuture {
+                    reader: r,
+                    pos: offs,
+                    buf: iovecs,
+                    state: FileStreamingArchiveBinReadFutureState::Idle,
+                })
+            }
+        }
+    }
 }
 impl<'a, R: RandomReadBlobAsync + MemoryMapBlob> ArchiveBinReaderAsync<'a, R> {
     #[inline]
@@ -872,7 +1265,7 @@ pub enum ArchiveAsync {
 impl ArchiveAsync {
     /// Creates a new archive reader from a platform-specific blob reader.
     pub async fn new(
-        mut blob: PlatformNativeFileReaderAsync,
+        blob: PlatformNativeFileReaderAsync,
         check_integrity: bool,
     ) -> ArchiveReadResult<Self> {
         let (comp, crc, body_start) = Self::read_file_header(&blob).await?;
@@ -1018,31 +1411,28 @@ impl Archive {
         read_ptr += 4;
         let signature = unsafe { core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(signature) };
         let mut sink_64_bits = [const { MaybeUninit::uninit() }; 8];
-        let comp: CompressionMethod;
-        match &signature {
-            b"par " => {
-                comp = CompressionMethod::None;
-            }
+        let comp = match &signature {
+            b"par " => CompressionMethod::None,
             b"pard" => {
                 reader.read_exact(read_ptr, &mut sink_64_bits)?;
                 read_ptr += 8;
-                comp = CompressionMethod::Zlib(u64::from_le_bytes(unsafe {
+                CompressionMethod::Zlib(u64::from_le_bytes(unsafe {
                     core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
-                }));
+                }))
             }
             b"parz" => {
                 reader.read_exact(read_ptr, &mut sink_64_bits)?;
                 read_ptr += 8;
-                comp = CompressionMethod::Lz4(u64::from_le_bytes(unsafe {
+                CompressionMethod::Lz4(u64::from_le_bytes(unsafe {
                     core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
-                }));
+                }))
             }
             b"par1" => {
                 reader.read_exact(read_ptr, &mut sink_64_bits)?;
                 read_ptr += 8;
-                comp = CompressionMethod::Zstd11(u64::from_le_bytes(unsafe {
+                CompressionMethod::Zstd11(u64::from_le_bytes(unsafe {
                     core::mem::transmute::<[MaybeUninit<u8>; _], [u8; _]>(sink_64_bits)
-                }));
+                }))
             }
             _ => return Err(ArchiveReadError::SignatureMismatch),
         };

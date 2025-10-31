@@ -103,6 +103,15 @@ impl Drop for Asset {
         }
     }
 }
+impl Asset {
+    #[inline]
+    pub const fn leak(self) -> core::ptr::NonNull<AAsset> {
+        let p = self.0;
+        core::mem::forget(self);
+
+        p
+    }
+}
 impl std::io::Read for Asset {
     fn read(&mut self, buf: &mut [u8]) -> IOResult<usize> {
         let read_len = unsafe { AAsset_read(self.0.as_ptr(), buf.as_mut_ptr() as _, buf.len()) };

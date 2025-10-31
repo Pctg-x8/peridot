@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicPtr, AtomicUsize},
 };
 
-use crate::native_io::generic_unix::{UnixFile, UnixFileUnmapData};
+use crate::generic_unix::{UnixFile, UnixFileUnmapData};
 
 // dispatch_io requires block abi: https://clang.llvm.org/docs/Block-ABI-Apple.html
 pub type BlockLiteralFlags = core::ffi::c_int;
@@ -336,6 +336,13 @@ impl NativeFileReader {
         )?))
     }
 }
+impl super::BlobMetadata for NativeFileReader {
+    fn byte_length(&self) -> std::io::Result<u64> {
+        let mut st = core::mem::MaybeUninit::uninit();
+        self.0.stat(&mut st)?;
+        Ok(unsafe { st.assume_init_ref().st_size.cast_unsigned() })
+    }
+}
 impl super::RandomReadBlob for NativeFileReader {
     #[inline(always)]
     fn read(&self, offs: u64, buf: &mut [std::mem::MaybeUninit<u8>]) -> std::io::Result<usize> {
@@ -397,6 +404,15 @@ impl NativeFileAsyncReader {
         core::mem::forget(f);
 
         Ok(Self { dch: dio, fd })
+    }
+}
+impl super::BlobMetadataAsync for NativeFileAsyncReader {
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>> {
+        async move {
+            let mut st = core::mem::MaybeUninit::uninit();
+            UnixFile::stat_raw(self.fd, &mut st)?;
+            Ok(unsafe { st.assume_init_ref().st_size.cast_unsigned() })
+        }
     }
 }
 impl super::RandomReadBlobAsync for NativeFileAsyncReader {

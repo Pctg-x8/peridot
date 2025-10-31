@@ -50,7 +50,7 @@ final class PeridotRenderableViewController : NSViewController {
     var workDispatcher: DispatchSourceUserDataAdd? = nil
     var clientMousePoint = CGPoint(x: 0, y: 0)
     
-    private var nativeGameDriver: NativeGameDriver? = nil
+    private(set) var nativeGameDriver: NativeGameDriver? = nil
     
     func initDispatchers() {
         func onUpdateDisplay(_ _: CVDisplayLink,

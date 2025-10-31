@@ -1,6 +1,6 @@
 use euclid::Rect;
 use lyon_path::builder::PathBuilder;
-use peridot::math::Vector2;
+use peridot::{math::Vector2, AssetBlob};
 
 #[cfg(all(target_os = "macos", not(feature = "use-freetype")))]
 mod core_text;
@@ -139,13 +139,21 @@ pub struct TTFBlob(pub(crate) Vec<u8>);
 impl peridot::LogicalAssetData for TTFBlob {
     const EXT: &'static str = "ttf";
 }
-impl peridot::FromAsset for TTFBlob {
+impl peridot::FromAssetBlob for TTFBlob {
     type Error = std::io::Error;
 
-    fn from_asset<'a, Asset: std::io::Read + std::io::Seek + 'a>(
-        mut asset: Asset,
-    ) -> Result<Self, Self::Error> {
-        let mut bin = Vec::new();
-        asset.read_to_end(&mut bin).map(move |_| TTFBlob(bin))
+    #[inline(always)]
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
+        Ok(Self(blob.read_to_end(0)?))
+    }
+}
+impl peridot::FromAssetBlobAsync for TTFBlob {
+    type Error = std::io::Error;
+
+    #[inline(always)]
+    fn from_asset_blob_async<'a, Blob: peridot::AssetBlobAsync + 'a>(
+        blob: Blob,
+    ) -> impl core::future::Future<Output = Result<Self, Self::Error>> {
+        async move { Ok(Self(blob.read_to_end_async(0).await?)) }
     }
 }

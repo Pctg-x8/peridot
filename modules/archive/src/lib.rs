@@ -2,7 +2,6 @@
 
 mod entry;
 mod entry_tree;
-pub mod native_io;
 mod utils;
 
 use bitflags::bitflags;

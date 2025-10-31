@@ -41,8 +41,15 @@ impl BundledAsset {
 #[repr(transparent)]
 pub struct BundledAssetRandomReader(BundledAsset);
 impl BundledAssetRandomReader {
-    pub fn open(_path: impl AsRef<Path>) -> std::io::Result<Self> {
-        unimplemented!()
+    #[inline(always)]
+    pub const fn from_asset_ptr(asset: NonNull<android::AAsset>) -> Self {
+        Self(BundledAsset(asset))
+    }
+}
+impl super::BlobMetadata for BundledAssetRandomReader {
+    #[inline]
+    fn byte_length(&self) -> std::io::Result<u64> {
+        Ok(unsafe { android::AAsset_getLength64(self.0.0.as_ptr()).cast_unsigned() })
     }
 }
 impl super::RandomReadBlob for BundledAssetRandomReader {
@@ -118,8 +125,17 @@ pub struct BundledAssetAsyncRandomReader {
     asset: BundledAsset,
 }
 impl BundledAssetAsyncRandomReader {
-    pub fn open(_path: impl AsRef<Path>) -> std::io::Result<Self> {
-        unimplemented!()
+    #[inline(always)]
+    pub const fn from_asset_ptr(asset: NonNull<android::AAsset>) -> Self {
+        Self {
+            asset: BundledAsset(asset),
+        }
+    }
+}
+impl super::BlobMetadataAsync for BundledAssetAsyncRandomReader {
+    #[inline]
+    fn byte_length_async(&self) -> impl core::future::Future<Output = std::io::Result<u64>> {
+        async move { Ok(unsafe { android::AAsset_getLength64(self.asset.0.as_ptr()).cast_unsigned() }) }
     }
 }
 impl super::RandomReadBlobAsync for BundledAssetAsyncRandomReader {
@@ -359,11 +375,11 @@ impl BackgroundIoWorkerPool {
         let termination = Arc::new(AtomicBool::new(false));
         let threads = workers
             .into_iter()
-            .zip(other_stealer_sets.into_iter())
+            .zip(other_stealer_sets)
             .enumerate()
             .map(|(n, (w, other_stealers))| {
                 std::thread::Builder::new()
-                    .name(format!("peridot-archive Background IO Worker #{n}"))
+                    .name(format!("Peridot Background NativeIO Worker #{n}"))
                     .spawn({
                         let injector = injector.clone();
                         let termination = termination.clone();

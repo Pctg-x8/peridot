@@ -26,6 +26,7 @@ typedef struct {
     void (*handle_mouse_button_down)(void* context_ptr, uint8_t index);
     void (*handle_mouse_button_up)(void* context_ptr, uint8_t index);
     void (*report_mouse_move_abs)(void* context_ptr, float x, float y);
+    void (*poll_usercode_task)(void* context_ptr);
 } GameDriverCallbacks;
 
 const uint8_t KEYMOD_SHIFT = 1;

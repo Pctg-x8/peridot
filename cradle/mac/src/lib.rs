@@ -9,7 +9,6 @@ use br::{InstanceChild, PhysicalDevice, SurfaceCreateInfo, VkHandle};
 use core::future::Future;
 use peridot::mthelper::SharedRef;
 use std::ffi::CStr;
-use std::io::Cursor;
 use std::io::{Error as IOError, ErrorKind, Result as IOResult};
 use std::pin::Pin;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
@@ -109,7 +108,9 @@ impl<R: Read + Seek> Seek for ReaderView<R> {
     }
 }
 pub struct PlatformAssetLoader {
+    par_path: CocoaObject<NSString>,
     par: peridot_archive::Archive,
+    par_async: Option<peridot_archive::ArchiveAsync>,
 }
 impl PlatformAssetLoader {
     fn new() -> Self {
@@ -123,7 +124,7 @@ impl PlatformAssetLoader {
 
         PlatformAssetLoader {
             par: peridot_archive::Archive::new(
-                peridot_archive::native_io::PlatformNativeFileReader::open(&par_path.to_str())
+                peridot::native_io::PlatformNativeFileReader::open(&par_path.to_str())
                     .expect("Failed to open primary asset"),
                 false,
             )
@@ -144,17 +145,51 @@ impl PlatformAssetLoader {
                 _ => IOError::other("PrimaryArchive read error"),
             })
             .expect("Failed to intiialize primary asset reader"),
+            par_path,
+            par_async: None,
         }
+    }
+
+    async fn post_init(&mut self) {
+        self.par_async = Some(
+            peridot_archive::ArchiveAsync::new(
+                peridot::native_io::PlatformNativeFileReaderAsync::open(&self.par_path.to_str())
+                    .expect("Failed to open primary asset"),
+                false,
+            )
+            .await
+            .map_err(|e| match e {
+                peridot::archive::ArchiveReadError::IO(e) => e,
+                peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
+                    error!("PrimaryArchive integrity check failed!");
+                    IOError::other("PrimaryArchive read error")
+                }
+                peridot::archive::ArchiveReadError::SignatureMismatch => {
+                    error!("PrimaryArchive signature mismatch!");
+                    IOError::other("PrimaryArchive read error")
+                }
+                peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
+                    error!("lz4 decompress error: {:?}", e);
+                    IOError::other("PrimaryArchive read error")
+                }
+                _ => IOError::other("PrimaryArchive read error"),
+            })
+            .expect("Failed to intiialize primary asset reader"),
+        );
     }
 }
 use peridot::archive as par;
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset<'a> =
-        peridot_archive::ArchiveBinReader<'a, peridot_archive::native_io::PlatformNativeFileReader>;
+    type AssetBlob<'a> =
+        peridot_archive::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
+    type AssetBlobAsync<'a> = peridot_archive::ArchiveBinReaderAsync<
+        'a,
+        peridot::native_io::PlatformNativeFileReaderAsync,
+    >;
     type StreamingAsset<'a> =
-        par::ArchiveBinReader<'a, peridot_archive::native_io::PlatformNativeFileReader>;
+        par::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
         let Some(entry) = self.par.find_entry(path, ext) else {
             return Err(IOError::new(
                 ErrorKind::NotFound,
@@ -163,6 +198,25 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         };
 
         Ok(self.par.read_bin(entry))
+    }
+
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
+        async move {
+            let par_async = unsafe { self.par_async.as_ref().unwrap_unchecked() };
+
+            let Some(entry) = par_async.find_entry(path, ext) else {
+                return Err(IOError::new(
+                    ErrorKind::NotFound,
+                    "not in primary asset package",
+                ));
+            };
+
+            Ok(par_async.read_bin(entry))
+        }
     }
 
     fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
@@ -340,8 +394,8 @@ type Engine<'q> = peridot::Engine<'q, NativeLink>;
 
 const USERCODE_WAKER_VTABLE: &'static core::task::RawWakerVTable = &core::task::RawWakerVTable::new(
     |ptr| core::task::RawWaker::new(ptr, USERCODE_WAKER_VTABLE),
-    |_| /*println!("game_main wake")*/{},
-    |_| /*println!("game_main wake by ref")*/{},
+    |ptr| /*println!("game_main wake")*/{unsafe { schedule_usercode_task_polling(ptr.cast_mut().cast::<core::ffi::c_void>()); }},
+    |ptr| /*println!("game_main wake by ref")*/{ unsafe { schedule_usercode_task_polling(ptr.cast_mut().cast::<core::ffi::c_void>()); } },
     |_| {},
 );
 
@@ -365,7 +419,7 @@ fn launch_f<'f, F>(
     F: Future<Output = ()> + 'f,
 {
     let (event_sender, event_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
-    let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
+    let (_, frame_timing_receiver) = async_std::channel::bounded::<()>(1);
 
     let state = Box::new(AppInternalState {
         event_queue: peridot::EventQueue::new(),
@@ -389,15 +443,14 @@ fn launch_f<'f, F>(
     engine.post_init();
     let input = engine.input().clone();
 
-    let usercode_waker =
-        unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
-    let mut usercode = Box::pin(launch_usercode(engine));
-    let _ = usercode
-        .as_mut()
-        .poll(&mut core::task::Context::from_waker(&usercode_waker));
+    let usercode_waker = unsafe {
+        core::task::Waker::new(initialization_context.cast::<()>(), &USERCODE_WAKER_VTABLE)
+    };
+    let usercode = Box::pin(launch_usercode(engine));
 
     struct GameDriverContext<F> {
         usercode: Pin<Box<F>>,
+        usercode_waker: core::task::Waker,
         state: Box<AppInternalState>,
         input: peridot::InputProcess,
     }
@@ -406,12 +459,10 @@ fn launch_f<'f, F>(
 
         ctx.state.event_queue.enqueue(peridot::Event::Shutdown);
         loop {
-            let usercode_waker =
-                unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
             if ctx
                 .usercode
                 .as_mut()
-                .poll(&mut core::task::Context::from_waker(&usercode_waker))
+                .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker))
                 .is_ready()
             {
                 break;
@@ -428,12 +479,6 @@ fn launch_f<'f, F>(
         let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
 
         ctx.state.event_queue.enqueue(peridot::Event::NextFrame);
-        let usercode_waker =
-            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
-        let _ = ctx
-            .usercode
-            .as_mut()
-            .poll(&mut core::task::Context::from_waker(&usercode_waker));
     }
     extern "C" fn game_driver_resize<F: core::future::Future>(
         ctx: *mut core::ffi::c_void,
@@ -445,12 +490,6 @@ fn launch_f<'f, F>(
         ctx.state
             .event_queue
             .enqueue(peridot::Event::Resize(peridot::math::Vector2(w, h)));
-        let usercode_waker =
-            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
-        let _ = ctx
-            .usercode
-            .as_mut()
-            .poll(&mut core::task::Context::from_waker(&usercode_waker));
     }
     extern "C" fn game_driver_handle_character_keydown<F: core::future::Future>(
         ctx: *mut core::ffi::c_void,
@@ -537,6 +576,19 @@ fn launch_f<'f, F>(
         ctx.input
             .dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
     }
+    extern "C" fn game_driver_poll_usercode_task<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+    ) {
+        let ctx = unsafe { &mut *ctx.cast::<GameDriverContext<F>>() };
+
+        let r = ctx
+            .usercode
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker));
+        if r.is_ready() {
+            tracing::warn!("Usercode task terminated?");
+        }
+    }
     let cbs: &'static GameDriverCallbacks = &GameDriverCallbacks {
         terminate: game_driver_terminate::<F>,
         update: game_driver_update::<F>,
@@ -548,18 +600,18 @@ fn launch_f<'f, F>(
         handle_mouse_button_down: game_driver_handle_mouse_button_down::<F>,
         handle_mouse_button_up: game_driver_handle_mouse_button_up::<F>,
         report_mouse_move_abs: game_driver_report_mouse_move_abs::<F>,
+        poll_usercode_task: game_driver_poll_usercode_task::<F>,
     };
-    unsafe {
-        give_game_driver_callbacks(
-            initialization_context,
-            cbs,
-            Box::into_raw(Box::new(GameDriverContext {
-                usercode,
-                state: Box::from_raw(state_ptr),
-                input,
-            })) as _,
-        )
-    }
+    let context_ptr = Box::into_raw(Box::new(GameDriverContext {
+        usercode,
+        usercode_waker,
+        state: unsafe { Box::from_raw(state_ptr) },
+        input,
+    }));
+    unsafe { give_game_driver_callbacks(initialization_context, cbs, context_ptr as _) }
+
+    // execute initial process
+    game_driver_poll_usercode_task::<F>(context_ptr.cast::<core::ffi::c_void>());
 }
 
 // Swift Linking //
@@ -582,6 +634,7 @@ pub struct GameDriverCallbacks {
     handle_mouse_button_down: extern "C" fn(*mut core::ffi::c_void, index: u8),
     handle_mouse_button_up: extern "C" fn(*mut core::ffi::c_void, index: u8),
     report_mouse_move_abs: extern "C" fn(*mut core::ffi::c_void, x: f32, y: f32),
+    poll_usercode_task: extern "C" fn(*mut core::ffi::c_void),
 }
 
 unsafe extern "C" {
@@ -599,6 +652,8 @@ unsafe extern "C" {
         callbacks: *const GameDriverCallbacks,
         aux_ptr: *mut core::ffi::c_void,
     );
+
+    fn schedule_usercode_task_polling(initialization_context: *mut core::ffi::c_void);
 }
 
 #[no_mangle]
@@ -618,6 +673,7 @@ pub extern "C" fn launch_game(
     tracing::subscriber::set_global_default(subscriber).expect("Failed to set log subscriber");
 
     launch_f(initialization_context, v, |mut engine| async move {
+        engine.internal_native_link_mut().al.post_init().await;
         userlib::game_main(&mut engine).await;
     });
 }
