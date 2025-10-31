@@ -144,6 +144,16 @@ impl peridot::FromAssetBlob for TTFBlob {
 
     #[inline(always)]
     fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
-        Ok(TTFBlob(blob.read_to_end(0)?))
+        Ok(Self(blob.read_to_end(0)?))
+    }
+}
+impl peridot::FromAssetBlobAsync for TTFBlob {
+    type Error = std::io::Error;
+
+    #[inline(always)]
+    fn from_asset_blob_async<'a, Blob: peridot::AssetBlobAsync + 'a>(
+        blob: Blob,
+    ) -> impl core::future::Future<Output = Result<Self, Self::Error>> {
+        async move { Ok(Self(blob.read_to_end_async(0).await?)) }
     }
 }
