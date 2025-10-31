@@ -57,6 +57,10 @@ struct NativeGameDriver {
     func reportMouseMoveAbs(x: Float, y: Float) {
         self.callbacks.pointee.report_mouse_move_abs(self.contextPtr, x, y)
     }
+    
+    func pollUsercodeTask() {
+        self.callbacks.pointee.poll_usercode_task(self.contextPtr)
+    }
 }
 
 func captionbarText() -> NSString? {
@@ -101,4 +105,12 @@ func obtain_mouse_pointer_position(
 @_cdecl("give_game_driver_callbacks")
 func give_game_driver_callbacks(initializationContext: UnsafeMutableRawPointer, callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
     unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self).setGameDriverCallbacks(callbacks, contextPtr: contextPtr)
+}
+
+@_cdecl("schedule_usercode_task_polling")
+func scheduleUsercodeTaskPolling(initializationContext: UnsafeMutableRawPointer) {
+    DispatchQueue.main.async {
+        let viewController = unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self)
+        viewController.nativeGameDriver?.pollUsercodeTask()
+    }
 }
