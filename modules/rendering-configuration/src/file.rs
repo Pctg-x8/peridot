@@ -4,7 +4,7 @@ use core::pin::Pin;
 use futures_io::{AsyncBufRead, AsyncRead};
 use peridot_semantic_shader::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt};
-use pinned_futures_helper::read_exact_async_pinned;
+use pinned_futures_helper::{read_byte_async, read_exact_async_pinned};
 
 use crate::{
     DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
@@ -800,11 +800,4 @@ impl FrontFace {
             x => panic!("invalid FrontFace first byte: 0x{x:02x}"),
         }
     }
-}
-
-async fn read_byte_async(mut reader: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<u8> {
-    let mut buf = [0u8];
-    core::future::poll_fn(|cx| reader.as_mut().poll_read(cx, &mut buf)).await?;
-
-    Ok(buf[0])
 }

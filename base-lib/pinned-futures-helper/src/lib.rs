@@ -23,3 +23,13 @@ pub async fn read_exact_async_pinned(
 
     Ok(())
 }
+
+/// Asynchronously read an byte from a reader.
+pub async fn read_byte_async(
+    mut reader: Pin<&mut (impl AsyncRead + ?Sized)>,
+) -> std::io::Result<u8> {
+    let mut buf = [0u8];
+    core::future::poll_fn(|cx| reader.as_mut().poll_read(cx, &mut buf)).await?;
+
+    Ok(buf[0])
+}
