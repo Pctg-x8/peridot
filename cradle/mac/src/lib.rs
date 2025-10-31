@@ -394,8 +394,8 @@ type Engine<'q> = peridot::Engine<'q, NativeLink>;
 
 const USERCODE_WAKER_VTABLE: &'static core::task::RawWakerVTable = &core::task::RawWakerVTable::new(
     |ptr| core::task::RawWaker::new(ptr, USERCODE_WAKER_VTABLE),
-    |_| /*println!("game_main wake")*/{},
-    |_| /*println!("game_main wake by ref")*/{},
+    |ptr| /*println!("game_main wake")*/{unsafe { schedule_usercode_task_polling(ptr.cast_mut().cast::<core::ffi::c_void>()); }},
+    |ptr| /*println!("game_main wake by ref")*/{ unsafe { schedule_usercode_task_polling(ptr.cast_mut().cast::<core::ffi::c_void>()); } },
     |_| {},
 );
 
@@ -443,15 +443,14 @@ fn launch_f<'f, F>(
     engine.post_init();
     let input = engine.input().clone();
 
-    let usercode_waker =
-        unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
-    let mut usercode = Box::pin(launch_usercode(engine));
-    let _ = usercode
-        .as_mut()
-        .poll(&mut core::task::Context::from_waker(&usercode_waker));
+    let usercode_waker = unsafe {
+        core::task::Waker::new(initialization_context.cast::<()>(), &USERCODE_WAKER_VTABLE)
+    };
+    let usercode = Box::pin(launch_usercode(engine));
 
     struct GameDriverContext<F> {
         usercode: Pin<Box<F>>,
+        usercode_waker: core::task::Waker,
         state: Box<AppInternalState>,
         input: peridot::InputProcess,
     }
@@ -460,12 +459,10 @@ fn launch_f<'f, F>(
 
         ctx.state.event_queue.enqueue(peridot::Event::Shutdown);
         loop {
-            let usercode_waker =
-                unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
             if ctx
                 .usercode
                 .as_mut()
-                .poll(&mut core::task::Context::from_waker(&usercode_waker))
+                .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker))
                 .is_ready()
             {
                 break;
@@ -482,12 +479,10 @@ fn launch_f<'f, F>(
         let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
 
         ctx.state.event_queue.enqueue(peridot::Event::NextFrame);
-        let usercode_waker =
-            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
         let _ = ctx
             .usercode
             .as_mut()
-            .poll(&mut core::task::Context::from_waker(&usercode_waker));
+            .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker));
     }
     extern "C" fn game_driver_resize<F: core::future::Future>(
         ctx: *mut core::ffi::c_void,
@@ -499,12 +494,10 @@ fn launch_f<'f, F>(
         ctx.state
             .event_queue
             .enqueue(peridot::Event::Resize(peridot::math::Vector2(w, h)));
-        let usercode_waker =
-            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
         let _ = ctx
             .usercode
             .as_mut()
-            .poll(&mut core::task::Context::from_waker(&usercode_waker));
+            .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker));
     }
     extern "C" fn game_driver_handle_character_keydown<F: core::future::Future>(
         ctx: *mut core::ffi::c_void,
@@ -591,6 +584,19 @@ fn launch_f<'f, F>(
         ctx.input
             .dispatch_analog_event(peridot::NativeAnalogInput::MouseY, y * scale, true);
     }
+    extern "C" fn game_driver_poll_usercode_task<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+    ) {
+        let ctx = unsafe { &mut *ctx.cast::<GameDriverContext<F>>() };
+
+        let r = ctx
+            .usercode
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker));
+        if r.is_ready() {
+            tracing::warn!("Usercode task terminated?");
+        }
+    }
     let cbs: &'static GameDriverCallbacks = &GameDriverCallbacks {
         terminate: game_driver_terminate::<F>,
         update: game_driver_update::<F>,
@@ -602,18 +608,18 @@ fn launch_f<'f, F>(
         handle_mouse_button_down: game_driver_handle_mouse_button_down::<F>,
         handle_mouse_button_up: game_driver_handle_mouse_button_up::<F>,
         report_mouse_move_abs: game_driver_report_mouse_move_abs::<F>,
+        poll_usercode_task: game_driver_poll_usercode_task::<F>,
     };
-    unsafe {
-        give_game_driver_callbacks(
-            initialization_context,
-            cbs,
-            Box::into_raw(Box::new(GameDriverContext {
-                usercode,
-                state: Box::from_raw(state_ptr),
-                input,
-            })) as _,
-        )
-    }
+    let context_ptr = Box::into_raw(Box::new(GameDriverContext {
+        usercode,
+        usercode_waker,
+        state: unsafe { Box::from_raw(state_ptr) },
+        input,
+    }));
+    unsafe { give_game_driver_callbacks(initialization_context, cbs, context_ptr as _) }
+
+    // execute initial process
+    game_driver_poll_usercode_task::<F>(context_ptr.cast::<core::ffi::c_void>());
 }
 
 // Swift Linking //
@@ -636,6 +642,7 @@ pub struct GameDriverCallbacks {
     handle_mouse_button_down: extern "C" fn(*mut core::ffi::c_void, index: u8),
     handle_mouse_button_up: extern "C" fn(*mut core::ffi::c_void, index: u8),
     report_mouse_move_abs: extern "C" fn(*mut core::ffi::c_void, x: f32, y: f32),
+    poll_usercode_task: extern "C" fn(*mut core::ffi::c_void),
 }
 
 unsafe extern "C" {
@@ -653,6 +660,8 @@ unsafe extern "C" {
         callbacks: *const GameDriverCallbacks,
         aux_ptr: *mut core::ffi::c_void,
     );
+
+    fn schedule_usercode_task_polling(initialization_context: *mut core::ffi::c_void);
 }
 
 #[no_mangle]
