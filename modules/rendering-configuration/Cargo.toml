@@ -17,6 +17,10 @@ slang = { path = "../../thirdparty/slang", optional = true }
 thiserror = { workspace = true, optional = true }
 tracing = { workspace = true }
 peridot-asset-processing = { path = "../asset-processing", optional = true }
+futures-io = { workspace = true }
+futures-util = { workspace = true, features = ["io"] }
+peridot-native-io = { path = "../native-io" }
+pinned-futures-helper.path = "../../base-lib/pinned-futures-helper"
 
 [lints]
 workspace = true

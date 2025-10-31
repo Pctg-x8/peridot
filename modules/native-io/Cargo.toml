@@ -1,0 +1,34 @@
+[package]
+name = "peridot-native-io"
+description = "native io providers for peridot"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures-io = { workspace = true }
+pin-project = "1.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-io-uring = { path = "../../platform/linux/io_uring" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.59"
+features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+]
+
+[target.'cfg(target_os = "android")'.dependencies]
+crossbeam-deque = "0.8"
+android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
+libc = "0.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true

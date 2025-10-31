@@ -22,17 +22,10 @@ impl RenderingConfiguration {
         for elem in s {
             match elem {
                 syntax::ToplevelElement::PropertiesBlock(ps) => {
+                    #[derive(Default)]
                     struct Attributes {
                         immutable: bool,
                         per_draw_call: bool,
-                    }
-                    impl Default for Attributes {
-                        fn default() -> Self {
-                            Self {
-                                immutable: false,
-                                per_draw_call: false,
-                            }
-                        }
                     }
 
                     let mut attr = Attributes::default();
@@ -399,14 +392,14 @@ static inline float4x4 transformMatrix() {
             code.push_str(&n.to_string());
             code.push_str(")]\nconst ");
             print_property_type(ty, &mut code);
-            code.push_str(" ");
+            code.push(' ');
             code.push_str(&name);
             code.push_str(" = 0;\n");
         }
 
         for x in combined_constants {
             code.push_str(&x);
-            code.push_str("\n");
+            code.push('\n');
         }
 
         if !push_constant_block_members.is_empty() {
@@ -414,7 +407,7 @@ static inline float4x4 transformMatrix() {
             for (name, ty) in push_constant_block_members {
                 code.push_str("    ");
                 print_property_type(ty, &mut code);
-                code.push_str(" ");
+                code.push(' ');
                 code.push_str(name);
                 code.push_str(";\n");
             }
@@ -428,7 +421,7 @@ static inline float4x4 transformMatrix() {
             code.push_str(&n.to_string());
             code.push_str(", 2)]\n");
             print_property_type(ty, &mut code);
-            code.push_str(" ");
+            code.push(' ');
             code.push_str(name);
             code.push_str(";\n");
 
@@ -445,7 +438,7 @@ static inline float4x4 transformMatrix() {
             for (name, ty) in realtime_buffer_members {
                 code.push_str("    ");
                 print_property_type(ty, &mut code);
-                code.push_str(" ");
+                code.push(' ');
                 code.push_str(name);
                 code.push_str(";\n");
             }
@@ -467,17 +460,13 @@ pub struct PropertyData {
     pub update_frequency: PropertyUpdateFrequency,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum PropertyUpdateFrequency {
     Immutable,
     PerDrawCall,
+    #[default]
     Dynamic,
     Realtime,
-}
-impl Default for PropertyUpdateFrequency {
-    fn default() -> Self {
-        PropertyUpdateFrequency::Dynamic
-    }
 }
 
 #[derive(Debug)]
@@ -515,7 +504,7 @@ impl PassData {
                 code.push_str(&n.to_string());
                 code.push_str(")]\n    ");
                 print_property_type(&vb.r#type, &mut code);
-                code.push_str(" ");
+                code.push(' ');
                 code.push_str(&vb.name);
                 code.push_str(" : ");
                 print_vi_semantic(&vb.semantic, &mut code);
@@ -658,31 +647,31 @@ fn print_vi_semantic(s: &VertexInputSemantic, sink: &mut String) {
     match s {
         VertexInputSemantic::Position(index) => {
             sink.push_str("POSITION");
-            sink.extend(index.to_string().chars());
+            sink.push_str(&index.to_string());
         }
         VertexInputSemantic::Normal(index) => {
             sink.push_str("NORMAL");
-            sink.extend(index.to_string().chars());
+            sink.push_str(&index.to_string());
         }
         VertexInputSemantic::Tangent(index) => {
             sink.push_str("TANGENT");
-            sink.extend(index.to_string().chars());
+            sink.push_str(&index.to_string());
         }
         VertexInputSemantic::Binormal(index) => {
             sink.push_str("BINORMAL");
-            sink.extend(index.to_string().chars());
+            sink.push_str(&index.to_string());
         }
         VertexInputSemantic::Texcoord(index) => {
             sink.push_str("TEXCOORD");
-            sink.extend(index.to_string().chars());
+            sink.push_str(&index.to_string());
         }
         VertexInputSemantic::Color(index) => {
             sink.push_str("COLOR");
-            sink.extend(index.to_string().chars());
+            sink.push_str(&index.to_string());
         }
         VertexInputSemantic::Misc(index) => {
             sink.push_str("MISC");
-            sink.extend(index.to_string().chars());
+            sink.push_str(&index.to_string());
         }
     }
 }

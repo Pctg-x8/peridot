@@ -45,14 +45,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-    #[cfg(windows)]
-    let async_io_reactor_thread = peridot_archive::native_io::windows::spawn_io_reactor_thread();
-    #[cfg(target_os = "linux")]
-    let async_io_reactor_thread = peridot_archive::native_io::linux::IoReactorThread::spawn();
-
+    #[cfg(not(target_os = "android"))]
     #[cfg(not(target_os = "macos"))]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
+        peridot::native_io::PlatformNativeFileReaderAsync::open(
             "../../examples/image-plane/assets/resources.par",
         )
         .expect("open resources.par"),
@@ -60,9 +56,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     )
     .await
     .expect("load resources.par");
+    #[cfg(not(target_os = "android"))]
     #[cfg(target_os = "macos")]
     let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot_archive::native_io::PlatformNativeFileReaderAsync::open(
+        peridot::native_io::PlatformNativeFileReaderAsync::open(
             std::env::current_exe()
                 .expect("current_exe")
                 .parent()
@@ -75,8 +72,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     .await
     .expect("load resources.par");
 
-    let mut image_data: peridot_image::StdTexture2DAsset =
-        e.load("images.example").expect("No image found");
+    let (mut image_data, bgm): (peridot_image::StdTexture2DAsset, PreloadedPlayableWav) =
+        futures_util::try_join!(e.load_async("images.example"), e.load_async("bgm"))
+            .expect("asset loading");
+
     if image_data.0.needs_transcoding() {
         // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
         image_data
@@ -95,9 +94,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     // debug!("ImageFormat: {:?}", image_data.0.vk_format());
 
     // TODO: streamingなassetが複数ある時に相性が悪い どうしたものか
-    let bgm = Arc::new(RwLock::new(
-        e.load::<PreloadedPlayableWav>("bgm").expect("Loading BGM"),
-    ));
+    let bgm = Arc::new(RwLock::new(bgm));
     e.audio_mixer().write().add_process(bgm.clone());
     e.audio_mixer().write().set_master_volume(0.5);
 
@@ -369,7 +366,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .expect("Creating Sampler");
     let single_smp_refs = [smp.as_transparent_ref()];
     let rc: prc::CompiledRenderingConfigurationVk = e
-        .load("builtin.rendering_configuration.unlit_image")
+        .load_async("builtin.rendering_configuration.unlit_image")
+        .await
         .expect("Loading rendering configuration");
     let dsl_rc = br::DescriptorSetLayoutObject::new(
         e.graphics().device().clone(),
@@ -815,9 +813,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     unsafe {
         e.graphics_device().wait().expect("Failed to wait for work");
     }
-
-    #[cfg(any(target_os = "linux", windows))]
-    drop(async_io_reactor_thread);
 }
 
 #[repr(C)]

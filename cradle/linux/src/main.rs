@@ -45,10 +45,13 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset<'a> = File;
-    type StreamingAsset<'a> = File;
+    type AssetBlob<'a> = peridot::native_io::linux::NativeFileBlobRandomReader;
+    type AssetBlobAsync<'a> = peridot::native_io::linux::NativeFileAsyncBlobRandomReader;
+    type StreamingAsset<'a> = peridot::native_io::RandomBlobReadSeekAdapter<
+        peridot::native_io::linux::NativeFileBlobRandomReader,
+    >;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
         #[allow(unused_mut)]
         let mut path_segments = path.split('.').peekable();
 
@@ -56,11 +59,29 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         apath.extend(path_segments);
         apath.set_extension(ext);
 
-        File::open(apath)
+        peridot::native_io::linux::NativeFileBlobRandomReader::open(apath)
     }
 
-    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
+        async move {
+            #[allow(unused_mut)]
+            let mut path_segments = path.split('.').peekable();
+
+            let mut apath = self.basedir.clone();
+            apath.extend(path_segments);
+            apath.set_extension(ext);
+
+            peridot::native_io::linux::NativeFileAsyncBlobRandomReader::open(apath)
+        }
+    }
+
+    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
         self.get(path, ext)
+            .map(peridot::native_io::RandomBlobReadSeekAdapter::new)
     }
 }
 
@@ -236,9 +257,14 @@ where
             0,
         );
 
-        let count = ep
-            .wait(&mut events, Some(1))
-            .expect("Failed to waiting epoll");
+        let count = match ep.wait(&mut events, Some(1)) {
+            Ok(x) => x,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => 0,
+            Err(e) => {
+                tracing::error!(reason = ?e, "epoll_wait failed");
+                break;
+            }
+        };
         drop(window_backend_temporary_epoll);
 
         // TODO: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
@@ -294,6 +320,8 @@ fn main() {
         .with(env_filter)
         .init();
 
+    let io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
+
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
             run_with_window_backend(make_shared_mutable_ref(
@@ -325,5 +353,6 @@ fn main() {
         return;
     }
 
+    drop(io_reactor_thread);
     panic!("No suitable window backend");
 }

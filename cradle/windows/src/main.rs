@@ -163,6 +163,7 @@ async fn main() {
     }
 
     let w = Arc::new(RwLock::new(ThreadsafeWindowOps(w)));
+    let io_reactor_thread = peridot::native_io::windows::spawn_io_reactor_thread();
 
     // Resizeをここに入れると詰まるので対策が必要（結局個別のイベントバスになるのか.......
     let (events_sender, events_receiver) = async_std::channel::unbounded::<peridot::EngineEvent>();
@@ -238,6 +239,8 @@ async fn main() {
             break;
         }
     }
+
+    drop(io_reactor_thread);
 }
 
 extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -321,10 +324,12 @@ impl AssetProvider {
     }
 }
 impl peridot::PlatformAssetLoader for AssetProvider {
-    type Asset<'a> = std::fs::File;
+    type AssetBlob<'a> = peridot::native_io::windows::NativeFileBlobRandomReader;
+    type AssetBlobAsync<'a> = peridot::native_io::windows::NativeFileBlobAsyncRandomReader;
     type StreamingAsset<'a> = std::fs::File;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::Asset<'a>> {
+    #[tracing::instrument(name = "AssetProvider::get", skip(self))]
+    fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::AssetBlob<'a>> {
         #[allow(unused_mut)]
         let mut segments = path.split('.').peekable();
 
@@ -335,17 +340,48 @@ impl peridot::PlatformAssetLoader for AssetProvider {
             let mut p = self.builtin_assets_base.clone();
             p.extend(segments);
             p.set_extension(ext);
-            log::debug!("Loading Builtin Asset: {:?}", p);
+            tracing::debug!(realpath = ?p, "Loading Builtin Asset");
 
-            return std::fs::File::open(&p);
+            return peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p);
         }
 
         let mut p = self.base.clone();
         p.extend(segments);
         p.set_extension(ext);
-        log::debug!("Loading Asset: {:?}", p);
+        tracing::debug!(realpath = ?p, "Loading Asset");
 
-        std::fs::File::open(&p)
+        peridot::native_io::windows::NativeFileBlobRandomReader::open(&p)
+    }
+
+    #[tracing::instrument(name = "AssetProvider(windows)::get_async", skip(self))]
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = std::io::Result<Self::AssetBlobAsync<'a>>> {
+        async move {
+            #[allow(unused_mut)]
+            let mut segments = path.split('.').peekable();
+
+            #[cfg(feature = "IterationBuild")]
+            if segments.peek().map_or(false, |&s| s == "builtin") {
+                let _ = segments.next();
+
+                let mut p = self.builtin_assets_base.clone();
+                p.extend(segments);
+                p.set_extension(ext);
+                tracing::debug!(realpath = ?p, "Loading Builtin Asset");
+
+                return peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p);
+            }
+
+            let mut p = self.base.clone();
+            p.extend(segments);
+            p.set_extension(ext);
+            tracing::debug!(realpath = ?p, "Loading Asset");
+
+            peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p)
+        }
     }
 
     fn get_streaming<'a>(

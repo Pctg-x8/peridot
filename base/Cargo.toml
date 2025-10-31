@@ -21,6 +21,7 @@ parking_lot = "0.12"
 peridot-archive = { path = "../modules/archive" }
 peridot-math = { path = "../modules/math" }
 peridot-derive = { path = "../derive", optional = true }
+peridot-native-io = { path = "../modules/native-io" }
 cfg-if.workspace = true
 async-std.workspace = true
 futures-util.workspace = true

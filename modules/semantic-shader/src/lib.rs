@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 
 use bedrock::{self as br, ShaderModule};
+use core::pin::Pin;
+use futures_io::AsyncRead;
+#[cfg(feature = "with-loader-impl")]
+use peridot::AssetBlob;
 use peridot_serialization_utils::VariableUInt;
+use pinned_futures_helper::read_exact_async_pinned;
 
 /// Represents the semantic of a vertex shader input.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -37,6 +42,25 @@ impl VertexInputSemantic {
     pub fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
         let mut buf = [0u8; 2];
         reader.read_exact(&mut buf)?;
+
+        match buf[0] {
+            0 => Ok(Self::Misc(buf[1])),
+            1 => Ok(Self::Position(buf[1])),
+            2 => Ok(Self::Normal(buf[1])),
+            3 => Ok(Self::Tangent(buf[1])),
+            4 => Ok(Self::Binormal(buf[1])),
+            5 => Ok(Self::Texcoord(buf[1])),
+            6 => Ok(Self::Color(buf[1])),
+            _ => Err(std::io::Error::other("unknown tag for VertexInputSemantic")),
+        }
+    }
+
+    pub async fn read_async(reader: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
+        let mut buf = Vec::with_capacity(2);
+        read_exact_async_pinned(reader, buf.spare_capacity_mut()).await?;
+        unsafe {
+            buf.set_len(2);
+        }
 
         match buf[0] {
             0 => Ok(Self::Misc(buf[1])),
@@ -192,14 +216,14 @@ impl peridot::LogicalAssetData for ShaderPackAsset {
     const EXT: &'static str = "pss";
 }
 #[cfg(feature = "with-loader-impl")]
-impl peridot::FromAsset for ShaderPackAsset {
+impl peridot::FromAssetBlob for ShaderPackAsset {
     type Error = AssetReadError;
 
     #[inline(always)]
-    fn from_asset<'a, Asset: std::io::Read + std::io::Seek + 'a>(
-        asset: Asset,
-    ) -> Result<Self, Self::Error> {
-        ShaderPackAsset::read(&mut std::io::BufReader::new(asset))
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
+        ShaderPackAsset::read(&mut std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
     }
 }
 

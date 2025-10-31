@@ -5,6 +5,7 @@ authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2021"
 
 [dependencies]
+peridot-native-io = { path = "../../modules/native-io" }
 peridot-archive = { path = "../../modules/archive", features = [
     "async-rt-async-std",
 ] }

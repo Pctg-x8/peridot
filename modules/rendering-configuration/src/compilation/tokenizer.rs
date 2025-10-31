@@ -1,5 +1,11 @@
 #[derive(Debug, Clone)]
 pub struct Identifier<'s>(&'s str, Location);
+impl Located for Identifier<'_> {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.1
+    }
+}
 impl<'s> Identifier<'s> {
     pub(crate) const fn as_str(&self) -> &'s str {
         self.0
@@ -8,6 +14,12 @@ impl<'s> Identifier<'s> {
 
 #[derive(Debug, Clone)]
 pub struct StrLit<'s>(&'s str, Location);
+impl Located for StrLit<'_> {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.1
+    }
+}
 impl<'s> StrLit<'s> {
     pub(crate) const fn as_str(&self) -> &'s str {
         self.0
@@ -16,6 +28,12 @@ impl<'s> StrLit<'s> {
 
 #[derive(Debug, Clone)]
 pub struct NumLit<'s>(&'s str, Location);
+impl Located for NumLit<'_> {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.1
+    }
+}
 impl<'s> NumLit<'s> {
     pub(crate) const fn as_str(&self) -> &'s str {
         self.0
@@ -25,58 +43,142 @@ impl<'s> NumLit<'s> {
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct KwUse(Location);
+impl Located for KwUse {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct KwEnd(Location);
+impl Located for KwEnd {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct KwProperties(Location);
+impl Located for KwProperties {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct KwPass(Location);
+impl Located for KwPass {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct KwShader(Location);
+impl Located for KwShader {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct KwVertexBindings(Location);
+impl Located for KwVertexBindings {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct KwRenderOption(Location);
+impl Located for KwRenderOption {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct OpenBracket(Location);
+impl Located for OpenBracket {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct CloseBracket(Location);
+impl Located for CloseBracket {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct OpenParen(Location);
+impl Located for OpenParen {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct CloseParen(Location);
+impl Located for CloseParen {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct Comma(Location);
+impl Located for Comma {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct Equal(Location);
+impl Located for Equal {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct Colon(Location);
+impl Located for Colon {
+    #[inline(always)]
+    fn location(&self) -> &Location {
+        &self.0
+    }
+}
 
 #[derive(Debug)]
 pub enum Token<'s> {
@@ -93,6 +195,25 @@ pub enum Token<'s> {
     Colon(Colon),
     EndOfInput(Location),
 }
+impl Located for Token<'_> {
+    #[inline]
+    fn location(&self) -> &Location {
+        match self {
+            Self::Keyword(kw) => kw.location(),
+            Self::Identifier(Identifier(_, l)) => l,
+            Self::NumLiteral(NumLit(_, l)) => l,
+            Self::StringLiteral(StrLit(_, l)) => l,
+            Self::OpenBracket(OpenBracket(l)) => l,
+            Self::CloseBracket(CloseBracket(l)) => l,
+            Self::OpenParenthese(OpenParen(l)) => l,
+            Self::CloseParenthese(CloseParen(l)) => l,
+            Self::Comma(Comma(l)) => l,
+            Self::Equal(Equal(l)) => l,
+            Self::Colon(Colon(l)) => l,
+            Self::EndOfInput(l) => l,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Keyword {
@@ -104,11 +225,35 @@ pub enum Keyword {
     VertexBindings(KwVertexBindings),
     RenderOption(KwRenderOption),
 }
+impl Located for Keyword {
+    #[inline]
+    fn location(&self) -> &Location {
+        match self {
+            Self::End(KwEnd(l)) => l,
+            Self::Properties(KwProperties(l)) => l,
+            Self::Pass(KwPass(l)) => l,
+            Self::Use(KwUse(l)) => l,
+            Self::Shader(KwShader(l)) => l,
+            Self::VertexBindings(KwVertexBindings(l)) => l,
+            Self::RenderOption(KwRenderOption(l)) => l,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Location {
     pub col: usize,
     pub line: usize,
+}
+impl core::fmt::Display for Location {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.line, self.col)
+    }
+}
+
+pub trait Located {
+    fn location(&self) -> &Location;
 }
 
 pub struct Context<'s> {
@@ -116,21 +261,20 @@ pub struct Context<'s> {
     loc: Location,
 }
 impl<'s> Context<'s> {
-    pub fn new(src: &'s str) -> Self {
+    #[inline(always)]
+    pub const fn new(src: &'s str) -> Self {
         Self {
             src,
             loc: Location { col: 1, line: 1 },
         }
     }
 
+    #[inline(always)]
     pub const fn is_finished(&self) -> bool {
         self.src.is_empty()
     }
 
-    pub const fn src(&self) -> &'s str {
-        self.src
-    }
-
+    #[inline(always)]
     pub const fn loc(&self) -> &Location {
         &self.loc
     }
@@ -296,12 +440,7 @@ pub fn next_token<'s>(ctx: &mut Context<'s>) -> Option<Token<'s>> {
                 Some(c @ '\\') => {
                     read_bytes += c.len_utf8();
                     nloc.col += 1;
-
-                    if !escaping {
-                        escaping = true;
-                    } else {
-                        escaping = false;
-                    }
+                    escaping = !escaping;
                 }
                 Some(c) => {
                     read_bytes += c.len_utf8();
@@ -322,11 +461,11 @@ pub fn next_token<'s>(ctx: &mut Context<'s>) -> Option<Token<'s>> {
         return Some(t);
     }
 
-    if ctx.src.starts_with(|c: char| c.is_digit(10)) {
+    if ctx.src.starts_with(|c: char| c.is_ascii_digit()) {
         let (b, c) = ctx
             .src
             .chars()
-            .take_while(|&c| c.is_digit(10))
+            .take_while(char::is_ascii_digit)
             .fold((0, 0), |(b, c), x| (b + x.len_utf8(), c + 1));
 
         let t = Token::NumLiteral(NumLit(&ctx.src[..b], ctx.loc.clone()));

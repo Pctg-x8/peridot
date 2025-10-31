@@ -823,7 +823,11 @@ pub struct ktxAstcParams {
 }
 
 // TODO: kind = dylibにしないとWindowsだとグローバル定数のリンクがうまくいかない
-#[link(name = "ktx", kind = "dylib")]
+// Androidはsoコピーしないといけないのが面倒なのでstatic linkで対処 あと、libc++を明示的にリンクしてあげないといけないらしい
+#[cfg_attr(windows, link(name = "ktx", kind = "dylib"))]
+#[cfg_attr(target_os = "android", link(name = "ktx", kind = "static"))]
+#[cfg_attr(not(any(windows, target_os = "android")), link(name = "ktx"))]
+#[cfg_attr(target_os = "android", link(name = "c++_shared"))]
 unsafe extern "C" {
     pub static KTX_ETC1S_DEFAULT_COMPRESSION_LEVEL: u32;
 }

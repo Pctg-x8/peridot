@@ -2,6 +2,7 @@ use async_std::stream::StreamExt;
 use futures_util::FutureExt;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
+pub use peridot_native_io as native_io;
 
 use bedrock::{self as br, VkHandle};
 use parking_lot::RwLock;
@@ -488,9 +489,28 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     }
 }
 impl<PL: NativeLinker> Engine<'_, PL> {
-    pub fn load<A: FromAsset>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(self.native_link.asset_loader().get(path, A::EXT)?)
+    #[inline(always)]
+    pub fn internal_native_link_mut(&mut self) -> &mut PL {
+        &mut self.native_link
     }
+
+    #[inline(always)]
+    pub fn load<A: FromAssetBlob>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset_blob(self.native_link.asset_loader().get(path, A::EXT)?)
+    }
+
+    #[inline(always)]
+    pub async fn load_async<A: FromAssetBlobAsync>(&self, path: &str) -> Result<A, A::Error> {
+        A::from_asset_blob_async(
+            self.native_link
+                .asset_loader()
+                .get_async(path, A::EXT)
+                .await?,
+        )
+        .await
+    }
+
+    #[inline(always)]
     pub fn streaming<'a, A: FromStreamingAsset<'a>>(&'a self, path: &str) -> Result<A, A::Error> {
         A::from_asset(
             self.native_link
@@ -499,6 +519,7 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         )
     }
 
+    #[inline(always)]
     pub fn rendering_precision(&self) -> f32 {
         self.native_link.rendering_precision()
     }

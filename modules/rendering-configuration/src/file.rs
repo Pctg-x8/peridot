@@ -1,7 +1,10 @@
 use std::io::{BufRead, IoSlice, IoSliceMut, Read, SeekFrom, Write};
 
+use core::pin::Pin;
+use futures_io::{AsyncBufRead, AsyncRead};
 use peridot_semantic_shader::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt};
+use pinned_futures_helper::{read_byte_async, read_exact_async_pinned};
 
 use crate::{
     DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
@@ -17,6 +20,12 @@ const fn b32m<'x>(v: &'x mut u32) -> &'x mut [u8] {
     unsafe { core::mem::transmute::<&mut _, &mut [u8; 4]>(v) }
 }
 #[inline(always)]
+const fn b32m_uninit<'x>(
+    v: &'x mut core::mem::MaybeUninit<u32>,
+) -> &'x mut [core::mem::MaybeUninit<u8>] {
+    unsafe { core::mem::transmute::<&mut _, &mut [core::mem::MaybeUninit<u8>; 4]>(v) }
+}
+#[inline(always)]
 const fn b64<'x>(v: &'x u64) -> &'x [u8] {
     unsafe { core::mem::transmute::<&_, &[u8; 8]>(v) }
 }
@@ -30,7 +39,8 @@ pub struct Header {
 }
 impl Header {
     const MAGIC: u32 = u32::from_be_bytes(*b"prc\x01");
-    pub const READ_SEEK_POS: SeekFrom = SeekFrom::End(-4 - 8);
+    pub const BYTE_LENGTH: usize = 4 + 8;
+    pub const READ_SEEK_POS: SeekFrom = SeekFrom::End(-Self::BYTE_LENGTH.cast_signed() as _);
 
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
         let mut iovs = &mut [
@@ -66,6 +76,44 @@ impl Header {
             IoSliceMut::advance_slices(&mut iovs, r);
         }
 
+        if needs_swap {
+            shading_pass_directory_offset = shading_pass_directory_offset.swap_bytes();
+        }
+
+        Ok((
+            Self {
+                shading_pass_directory_offset,
+            },
+            needs_swap,
+        ))
+    }
+
+    pub async fn read_async(
+        source: &mut peridot_native_io::BufferedRandomBlobReader<
+            impl peridot_native_io::RandomReadBlobAsync,
+        >,
+        pos: u64,
+    ) -> std::io::Result<(Self, bool)> {
+        let mut magic_buf = core::mem::MaybeUninit::uninit();
+        source
+            .read_exact_at_async(pos, b32m_uninit(&mut magic_buf))
+            .await?;
+        let magic_buf = unsafe { magic_buf.assume_init() };
+        let needs_swap = if magic_buf == Self::MAGIC {
+            cfg!(target_endian = "big")
+        } else if magic_buf.swap_bytes() == Self::MAGIC {
+            cfg!(target_endian = "little")
+        } else {
+            panic!("magic mismatching");
+        };
+
+        let mut shading_pass_directory_offset = 0u64;
+        source
+            .readv_all_at_async(
+                pos + 4,
+                &mut [IoSliceMut::new(b64m(&mut shading_pass_directory_offset))],
+            )
+            .await?;
         if needs_swap {
             shading_pass_directory_offset = shading_pass_directory_offset.swap_bytes();
         }
@@ -130,6 +178,38 @@ impl PropertyDirectory {
             push_constant_buffer_size_bytes,
         })
     }
+
+    pub async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        let VariableUInt(entry_count) = VariableUInt::read_async(source.as_mut()).await?;
+        let mut entries = Vec::with_capacity(entry_count as _);
+        for _ in 0..entry_count {
+            let PascalString(name) = PascalString::read_async(source.as_mut()).await?;
+            let r#type = PropertyType::read_async(source.as_mut()).await?;
+            let mapping_vk = PropertyMappingVk::read_async(source.as_mut()).await?;
+
+            entries.push((name, r#type, mapping_vk));
+        }
+
+        let VariableUInt(descriptor_set_binding_count) =
+            VariableUInt::read_async(source.as_mut()).await?;
+        let mut descriptor_set_bindings = Vec::with_capacity(descriptor_set_binding_count as _);
+        for _ in 0..descriptor_set_binding_count {
+            let t = DescriptorTypeVk::read_async(source.as_mut()).await?;
+
+            descriptor_set_bindings.push(t);
+        }
+
+        let VariableUInt(push_constant_buffer_size_bytes) =
+            VariableUInt::read_async(source.as_mut()).await?;
+
+        Ok(Self {
+            entries,
+            descriptor_set_bindings,
+            push_constant_buffer_size_bytes: push_constant_buffer_size_bytes as _,
+        })
+    }
 }
 
 pub struct ShadingPassDirectory {
@@ -154,6 +234,21 @@ impl ShadingPassDirectory {
             let entry = ShadingPassDirectoryEntry::read(source)?;
 
             entries.push((name, entry));
+        }
+
+        Ok(Self { entries })
+    }
+
+    pub async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        let VariableUInt(entry_count) = VariableUInt::read_async(source.as_mut()).await?;
+        let mut entries = Vec::with_capacity(entry_count as _);
+        for _ in 0..entry_count {
+            let PascalString(name) = PascalString::read_async(source.as_mut()).await?;
+            let entry = ShadingPassDirectoryEntry::read_async(source.as_mut()).await?;
+
+            entries.push((name, entry))
         }
 
         Ok(Self { entries })
@@ -185,6 +280,20 @@ impl ShadingPassDirectoryEntry {
         match first_byte[0] {
             0 => Ok(Self::Located(VariableUInt::read(source)?.0 as _)),
             1 => Ok(Self::SimpleDeriveBuiltin(PascalString::read(source)?.0)),
+            x => panic!("invalid ShadingPassDirectoryEntry first byte: 0x{x:02x}"),
+        }
+    }
+
+    async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        match read_byte_async(source.as_mut()).await? {
+            0 => Ok(Self::Located(
+                VariableUInt::read_async(source).await?.0 as _,
+            )),
+            1 => Ok(Self::SimpleDeriveBuiltin(
+                PascalString::read_async(source).await?.0,
+            )),
             x => panic!("invalid ShadingPassDirectoryEntry first byte: 0x{x:02x}"),
         }
     }
@@ -275,6 +384,54 @@ impl ShadingPassVk {
             code,
         })
     }
+
+    pub async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        let option_overrides = RenderingOptionOverrides::read_async(source.as_mut()).await?;
+
+        let vertex_semantic_to_location_count =
+            VariableUInt::read_async(source.as_mut()).await?.0 as usize;
+        let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
+        for _ in 0..vertex_semantic_to_location_count {
+            let name = VertexInputSemantic::read_async(source.as_mut()).await?;
+            let location = VariableUInt::read_async(source.as_mut()).await?.0;
+            vertex_semantic_to_location.push((name, location));
+        }
+
+        let stage_flags = read_byte_async(source.as_mut()).await?;
+        let vertex_entry_point_name = if stage_flags & 0x01 != 0 {
+            Some(PascalString::read_async(source.as_mut()).await?.0)
+        } else {
+            None
+        };
+        let fragment_entry_point_name = if stage_flags & 0x02 != 0 {
+            Some(PascalString::read_async(source.as_mut()).await?.0)
+        } else {
+            None
+        };
+
+        let code_word_count = VariableUInt::read_async(source.as_mut()).await?.0 as usize;
+        let mut code = Vec::<u32>::with_capacity(code_word_count);
+        read_exact_async_pinned(source.as_mut(), unsafe {
+            core::slice::from_raw_parts_mut(
+                code.spare_capacity_mut().as_mut_ptr() as *mut core::mem::MaybeUninit<u8>,
+                code_word_count << 2,
+            )
+        })
+        .await?;
+        unsafe {
+            code.set_len(code.capacity());
+        }
+
+        Ok(Self {
+            option_overrides,
+            vertex_semantic_to_location,
+            vertex_entry_point_name,
+            fragment_entry_point_name,
+            code,
+        })
+    }
 }
 
 impl RenderingOptionOverrides {
@@ -324,6 +481,34 @@ impl RenderingOptionOverrides {
             front_face,
         })
     }
+
+    async fn read_async(mut source: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
+        let mut existential_bitmap = 0u32;
+        core::future::poll_fn(|cx| source.as_mut().poll_read(cx, b32m(&mut existential_bitmap)))
+            .await?;
+
+        let mode = if existential_bitmap & 0x01 != 0 {
+            Some(PolygonRasterizationMode::read_async(source.as_mut()).await?)
+        } else {
+            None
+        };
+        let culling = if existential_bitmap & 0x02 != 0 {
+            Some(FaceCulling::read_async(source.as_mut()).await?)
+        } else {
+            None
+        };
+        let front_face = if existential_bitmap & 0x04 != 0 {
+            Some(FrontFace::read_async(source.as_mut()).await?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            mode,
+            culling,
+            front_face,
+        })
+    }
 }
 
 impl PropertyType {
@@ -344,6 +529,19 @@ impl PropertyType {
         source.read_exact(&mut first_byte)?;
 
         match first_byte[0] {
+            0 => Ok(Self::UInt),
+            1 => Ok(Self::Int),
+            2 => Ok(Self::Float),
+            3 => Ok(Self::Float2),
+            4 => Ok(Self::Float4),
+            5 => Ok(Self::RGB),
+            6 => Ok(Self::Texture2D),
+            x => panic!("invalid PropertyType first byte: 0x{x:02x}"),
+        }
+    }
+
+    async fn read_async(source: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
+        match read_byte_async(source).await? {
             0 => Ok(Self::UInt),
             1 => Ok(Self::Int),
             2 => Ok(Self::Float),
@@ -393,6 +591,26 @@ impl PropertyMappingVk {
             x => panic!("invalid PropertyMappingVk first byte: 0x{x:02x}"),
         }
     }
+
+    async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        match read_byte_async(source.as_mut()).await? {
+            0 => Ok(Self::Direct(
+                PropertyDestinationVk::read_async(source).await?,
+            )),
+            1 => {
+                let VariableUInt(count) = VariableUInt::read_async(source.as_mut()).await?;
+                let mut xs = Vec::with_capacity(count as _);
+                for _ in 0..count {
+                    xs.push(PropertyDestinationVk::read_async(source.as_mut()).await?);
+                }
+
+                Ok(Self::Splitted(xs))
+            }
+            x => panic!("invalid PropertyMappingVk first byte: 0x{x:02x}"),
+        }
+    }
 }
 
 impl PropertyDestinationVk {
@@ -429,6 +647,26 @@ impl PropertyDestinationVk {
             x => panic!("invalid PropertyDestinationVk first byte: 0x{x:02x}"),
         }
     }
+
+    async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        match read_byte_async(source.as_mut()).await? {
+            0 => Ok(Self::SpecConstant(
+                VariableUInt::read_async(source).await?.0 as _,
+            )),
+            1 => Ok(Self::PushConstantBlock(
+                VariableUInt::read_async(source).await?.0 as _,
+            )),
+            2 => Ok(Self::DescriptorSet(
+                VariableUInt::read_async(source).await?.0 as _,
+            )),
+            3 => Ok(Self::RealtimeBuffer(
+                VariableUInt::read_async(source).await?.0 as _,
+            )),
+            x => panic!("invalid PropertyDestinationVk first byte: 0x{x:02x}"),
+        }
+    }
 }
 
 impl DescriptorTypeVk {
@@ -457,6 +695,18 @@ impl DescriptorTypeVk {
             x => panic!("invalid DescriptorTypeVk first byte: 0x{x:02x}"),
         }
     }
+
+    async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        match read_byte_async(source.as_mut()).await? {
+            0 => Ok(Self::UniformBuffer {
+                size_bytes: VariableUInt::read_async(source).await?.0 as _,
+            }),
+            1 => Ok(Self::CombinedImageSampler),
+            x => panic!("invalid DescriptorTypeVk first byte: 0x{x:02x}"),
+        }
+    }
 }
 
 impl PolygonRasterizationMode {
@@ -473,6 +723,15 @@ impl PolygonRasterizationMode {
         source.read_exact(&mut first_byte)?;
 
         match first_byte[0] {
+            0 => Ok(Self::Point),
+            1 => Ok(Self::Line),
+            2 => Ok(Self::Fill),
+            x => panic!("invalid PolygonRasterizationMode first byte: 0x{x:02x}"),
+        }
+    }
+
+    async fn read_async(source: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
+        match read_byte_async(source).await? {
             0 => Ok(Self::Point),
             1 => Ok(Self::Line),
             2 => Ok(Self::Fill),
@@ -503,6 +762,16 @@ impl FaceCulling {
             x => panic!("invalid FaceCulling first byte: 0x{x:02x}"),
         }
     }
+
+    async fn read_async(source: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
+        match read_byte_async(source).await? {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Front),
+            2 => Ok(Self::Back),
+            3 => Ok(Self::Both),
+            x => panic!("invalid FaceCulling first byte: 0x{x:02x}"),
+        }
+    }
 }
 
 impl FrontFace {
@@ -518,6 +787,14 @@ impl FrontFace {
         source.read_exact(&mut first_byte)?;
 
         match first_byte[0] {
+            0 => Ok(Self::CounterClockwise),
+            1 => Ok(Self::Clockwise),
+            x => panic!("invalid FrontFace first byte: 0x{x:02x}"),
+        }
+    }
+
+    async fn read_async(source: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
+        match read_byte_async(source).await? {
             0 => Ok(Self::CounterClockwise),
             1 => Ok(Self::Clockwise),
             x => panic!("invalid FrontFace first byte: 0x{x:02x}"),

@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-exclude = ["extras/", "cradle/", "examples/", "tools/", "thirdparty/", "build-script-helper/", "platform/"]
+exclude = [
+    "extras/",
+    "cradle/",
+    "examples/",
+    "tools/",
+    "thirdparty/",
+    "build-script-helper/",
+    "platform/",
+]
 members = [
     "base",
     "derive",
@@ -15,7 +23,9 @@ members = [
     "modules/memory-manager",
     "modules/semantic-shader",
     "modules/rendering-configuration",
-    "modules/asset-processing"
+    "modules/asset-processing",
+    "modules/native-io",
+    "base-lib/pinned-futures-helper",
 ]
 
 [workspace.dependencies]
@@ -23,6 +33,7 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 tracing = "0.1"
 async-std = "1.13"
 futures-util = "0.3"
+futures-io = "0.3"
 cfg-if = "1.0"
 thiserror = "2.0"
 
@@ -31,9 +42,9 @@ unwrap_used = "deny"
 manual_div_ceil = "allow"
 needless_lifetimes = "allow"
 manual_async_fn = "allow"
+upper_case_acronyms = "allow"
 
 # defaultは基本使わない方針なのでそれ関係のlintは無視する
 unwrap_or_default = "allow"
 new_without_default = "allow"
 mem_replace_with_default = "allow"
-
