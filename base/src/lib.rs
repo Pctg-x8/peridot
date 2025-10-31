@@ -490,8 +490,8 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
 }
 impl<PL: NativeLinker> Engine<'_, PL> {
     #[inline(always)]
-    pub fn internal_asset_loader(&self) -> &PL::AssetLoader {
-        self.native_link.asset_loader()
+    pub fn internal_native_link_mut(&mut self) -> &mut PL {
+        &mut self.native_link
     }
 
     #[inline(always)]
