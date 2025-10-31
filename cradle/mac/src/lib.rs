@@ -479,10 +479,6 @@ fn launch_f<'f, F>(
         let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
 
         ctx.state.event_queue.enqueue(peridot::Event::NextFrame);
-        let _ = ctx
-            .usercode
-            .as_mut()
-            .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker));
     }
     extern "C" fn game_driver_resize<F: core::future::Future>(
         ctx: *mut core::ffi::c_void,
@@ -494,10 +490,6 @@ fn launch_f<'f, F>(
         ctx.state
             .event_queue
             .enqueue(peridot::Event::Resize(peridot::math::Vector2(w, h)));
-        let _ = ctx
-            .usercode
-            .as_mut()
-            .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker));
     }
     extern "C" fn game_driver_handle_character_keydown<F: core::future::Future>(
         ctx: *mut core::ffi::c_void,
