@@ -45,13 +45,13 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset<'a> = peridot::native_io::linux::NativeFileBlobRandomReader;
+    type AssetBlob<'a> = peridot::native_io::linux::NativeFileBlobRandomReader;
     type AssetBlobAsync<'a> = peridot::native_io::linux::NativeFileAsyncBlobRandomReader;
     type StreamingAsset<'a> = peridot::native_io::RandomBlobReadSeekAdapter<
         peridot::native_io::linux::NativeFileBlobRandomReader,
     >;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
         #[allow(unused_mut)]
         let mut path_segments = path.split('.').peekable();
 

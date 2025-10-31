@@ -324,12 +324,12 @@ impl AssetProvider {
     }
 }
 impl peridot::PlatformAssetLoader for AssetProvider {
-    type Asset<'a> = peridot::native_io::windows::NativeFileBlobRandomReader;
+    type AssetBlob<'a> = peridot::native_io::windows::NativeFileBlobRandomReader;
     type AssetBlobAsync<'a> = peridot::native_io::windows::NativeFileBlobAsyncRandomReader;
     type StreamingAsset<'a> = std::fs::File;
 
-    #[tracing::instrument(name = "AssetProvider(windows)::get", skip(self))]
-    fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::Asset<'a>> {
+    #[tracing::instrument(name = "AssetProvider::get", skip(self))]
+    fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::AssetBlob<'a>> {
         #[allow(unused_mut)]
         let mut segments = path.split('.').peekable();
 

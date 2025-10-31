@@ -191,7 +191,7 @@ impl PlatformAssetLoader {
 }
 use peridot::archive as par;
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset<'a> =
+    type AssetBlob<'a> =
         peridot_archive::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
     type AssetBlobAsync<'a> = peridot_archive::ArchiveBinReaderAsync<
         'a,
@@ -200,7 +200,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type StreamingAsset<'a> =
         par::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
         let Some(entry) = self.par.find_entry(path, ext) else {
             return Err(IOError::new(
                 ErrorKind::NotFound,

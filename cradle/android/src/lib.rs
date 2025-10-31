@@ -320,11 +320,11 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset<'a> = peridot::native_io::android::BundledAssetRandomReader;
+    type AssetBlob<'a> = peridot::native_io::android::BundledAssetRandomReader;
     type AssetBlobAsync<'a> = peridot::native_io::android::BundledAssetAsyncRandomReader;
     type StreamingAsset<'a> = native_wrapper::Asset;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
         let mut path_str = path.replace(".", "/");
         path_str.push('.');
         path_str.push_str(ext);

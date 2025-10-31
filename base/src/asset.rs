@@ -14,7 +14,7 @@ where
 }
 
 pub trait PlatformAssetLoader {
-    type Asset<'a>: AssetBlob + 'a
+    type AssetBlob<'a>: AssetBlob + 'a
     where
         Self: 'a;
     type AssetBlobAsync<'a>: AssetBlobAsync + 'a
@@ -24,7 +24,7 @@ pub trait PlatformAssetLoader {
     where
         Self: 'a;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::Asset<'a>>;
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>>;
     fn get_async<'a>(
         &'a self,
         path: &str,
