@@ -4,6 +4,7 @@ use bedrock::{
 };
 use peridot::math::Zero;
 use peridot_vertex_processing_pack::PvpShaderModules;
+use peridot_vg::{Font, FontProvider, FontProviderConstruct};
 
 #[repr(C)]
 pub struct Vertex {
@@ -129,7 +130,42 @@ pub enum ChildrenLayoutMode {
     },
 }
 
-pub struct UIElement {
+pub struct TextFontData {
+    internal: peridot_vg::DefaultFont,
+}
+impl TextFontData {
+    pub fn new(internal: peridot_vg::DefaultFont) -> Self {
+        Self { internal }
+    }
+
+    pub fn request_char(&self, c: char) -> CharacterData {
+        let glyph_id = self.internal.glyph_id(c).expect("font.glyph_id failed");
+        let bounds = self.internal.bounds(&glyph_id).expect("font.bounds failed");
+
+        CharacterData {
+            width: bounds.size.width,
+            height: bounds.size.height,
+            left_offset: bounds.min_x(),
+            top_offset: 0.0,
+            advance_x: self
+                .internal
+                .advance_h(&glyph_id)
+                .expect("font.advance_h failed"),
+            ascend: self.internal.ascent(),
+        }
+    }
+}
+
+struct CharacterData {
+    pub width: f32,
+    pub height: f32,
+    pub left_offset: f32,
+    pub top_offset: f32,
+    pub advance_x: f32,
+    pub ascend: f32,
+}
+
+pub struct UIElement<'s> {
     pub size: peridot::math::Vector2<UIElementSize>,
     pub scale: peridot::math::Vector2<f32>,
     pub offset: peridot::math::Vector2<f32>,
@@ -142,9 +178,11 @@ pub struct UIElement {
     pub row_alignment_override: Option<LayoutAlignment>,
     pub children_layout: ChildrenLayoutMode,
     pub debug_color: peridot::math::Vector4<f32>,
-    pub children: Vec<UIElement>,
+    pub font: Option<&'s TextFontData>,
+    pub text: &'s str,
+    pub children: Vec<UIElement<'s>>,
 }
-impl Default for UIElement {
+impl Default for UIElement<'_> {
     fn default() -> Self {
         Self {
             size: peridot::math::Vector2(UIElementSize::FitContent, UIElementSize::FitContent),
@@ -159,6 +197,8 @@ impl Default for UIElement {
             row_alignment_override: None,
             children_layout: ChildrenLayoutMode::Free,
             debug_color: peridot::math::Vector4(0.0, 0.0, 0.0, 0.0),
+            font: None,
+            text: "",
             children: Vec::new(),
         }
     }
@@ -501,11 +541,13 @@ fn compute_horizontal_alignment_axis_offset(
 }
 
 #[inline]
-fn apply_layout_rects<'e>(
-    targets: impl Iterator<Item = &'e UIElement>,
+fn apply_layout_rects<'e, 's>(
+    targets: impl Iterator<Item = &'e UIElement<'s>>,
     layout_rects: impl Iterator<Item = LayoutRect>,
     boxes: &mut Vec<BoxInstance>,
-) {
+) where
+    's: 'e,
+{
     for (c, r) in targets.zip(layout_rects) {
         layout1(c, boxes, r);
     }
@@ -619,14 +661,17 @@ impl HorizontalJustifyMethod for HorizontalJustifySpaceAround {
     }
 }
 
-fn layout_horizontal_justify_per_row<'e>(
-    elements_ordered: impl Iterator<Item = &'e UIElement>,
+fn layout_horizontal_justify_per_row<'e, 's>(
+    elements_ordered: impl Iterator<Item = &'e UIElement<'s>>,
     alignment: LayoutAlignment,
     overflow: Overflow,
     gap: f32,
     global_rect: &LayoutRect,
     justify: impl HorizontalJustifyMethod,
-) -> Vec<LayoutRect> {
+) -> Vec<LayoutRect>
+where
+    's: 'e,
+{
     let (lb, ub) = elements_ordered.size_hint();
     let mut layout_rects = Vec::with_capacity(ub.unwrap_or(lb));
     let mut row_rects = Vec::<(LayoutRect, LayoutAlignment)>::new();
@@ -692,13 +737,16 @@ fn layout_horizontal_justify_per_row<'e>(
     layout_rects
 }
 
-fn layout_horizontal<'e>(
-    elements_ordered: impl Iterator<Item = &'e UIElement>,
+fn layout_horizontal<'e, 's>(
+    elements_ordered: impl Iterator<Item = &'e UIElement<'s>>,
     alignment: LayoutAlignment,
     overflow: Overflow,
     gap: f32,
     global_rect: &LayoutRect,
-) -> Vec<LayoutRect> {
+) -> Vec<LayoutRect>
+where
+    's: 'e,
+{
     let (lb, ub) = elements_ordered.size_hint();
     let mut layout_rects = Vec::with_capacity(ub.unwrap_or(lb));
     let mut row_rects = Vec::<LayoutRect>::new();
@@ -761,6 +809,25 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
             ),
             col: target.debug_color,
         });
+    }
+
+    if let Some(ref f) = target.font {
+        let mut char_offset_x = 0.0;
+        for c in target.text.chars() {
+            let cd = f.request_char(c);
+
+            boxes.push(BoxInstance {
+                pos_st: peridot::math::Vector4(
+                    cd.width * target.scale.0,
+                    cd.height * target.scale.1,
+                    layout_rect.pos.0 + char_offset_x,
+                    layout_rect.pos.1 + cd.ascend - cd.height,
+                ),
+                col: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+            });
+
+            char_offset_x += cd.advance_x;
+        }
     }
 
     let child_layout_global_offset = layout_rect.pos + target.padding.lt();
@@ -1495,6 +1562,13 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         .expect("Failed to create unlit fill pipeline");
     let mut unlit_fill_pipeline = unlit_fill_pipeline.clone_parent();
 
+    let main_font = TextFontData::new(
+        peridot_vg::DefaultFontProvider::new()
+            .expect("DefaultFontProvider::new failed")
+            .best_match("system-ui", &peridot_vg::FontProperties::default(), 12.0)
+            .expect("DefaultFontProvider::best_match"),
+    );
+
     // プレイヤーカード風UI試作
     let user_card_cell_ui = UIElement {
         size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::FitContent),
@@ -1562,6 +1636,8 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                                 ..Default::default()
                             },
                         ],
+                        font: Some(&main_font),
+                        text: "player #111",
                         ..Default::default()
                     },
                     // separator
@@ -1644,6 +1720,8 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                                                 debug_color: peridot::math::Vector4(
                                                     0.5, 0.0, 0.0, 1.0,
                                                 ),
+                                                font: Some(&main_font),
+                                                text: "follow",
                                                 ..Default::default()
                                             },
                                         ],
