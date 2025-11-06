@@ -1,7 +1,5 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
-use br::{
-    Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch,
-};
+use br::{Device, Image};
 use peridot::mthelper::SharedRef;
 use peridot_command_object::{
     BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
@@ -10,7 +8,7 @@ use peridot_command_object::{
     PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
 };
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
-use peridot_vertex_processing_pack::{PvpContainer, PvpShaderModules};
+use peridot_semantic_shader::{ShaderPackAsset, VertexInputSemantic};
 
 #[repr(C)]
 #[derive(Clone)]
@@ -39,15 +37,88 @@ fn init_controls(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .map(peridot::NativeAnalogInput::TouchMoveY(0), INPUT_PLANE_TOP);
 }
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+struct MainFramebuffer {
+    gfx_device: peridot::VulkanGfx,
+    swapchain_image_view: br::vk::VkImageView,
+    framebuffer: br::vk::VkFramebuffer,
+}
+impl Drop for MainFramebuffer {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_framebuffer(
+                self.gfx_device.native_ptr(),
+                self.framebuffer,
+                None,
+            );
+            br::vkfn_wrapper::destroy_image_view(
+                self.gfx_device.native_ptr(),
+                self.swapchain_image_view,
+                None,
+            );
+        }
+    }
+}
+impl br::VkHandle for MainFramebuffer {
+    type Handle = br::vk::VkFramebuffer;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.framebuffer
+    }
+}
+impl MainFramebuffer {
+    pub fn new(
+        e: &peridot::Engine<'_, impl peridot::NativeLinker>,
+        render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
+        swapchain_buffer_index: usize,
+    ) -> Self {
+        let bb_size = e.back_buffer_size();
+        let swapchain_image_view = unsafe {
+            br::vkfn_wrapper::create_image_view(
+                e.graphics().device().native_ptr(),
+                &br::ImageViewCreateInfo::new(
+                    &e.back_buffer(swapchain_buffer_index)
+                        .expect("no back buffer?"),
+                    br::vk::VkImageSubresourceRange {
+                        aspectMask: br::AspectMask::COLOR.bits(),
+                        baseMipLevel: 0,
+                        levelCount: 1,
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    },
+                    br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                    e.back_buffer_format(),
+                ),
+                None,
+            )
+            .expect("Failed to create swapchain back buffer view")
+        };
+
+        let framebuffer = unsafe {
+            br::vkfn_wrapper::create_framebuffer(
+                e.graphics().device().native_ptr(),
+                &br::FramebufferCreateInfo::new(
+                    render_pass,
+                    &[br::VkHandleRef::dangling(swapchain_image_view)],
+                    bb_size.0,
+                    bb_size.1,
+                ),
+                None,
+            )
+            .expect("Failed to create framebuffer")
+        };
+
+        Self {
+            gfx_device: e.graphics().device().clone(),
+            swapchain_image_view,
+            framebuffer,
+        }
+    }
+}
+
+pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     init_controls(e);
 
-    let bb_size = e
-        .back_buffer(0)
-        .expect("empty back-buffers")
-        .image()
-        .size()
-        .wh();
+    let bb_size = e.back_buffer_size();
 
     let renderpass = br::RenderPassObject::new(
         e.graphics().device().clone(),
@@ -67,12 +138,9 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         ),
     )
     .expect("Failed to create RenderPass");
-    let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
-    let framebuffers: Vec<_> = backbuffer_resources
-        .iter()
-        .map(|b| br::FramebufferBuilder::new_with_attachment(&renderpass, b).create())
-        .collect::<Result<_, _>>()
-        .expect("Failed to create Framebuffer");
+    let framebuffers = (0..e.back_buffer_count())
+        .map(|n| MainFramebuffer::new(e, &renderpass, n))
+        .collect::<Vec<_>>();
 
     let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Failed to create sampler");
@@ -106,15 +174,11 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .alloc_array(&[dsl.as_transparent_ref(), dsl2.as_transparent_ref()])
         .expect("Failed to alloc Required Descriptors");
 
-    let shaders: PvpContainer = e.load("shaders.blit").expect("Failed to load blit shader");
-    let shader_modules = PvpShaderModules::new(e.graphics().device(), &shaders)
-        .expect("Failed to generate ShaderModules");
-    let shader_stages = [
-        shader_modules.pipeline_vertex_shader_stage(),
-        shader_modules
-            .pipeline_fragment_shader_stage()
-            .expect("no fsh?"),
-    ];
+    let shaders = e
+        .load::<ShaderPackAsset>("shaders.blit")
+        .expect("Failed to load blit shader asset")
+        .instantiate(e.graphics().device().clone())
+        .expect("Failed to instantiate blit shader");
     let pl = br::PipelineLayoutObject::new(
         e.graphics().device().clone(),
         &br::PipelineLayoutCreateInfo::new(
@@ -124,27 +188,60 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     )
     .expect("Failed to create PipelineLayout");
 
-    let scissors = [bb_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
+    let scissors = [br::Extent2D::from(bb_size).into_rect(br::Offset2D::ZERO)];
     let viewports = [scissors[0].make_viewport(0.0..1.0)];
-    let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
-    let pipeline = br::NonDerivedGraphicsPipelineBuilder::new(
-        &pl,
-        renderpass.subpass(0),
-        br::VertexProcessingStages::new(
-            &shader_stages,
-            &shaders.vertex_bindings,
-            &shaders.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
-        ),
-    )
-    .viewport_state(br::ViewportState::new(&viewports, &scissors))
-    .multisample_state(br::MultisampleState::new().into())
-    .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]))
-    .create(
-        e.graphics().device().clone(),
-        None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-    )
-    .expect("Failed to create GraphicsPipeline");
+    let [pipeline] = e
+        .graphics()
+        .device()
+        .new_graphics_pipeline_array(
+            &[br::GraphicsPipelineCreateInfo::new(
+                &pl,
+                renderpass.subpass(0),
+                &[
+                    shaders.pipeline_vertex_shader(),
+                    shaders.pipeline_fragment_shader().expect("no fsh?"),
+                ],
+                &br::PipelineVertexInputStateCreateInfo::new(
+                    &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
+                        peridot::VertexUV2D,
+                    >(0)],
+                    &[
+                        br::vk::VkVertexInputAttributeDescription {
+                            binding: 0,
+                            location: shaders
+                                .resolve_input_semantic_location(VertexInputSemantic::Position(0))
+                                .expect("no position input?"),
+                            format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                            offset: core::mem::offset_of!(peridot::VertexUV2D, pos) as _,
+                        },
+                        br::vk::VkVertexInputAttributeDescription {
+                            binding: 0,
+                            location: shaders
+                                .resolve_input_semantic_location(VertexInputSemantic::Texcoord(0))
+                                .expect("no texcoord input?"),
+                            format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                            offset: core::mem::offset_of!(peridot::VertexUV2D, uv) as _,
+                        },
+                    ],
+                ),
+                &br::PipelineInputAssemblyStateCreateInfo::new(
+                    br::PrimitiveTopology::TriangleStrip,
+                ),
+                &br::PipelineViewportStateCreateInfo::new_array(&viewports, &scissors),
+                &br::PipelineRasterizationStateCreateInfo::new(
+                    br::PolygonMode::Fill,
+                    br::CullModeFlags::NONE,
+                    br::FrontFace::CounterClockwise,
+                ),
+                &br::PipelineColorBlendStateCreateInfo::new(&[
+                    ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk(),
+                ]),
+            )
+            .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Failed to create GraphicsPipeline");
+    let pipeline = pipeline.clone_parent();
 
     let main_image_data: peridot_image::PNG = e
         .load("images.peridot_default_tapfx_circle")
@@ -171,8 +268,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .allocate_device_local_image(
             e.graphics(),
             br::ImageCreateInfo::new(main_image_data.0.size, main_image_data.0.format as _)
-                .sampled()
-                .transfer_dest()
+                .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
                 .init_layout(br::ImageLayout::Preinitialized),
         )
         .expect("Failed to allocate main image");
@@ -260,11 +356,12 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .expect("Failed to execute init command");
     }
 
-    let main_image_view = main_image
-        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-        .view_builder()
-        .create()
-        .expect("Failed to create main image view");
+    let main_image_view = br::ImageViewBuilder::new(
+        main_image,
+        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+    )
+    .create()
+    .expect("Failed to create main image view");
 
     e.graphics().device().update_descriptor_sets(
         &[
@@ -286,8 +383,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut update_data = UniformValues {
         mat: peridot::math::Camera {
             projection: Some(peridot::math::ProjectionMethod::UI {
-                design_width: bb_size.width as _,
-                design_height: bb_size.height as _,
+                design_width: bb_size.0 as _,
+                design_height: bb_size.1 as _,
             }),
             ..Default::default()
         }
@@ -317,12 +414,12 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .with_barrier(dynamic_out_barrier);
 
         copy.between(in_barriers, out_barriers)
-            .execute_and_finish(unsafe {
-                update_commands[0]
-                    .begin(e.graphics_device())
-                    .expect("Failed to begin recording update commands")
-                    .as_dyn_ref()
-            })
+            .execute_and_finish(
+                update_commands
+                    .synchronized_nth(0)
+                    .begin(&br::CommandBufferBeginInfo::new())
+                    .expect("Failed to begin recording update commands"),
+            )
             .expect("Failed to record commands");
     }
 
@@ -343,23 +440,27 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         e.back_buffer_count(),
     )
     .expect("Failed to allocate render commands");
-    for (b, fb) in main_commands.iter_mut().zip(&framebuffers) {
-        let rp = BeginRenderPass::new(&renderpass, fb, scissors[0].clone())
-            .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
+    for (mut b, fb) in main_commands.iter_mut().zip(&framebuffers) {
+        let rp = BeginRenderPass::new(
+            &renderpass,
+            fb,
+            scissors[0].clone(),
+            br::SubpassContents::Inline,
+        )
+        .with_clear_values(vec![br::ClearValue::color([0.0; 4])]);
 
         (&color_renders)
             .between(rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                b.begin(e.graphics_device())
+                b.begin(&br::CommandBufferBeginInfo::new())
                     .expect("Failed to begin recording main commands")
-                    .as_dyn_ref()
             })
             .expect("Failed to record commands");
     }
 
     let mut last_mouse_input = false;
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    loop {
+        match e.next_event().await {
             peridot::Event::NextFrame => {
                 let fd = e.prepare_frame().expect("Failed to prepare frame");
 
@@ -379,14 +480,14 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     .write_content(update_data.clone())
                     .expect("Failed to map dynamic buffer");
 
-                e.do_render(
-                    fd.backbuffer_index,
-                    Some(br::EmptySubmissionBatch.with_command_buffers(&update_commands)),
-                    br::EmptySubmissionBatch.with_command_buffers(
-                        &main_commands[fd.backbuffer_index as usize..=fd.backbuffer_index as usize],
-                    ),
-                )
-                .expect("Failed to present");
+                let mut update_batch = peridot::SubmissionBatchBuilder::new();
+                let update_cb = update_commands.nth_ref(0);
+                update_batch.add_command_buffers([update_cb.as_transparent_ref()]);
+                let mut render_batch = peridot::SubmissionBatchBuilder::new();
+                let render_cb = main_commands.nth_ref(fd.backbuffer_index as _);
+                render_batch.add_command_buffers([render_cb.as_transparent_ref()]);
+                e.do_render(fd.backbuffer_index, Some(update_batch), render_batch)
+                    .expect("Failed to present");
             }
             peridot::Event::Shutdown => break,
             peridot::Event::Resize(ns) => {

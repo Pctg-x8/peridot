@@ -1,10 +1,12 @@
 //! Shell Command Helper
 
-use std::process::ExitStatus;
 use std::path::Path;
+use std::process::ExitStatus;
 
 pub fn handle_process_result(msg_prefix: &str, e: ExitStatus) {
-    if e.success() { return; }
+    if e.success() {
+        return;
+    }
 
     if let Some(c) = e.code() {
         eprintln!(
@@ -20,11 +22,15 @@ pub fn handle_process_result(msg_prefix: &str, e: ExitStatus) {
 }
 
 #[cfg(windows)]
-pub fn sh_mirror(source: &Path, target: &Path, excludes: &[&str]) -> Result<ExitStatus, std::io::Error> {
+pub fn sh_mirror(
+    source: &Path,
+    target: &Path,
+    excludes: &[&str],
+) -> Result<ExitStatus, std::io::Error> {
     let mut args = vec![
         source.to_str().expect("invalid sequence in source path"),
         target.to_str().expect("invalid sequence in target path"),
-        "/MIR"
+        "/MIR",
     ];
     args.extend(excludes.iter().flat_map(|x| vec!["/XF", x]));
 
@@ -34,13 +40,20 @@ pub fn sh_mirror(source: &Path, target: &Path, excludes: &[&str]) -> Result<Exit
         .wait()?;
     Ok(if e.code().map_or(false, |c| c < 8) {
         // 8未満は成功ステータスなので、適当なコマンドを発行して潰す
-        std::process::Command::new("cmd").args(&["/c", "exit", "/b", "0"])
+        std::process::Command::new("cmd")
+            .args(&["/c", "exit", "/b", "0"])
             .spawn()?
             .wait()?
-    } else { e })
+    } else {
+        e
+    })
 }
 #[cfg(not(windows))]
-pub fn sh_mirror(source: &Path, target: &Path, excludes: &[&str]) -> Result<ExitStatus, std::io::Error> {
+pub fn sh_mirror(
+    source: &Path,
+    target: &Path,
+    excludes: &[&str],
+) -> Result<ExitStatus, std::io::Error> {
     let mut source = String::from(source.to_str().expect("invalid sequence in source path"));
     if !source.ends_with('/') {
         source.push('/');
@@ -65,17 +78,21 @@ pub fn sh_append_copy(source: &Path, target: &Path) -> Result<ExitStatus, std::i
         .args(&[
             source.to_str().expect("invalid sequence in source path"),
             target.to_str().expect("invalid sequence in target path"),
-            "/IS", "/E"
+            "/IS",
+            "/E",
         ])
         .spawn()?
         .wait()?;
-    
+
     Ok(if e.code().map_or(false, |c| c < 8) {
         // 8未満は成功ステータスなので、適当なコマンドを発行して潰す
-        std::process::Command::new("cmd").args(&["/c", "exit", "/b", "0"])
+        std::process::Command::new("cmd")
+            .args(&["/c", "exit", "/b", "0"])
             .spawn()?
             .wait()?
-    } else { e })
+    } else {
+        e
+    })
 }
 #[cfg(not(windows))]
 pub fn sh_append_copy(source: &Path, target: &Path) -> Result<ExitStatus, std::io::Error> {
@@ -88,7 +105,7 @@ pub fn sh_append_copy(source: &Path, target: &Path) -> Result<ExitStatus, std::i
         .args(&[
             "-a",
             &source,
-            target.to_str().expect("invalid sequence in target path")
+            target.to_str().expect("invalid sequence in target path"),
         ])
         .spawn()?
         .wait()

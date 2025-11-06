@@ -243,7 +243,7 @@ impl FontSet {
         };
 
         sliced
-            .into_iter()
+            .iter()
             .map(|&p| unsafe { PatternRef(core::ptr::NonNull::new_unchecked(p)) })
     }
 }

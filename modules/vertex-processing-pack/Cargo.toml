@@ -13,8 +13,13 @@ async-rt-async-std = [
     "dep:async-std",
 ]
 
+[lints]
+workspace = true
+
 [dependencies]
 bedrock = { workspace = true }
 peridot = { path = "../../base", optional = true }
 peridot-serialization-utils = { path = "../serialization-utils" }
 async-std = { workspace = true, optional = true }
+futures-util = { workspace = true }
+peridot-native-io = { path = "../native-io" }

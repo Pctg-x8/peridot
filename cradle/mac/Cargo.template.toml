@@ -15,6 +15,7 @@ debug = ["peridot/debug"]
 mt = ["peridot/mt"]
 
 [dependencies]
+
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
     "VK_KHR_surface",
     "VK_KHR_swapchain",
@@ -22,11 +23,14 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "VK_EXT_metal_surface",
 ] }
 peridot = { path = "../../base" }
+peridot-archive = { path = "../../modules/archive" }
 log = "0.4"
 env_logger = "0.5"
 objc = "0.2"
 appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
 libc = "0.2"
+parking_lot = "0.12"
 tracing = { version = "0.1.37", features = ["log"] }
 tracing-subscriber = { version = "0.3.17", features = ["fmt", "env-filter"] }
 async-std = "1.13.0"
+thiserror = "2.0"

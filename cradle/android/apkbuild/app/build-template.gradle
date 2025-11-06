@@ -5,8 +5,9 @@ plugins {
 
 android {
     namespace **APKAPPID**
-    compileSdkVersion = 28
-    
+    compileSdkVersion = 34
+    ndkVersion "28.0.12433566"
+
     defaultConfig {
         applicationId = **APKAPPID**
         minSdkVersion 21
@@ -20,7 +21,6 @@ android {
         minifyEnabled false
         proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
     }
-    externalNativeBuild.cmake.path 'src/main/CMakeLists.txt'
     sourceSets.main {
         java.srcDirs = ["src/main"]
         jniLibs.srcDir System.getenv("NDK_HOME") + '/sources/third_party/vulkan/src/build-android/jniLibs'
@@ -28,15 +28,13 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
     }
-    kotlinOptions.jvmTarget = JavaVersion.VERSION_1_8
 }
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation libs.android.appcompat.v7
-    implementation libs.android.support.constraintLayout
-    implementation libs.kotlin.stdlib
+    implementation libs.androidx.appcompat
+    implementation libs.androidx.lifecycle.viewmodel
 }

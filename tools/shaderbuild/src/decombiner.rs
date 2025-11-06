@@ -44,12 +44,14 @@ impl DeclarationOps {
 pub type ParseResult<T> = Result<T, ()>;
 
 trait CharIterationExt: Iterator<Item = char> + Sized {
+    #[inline]
     fn count_with_bytes(self) -> (usize, usize) {
         self.fold((0, 0), |(c, b), cc| (c + 1, b + cc.len_utf8()))
     }
+
+    #[inline]
     fn count_with_bytes_while<P: Fn(char) -> bool>(self, pred: P) -> (usize, usize) {
-        self.take_while(|&c| pred(c))
-            .fold((0, 0), |(c, b), cc| (c + 1, b + cc.len_utf8()))
+        self.take_while(|&c| pred(c)).count_with_bytes()
     }
 }
 impl<I: Iterator<Item = char>> CharIterationExt for I {}
@@ -101,7 +103,7 @@ impl<'s> Tokenizer<'s> {
         }
         let slice = &self.0[..bytes];
         self.0 = &self.0[bytes..];
-        trace!("Tokenizer::strip_ident: {}", slice);
+        tracing::trace!("Tokenizer::strip_ident: {slice}");
 
         Some(slice)
     }
@@ -384,7 +386,7 @@ impl<'s> BindingBlock<'s> {
                     let offset = align2(total, align_of::<[u8; 4]>());
                     total = offset + size_of::<[u8; 4]>();
                 }
-                _ => warn!("Unimplement: Unable to determine exact packed size"),
+                _ => tracing::warn!("Unimplement: Unable to determine exact packed size"),
             }
         }
         return total;
@@ -1036,16 +1038,15 @@ impl<'s> CombinedShader<'s> {
                             align_of::<[u8; 4]>(),
                         );
                     }
-                    _ => warn!(
-                        "Unimplemented: Cannot estimate appropriate attribute info for `{}`",
-                        type_str
+                    _ => tracing::warn!(
+                        "Unimplemented: Cannot estimate appropriate attribute info for `{type_str}`"
                     ),
                 }
             }
             location_offs += blk.vars.len();
         }
 
-        debug!("Generated Attributes: {:?}", attrs);
+        tracing::debug!("Generated Attributes: {attrs:?}");
         return attrs;
     }
 }

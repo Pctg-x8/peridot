@@ -9,5 +9,12 @@ default = []
 
 async-rt-async-std = ["dep:async-std"]
 
+[lints]
+workspace = true
+
 [dependencies]
 async-std = { workspace = true, optional = true }
+futures-io = { workspace = true }
+futures-util = { workspace = true, features = ["io"] }
+peridot-native-io = { path = "../native-io" }
+pinned-futures-helper.path = "../../base-lib/pinned-futures-helper"

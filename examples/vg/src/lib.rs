@@ -1,14 +1,9 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
-use br::{
-    Device, GraphicsPipelineBuilder, Image, ImageChild, ImageSubresourceSlice, SubmissionBatch,
-};
+use br::{Device, ImageChild};
 use log::*;
 use peridot::math::Vector2;
 use peridot::mthelper::SharedRef;
-use peridot::{
-    BufferPrealloc, CBSubmissionType, CommandBundle, LayoutedPipeline, ModelData,
-    SpecConstantStorage,
-};
+use peridot::{BufferPrealloc, CBSubmissionType, CommandBundle, LayoutedPipeline, ModelData};
 use peridot_command_object::{
     BeginRenderPass, BufferUsage, ColorAttachmentBlending, EndRenderPass, GraphicsCommand,
     GraphicsCommandCombiner, GraphicsCommandSubmission, PipelineBarrier, RangedBuffer, RangedImage,
@@ -19,12 +14,16 @@ use peridot_vg as pvg;
 use peridot_vg::{FlatPathBuilder, PathBuilder};
 use pvg::{FontProvider, FontProviderConstruct, RenderVG};
 
-#[derive(SpecConstantStorage)]
+#[derive(br::SpecializationConstants)]
 #[repr(C)]
 pub struct VgRendererFragmentFixedColor {
+    #[constant_id = 0]
     r: f32,
+    #[constant_id = 1]
     g: f32,
+    #[constant_id = 2]
     b: f32,
+    #[constant_id = 3]
     a: f32,
 }
 
@@ -35,7 +34,39 @@ const unsafe fn as_u8_slice<T>(slice: &[T]) -> &[u8] {
     )
 }
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
+pub struct StandaloneImageView {
+    gfx_device: peridot::VulkanGfx,
+    handle: br::vk::VkImageView,
+}
+impl Drop for StandaloneImageView {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image_view(self.gfx_device.native_ptr(), self.handle, None);
+        }
+    }
+}
+impl br::VkHandle for StandaloneImageView {
+    type Handle = br::vk::VkImageView;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+impl StandaloneImageView {
+    pub fn new(
+        device: &peridot::VulkanGfx,
+        create_info: &br::ImageViewCreateInfo,
+    ) -> br::Result<Self> {
+        Ok(Self {
+            handle: unsafe {
+                br::vkfn_wrapper::create_image_view(device.native_ptr(), create_info, None)?
+            },
+            gfx_device: device.clone(),
+        })
+    }
+}
+
+pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     let mut font_provider =
         pvg::DefaultFontProvider::new().expect("FontProvider initialization error");
     let font = font_provider
@@ -114,7 +145,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let buffer = memory_manager
         .allocate_device_local_buffer(
             e.graphics(),
-            bp.build_desc().and_usage(br::BufferUsage::TRANSFER_DEST),
+            bp.build_desc().with_usage(br::BufferUsage::TRANSFER_DEST),
         )
         .expect("Buffer Allocation");
     let buf_length = buffer.byte_length();
@@ -127,28 +158,26 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .expect("StgBuffer Allocation")
         .into();
 
-    let rt_size = e
-        .back_buffer(0)
-        .expect("no back-buffers?")
-        .image()
-        .size()
-        .wh();
+    let rt_size = e.back_buffer_size();
     let msaa_count = br::vk::VK_SAMPLE_COUNT_4_BIT;
     let msaa_texture = memory_manager
         .allocate_device_local_image(
             e.graphics(),
             br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
-                .as_color_attachment()
-                .as_transient_attachment()
+                .with_usage(
+                    br::ImageUsageFlags::COLOR_ATTACHMENT
+                        | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+                )
                 .sample_counts(msaa_count),
         )
         .expect("Failed to create msaa render target");
     let mut msaa_texture = SharedRef::new(
-        msaa_texture
-            .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-            .view_builder()
-            .create()
-            .expect("Failed to create msaa render target view"),
+        br::ImageViewBuilder::new(
+            msaa_texture,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .expect("Failed to create msaa render target view"),
     );
 
     let (vg_renderer_params, vg_renderer_params2) = stg_buffer
@@ -255,15 +284,40 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     )
     .expect("Failed to create render pass");
 
-    let screen_size = e.back_buffer(0).expect("no backbuffer").image().size().wh();
-    let mut backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
+    let screen_size = e.back_buffer_size();
+    let mut backbuffer_resources = e
+        .iter_back_buffers()
+        .map(|x| {
+            StandaloneImageView::new(
+                e.graphics().device(),
+                &br::ImageViewCreateInfo::new(
+                    &x,
+                    br::vk::VkImageSubresourceRange {
+                        aspectMask: br::AspectMask::COLOR.bits(),
+                        baseMipLevel: 0,
+                        levelCount: 1,
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    },
+                    br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                    e.back_buffer_format(),
+                ),
+            )
+            .expect("Failed to create backbuffer view")
+        })
+        .collect::<Vec<_>>();
     let mut framebuffers = backbuffer_resources
         .iter()
         .map(|bb| {
-            br::FramebufferBuilder::new(&render_pass)
-                .with_attachment(bb)
-                .with_attachment(&msaa_texture)
-                .create()
+            br::FramebufferObject::new(
+                e.graphics_device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &render_pass,
+                    &[bb.as_transparent_ref(), msaa_texture.as_transparent_ref()],
+                    screen_size.0,
+                    screen_size.1,
+                ),
+            )
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("Framebuffer Creation");
@@ -295,7 +349,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     br::VkHandleRef::new(&bufview),
                 ])),
             desc_curve
-                .binding_at(1)
+                .binding_at(0)
                 .write(br::DescriptorContents::UniformTexelBuffer(vec![
                     br::VkHandleRef::new(&bufview2),
                 ])),
@@ -314,8 +368,6 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let curve_shader_modules =
         PvpShaderModules::new(e.graphics().device(), &curve_shader).expect("Creating CurveShader");
     debug!("ScreenSize: {screen_size:?}");
-    let sc = [screen_size.clone().into_rect(br::vk::VkOffset2D::ZERO)];
-    let vp = [sc[0].make_viewport(0.0..1.0)];
     let pl = SharedRef::new(
         br::PipelineLayoutObject::new(
             e.graphics().device().clone(),
@@ -330,149 +382,143 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         .expect("Create PipelineLayout"),
     );
 
-    let (gp, gp_curve);
-    let (gp2, gp2_curve);
-    {
-        let spc_map = &[
-            br::vk::VkSpecializationMapEntry {
-                constantID: 0,
-                offset: 0,
-                size: 4,
-            },
-            br::vk::VkSpecializationMapEntry {
-                constantID: 1,
-                offset: 4,
-                size: 4,
-            },
-        ];
-        let vsh_parameters = br::SpecializationInfo::from_binary(spc_map, unsafe {
-            as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..])
-        });
+    let [gp, gp_curve, gp2, gp2_curve] = {
+        let sc = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
+        let vp = [sc[0].make_viewport(0.0..1.0)];
+        let viewport_state = br::PipelineViewportStateCreateInfo::new_array(&vp, &sc);
 
-        let color1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
+        let spc_map = &[
+            br::vk::VkSpecializationMapEntry::for_type::<f32>(0, 0),
+            br::vk::VkSpecializationMapEntry::for_type::<f32>(1, 4),
+        ];
+        let vsh_parameters = unsafe {
+            br::SpecializationInfo::from_binary(
+                spc_map,
+                as_u8_slice(&pvg::renderer_pivot::LEFT_TOP[..]),
+            )
+        };
+
+        let gp1_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
             r: 1.0,
             g: 0.5,
             b: 0.0,
             a: 1.0,
         });
-        let shader_stages = [
-            shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&color1_fsh_parameters),
-        ];
-        let curve_shader_stages = [
-            curve_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            curve_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&color1_fsh_parameters),
-        ];
-        let interior_vertex_processing = br::VertexProcessingStages::new(
-            &shader_stages,
-            &shader.vertex_bindings,
-            &shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        );
-        let curve_vertex_processing = br::VertexProcessingStages::new(
-            &curve_shader_stages,
-            &curve_shader.vertex_bindings,
-            &curve_shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        );
-
-        let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
-        let mut gpb = br::NonDerivedGraphicsPipelineBuilder::new(
-            &pl,
-            render_pass.subpass(0),
-            interior_vertex_processing,
-        );
-        gpb.multisample_state(Some({
-            let mut state = br::MultisampleState::new();
-            state.rasterization_samples(msaa_count as _);
-
-            state
-        }))
-        .viewport_state(br::ViewportState::new(&vp, &sc))
-        .color_blend_state(br::ColorBlendState::new(None, &color_blends, [0.0; 4]));
-        gp = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Create GraphicsPipeline"),
-            pl.clone(),
-        );
-        gpb.vertex_processing(curve_vertex_processing);
-        gp_curve = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Create GraphicsPipeline of CurveRender"),
-            pl.clone(),
-        );
-
-        let fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
+        let gp2_fsh_parameters = br::SpecializationInfo::new(&VgRendererFragmentFixedColor {
             r: 0.0,
             g: 0.5,
             b: 1.0,
             a: 1.0,
         });
-        let shader_stages = [
-            shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&fsh_parameters),
-        ];
-        let curve_shader_stages = [
-            curve_shader_modules
-                .pipeline_vertex_shader_stage()
-                .with_specialization_info(&vsh_parameters),
-            curve_shader_modules
-                .pipeline_fragment_shader_stage()
-                .expect("no fsh?")
-                .with_specialization_info(&fsh_parameters),
-        ];
-        let interior_vertex_processing = br::VertexProcessingStages::new(
-            &shader_stages,
+
+        let vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
             &shader.vertex_bindings,
             &shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         );
-        let curve_vertex_processing = br::VertexProcessingStages::new(
-            &curve_shader_stages,
+        let curve_vertex_input_state = br::PipelineVertexInputStateCreateInfo::new(
             &curve_shader.vertex_bindings,
             &curve_shader.vertex_attributes,
-            br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
         );
-        gpb.vertex_processing(interior_vertex_processing);
-        gp2 = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
+        let input_assembly_state =
+            br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleList);
+        let ms =
+            br::PipelineMultisampleStateCreateInfo::new().rasterization_samples(msaa_count as _);
+        let rs = br::PipelineRasterizationStateCreateInfo::new(
+            br::PolygonMode::Fill,
+            br::CullModeFlags::NONE,
+            br::FrontFace::CounterClockwise,
+        );
+        let color_blends = [ColorAttachmentBlending::PREMULTIPLIED_ALPHA.into_vk()];
+
+        e.graphics()
+            .device()
+            .new_graphics_pipeline_array(
+                &[
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp1_fsh_parameters),
+                        ],
+                        &vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .set_multisample_state(&ms),
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            curve_shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            curve_shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp1_fsh_parameters),
+                        ],
+                        &curve_vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .set_multisample_state(&ms),
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp2_fsh_parameters),
+                        ],
+                        &vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .set_multisample_state(&ms),
+                    br::GraphicsPipelineCreateInfo::new(
+                        &pl,
+                        render_pass.subpass(0),
+                        &[
+                            curve_shader_modules
+                                .pipeline_vertex_shader_stage()
+                                .with_specialization_info(&vsh_parameters),
+                            curve_shader_modules
+                                .pipeline_fragment_shader_stage()
+                                .expect("no fsh?")
+                                .with_specialization_info(&gp2_fsh_parameters),
+                        ],
+                        &curve_vertex_input_state,
+                        &input_assembly_state,
+                        &viewport_state,
+                        &rs,
+                        &br::PipelineColorBlendStateCreateInfo::new(&color_blends),
+                    )
+                    .set_multisample_state(&ms),
+                ],
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
             )
-            .expect("Creating GraphicsPipeline2"),
-            pl.clone(),
-        );
-        gpb.vertex_processing(curve_vertex_processing);
-        gp2_curve = LayoutedPipeline::combine(
-            gpb.create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Creating GraphicsPipeline2 for CurveRender"),
-            pl.clone(),
-        );
-    }
+            .expect("Failed to create graphics pipelines")
+    };
+    let gp = LayoutedPipeline::combine(gp.clone_parent(), pl.clone());
+    let gp_curve = LayoutedPipeline::combine(gp_curve.clone_parent(), pl.clone());
+    let gp2 = LayoutedPipeline::combine(gp2.clone_parent(), pl.clone());
+    let gp2_curve = LayoutedPipeline::combine(gp2_curve.clone_parent(), pl.clone());
 
     let render_vg = RenderVG {
         params: vg_renderer_params,
@@ -480,7 +526,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         interior_pipeline: gp,
         curve_pipeline: gp_curve,
         transform_buffer_descriptor_set: desc_interior,
-        target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
+        target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _),
         rendering_precision: e.rendering_precision(),
     };
     let render_vg2 = RenderVG {
@@ -489,8 +535,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         interior_pipeline: gp2,
         curve_pipeline: gp2_curve,
         transform_buffer_descriptor_set: desc_curve,
-        target_pixels: Vector2(screen_size.width as _, screen_size.height as _),
-
+        target_pixels: Vector2(screen_size.0 as _, screen_size.1 as _),
         rendering_precision: e.rendering_precision(),
     };
     let mut color_renders = [render_vg2, render_vg];
@@ -501,11 +546,12 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         framebuffers.len(),
     )
     .expect("Creating RenderCB");
-    for (r, f) in render_cb.iter_mut().zip(&framebuffers) {
+    for (mut r, f) in render_cb.iter_mut().zip(&framebuffers) {
         let rp = BeginRenderPass::new(
             &render_pass,
             f,
-            screen_size.into_rect(br::vk::VkOffset2D::ZERO),
+            br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO),
+            br::SubpassContents::Inline,
         )
         .with_clear_values(vec![
             br::ClearValue::color([1.0; 4]),
@@ -515,32 +561,29 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         (&color_renders[..])
             .between(rp, EndRenderPass)
             .execute_and_finish(unsafe {
-                r.begin(e.graphics_device())
+                r.begin(&br::CommandBufferBeginInfo::new())
                     .expect("Failed to begin render command recording")
-                    .as_dyn_ref()
             })
             .expect("Failed to finish render commands");
     }
 
-    let target_size = peridot::math::Vector2(screen_size.width as _, screen_size.height as _);
+    let target_size = peridot::math::Vector2(screen_size.0 as _, screen_size.1 as _);
 
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    loop {
+        match e.next_event().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
                 let fd = e.prepare_frame().expect("Failed to prepare frame");
 
-                e.do_render(
-                    fd.backbuffer_index,
-                    None::<br::EmptySubmissionBatch>,
-                    br::EmptySubmissionBatch.with_command_buffers(
-                        &render_cb[fd.backbuffer_index as usize..=fd.backbuffer_index as usize],
-                    ),
-                )
-                .expect("Failed to present");
+                let mut render_batch = peridot::SubmissionBatchBuilder::new();
+                let render_cb = render_cb.nth_ref(fd.backbuffer_index as _);
+                render_batch.add_command_buffers([render_cb.as_transparent_ref()]);
+                e.do_render(fd.backbuffer_index, None, render_batch)
+                    .expect("Failed to present");
             }
             peridot::Event::Resize(new_size) => {
-                e.wait_for_last_rendering_completion();
+                e.wait_for_last_rendering_completion()
+                    .expect("Failed to wait last rendering completion");
 
                 unsafe { render_cb.reset().expect("Resetting RenderCB") };
                 drop(framebuffers);
@@ -558,17 +601,20 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     .allocate_device_local_image(
                         e.graphics(),
                         br::ImageCreateInfo::new(rt_size.clone(), e.back_buffer_format())
-                            .as_color_attachment()
-                            .as_transient_attachment()
+                            .with_usage(
+                                br::ImageUsageFlags::COLOR_ATTACHMENT
+                                    | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+                            )
                             .sample_counts(msaa_count),
                     )
                     .expect("Failed to create msaa render target");
                 msaa_texture = SharedRef::new(
-                    msaa_texture_res
-                        .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                        .view_builder()
-                        .create()
-                        .expect("Failed to create msaa render target view"),
+                    br::ImageViewBuilder::new(
+                        msaa_texture_res,
+                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                    )
+                    .create()
+                    .expect("Failed to create msaa render target view"),
                 );
 
                 PipelineBarrier::from(
@@ -579,14 +625,39 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 .submit(e)
                 .expect("Failed to initialize msaa rt");
 
-                backbuffer_resources = e.iter_back_buffers().cloned().collect();
+                backbuffer_resources = e
+                    .iter_back_buffers()
+                    .map(|x| {
+                        StandaloneImageView::new(
+                            e.graphics().device(),
+                            &br::ImageViewCreateInfo::new(
+                                &x,
+                                br::vk::VkImageSubresourceRange {
+                                    aspectMask: br::AspectMask::COLOR.bits(),
+                                    baseMipLevel: 0,
+                                    levelCount: 1,
+                                    baseArrayLayer: 0,
+                                    layerCount: 1,
+                                },
+                                br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                                e.back_buffer_format(),
+                            ),
+                        )
+                        .expect("Failed to create backbuffer view")
+                    })
+                    .collect();
                 framebuffers = backbuffer_resources
                     .iter()
                     .map(|bb| {
-                        br::FramebufferBuilder::new(&render_pass)
-                            .with_attachment(bb)
-                            .with_attachment(&msaa_texture)
-                            .create()
+                        br::FramebufferObject::new(
+                            e.graphics_device().clone(),
+                            &br::FramebufferCreateInfo::new(
+                                &render_pass,
+                                &[bb.as_transparent_ref(), msaa_texture.as_transparent_ref()],
+                                new_size.0,
+                                new_size.1,
+                            ),
+                        )
                     })
                     .collect::<Result<Vec<_>, _>>()
                     .expect("Bind Framebuffer");
@@ -595,11 +666,12 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     r.set_target_pixels(target_size.clone());
                 }
 
-                for (r, f) in render_cb.iter_mut().zip(&framebuffers) {
+                for (mut r, f) in render_cb.iter_mut().zip(&framebuffers) {
                     let rp = BeginRenderPass::new(
                         &render_pass,
                         f,
                         br::vk::VkExtent2D::from(new_size).into_rect(br::vk::VkOffset2D::ZERO),
+                        br::SubpassContents::Inline,
                     )
                     .with_clear_values(vec![
                         br::ClearValue::color([1.0; 4]),
@@ -609,9 +681,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                     (&color_renders[..])
                         .between(rp, EndRenderPass)
                         .execute_and_finish(unsafe {
-                            r.begin(e.graphics_device())
+                            r.begin(&br::CommandBufferBeginInfo::new())
                                 .expect("Start Recording CB")
-                                .as_dyn_ref()
                         })
                         .expect("Failed to finish render commands");
                 }

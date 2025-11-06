@@ -1,0 +1,8 @@
+[package]
+name = "peridot-rendering-configuration-reader"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration" }

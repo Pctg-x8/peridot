@@ -12,11 +12,21 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
 peridot = { path = "../../base", features = ["mt"] }
 peridot-math = { path = "../../modules/math" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
+peridot-semantic-shader.path = "../../modules/semantic-shader"
 peridot-image = { path = "../../modules/image" }
 peridot-command-object = { path = "../../modules/command-object", features = [
     "memory-manager-interop",
 ] }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = [
+    "with-loader-impl",
+] }
 async-std = "1.7"
+parking_lot = "0.12"
+ktx = { path = "../../thirdparty/ktx" }
+peridot-archive = { path = "../../modules/archive", features = [
+    "async-rt-async-std",
+] }
+futures-util = "0.3"
 
 log = "0.4"

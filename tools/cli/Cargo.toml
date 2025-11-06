@@ -3,18 +3,29 @@ name = "peridot-cli"
 version = "0.1.0"
 description = "Peridot Enigne BuildProcess CLI"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
-edition = "2018"
+edition = "2024"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = ["process-assets"]
+process-assets = [
+    "dep:peridot-rendering-configuration",
+    "dep:peridot-asset-processing",
+]
 
 [[bin]]
 name = "peridot"
 path = "src/main.rs"
 
 [dependencies]
-structopt = "0.3"
+clap = { workspace = true, features = ["derive"] }
 toml = "0.5"
 serde = { version = "1.0", features = ["derive"] }
 console = "0.14"
 regex = "1.4"
 semver = "1.0"
+pbxproj = { path = "../../thirdparty/pbxproj" }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration", optional = true, features = [
+    "with-asset-processing",
+] }
+peridot-asset-processing = { path = "../../modules/asset-processing", optional = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }

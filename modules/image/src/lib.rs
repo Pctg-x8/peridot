@@ -1,7 +1,11 @@
+use core::pin::Pin;
 use image::codecs::hdr::{HdrDecoder, HdrMetadata};
 use image::{ImageDecoder, ImageError, ImageResult};
-use peridot::{DecodedPixelData, FromAsset, LDRImageAsset, LogicalAssetData, PixelFormat};
-use std::io::{BufReader, Read, Seek};
+use peridot::{
+    AssetBlob, DecodedPixelData, FromAssetBlob, FromAssetBlobAsync, LDRImageAsset,
+    LogicalAssetData, PixelFormat,
+};
+use std::io::BufReader;
 
 fn load_image<D>(decoder: D) -> ImageResult<DecodedPixelData>
 where
@@ -10,10 +14,14 @@ where
     let color = decoder.color_type();
     let (w, h) = decoder.dimensions();
     let mut pixels = Vec::with_capacity(decoder.total_bytes() as _);
+    decoder.read_image(unsafe {
+        core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+            pixels.spare_capacity_mut(),
+        )
+    })?;
     unsafe {
-        pixels.set_len(decoder.total_bytes() as _);
+        pixels.set_len(pixels.capacity());
     }
-    decoder.read_image(&mut pixels)?;
 
     Ok(DecodedPixelData {
         pixels,
@@ -43,7 +51,7 @@ pub struct WebP(pub DecodedPixelData);
 pub struct BMP(pub DecodedPixelData);
 pub struct HDR {
     pub pixel_data: DecodedPixelData,
-    pub hdr_metadata: HdrMetadata
+    pub hdr_metadata: HdrMetadata,
 }
 
 impl LogicalAssetData for PNG {
@@ -64,56 +72,68 @@ impl LogicalAssetData for BMP {
 impl LogicalAssetData for HDR {
     const EXT: &'static str = "hdr";
 }
-impl FromAsset for PNG {
+impl FromAssetBlob for PNG {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::png::PngDecoder::new(std::io::BufReader::new(asset))
-            .and_then(load_image)
-            .map(PNG)
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, ImageError> {
+        image::codecs::png::PngDecoder::new(std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
+        .and_then(load_image)
+        .map(PNG)
     }
 }
-impl FromAsset for TGA {
+impl FromAssetBlob for TGA {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::tga::TgaDecoder::new(std::io::BufReader::new(asset))
-            .and_then(load_image)
-            .map(TGA)
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, ImageError> {
+        image::codecs::tga::TgaDecoder::new(std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
+        .and_then(load_image)
+        .map(TGA)
     }
 }
-impl FromAsset for TIFF {
+impl FromAssetBlob for TIFF {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::tiff::TiffDecoder::new(std::io::BufReader::new(asset))
-            .and_then(load_image)
-            .map(TIFF)
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, ImageError> {
+        image::codecs::tiff::TiffDecoder::new(std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
+        .and_then(load_image)
+        .map(TIFF)
     }
 }
-impl FromAsset for WebP {
+impl FromAssetBlob for WebP {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::webp::WebPDecoder::new(std::io::BufReader::new(asset))
-            .and_then(load_image)
-            .map(WebP)
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, ImageError> {
+        image::codecs::webp::WebPDecoder::new(std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
+        .and_then(load_image)
+        .map(WebP)
     }
 }
-impl FromAsset for BMP {
+impl FromAssetBlob for BMP {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        image::codecs::bmp::BmpDecoder::new(std::io::BufReader::new(asset))
-            .and_then(load_image)
-            .map(BMP)
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, ImageError> {
+        image::codecs::bmp::BmpDecoder::new(std::io::BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))
+        .and_then(load_image)
+        .map(BMP)
     }
 }
-impl FromAsset for HDR {
+impl FromAssetBlob for HDR {
     type Error = ImageError;
 
-    fn from_asset<Asset: Read + Seek + 'static>(asset: Asset) -> Result<Self, ImageError> {
-        let reader = HdrDecoder::new(BufReader::new(asset))?;
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, ImageError> {
+        let reader = HdrDecoder::new(BufReader::new(
+            peridot::native_io::RandomBlobReadSeekAdapter::new(blob),
+        ))?;
 
         Ok(Self {
             hdr_metadata: reader.metadata(),
@@ -145,5 +165,41 @@ impl LDRImageAsset for TIFF {
 impl LDRImageAsset for WebP {
     fn into_pixel_data_info(self) -> DecodedPixelData {
         self.0
+    }
+}
+
+pub struct StdTexture2DAsset(
+    pub ktx::Owned<ktx::Texture2>,
+    #[allow(dead_code)] Pin<Box<[u8]>>,
+);
+impl LogicalAssetData for StdTexture2DAsset {
+    const EXT: &'static str = "pa1-texture2d";
+}
+impl FromAssetBlob for StdTexture2DAsset {
+    type Error = std::io::Error;
+
+    fn from_asset_blob<'a, Blob: AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
+        let buf = blob.read_to_end(0)?;
+        let buf = Box::into_pin(buf.into_boxed_slice());
+        let container = ktx::Texture2::from_memory(&buf, ktx::TextureCreateFlags::empty())
+            .expect("Failed to load ktx2");
+
+        Ok(Self(container, buf))
+    }
+}
+impl FromAssetBlobAsync for StdTexture2DAsset {
+    type Error = std::io::Error;
+
+    fn from_asset_blob_async<'a, Blob: peridot::AssetBlobAsync + 'a>(
+        blob: Blob,
+    ) -> impl core::future::Future<Output = Result<Self, Self::Error>> {
+        async move {
+            let buf = blob.read_to_end_async(0).await?;
+            let buf = Box::into_pin(buf.into_boxed_slice());
+            let container = ktx::Texture2::from_memory(&buf, ktx::TextureCreateFlags::empty())
+                .expect("Failed to load ktx2");
+
+            Ok(Self(container, buf))
+        }
     }
 }

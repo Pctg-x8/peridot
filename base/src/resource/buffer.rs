@@ -1,47 +1,65 @@
 //! Buffer Resource Helpers
 
-use super::AutocloseMappedMemoryRange;
+use super::{AutocloseMappedMemoryRange, ExclusiveLockedSharedMemoryBlock, SharedMemoryBlock};
 
-use bedrock as br;
+use bedrock::{self as br, DeviceMemoryMut};
 use num::Integer;
 
+use crate::graphics::VulkanGfx;
 #[allow(unused_imports)]
 use crate::mthelper::DynamicMutabilityProvider;
-use crate::{
-    mthelper::{DynamicMut, SharedRef},
-    DeviceObject,
-};
 
-/// A refcounted buffer object bound with a memory object.
-#[derive(Clone)]
-pub struct Buffer<Backend: br::Buffer, Memory: br::DeviceMemory>(
-    Backend,
-    SharedRef<DynamicMut<Memory>>,
-    u64,
-);
-impl<
-        Backend: br::Buffer + br::MemoryBound + br::VkHandleMut,
-        Memory: br::DeviceMemory + br::VkHandleMut,
-    > Buffer<Backend, Memory>
-{
+/// A buffer object that unbounded with any memory objects.
+pub struct UnboundedStandaloneBuffer(br::vk::VkBuffer, VulkanGfx);
+impl Drop for UnboundedStandaloneBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_buffer(self.1 .0.device, self.0, None);
+        }
+    }
+}
+impl br::VkHandle for UnboundedStandaloneBuffer {
+    type Handle = br::vk::VkBuffer;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.0
+    }
+}
+
+/// A buffer object bound with a memory object.
+pub struct Buffer(br::vk::VkBuffer, SharedMemoryBlock, u64);
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_buffer(self.1.lock_shared().device.0.device, self.0, None)
+        }
+    }
+}
+impl Buffer {
     pub fn bound(
-        mut b: Backend,
-        mem: &SharedRef<DynamicMut<Memory>>,
+        b: UnboundedStandaloneBuffer,
+        mem: &SharedMemoryBlock,
         offset: u64,
     ) -> br::Result<Self> {
-        b.bind(&*mem.borrow(), offset as _)
-            .map(move |_| Self(b, mem.clone(), offset))
+        let UnboundedStandaloneBuffer(handle, _) = b;
+        unsafe {
+            br::vkfn_wrapper::bind_buffer_memory(
+                mem.lock_shared().device.0.device,
+                handle,
+                mem.lock_shared().handle,
+                offset as _,
+            )?;
+        }
+
+        Ok(Self(handle, mem.clone(), offset))
     }
 
     pub fn guard_map<R>(
-        &mut self,
+        &self,
         range: std::ops::Range<u64>,
-        f: impl FnOnce(&br::MappedMemoryRange<Memory>) -> R,
-    ) -> br::Result<R>
-    where
-        Memory: br::DeviceMemoryMut,
-    {
-        let mut mem = self.1.borrow_mut();
+        f: impl FnOnce(&br::MappedMemory<ExclusiveLockedSharedMemoryBlock>) -> R,
+    ) -> br::Result<R> {
+        let mut mem = self.1.lock_exclusive();
         let mapped_range = AutocloseMappedMemoryRange(
             mem.map((self.2 + range.start) as _..(self.2 + range.end) as _)?
                 .into(),
@@ -50,54 +68,35 @@ impl<
         Ok(f(&mapped_range))
     }
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+impl Buffer {
     /// Reference to a memory object bound with this object.
     #[inline]
-    pub const fn memory(&self) -> &SharedRef<DynamicMut<Memory>> {
+    pub const fn memory(&self) -> &SharedMemoryBlock {
         &self.1
     }
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> std::ops::Deref for Buffer<Backend, Memory> {
-    type Target = Backend;
-
-    fn deref(&self) -> &Backend {
-        &self.0
-    }
-}
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::VkHandle for Buffer<Backend, Memory> {
-    type Handle = <Backend as br::VkHandle>::Handle;
+impl br::VkHandle for Buffer {
+    type Handle = br::vk::VkBuffer;
 
     fn native_ptr(&self) -> Self::Handle {
-        self.0.native_ptr()
+        self.0
     }
 }
-impl<Backend: br::Buffer + br::DeviceChildHandle, Memory: br::DeviceMemory> br::DeviceChildHandle
-    for Buffer<Backend, Memory>
-{
+impl br::DeviceChildHandle for Buffer {
     #[inline(always)]
-    fn device_handle(&self) -> bedrock::vk::VkDevice {
-        self.0.device_handle()
+    fn device_handle(&self) -> br::vk::VkDevice {
+        self.1.lock_shared().device.0.device
     }
 }
-impl<Backend: br::Buffer + br::DeviceChild, Memory: br::DeviceMemory> br::DeviceChild
-    for Buffer<Backend, Memory>
-{
-    type ConcreteDevice = Backend::ConcreteDevice;
-
-    #[inline(always)]
-    fn device(&self) -> &Self::ConcreteDevice {
-        self.0.device()
-    }
-}
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> br::Buffer for Buffer<Backend, Memory> {}
+impl br::Buffer for Buffer {}
 
 /// A view of the buffer.
 #[derive(Clone, Copy)]
-pub struct BufferView<Buffer: br::Buffer> {
+pub struct BufferView<Buffer> {
     pub buffer: Buffer,
     pub offset: usize,
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
+impl Buffer {
     pub const fn with_offset(self, offset: usize) -> BufferView<Self> {
         BufferView {
             buffer: self,
@@ -112,7 +111,7 @@ impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
         }
     }
 }
-impl<Buffer: br::Buffer> BufferView<Buffer> {
+impl BufferView<Buffer> {
     pub fn with_offset(self, offset: usize) -> Self {
         Self {
             buffer: self.buffer,
@@ -120,12 +119,12 @@ impl<Buffer: br::Buffer> BufferView<Buffer> {
         }
     }
 
-    pub const fn range(&self, bytes: usize) -> std::ops::Range<usize> {
+    pub const fn head_range(&self, bytes: usize) -> core::ops::Range<usize> {
         self.offset..self.offset + bytes
     }
 }
 /// Conversion for Bedrock bind_vertex_buffers form
-impl<Buffer: br::Buffer> From<BufferView<Buffer>> for (Buffer, usize) {
+impl<Buffer> From<BufferView<Buffer>> for (Buffer, usize) {
     fn from(v: BufferView<Buffer>) -> Self {
         (v.buffer, v.offset)
     }
@@ -135,20 +134,17 @@ impl<Buffer: br::Buffer> From<BufferView<Buffer>> for (Buffer, usize) {
 #[derive(Clone, Copy)]
 pub struct DeviceBufferView<Buffer> {
     pub buffer: Buffer,
-    pub offset: br::vk::VkDeviceSize,
+    pub offset: br::DeviceSize,
 }
-impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
-    pub const fn with_dev_offset(self, offset: br::vk::VkDeviceSize) -> DeviceBufferView<Self> {
+impl Buffer {
+    pub const fn with_dev_offset(self, offset: br::DeviceSize) -> DeviceBufferView<Self> {
         DeviceBufferView {
             buffer: self,
             offset,
         }
     }
 
-    pub const fn with_dev_offset_ref(
-        &self,
-        offset: br::vk::VkDeviceSize,
-    ) -> DeviceBufferView<&Self> {
+    pub const fn with_dev_offset_ref(&self, offset: br::DeviceSize) -> DeviceBufferView<&Self> {
         DeviceBufferView {
             buffer: self,
             offset,
@@ -156,17 +152,14 @@ impl<Backend: br::Buffer, Memory: br::DeviceMemory> Buffer<Backend, Memory> {
     }
 }
 impl<Buffer> DeviceBufferView<Buffer> {
-    pub fn with_offset(self, offset: br::vk::VkDeviceSize) -> Self {
+    pub fn with_offset(self, offset: br::DeviceSize) -> Self {
         Self {
             buffer: self.buffer,
             offset: self.offset + offset,
         }
     }
 
-    pub const fn range(
-        &self,
-        bytes: br::vk::VkDeviceSize,
-    ) -> std::ops::Range<br::vk::VkDeviceSize> {
+    pub const fn head_range(&self, bytes: br::DeviceSize) -> core::ops::Range<br::DeviceSize> {
         self.offset..self.offset + bytes
     }
 }
@@ -197,17 +190,17 @@ impl BufferContent {
         }
     }
 
-    fn alignment(&self, pd: &impl br::PhysicalDevice) -> u64 {
+    fn alignment(&self, gfx: &VulkanGfx) -> u64 {
         use self::BufferContent::*;
 
         match *self {
             Vertex(_, a) | Index(_, a) | Raw(_, a) => a,
             Uniform(_, a) | UniformTexel(_, a) => u64::lcm(
-                &pd.properties().limits.minUniformBufferOffsetAlignment as _,
+                &gfx.adapter_limits().minUniformBufferOffsetAlignment as _,
                 &a,
             ),
             Storage(_, a) | StorageTexel(_, a) => u64::lcm(
-                &pd.properties().limits.minStorageBufferOffsetAlignment as _,
+                &gfx.adapter_limits().minStorageBufferOffsetAlignment as _,
                 &a,
             ),
         }
@@ -324,7 +317,7 @@ impl BufferContent {
 
     pub const fn raw_for_slice<T>(slice: &[T]) -> Self {
         Self::Raw(
-            (core::mem::size_of::<T>() * slice.len()) as _,
+            core::mem::size_of_val(slice) as _,
             core::mem::align_of::<T>() as _,
         )
     }
@@ -348,52 +341,72 @@ impl<'g> BufferPrealloc<'g> {
         }
     }
 
-    pub fn build_desc(&self) -> br::BufferCreateInfo {
+    pub fn build_desc(&self) -> br::BufferCreateInfo<'_> {
         br::BufferCreateInfo::new(self.total as _, self.usage)
     }
 
     /// this ignores usage flags from appended contents
-    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferCreateInfo {
+    pub fn build_desc_custom_usage(&self, usage: br::BufferUsage) -> br::BufferCreateInfo<'_> {
         br::BufferCreateInfo::new(self.total as _, usage)
     }
 
-    pub fn build(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferObject::new(
-            self.g.device.clone(),
-            &br::BufferCreateInfo::new(self.total as _, self.usage),
-        )
+    pub fn build(&self) -> br::Result<UnboundedStandaloneBuffer> {
+        let handle = unsafe {
+            br::vkfn_wrapper::create_buffer(
+                self.g.gfx_device.0.device,
+                &br::BufferCreateInfo::new(self.total as _, self.usage),
+                None,
+            )?
+        };
+
+        Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }
 
-    pub fn build_transferred(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferObject::new(
-            self.g.device().clone(),
-            &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_dest()),
-        )
+    pub fn build_transferred(&self) -> br::Result<UnboundedStandaloneBuffer> {
+        let handle = unsafe {
+            br::vkfn_wrapper::create_buffer(
+                self.g.gfx_device.0.device,
+                &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_dest()),
+                None,
+            )?
+        };
+
+        Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }
 
-    pub fn build_upload(&self) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferObject::new(
-            self.g.device.clone(),
-            &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_src()),
-        )
+    pub fn build_upload(&self) -> br::Result<UnboundedStandaloneBuffer> {
+        let handle = unsafe {
+            br::vkfn_wrapper::create_buffer(
+                self.g.gfx_device.0.device,
+                &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_src()),
+                None,
+            )?
+        };
+
+        Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }
 
     pub fn build_custom_usage(
         &self,
         usage: br::BufferUsage,
-    ) -> br::Result<br::BufferObject<DeviceObject>> {
-        br::BufferObject::new(
-            self.g.device.clone(),
-            &br::BufferCreateInfo::new(self.total as _, self.usage | usage),
-        )
+    ) -> br::Result<UnboundedStandaloneBuffer> {
+        let handle = unsafe {
+            br::vkfn_wrapper::create_buffer(
+                self.g.gfx_device.0.device,
+                &br::BufferCreateInfo::new(self.total as _, self.usage | usage),
+                None,
+            )?
+        };
+
+        Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }
 
     pub fn add(&mut self, content: BufferContent) -> u64 {
         self.usage = content.usage(self.usage);
-        let content_align = content.alignment(&self.g.adapter);
+        let content_align = content.alignment(&self.g.gfx_device);
         self.common_align = self.common_align.lcm(&content_align);
         let offs = super::align2!(self.total, content_align);
-        self.total = offs + content.size() as u64;
+        self.total = offs + content.size();
         self.offsets.push(offs);
 
         offs

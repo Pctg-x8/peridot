@@ -1,3 +1,4 @@
+use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
@@ -6,12 +7,11 @@ use sound_backend::SoundBackend;
 use std::{ffi::CStr, path::PathBuf, sync::Arc};
 use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
-use tracing::warn;
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 mod sound_backend;
 
-use crate::presenter::{wayland::Wayland, xcb::X11, BorrowFd, EventProcessor, WindowBackend};
+use crate::presenter::{wayland::Wayland, BorrowFd, EventProcessor, WindowBackend};
 mod epoll;
 mod input;
 mod kernel_input;
@@ -45,32 +45,43 @@ impl PlatformAssetLoader {
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type Asset = File;
-    type StreamingAsset = File;
+    type AssetBlob<'a> = peridot::native_io::linux::NativeFileBlobRandomReader;
+    type AssetBlobAsync<'a> = peridot::native_io::linux::NativeFileAsyncBlobRandomReader;
+    type StreamingAsset<'a> = peridot::native_io::RandomBlobReadSeekAdapter<
+        peridot::native_io::linux::NativeFileBlobRandomReader,
+    >;
 
-    fn get(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
+    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
         #[allow(unused_mut)]
         let mut path_segments = path.split('.').peekable();
-
-        #[cfg(feature = "IterationBuild")]
-        if path_segments.peek().map_or(false, |&s| s == "builtin") {
-            // Switch base to external builtin path
-            path_segments.next();
-            let mut apath = self.builtin_asset_basedir.clone();
-            apath.extend(path_segments);
-            apath.set_extension(ext);
-
-            return File::open(apath);
-        }
 
         let mut apath = self.basedir.clone();
         apath.extend(path_segments);
         apath.set_extension(ext);
 
-        File::open(apath)
+        peridot::native_io::linux::NativeFileBlobRandomReader::open(apath)
     }
-    fn get_streaming(&self, path: &str, ext: &str) -> IOResult<Self::Asset> {
+
+    fn get_async<'a>(
+        &'a self,
+        path: &str,
+        ext: &str,
+    ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
+        async move {
+            #[allow(unused_mut)]
+            let mut path_segments = path.split('.').peekable();
+
+            let mut apath = self.basedir.clone();
+            apath.extend(path_segments);
+            apath.set_extension(ext);
+
+            peridot::native_io::linux::NativeFileAsyncBlobRandomReader::open(apath)
+        }
+    }
+
+    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
         self.get(path, ext)
+            .map(peridot::native_io::RandomBlobReadSeekAdapter::new)
     }
 }
 
@@ -97,36 +108,52 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
     }
 }
 
-pub struct GameDriver {
+static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
+    |ptr| core::task::RawWaker::new(ptr, &USERCODE_WAKER_VTABLE),
+    |_| {},
+    |_| {},
+    |_| {},
+);
+
+pub struct GameDriver<MainF> {
     engine_input: peridot::InputProcess,
-    engine_audio: Arc<std::sync::RwLock<peridot::audio::Mixer>>,
+    engine_audio: Arc<RwLock<peridot::audio::Mixer>>,
     _snd: Box<dyn SoundBackend>,
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
     frame_timing_sender: async_std::channel::Sender<()>,
-    usercode_thread: async_std::task::JoinHandle<()>,
+    event_queue: Pin<Box<peridot::EventQueue>>,
+    usercode: Pin<Box<MainF>>,
+    // self-referential struct
+    _pinned: core::marker::PhantomPinned,
 }
-impl GameDriver {
-    fn new<PP>(pp: Arc<RwLock<PP>>) -> Self
+impl<MainF: Future> GameDriver<MainF> {
+    fn new<PP>(
+        pp: SharedMutableRef<PP>,
+        usercode_launcher: impl FnOnce(
+            peridot::Engine<'static, NativeLink<SharedMutableRef<PP>>>,
+        ) -> MainF,
+    ) -> Self
     where
         PP: PointerPositionProvider + Send + Sync + 'static,
-        Arc<RwLock<PP>>: PresenterProvider,
-        <Arc<RwLock<PP>> as PresenterProvider>::Presenter: Sync + Send,
-        <<Arc<RwLock<PP>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer: Sync + Send
+        SharedMutableRef<PP>: PresenterProvider,
     {
         let (event_sender, event_receiver) = async_std::channel::unbounded();
         let (frame_timing_sender, frame_timing_receiver) = async_std::channel::bounded(1);
 
-        let nl = NativeLink {
-            al: PlatformAssetLoader::new(),
-            pp: pp.clone(),
-        };
+        let event_queue = Box::pin(peridot::EventQueue::new());
+        let event_queue_lifetime_extended: &'static peridot::EventQueue =
+            unsafe { &*(&*event_queue as *const _) };
         let mut engine = peridot::Engine::new(
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
-            nl,
-            Default::default(),
+            NativeLink {
+                al: PlatformAssetLoader::new(),
+                pp: pp.clone(),
+            },
+            unsafe { core::mem::MaybeUninit::zeroed().assume_init() },
             (event_sender.clone(), event_receiver),
             frame_timing_receiver,
+            &event_queue_lifetime_extended,
         );
         engine
             .input()
@@ -146,9 +173,7 @@ impl GameDriver {
 
         let engine_input = engine.input().clone();
         let engine_audio = engine.audio_mixer().clone();
-        let usercode_thread = async_std::task::spawn(async move {
-            userlib::game_main(&mut engine).await;
-        });
+        let usercode = Box::pin(usercode_launcher(engine));
 
         Self {
             engine_input,
@@ -156,8 +181,21 @@ impl GameDriver {
             _snd,
             event_sender,
             frame_timing_sender,
-            usercode_thread,
+            event_queue,
+            usercode,
+            _pinned: core::marker::PhantomPinned,
         }
+    }
+
+    /// returns true if usercode coroutine has done
+    pub fn step(&mut self) -> bool {
+        let usercode_waker =
+            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
+
+        self.usercode
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&usercode_waker))
+            .is_ready()
     }
 }
 
@@ -184,27 +222,26 @@ impl Drop for EpollTemporaryAddFd<'_> {
     }
 }
 
-async fn run_with_window_backend<W>(window_backend: Arc<RwLock<W>>)
+fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
     W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
-    Arc<RwLock<W>>: PresenterProvider,
-    <Arc<RwLock<W>> as PresenterProvider>::Presenter: Sync + Send,
-    <<Arc<RwLock<W>> as PresenterProvider>::Presenter as peridot::PlatformPresenter>::BackBuffer:
-        Sync + Send,
+    SharedMutableRef<W>: PresenterProvider,
 {
-    let gd = GameDriver::new(window_backend.clone());
+    let mut gd = GameDriver::new(window_backend.clone(), |mut engine| async move {
+        userlib::game_main(&mut engine).await;
+    });
 
     let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
-    window_backend.write().show();
-    gd.engine_audio
-        .write()
-        .expect("Failed to mutate audio mixer")
-        .start();
+    window_backend.borrow_mut().show();
+    gd.engine_audio.write().start();
     let mut events = Vec::new();
-    let mut last_drawn_geometry = window_backend.read().geometry();
-    while !window_backend.read().has_close_requested() {
+    let mut last_drawn_geometry = window_backend.borrow().geometry();
+    while !window_backend.borrow().has_close_requested() {
+        // step usercode before wait
+        gd.step();
+
         if events.len() != 2 + input.managed_devices_count() {
             // resize
             events.resize(2 + input.managed_devices_count(), unsafe {
@@ -212,7 +249,7 @@ where
             });
         }
 
-        let window_backend_readiness_guard = window_backend.write().readiness_guard();
+        let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
             window_backend_readiness_guard.borrow_fd().as_raw_fd(),
@@ -220,33 +257,28 @@ where
             0,
         );
 
-        let count = ep
-            .wait(&mut events, Some(1))
-            .expect("Failed to waiting epoll");
+        let count = match ep.wait(&mut events, Some(1)) {
+            Ok(x) => x,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => 0,
+            Err(e) => {
+                tracing::error!(reason = ?e, "epoll_wait failed");
+                break;
+            }
+        };
         drop(window_backend_temporary_epoll);
 
-        // FIXME: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
+        // TODO: あとでちゃんと待つ(external_fence_fdでは待てなさそうなので、監視スレッド立てるかしかないか......)
         if count == 0 {
+            window_backend.borrow_mut().cancel_read();
             drop(window_backend_readiness_guard);
-            let current_geometry = window_backend.read().geometry();
+            let current_geometry = window_backend.borrow().geometry();
             if last_drawn_geometry != current_geometry {
                 last_drawn_geometry = current_geometry;
-                if let Err(e) = gd
-                    .event_sender
-                    .send(peridot::EngineEvent::Resize(last_drawn_geometry))
-                    .await
-                {
-                    warn!("Failed to send resize event: {e:?}");
-                }
+                gd.event_queue
+                    .enqueue(peridot::Event::Resize(last_drawn_geometry));
             }
 
-            match gd.frame_timing_sender.try_send(()) {
-                Ok(_) => (),
-                Err(async_std::channel::TrySendError::Full(_)) => (),
-                Err(async_std::channel::TrySendError::Closed(_)) => {
-                    warn!("Frame Timing channel was closed!");
-                }
-            }
+            gd.event_queue.enqueue(peridot::Event::NextFrame);
             continue;
         }
 
@@ -254,7 +286,7 @@ where
         for e in &events[..count as usize] {
             if e.u64 == 0 {
                 window_backend
-                    .write()
+                    .borrow_mut()
                     .process_all_events(rg.take().expect("window events signaled twice"));
             } else if e.u64 == 1 {
                 input.process_monitor_event(&ep);
@@ -263,30 +295,24 @@ where
                 input.process_device_event(
                     &mut input_lock.make_event_receiver(),
                     e.u64,
-                    &*window_backend.read(),
+                    &*window_backend.borrow(),
                 );
             }
         }
+        if rg.is_some() {
+            // no window server events processed
+            window_backend.borrow_mut().cancel_read();
+        }
     }
 
-    if gd
-        .event_sender
-        .send(peridot::EngineEvent::Shutdown)
-        .await
-        .is_ok()
-    {
-        gd.usercode_thread.await;
-    }
+    gd.event_queue.enqueue(peridot::Event::Shutdown);
+    while !gd.step() {}
 
-    gd.engine_audio
-        .write()
-        .expect("Failed to mutate audio mixer")
-        .stop();
+    gd.engine_audio.write().stop();
     tracing::trace!("Terminating Program...");
 }
 
-#[async_std::main]
-async fn main() {
+fn main() {
     let fmt = tracing_subscriber::fmt::layer().pretty();
     let env_filter = tracing_subscriber::filter::EnvFilter::from_default_env();
     tracing_subscriber::registry()
@@ -294,19 +320,20 @@ async fn main() {
         .with(env_filter)
         .init();
 
+    let io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
+
     if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
-            run_with_window_backend(Arc::new(RwLock::new(
+            run_with_window_backend(make_shared_mutable_ref(
                 Wayland::try_init().expect("Failed to initialize wayland backend"),
-            )))
-            .await;
+            ));
             return;
         }
+        #[cfg(feature = "support-xcb")]
         if backend_name == "xcb" {
-            run_with_window_backend(Arc::new(RwLock::new(
-                X11::try_init().expect("Failed to initialize xcb backend"),
-            )))
-            .await;
+            run_with_window_backend(make_shared_mutable_ref(
+                presenter::xcb::X11::try_init().expect("Failed to initialize xcb backend"),
+            ));
             return;
         }
 
@@ -317,13 +344,15 @@ async fn main() {
     }
 
     if let Some(x) = Wayland::try_init() {
-        run_with_window_backend(Arc::new(RwLock::new(x))).await;
+        run_with_window_backend(make_shared_mutable_ref(x));
         return;
     }
-    if let Some(x) = X11::try_init() {
-        run_with_window_backend(Arc::new(RwLock::new(x))).await;
+    #[cfg(feature = "support-xcb")]
+    if let Some(x) = presenter::xcb::X11::try_init() {
+        run_with_window_backend(make_shared_mutable_ref(x));
         return;
     }
 
+    drop(io_reactor_thread);
     panic!("No suitable window backend");
 }

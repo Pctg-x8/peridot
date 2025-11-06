@@ -9,4 +9,5 @@ peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack"
     "with-loader-impl",
 ] }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
+peridot-vg = { path = "../../modules/vg" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }

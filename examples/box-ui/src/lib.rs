@@ -1,9 +1,10 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, Device, GraphicsPipelineBuilder, Image,
-    ImageChild, RenderPass, SubmissionBatch, VkHandle, VkRawHandle, VulkanStructure,
+    self as br, CommandBufferMut, CommandPoolMut, Device, Image, ImageChild, RenderPass,
+    SubmissionBatch, TypedVulkanStructure, VkHandle, VulkanStructure,
 };
 use peridot::math::Zero;
 use peridot_vertex_processing_pack::PvpShaderModules;
+use peridot_vg::{Font, FontProvider, FontProviderConstruct};
 
 #[repr(C)]
 pub struct Vertex {
@@ -123,11 +124,48 @@ pub enum ChildrenLayoutMode {
     Grid {
         columns: Vec<GridCellSize>,
         rows: Vec<GridCellSize>,
+        column_alignment: LayoutAlignment,
+        row_alignment: LayoutAlignment,
         gap: f32,
     },
 }
 
-pub struct UIElement {
+pub struct TextFontData {
+    internal: peridot_vg::DefaultFont,
+}
+impl TextFontData {
+    pub fn new(internal: peridot_vg::DefaultFont) -> Self {
+        Self { internal }
+    }
+
+    pub fn request_char(&self, c: char) -> CharacterData {
+        let glyph_id = self.internal.glyph_id(c).expect("font.glyph_id failed");
+        let bounds = self.internal.bounds(&glyph_id).expect("font.bounds failed");
+
+        CharacterData {
+            width: bounds.size.width,
+            height: bounds.size.height,
+            left_offset: bounds.min_x(),
+            top_offset: 0.0,
+            advance_x: self
+                .internal
+                .advance_h(&glyph_id)
+                .expect("font.advance_h failed"),
+            ascend: self.internal.ascent(),
+        }
+    }
+}
+
+struct CharacterData {
+    pub width: f32,
+    pub height: f32,
+    pub left_offset: f32,
+    pub top_offset: f32,
+    pub advance_x: f32,
+    pub ascend: f32,
+}
+
+pub struct UIElement<'s> {
     pub size: peridot::math::Vector2<UIElementSize>,
     pub scale: peridot::math::Vector2<f32>,
     pub offset: peridot::math::Vector2<f32>,
@@ -135,11 +173,16 @@ pub struct UIElement {
     pub padding: RectEdge<f32>,
     pub layout_width: LayoutSize,
     pub layout_height: LayoutSize,
+    pub layout_alignment_override: Option<LayoutAlignment>,
+    pub column_alignment_override: Option<LayoutAlignment>,
+    pub row_alignment_override: Option<LayoutAlignment>,
     pub children_layout: ChildrenLayoutMode,
     pub debug_color: peridot::math::Vector4<f32>,
-    pub children: Vec<UIElement>,
+    pub font: Option<&'s TextFontData>,
+    pub text: &'s str,
+    pub children: Vec<UIElement<'s>>,
 }
-impl Default for UIElement {
+impl Default for UIElement<'_> {
     fn default() -> Self {
         Self {
             size: peridot::math::Vector2(UIElementSize::FitContent, UIElementSize::FitContent),
@@ -149,8 +192,13 @@ impl Default for UIElement {
             padding: RectEdge::all(0.0),
             layout_width: LayoutSize::Unscaled,
             layout_height: LayoutSize::Unscaled,
+            layout_alignment_override: None,
+            column_alignment_override: None,
+            row_alignment_override: None,
             children_layout: ChildrenLayoutMode::Free,
-            debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 1.0),
+            debug_color: peridot::math::Vector4(0.0, 0.0, 0.0, 0.0),
+            font: None,
+            text: "",
             children: Vec::new(),
         }
     }
@@ -391,6 +439,15 @@ fn compute_layout_rect(
                 let mut current_column = 0;
                 let mut current_row = 0;
                 for c in target.children.iter() {
+                    if current_column >= columns.len() {
+                        current_column = 0;
+                        max_right = max_right.max(row_right);
+                        accum_bottom += row_bottom + gap;
+                        row_bottom = 0.0;
+                        row_right = 0.0;
+                        current_row += 1;
+                    }
+
                     if current_column > 0 {
                         row_right += gap;
                     }
@@ -410,14 +467,6 @@ fn compute_layout_rect(
                     });
 
                     current_column += 1;
-                    if current_column >= columns.len() {
-                        current_column = 0;
-                        max_right = max_right.max(row_right);
-                        accum_bottom += row_bottom + gap;
-                        row_bottom = 0.0;
-                        row_right = 0.0;
-                        current_row += 1;
-                    }
                 }
 
                 peridot::math::Vector2(max_right.max(row_right), accum_bottom + row_bottom)
@@ -492,11 +541,13 @@ fn compute_horizontal_alignment_axis_offset(
 }
 
 #[inline]
-fn apply_layout_rects<'e>(
-    targets: impl Iterator<Item = &'e UIElement>,
+fn apply_layout_rects<'e, 's>(
+    targets: impl Iterator<Item = &'e UIElement<'s>>,
     layout_rects: impl Iterator<Item = LayoutRect>,
     boxes: &mut Vec<BoxInstance>,
-) {
+) where
+    's: 'e,
+{
     for (c, r) in targets.zip(layout_rects) {
         layout1(c, boxes, r);
     }
@@ -505,10 +556,10 @@ fn apply_layout_rects<'e>(
 pub trait HorizontalJustifyMethod {
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect>;
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)>;
 }
 
 pub struct HorizontalJustifyEnd {
@@ -518,18 +569,18 @@ impl HorizontalJustifyMethod for HorizontalJustifyEnd {
     #[inline]
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width
             - (content_total_width + self.gap * (row_layout_rects.len() - 1) as f32);
 
-        row_layout_rects.scan(space, move |offset, r| {
+        row_layout_rects.scan(space, move |offset, (r, a)| {
             let o = *offset;
             *offset += r.width() + self.gap;
 
-            Some(r.r#move(peridot::math::Vector2(o, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(o, 0.0)), a))
         })
     }
 }
@@ -541,18 +592,18 @@ impl HorizontalJustifyMethod for HorizontalJustifyCenter {
     #[inline]
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width
             - (content_total_width + self.gap * (row_layout_rects.len() - 1) as f32);
 
-        row_layout_rects.scan(space * 0.5f32, move |offset, r| {
+        row_layout_rects.scan(space * 0.5f32, move |offset, (r, a)| {
             let o = *offset;
             *offset += r.width() + self.gap;
 
-            Some(r.r#move(peridot::math::Vector2(o, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(o, 0.0)), a))
         })
     }
 }
@@ -563,21 +614,21 @@ pub struct HorizontalJustifySpaceBetween {
 impl HorizontalJustifyMethod for HorizontalJustifySpaceBetween {
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width - content_total_width;
         let new_gap = match row_layout_rects.len() {
             x if x <= 1 => self.min_gap,
             x => (space / (x - 1) as f32).max(self.min_gap),
         };
 
-        row_layout_rects.scan(0.0f32, move |left, r| {
+        row_layout_rects.scan(0.0f32, move |left, (r, a)| {
             let place_left = *left;
             *left += r.width() + new_gap;
 
-            Some(r.r#move(peridot::math::Vector2(place_left, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(place_left, 0.0)), a))
         })
     }
 }
@@ -588,10 +639,10 @@ pub struct HorizontalJustifySpaceAround {
 impl HorizontalJustifyMethod for HorizontalJustifySpaceAround {
     fn horizontal_justify(
         &self,
-        row_layout_rects: impl ExactSizeIterator<Item = LayoutRect>,
+        row_layout_rects: impl ExactSizeIterator<Item = (LayoutRect, LayoutAlignment)>,
         content_total_width: f32,
         available_width: f32,
-    ) -> impl Iterator<Item = LayoutRect> {
+    ) -> impl Iterator<Item = (LayoutRect, LayoutAlignment)> {
         let space = available_width - content_total_width;
         let new_gap = space / (row_layout_rects.len() + 1) as f32;
         let (new_gap, offset) = if new_gap < self.min_gap {
@@ -601,26 +652,29 @@ impl HorizontalJustifyMethod for HorizontalJustifySpaceAround {
             (new_gap, new_gap)
         };
 
-        row_layout_rects.scan(offset, move |offset, r| {
+        row_layout_rects.scan(offset, move |offset, (r, a)| {
             let offs = *offset;
             *offset += r.width() + new_gap;
 
-            Some(r.r#move(peridot::math::Vector2(offs, 0.0)))
+            Some((r.r#move(peridot::math::Vector2(offs, 0.0)), a))
         })
     }
 }
 
-fn layout_horizontal_justify_per_row<'e>(
-    elements_ordered: impl Iterator<Item = &'e UIElement>,
+fn layout_horizontal_justify_per_row<'e, 's>(
+    elements_ordered: impl Iterator<Item = &'e UIElement<'s>>,
     alignment: LayoutAlignment,
     overflow: Overflow,
     gap: f32,
     global_rect: &LayoutRect,
     justify: impl HorizontalJustifyMethod,
-) -> Vec<LayoutRect> {
+) -> Vec<LayoutRect>
+where
+    's: 'e,
+{
     let (lb, ub) = elements_ordered.size_hint();
     let mut layout_rects = Vec::with_capacity(ub.unwrap_or(lb));
-    let mut row_rects = Vec::<LayoutRect>::new();
+    let mut row_rects = Vec::<(LayoutRect, LayoutAlignment)>::new();
 
     let mut content_total_width = 0.0f32;
     let mut row_height = 0.0f32;
@@ -641,11 +695,11 @@ fn layout_horizontal_justify_per_row<'e>(
                                 content_total_width,
                                 global_rect.size.0,
                             )
-                            .map(|r| {
+                            .map(|(r, a)| {
                                 let yoffs = compute_horizontal_alignment_axis_offset(
                                     row_height,
                                     r.height(),
-                                    alignment,
+                                    a,
                                 );
 
                                 r.r#move(global_rect.pos + peridot::math::Vector2(0.0, yoffs))
@@ -663,7 +717,10 @@ fn layout_horizontal_justify_per_row<'e>(
         }
 
         row_height = row_height.max(child_layout.height());
-        row_rects.push(child_layout.r#move(peridot::math::Vector2(0.0, content_y_offset)));
+        row_rects.push((
+            child_layout.r#move(peridot::math::Vector2(0.0, content_y_offset)),
+            e.layout_alignment_override.unwrap_or(alignment),
+        ));
         content_total_width += content_width;
         available_content_size.0 -= content_width + gap;
     }
@@ -671,9 +728,8 @@ fn layout_horizontal_justify_per_row<'e>(
     layout_rects.extend(
         justify
             .horizontal_justify(row_rects.drain(..), content_total_width, global_rect.size.0)
-            .map(|r| {
-                let yoffs =
-                    compute_horizontal_alignment_axis_offset(row_height, r.height(), alignment);
+            .map(|(r, a)| {
+                let yoffs = compute_horizontal_alignment_axis_offset(row_height, r.height(), a);
 
                 r.r#move(global_rect.pos + peridot::math::Vector2(0.0, yoffs))
             }),
@@ -681,13 +737,16 @@ fn layout_horizontal_justify_per_row<'e>(
     layout_rects
 }
 
-fn layout_horizontal<'e>(
-    elements_ordered: impl Iterator<Item = &'e UIElement>,
+fn layout_horizontal<'e, 's>(
+    elements_ordered: impl Iterator<Item = &'e UIElement<'s>>,
     alignment: LayoutAlignment,
     overflow: Overflow,
     gap: f32,
     global_rect: &LayoutRect,
-) -> Vec<LayoutRect> {
+) -> Vec<LayoutRect>
+where
+    's: 'e,
+{
     let (lb, ub) = elements_ordered.size_hint();
     let mut layout_rects = Vec::with_capacity(ub.unwrap_or(lb));
     let mut row_rects = Vec::<LayoutRect>::new();
@@ -752,6 +811,25 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
         });
     }
 
+    if let Some(ref f) = target.font {
+        let mut char_offset_x = 0.0;
+        for c in target.text.chars() {
+            let cd = f.request_char(c);
+
+            boxes.push(BoxInstance {
+                pos_st: peridot::math::Vector4(
+                    cd.width * target.scale.0,
+                    cd.height * target.scale.1,
+                    layout_rect.pos.0 + char_offset_x,
+                    layout_rect.pos.1 + cd.ascend - cd.height,
+                ),
+                col: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+            });
+
+            char_offset_x += cd.advance_x;
+        }
+    }
+
     let child_layout_global_offset = layout_rect.pos + target.padding.lt();
     let child_layout_available_size = layout_rect.size - target.padding.lt() - target.padding.rb();
     let child_layout_global_rect = LayoutRect {
@@ -794,7 +872,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -814,7 +892,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -849,7 +927,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -871,7 +949,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.size.1;
@@ -899,7 +977,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.bottom();
@@ -917,7 +995,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 let child_height = child_layout.bottom();
@@ -971,7 +1049,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -996,7 +1074,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -1035,7 +1113,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -1060,7 +1138,7 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 let left_offset = compute_vertical_alignment_axis_offset(
                                     available_content_size.0,
                                     child_layout.size.0,
-                                    alignment,
+                                    c.layout_alignment_override.unwrap_or(alignment),
                                 );
 
                                 layout1(
@@ -1231,6 +1309,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
         ChildrenLayoutMode::Grid {
             ref columns,
             ref rows,
+            column_alignment,
+            row_alignment,
             gap,
         } => {
             let mut column_fixed_sizes = vec![0.0; columns.len()];
@@ -1334,6 +1414,16 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                         row_size[current_row],
                     )),
                 );
+                let left_offset = compute_vertical_alignment_axis_offset(
+                    column_size[current_column],
+                    child_layout.size.0,
+                    c.row_alignment_override.unwrap_or(row_alignment),
+                );
+                let top_offset = compute_horizontal_alignment_axis_offset(
+                    row_size[current_row],
+                    child_layout.size.1,
+                    c.column_alignment_override.unwrap_or(column_alignment),
+                );
 
                 layout1(
                     c,
@@ -1345,7 +1435,8 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
                                 // TODO: 行数が多くなったときの処理（親コンテナの残りを全部割当、でいいはず）
                                 row_offsets[current_row],
                             )
-                            + child_layout.pos,
+                            + child_layout.pos
+                            + peridot::math::Vector2(left_offset, top_offset),
                         size: child_layout.size,
                     },
                 );
@@ -1361,82 +1452,293 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
     }
 }
 
-pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
-    let screen_size = e
-        .back_buffer(0)
-        .expect("no backbuffers?")
-        .image()
-        .size()
-        .as_2d_ref()
-        .clone();
-    let scissor_rect = screen_size.into_rect(br::vk::VkOffset2D::ZERO);
-    let viewport = scissor_rect.make_viewport(0.0..1.0);
+pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) {
+    let screen_size = e.back_buffer_size();
+    let mut scissor_rect = br::Extent2D::from(screen_size).into_rect(br::vk::VkOffset2D::ZERO);
+    let mut viewport = scissor_rect.make_viewport(0.0..1.0);
 
-    let main_renderpass = br::RenderPassBuilder::new(
-        &[e.back_buffer_attachment_desc()
-            .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
-        &[br::SubpassDescription::new().color_attachments(
-            &[br::AttachmentReference::new(
-                0,
-                br::ImageLayout::ColorAttachmentOpt,
+    let main_renderpass = br::RenderPassObject::new(
+        e.graphics().device().clone(),
+        &br::RenderPassCreateInfo::new(
+            &[e.back_buffer_attachment_desc()
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
+            &[br::SubpassDescription::new().color_attachments(
+                &[br::vk::VkAttachmentReference::new(
+                    0,
+                    br::ImageLayout::ColorAttachmentOpt,
+                )],
+                &[],
             )],
-            &[],
-        )],
-        &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
-            None, 0, true,
-        )],
+            &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
+                None, 0, true,
+            )],
+        ),
     )
-    .create(e.graphics().device().clone())
     .expect("Failed to create main renderpass");
-    let backbuffer_resources = e.iter_back_buffers().cloned().collect::<Vec<_>>();
-    let main_framebuffers = backbuffer_resources
+    let mut backbuffer_resources = e
+        .iter_back_buffers()
+        .map(|x| LocalImageView {
+            handle: unsafe {
+                br::vkfn_wrapper::create_image_view(
+                    e.graphics_device().native_ptr(),
+                    &br::ImageViewCreateInfo::new(
+                        &x,
+                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                        br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                        e.back_buffer_format(),
+                    ),
+                    None,
+                )
+                .expect("create_image_view failed")
+            },
+            device: e.graphics_device().clone(),
+        })
+        .collect::<Vec<_>>();
+    let mut main_framebuffers = backbuffer_resources
         .iter()
         .map(|bb| {
-            br::FramebufferBuilder::new_with_attachment(&main_renderpass, bb)
-                .create()
-                .expect("Failed to create main framebuffer")
+            br::FramebufferObject::new(
+                e.graphics().device().clone(),
+                &br::FramebufferCreateInfo::new(
+                    &main_renderpass,
+                    &[bb.as_transparent_ref()],
+                    screen_size.0,
+                    screen_size.1,
+                ),
+            )
+            .expect("Failed to create main framebuffer")
         })
         .collect::<Vec<_>>();
 
-    let unlit_fill_shader = PvpShaderModules::new(
-        e.graphics().device(),
-        e.load("shaders.unlit_fill")
-            .expect("Failed to load unlit_fill shader"),
+    let unlit_fill_shader = e
+        .load("shaders.unlit_fill")
+        .expect("Failed to load unlit_fill shader");
+    let unlit_fill_shader_modules =
+        PvpShaderModules::new(e.graphics().device(), &unlit_fill_shader)
+            .expect("Failed to create unlit_fill shader modules");
+    let unlit_fill_pipeline_layout = br::PipelineLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::PipelineLayoutCreateInfo::new(
+            &[],
+            &[br::vk::VkPushConstantRange::for_type::<
+                peridot::math::Vector2<f32>,
+            >(br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0)],
+        ),
     )
-    .expect("Failed to create unlit_fill shader modules");
-    let unlit_fill_pipeline_layout = br::PipelineLayoutBuilder::new(
-        &[],
-        &[
-            br::PushConstantRange::for_type::<peridot::math::Vector2<f32>>(
-                br::ShaderStage::VERTEX,
-                0,
-            ),
-        ],
-    )
-    .create(e.graphics().device().clone())
     .expect("Failed to create pipeline layout");
-    let unlit_fill_pipeline = {
-        let mut builder = br::NonDerivedGraphicsPipelineBuilder::new(
-            &unlit_fill_pipeline_layout,
-            main_renderpass.subpass(0),
-            unlit_fill_shader.generate_vps(br::vk::VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP),
-        );
-        builder
-            .viewport_scissors(
-                br::DynamicArrayState::Static(&[viewport]),
-                br::DynamicArrayState::Static(&[scissor_rect]),
+    let [unlit_fill_pipeline] = e
+        .graphics()
+        .device()
+        .new_graphics_pipeline_array(
+            &[br::GraphicsPipelineCreateInfo::new(
+                &unlit_fill_pipeline_layout,
+                main_renderpass.subpass(0),
+                &[
+                    unlit_fill_shader_modules.pipeline_vertex_shader_stage(),
+                    unlit_fill_shader_modules
+                        .pipeline_fragment_shader_stage()
+                        .expect("no fsh?"),
+                ],
+                &br::PipelineVertexInputStateCreateInfo::new(
+                    &unlit_fill_shader.vertex_bindings,
+                    &unlit_fill_shader.vertex_attributes,
+                ),
+                &br::PipelineInputAssemblyStateCreateInfo::new(
+                    br::PrimitiveTopology::TriangleStrip,
+                ),
+                &br::PipelineViewportStateCreateInfo::new_array(&[viewport], &[scissor_rect]),
+                &br::PipelineRasterizationStateCreateInfo::new(
+                    br::PolygonMode::Fill,
+                    br::CullModeFlags::NONE,
+                    br::FrontFace::CounterClockwise,
+                ),
+                &br::PipelineColorBlendStateCreateInfo::new(&[
+                    br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+                ]),
             )
-            .add_attachment_blend(br::AttachmentColorBlendState::premultiplied())
-            .multisample_state(Some(br::MultisampleState::new()));
+            .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+        )
+        .expect("Failed to create unlit fill pipeline");
+    let mut unlit_fill_pipeline = unlit_fill_pipeline.clone_parent();
 
-        builder
-            .create(
-                e.graphics().device().clone(),
-                None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-            )
-            .expect("Failed to create unlit_fill pipeline")
+    let main_font = TextFontData::new(
+        peridot_vg::DefaultFontProvider::new()
+            .expect("DefaultFontProvider::new failed")
+            .best_match("system-ui", &peridot_vg::FontProperties::default(), 12.0)
+            .expect("DefaultFontProvider::best_match"),
+    );
+
+    // プレイヤーカード風UI試作
+    let user_card_cell_ui = UIElement {
+        size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::FitContent),
+        padding: RectEdge::all(8.0),
+        debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+        children_layout: ChildrenLayoutMode::Horizontal {
+            direction: LayoutDirection::Normal,
+            justify: LayoutJustify::Start,
+            alignment: LayoutAlignment::Start,
+            overflow: Overflow::Hidden,
+            gap: 8.0,
+        },
+        children: vec![
+            // user_icon
+            UIElement {
+                size: peridot::math::Vector2(
+                    UIElementSize::Fixed(64.0),
+                    UIElementSize::Fixed(64.0),
+                ),
+                debug_color: peridot::math::Vector4(1.0, 0.0, 1.0, 0.5),
+                ..Default::default()
+            },
+            // detail_rows
+            UIElement {
+                size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::FitContent),
+                // debug_color: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+                children_layout: ChildrenLayoutMode::Vertical {
+                    direction: LayoutDirection::Normal,
+                    justify: LayoutJustify::Start,
+                    alignment: LayoutAlignment::Start,
+                    overflow: Overflow::Hidden,
+                    gap: 4.0,
+                },
+                children: vec![
+                    // name_container
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fill,
+                            UIElementSize::FitContent,
+                        ),
+                        children_layout: ChildrenLayoutMode::Grid {
+                            columns: vec![GridCellSize::Flexible(1.0), GridCellSize::FitContent],
+                            rows: vec![GridCellSize::FitContent],
+                            column_alignment: LayoutAlignment::Start,
+                            row_alignment: LayoutAlignment::Start,
+                            gap: 4.0,
+                        },
+                        children: vec![
+                            // name
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::Fill,
+                                    UIElementSize::Fixed(24.0),
+                                ),
+                                debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 1.0),
+                                ..Default::default()
+                            },
+                            // level
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::Fixed(64.0),
+                                    UIElementSize::Fixed(20.0),
+                                ),
+                                debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 1.0),
+                                ..Default::default()
+                            },
+                        ],
+                        font: Some(&main_font),
+                        text: "player #111",
+                        ..Default::default()
+                    },
+                    // separator
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fill,
+                            UIElementSize::Fixed(4.0),
+                        ),
+                        debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 0.5),
+                        ..Default::default()
+                    },
+                    // details_block
+                    UIElement {
+                        size: peridot::math::Vector2(
+                            UIElementSize::Fill,
+                            UIElementSize::FitContent,
+                        ),
+                        children_layout: ChildrenLayoutMode::Grid {
+                            columns: vec![GridCellSize::Flexible(1.0), GridCellSize::FitContent],
+                            rows: vec![GridCellSize::FitContent],
+                            column_alignment: LayoutAlignment::Start,
+                            row_alignment: LayoutAlignment::Start,
+                            gap: 4.0,
+                        },
+                        children: vec![
+                            // comment_area
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::Fill,
+                                    UIElementSize::FitContent,
+                                ),
+                                debug_color: peridot::math::Vector4(1.0, 1.0, 0.5, 0.125),
+                                padding: RectEdge {
+                                    left: 16.0,
+                                    right: 16.0,
+                                    top: 24.0,
+                                    bottom: 24.0,
+                                },
+                                children: vec![
+                                    // comment
+                                    UIElement {
+                                        size: peridot::math::Vector2(
+                                            UIElementSize::Fill,
+                                            UIElementSize::Fixed(20.0),
+                                        ),
+                                        debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 0.5),
+                                        ..Default::default()
+                                    },
+                                ],
+                                ..Default::default()
+                            },
+                            // buttons_container
+                            UIElement {
+                                size: peridot::math::Vector2(
+                                    UIElementSize::FitContent,
+                                    UIElementSize::FitContent,
+                                ),
+                                column_alignment_override: Some(LayoutAlignment::End),
+                                children: vec![
+                                    // follow_button
+                                    UIElement {
+                                        size: peridot::math::Vector2(
+                                            UIElementSize::FitContent,
+                                            UIElementSize::FitContent,
+                                        ),
+                                        debug_color: peridot::math::Vector4(0.5, 1.0, 0.0, 1.0),
+                                        padding: RectEdge {
+                                            left: 4.0,
+                                            right: 4.0,
+                                            top: 4.0,
+                                            bottom: 4.0,
+                                        },
+                                        children: vec![
+                                            // button_label
+                                            UIElement {
+                                                size: peridot::math::Vector2(
+                                                    UIElementSize::Fixed(64.0),
+                                                    UIElementSize::Fixed(20.0),
+                                                ),
+                                                debug_color: peridot::math::Vector4(
+                                                    0.5, 0.0, 0.0, 1.0,
+                                                ),
+                                                font: Some(&main_font),
+                                                text: "follow",
+                                                ..Default::default()
+                                            },
+                                        ],
+                                        ..Default::default()
+                                    },
+                                ],
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
     };
-
     let ui_tree = UIElement {
         size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::Fill),
         padding: RectEdge::all(8.0),
@@ -1549,6 +1851,8 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                         GridCellSize::Flexible(1.0),
                     ],
                     rows: vec![GridCellSize::FitContent, GridCellSize::FitContent],
+                    column_alignment: LayoutAlignment::Start,
+                    row_alignment: LayoutAlignment::Start,
                     gap: 4.0,
                 },
                 children: vec![
@@ -1592,6 +1896,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
                 ],
                 ..Default::default()
             },
+            user_card_cell_ui,
         ],
         ..Default::default()
     };
@@ -1605,15 +1910,18 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         },
     );
 
+    println!("layout boxes: {}", boxes.len());
+    // TODO: レイアウトボックスが1024を超えたときの対応（どうしよ）
+    assert!(boxes.len() < 1024, "too many layout boxes!!");
     let mut pmm = peridot_memory_manager::MemoryManager::new(e.graphics());
     let [vertex_buffer, instance_buffer] = pmm
         .allocate_device_local_buffer_array(
             e.graphics(),
             [
-                br::BufferDesc::new_for_type::<[Vertex; 4]>(
+                br::BufferCreateInfo::new_for_type::<[Vertex; 4]>(
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
-                br::BufferDesc::new_for_type::<[BoxInstance; 1024]>(
+                br::BufferCreateInfo::new_for_type::<[BoxInstance; 1024]>(
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
             ],
@@ -1626,7 +1934,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut init_buffer = pmm
         .allocate_upload_buffer(
             e.graphics(),
-            br::BufferDesc::new_for_type::<BufferInitContent>(br::BufferUsage::TRANSFER_SRC),
+            br::BufferCreateInfo::new_for_type::<BufferInitContent>(br::BufferUsage::TRANSFER_SRC),
         )
         .expect("Failed to create init buffer");
     init_buffer
@@ -1650,7 +1958,7 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     let mut instance_init_buffer = pmm
         .allocate_upload_buffer(
             e.graphics(),
-            br::BufferDesc::new(
+            br::BufferCreateInfo::new(
                 core::mem::size_of::<BoxInstance>() * boxes.len(),
                 br::BufferUsage::TRANSFER_SRC,
             ),
@@ -1672,16 +1980,16 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
             .copy_buffer(
                 &instance_init_buffer,
                 &instance_buffer,
-                &[br::BufferCopy(br::vk::VkBufferCopy {
+                &[br::BufferCopy {
                     srcOffset: 0,
                     dstOffset: 0,
                     size: (core::mem::size_of::<BoxInstance>() * boxes.len()) as _,
-                })],
+                }],
             )
             .pipeline_barrier(
                 br::PipelineStageFlags::TRANSFER,
                 br::PipelineStageFlags::VERTEX_INPUT,
-                false,
+                0,
                 &[br::vk::VkMemoryBarrier {
                     sType: br::vk::VkMemoryBarrier::TYPE,
                     pNext: core::ptr::null(),
@@ -1694,47 +2002,47 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
         })
         .expect("Failed to send init commands");
 
-    let mut ui_render_cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
-        .create(e.graphics().device().clone())
-        .expect("Failed to create ui render command pool");
-    let [mut ui_render_cb] = ui_render_cp
-        .alloc_array::<1>(false)
-        .expect("Failed to allocate ui render command buffer");
+    let mut ui_render_cp = br::CommandPoolObject::new(
+        e.graphics().device().clone(),
+        &br::CommandPoolCreateInfo::new(e.graphics_queue_family_index()),
+    )
+    .expect("Failed to create ui render command pool");
+    let [ui_render_cb] = unsafe {
+        e.graphics()
+            .device()
+            .allocate_command_buffer_array(&br::CommandBufferFixedCountAllocateInfo::new(
+                &mut ui_render_cp,
+                br::CommandBufferLevel::Secondary,
+            ))
+            .expect("Failed to allocate ui render command buffer")
+    };
+    let mut ui_render_cb = ui_render_cb.clone_parent();
     unsafe {
-        let inherit_info = br::vk::VkCommandBufferInheritanceInfo {
-            sType: br::vk::VkCommandBufferInheritanceInfo::TYPE,
-            pNext: core::ptr::null(),
-            renderPass: main_renderpass.native_ptr(),
-            subpass: 0,
-            framebuffer: br::vk::VkFramebuffer::NULL,
-            occlusionQueryEnable: false as _,
-            queryFlags: 0,
-            pipelineStatistics: 0,
-        };
-        let begin_info = br::vk::VkCommandBufferBeginInfo {
-            sType: br::vk::VkCommandBufferBeginInfo::TYPE,
-            pNext: core::ptr::null(),
-            flags: br::vk::VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT
-                | br::vk::VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
-            pInheritanceInfo: &inherit_info,
-        };
+        let inherit_info = br::CommandBufferInheritanceInfo::of_rendering(
+            main_renderpass.subpass(0),
+            None::<&br::FramebufferObject<peridot::DeviceObject>>,
+        );
+        let begin_info = br::CommandBufferBeginInfo::new()
+            .with_inheritance_info(&inherit_info)
+            .renderpass_continue()
+            .simultaneous_use();
 
         ui_render_cb
-            .begin_raw(&begin_info, e.graphics().device())
+            .begin(&begin_info)
             .expect("Failed to begin ui render command recording")
     }
-    .bind_graphics_pipeline(&unlit_fill_pipeline)
+    .bind_pipeline(br::PipelineBindPoint::Graphics, &unlit_fill_pipeline)
     .push_constant(
         &unlit_fill_pipeline_layout,
-        br::ShaderStage::VERTEX,
+        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
         0,
         &peridot::math::Vector2(640.0f32, 480.0),
     )
     .bind_vertex_buffers(
         0,
         &[
-            br::BufferObjectRef::new(&vertex_buffer),
-            br::BufferObjectRef::new(&instance_buffer),
+            vertex_buffer.as_transparent_ref(),
+            instance_buffer.as_transparent_ref(),
         ],
         &[0, 0],
     )
@@ -1742,24 +2050,39 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
     .end()
     .expect("Failed to finish ui render command recording");
 
-    let mut render_cp = br::CommandPoolBuilder::new(e.graphics_queue_family_index())
-        .create(e.graphics().device().clone())
-        .expect("Failed to create render command pool");
-    let mut render_cb = render_cp
-        .alloc(e.back_buffer_count() as _, true)
-        .expect("Failed to allocate render command buffers");
+    let mut render_cp = br::CommandPoolObject::new(
+        e.graphics().device().clone(),
+        &br::CommandPoolCreateInfo::new(e.graphics_queue_family_index()),
+    )
+    .expect("Failed to create render command pool");
+    let render_cb = unsafe {
+        e.graphics()
+            .device()
+            .allocate_command_buffers_alloc(&br::CommandBufferAllocateInfo::new(
+                &mut render_cp,
+                e.back_buffer_count() as _,
+                br::CommandBufferLevel::Primary,
+            ))
+            .expect("Failed to allocate render command buffers")
+    };
+    let mut render_cb = render_cb
+        .into_iter()
+        .map(|x| x.clone_parent())
+        .collect::<Vec<_>>();
     for (cb, fb) in render_cb.iter_mut().zip(main_framebuffers.iter()) {
         unsafe {
-            cb.begin(e.graphics().device())
+            cb.begin(&br::CommandBufferBeginInfo::new())
                 .expect("Failed to begin render command recording")
                 .begin_render_pass(
-                    &main_renderpass,
-                    fb,
-                    scissor_rect,
-                    &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 0.0])],
-                    false,
+                    &br::RenderPassBeginInfo::new(
+                        &main_renderpass,
+                        fb,
+                        scissor_rect,
+                        &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 0.0])],
+                    ),
+                    br::SubpassContents::SecondaryCommandBuffers,
                 )
-                .execute_commands(&[ui_render_cb.native_ptr()])
+                .execute_commands(&[ui_render_cb.as_transparent_ref()])
                 .end_render_pass()
                 .end()
                 .expect("Failed to finish render command recording");
@@ -1768,28 +2091,199 @@ pub async fn game_main(e: &mut peridot::Engine<impl peridot::NativeLinker>) {
 
     content_init.await.expect("Failed to initialize content");
 
-    while let Some(ev) = e.event_receivers().wait_for_event().await {
-        match ev {
+    let mut new_size: Option<peridot::math::Vector2<u32>> = None;
+
+    loop {
+        match e.next_event().await {
             peridot::Event::Shutdown => break,
             peridot::Event::NextFrame => {
-                let fd = e.prepare_frame().expect("Failed to prepare frame");
+                if let Some(ns) = new_size.take() {
+                    e.wait_for_last_rendering_completion();
 
-                e.do_render(
-                    fd.backbuffer_index,
-                    None::<br::EmptySubmissionBatch>,
-                    br::EmptySubmissionBatch.with_command_buffers(
-                        &render_cb[fd.backbuffer_index as usize..=fd.backbuffer_index as usize],
-                    ),
-                )
-                .expect("Failed to render");
+                    unsafe {
+                        render_cp
+                            .reset(br::CommandPoolResetFlags::RELEASE_RESOURCES)
+                            .expect("Failed to reset render command pool");
+                        ui_render_cp
+                            .reset(br::CommandPoolResetFlags::RELEASE_RESOURCES)
+                            .expect("Failed to reset ui render command pool");
+                    }
+                    drop(main_framebuffers);
+                    drop(backbuffer_resources);
+
+                    e.resize_presenter_backbuffers(ns);
+
+                    scissor_rect = br::vk::VkExtent2D::from(ns).into_rect(br::vk::VkOffset2D::ZERO);
+                    viewport = scissor_rect.make_viewport(0.0..1.0);
+
+                    backbuffer_resources = e
+                        .iter_back_buffers()
+                        .map(|x| LocalImageView {
+                            handle: unsafe {
+                                br::vkfn_wrapper::create_image_view(
+                                    e.graphics_device().native_ptr(),
+                                    &br::ImageViewCreateInfo::new(
+                                        &x,
+                                        br::ImageSubresourceRange::new(
+                                            br::AspectMask::COLOR,
+                                            0..1,
+                                            0..1,
+                                        ),
+                                        br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                                        e.back_buffer_format(),
+                                    ),
+                                    None,
+                                )
+                                .expect("create_image_view failed")
+                            },
+                            device: e.graphics_device().clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    main_framebuffers = backbuffer_resources
+                        .iter()
+                        .map(|bb| {
+                            br::FramebufferObject::new(
+                                e.graphics().device().clone(),
+                                &br::FramebufferCreateInfo::new(
+                                    &main_renderpass,
+                                    &[bb.as_transparent_ref()],
+                                    ns.0,
+                                    ns.1,
+                                ),
+                            )
+                            .expect("Failed to create main framebuffer")
+                        })
+                        .collect::<Vec<_>>();
+
+                    let [p1] = e
+                        .graphics()
+                        .device()
+                        .new_graphics_pipeline_array(
+                            &[br::GraphicsPipelineCreateInfo::new(
+                                &unlit_fill_pipeline_layout,
+                                main_renderpass.subpass(0),
+                                &[
+                                    unlit_fill_shader_modules.pipeline_vertex_shader_stage(),
+                                    unlit_fill_shader_modules
+                                        .pipeline_fragment_shader_stage()
+                                        .expect("no fsh?"),
+                                ],
+                                &br::PipelineVertexInputStateCreateInfo::new(
+                                    &unlit_fill_shader.vertex_bindings,
+                                    &unlit_fill_shader.vertex_attributes,
+                                ),
+                                &br::PipelineInputAssemblyStateCreateInfo::new(
+                                    br::PrimitiveTopology::TriangleStrip,
+                                ),
+                                &br::PipelineViewportStateCreateInfo::new_array(
+                                    &[viewport],
+                                    &[scissor_rect],
+                                ),
+                                &br::PipelineRasterizationStateCreateInfo::new(
+                                    br::PolygonMode::Fill,
+                                    br::CullModeFlags::NONE,
+                                    br::FrontFace::CounterClockwise,
+                                ),
+                                &br::PipelineColorBlendStateCreateInfo::new(&[
+                                    br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+                                ]),
+                            )
+                            .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+                            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                        )
+                        .expect("Failed to create unlit fill pipeline");
+                    unlit_fill_pipeline = p1.clone_parent();
+
+                    unsafe {
+                        let inherit_info = br::CommandBufferInheritanceInfo::of_rendering(
+                            main_renderpass.subpass(0),
+                            None::<&br::FramebufferObject<peridot::DeviceObject>>,
+                        );
+                        let begin_info = br::CommandBufferBeginInfo::new()
+                            .with_inheritance_info(&inherit_info)
+                            .renderpass_continue()
+                            .simultaneous_use();
+
+                        ui_render_cb
+                            .begin(&begin_info)
+                            .expect("Failed to begin ui render command recording")
+                    }
+                    .bind_pipeline(br::PipelineBindPoint::Graphics, &unlit_fill_pipeline)
+                    .push_constant(
+                        &unlit_fill_pipeline_layout,
+                        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                        0,
+                        &peridot::math::Vector2(640.0f32, ns.1 as f32 * 640.0f32 / ns.0 as f32),
+                    )
+                    .bind_vertex_buffers(
+                        0,
+                        &[
+                            vertex_buffer.as_transparent_ref(),
+                            instance_buffer.as_transparent_ref(),
+                        ],
+                        &[0, 0],
+                    )
+                    .draw(4, boxes.len() as _, 0, 0)
+                    .end()
+                    .expect("Failed to finish ui render command recording");
+
+                    for (cb, fb) in render_cb.iter_mut().zip(main_framebuffers.iter()) {
+                        unsafe {
+                            cb.begin(&br::CommandBufferBeginInfo::new())
+                                .expect("Failed to begin render command recording")
+                                .begin_render_pass(
+                                    &br::RenderPassBeginInfo::new(
+                                        &main_renderpass,
+                                        fb,
+                                        scissor_rect,
+                                        &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 0.0])],
+                                    ),
+                                    br::SubpassContents::SecondaryCommandBuffers,
+                                )
+                                .execute_commands(&[ui_render_cb.as_transparent_ref()])
+                                .end_render_pass()
+                                .end()
+                                .expect("Failed to finish render command recording");
+                        }
+                    }
+                }
+
+                let fd = e.prepare_frame().expect("Failed to prepare frame");
+                let mut render_submission = peridot::SubmissionBatchBuilder::new();
+                render_submission.add_command_buffers(
+                    render_cb[fd.backbuffer_index as usize..=fd.backbuffer_index as usize]
+                        .iter()
+                        .map(|x| x.as_transparent_ref()),
+                );
+                e.do_render(fd.backbuffer_index, None, render_submission)
+                    .expect("Failed to render");
             }
             peridot::Event::Resize(ns) => {
-                println!("not implemented: Resize: {ns:?}");
+                new_size = Some(ns);
             }
         }
     }
 
     unsafe {
         e.graphics().device().wait().expect("Failed to wait works");
+    }
+}
+
+struct LocalImageView {
+    handle: br::vk::VkImageView,
+    device: peridot::VulkanGfx,
+}
+impl Drop for LocalImageView {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), self.handle, None);
+        }
+    }
+}
+impl br::VkHandle for LocalImageView {
+    type Handle = br::vk::VkImageView;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
     }
 }

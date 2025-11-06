@@ -1,179 +1,379 @@
 //! Platform Presenter(Swapchain Abstraction)
 
-use bedrock::{self as br, QueueMut, VkHandle, VkHandleMut};
-#[cfg(feature = "debug")]
-use br::VkObject;
-use br::{ImageSubresourceSlice, PhysicalDevice, SubmissionBatch, Swapchain};
+use bedrock::{self as br, VkRawHandle};
 
-use crate::{mthelper::SharedRef, DeviceObject};
+use crate::{graphics::VulkanGfx, mthelper::SharedRef};
 
 pub trait PlatformPresenter {
-    type BackBuffer: br::ImageView
-        + br::ImageChild
-        + br::DeviceChild<ConcreteDevice = DeviceObject>
-        + 'static;
-
     fn format(&self) -> br::vk::VkFormat;
+    fn back_buffer_size(&self) -> peridot_math::Vector2<u32>;
     fn back_buffer_count(&self) -> usize;
-    fn back_buffer(&self, index: usize) -> Option<&SharedRef<Self::BackBuffer>>;
+    fn back_buffer<'a>(&'a self, index: usize) -> Option<br::VkHandleRef<'a, br::vk::VkImage>>;
 
-    fn emit_initialize_back_buffer_commands<'r, CB: br::CommandBufferMut + ?Sized>(
+    fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, CB, DeviceObject>,
-    ) -> br::CmdRecord<'r, CB, DeviceObject>;
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r>;
     fn next_back_buffer_index(&mut self) -> br::Result<u32>;
     fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags);
-    fn render_and_present<'s>(
+    fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut crate::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         back_buffer_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
-    ) -> br::Result<()>;
+        render_submission: SubmissionBatchBuilder<'r>,
+        update_submission: Option<SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r;
     /// Returns whether re-initializing is needed for back-buffer resources
     fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) -> bool;
     fn current_geometry_extent(&self) -> peridot_math::Vector2<u32>;
 }
 
-type SharedSwapchainObject<Device, Surface> =
-    SharedRef<br::SurfaceSwapchainObject<Device, Surface>>;
-struct IntegratedSwapchainObject<Device: br::Device, Surface: br::Surface> {
-    swapchain: SharedSwapchainObject<Device, Surface>,
-    back_buffer_images: Vec<
-        SharedRef<br::ImageViewObject<br::SwapchainImage<SharedSwapchainObject<Device, Surface>>>>,
-    >,
+struct IntegratedSwapchainObjectCore<Surface> {
+    surface: Surface,
+    handle: br::vk::VkSwapchainKHR,
+    device: VulkanGfx,
 }
-impl<Surface: br::Surface> IntegratedSwapchainObject<DeviceObject, Surface> {
+impl<Surface> Drop for IntegratedSwapchainObjectCore<Surface> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_swapchain(self.device.0.device, self.handle, None);
+        }
+    }
+}
+impl<Surface> br::VkObject for IntegratedSwapchainObjectCore<Surface> {
+    const TYPE: br::vk::VkObjectType = br::vk::VkSwapchainKHR::OBJECT_TYPE;
+}
+impl<Surface> br::VkHandle for IntegratedSwapchainObjectCore<Surface> {
+    type Handle = br::vk::VkSwapchainKHR;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+impl<Surface> br::VkHandleMut for IntegratedSwapchainObjectCore<Surface> {
+    fn native_ptr_mut(&mut self) -> Self::Handle {
+        self.handle
+    }
+}
+impl<Surface> IntegratedSwapchainObjectCore<Surface> {
+    pub fn unwrap_surface(self) -> Surface {
+        let surface = unsafe { core::ptr::read(&self.surface) };
+        let handle = unsafe { core::ptr::read(&self.handle) };
+        let device = unsafe { core::ptr::read(&self.device) };
+        unsafe {
+            br::vkfn_wrapper::destroy_swapchain(device.0.device, handle, None);
+        }
+        core::mem::forget(self);
+
+        surface
+    }
+}
+
+#[derive(Clone)]
+pub struct IntegratedSwapchainObjectBackbufferRef<Surface> {
+    handle: br::vk::VkImage,
+    _source: SharedRef<IntegratedSwapchainObjectCore<Surface>>,
+}
+impl<Surface> br::VkHandle for IntegratedSwapchainObjectBackbufferRef<Surface> {
+    type Handle = br::vk::VkImage;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+
+struct IntegratedSwapchainObject<Surface> {
+    core: SharedRef<IntegratedSwapchainObjectCore<Surface>>,
+    buffer_size: peridot_math::Vector2<u32>,
+    back_buffer_image_handles: Vec<br::vk::VkImage>,
+}
+impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainObject<Surface> {
     pub fn new(
         g: &crate::Graphics,
         surface: Surface,
         surface_info: &crate::SurfaceInfo,
         default_extent: peridot_math::Vector2<u32>,
     ) -> Self {
-        let si = g
-            .adapter
-            .surface_capabilities(&surface)
-            .expect("Failed to query Surface Capabilities");
-        let ew = if si.currentExtent.width == u32::MAX {
+        let si = match g.gfx_device.surface_capabilities(&surface) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to query surface capabilities");
+                std::process::abort();
+            }
+        };
+        let ew = if si.currentExtent.width == 0xffff_ffff {
             default_extent.0
         } else {
             si.currentExtent.width
         };
-        let eh = if si.currentExtent.height == u32::MAX {
+        let eh = if si.currentExtent.height == 0xffff_ffff {
             default_extent.1
         } else {
             si.currentExtent.height
         };
-        let ew = ew.max(si.minImageExtent.width).min(si.maxImageExtent.width);
-        let eh = eh
-            .max(si.minImageExtent.height)
-            .min(si.maxImageExtent.height);
-        let ext = br::vk::VkExtent2D {
+        let ew = ew.clamp(si.minImageExtent.width, si.maxImageExtent.width);
+        let eh = eh.clamp(si.minImageExtent.height, si.maxImageExtent.height);
+        let ext = br::Extent2D {
             width: ew,
             height: eh,
         };
-        let buffer_count = 2.max(si.minImageCount).min(si.maxImageCount);
+        let buffer_count = 2.clamp(si.minImageCount, si.maxImageCount);
         let pre_transform =
             if (si.supportedTransforms & br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0 {
-                br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                br::SurfaceTransformFlags::IDENTITY
             } else {
-                br::vk::VK_SURFACE_TRANSFORM_INHERIT_BIT_KHR
+                br::SurfaceTransformFlags::INHERIT
             };
-        let chain = br::SwapchainBuilder::new(
-            surface,
-            buffer_count,
-            surface_info.fmt.clone(),
-            ext,
-            br::ImageUsageFlags::COLOR_ATTACHMENT,
-        )
-        .present_mode(surface_info.pres_mode)
-        .composite_alpha(surface_info.available_composite_alpha)
-        .pre_transform(pre_transform)
-        .create(g.device.clone())
-        .expect("Failed to create Swapchain");
-        let chain = SharedRef::new(chain);
-        #[cfg(feature = "debug")]
-        chain
-            .set_name(Some(unsafe {
-                std::ffi::CStr::from_bytes_with_nul_unchecked(
-                    b"Peridot-Default Presenter-Swapchain\0",
+        let chain = unsafe {
+            br::vkfn_wrapper::create_swapchain(
+                g.gfx_device.0.device,
+                &br::SwapchainCreateInfo::new(
+                    &surface,
+                    buffer_count,
+                    surface_info.fmt,
+                    ext,
+                    br::ImageUsageFlags::COLOR_ATTACHMENT,
                 )
-            }))
-            .expect("Failed to set swapchain name");
+                .present_mode(surface_info.pres_mode)
+                .composite_alpha(surface_info.available_composite_alpha)
+                .pre_transform(pre_transform),
+                None,
+            )
+        };
+        let chain = SharedRef::new(IntegratedSwapchainObjectCore {
+            surface,
+            handle: match chain {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::error!(cause = ?e, "Failed to create swapchain");
+                    std::process::abort();
+                }
+            },
+            device: g.gfx_device.clone(),
+        });
+        #[cfg(feature = "debug")]
+        g.gfx_device
+            .dbg_set_object_name(&chain, c"[Peridot.DefaultPresenter] Swapchain");
 
-        let back_buffer_images: Vec<SharedRef<_>> = chain
-            .get_images()
-            .expect("Failed to get back-buffer images")
-            .into_iter()
-            .map(|bb| {
-                bb.clone_parent()
-                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                    .view_builder()
-                    .create()
-                    .expect("Failed to create ImageView for Back-Buffer")
-                    .into()
-            })
-            .collect();
+        let n = match unsafe {
+            br::vkfn_wrapper::get_swapchain_image_count(g.gfx_device.0.device, chain.handle)
+        } {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to acquire swapchain images");
+                std::process::abort();
+            }
+        };
+        let mut back_buffer_image_handles = Vec::with_capacity(n as _);
+        if let Err(e) = unsafe {
+            br::vkfn_wrapper::get_swapchain_images(
+                g.gfx_device.0.device,
+                chain.handle,
+                back_buffer_image_handles.spare_capacity_mut(),
+            )
+        } {
+            tracing::error!(cause = ?e, "Failed to acquire swapchain images");
+            std::process::abort();
+        }
+        unsafe {
+            back_buffer_image_handles.set_len(back_buffer_image_handles.capacity());
+        }
 
         #[cfg(feature = "debug")]
-        for (n, v) in back_buffer_images.iter().enumerate() {
-            v.set_name(Some(
-                &std::ffi::CString::new(format!(
-                    "Peridot-Default Presenter-BackBuffer View #{}",
-                    n
-                ))
-                .expect("invalid sequence?"),
-            ))
-            .expect("Failed to set back-buffer view name");
+        for (n, v) in back_buffer_image_handles.iter().enumerate() {
+            let name = unsafe {
+                std::ffi::CString::from_vec_with_nul_unchecked(
+                    format!("[Peridot.DefaultPresenter] BackBuffer #{n}\0").into_bytes(),
+                )
+            };
+            unsafe {
+                g.gfx_device
+                    .dbg_set_object_name_raw(br::vk::VkImage::OBJECT_TYPE, v, &name);
+            }
         }
 
         Self {
-            swapchain: chain,
-            back_buffer_images,
+            core: chain,
+            buffer_size: ext.into(),
+            back_buffer_image_handles,
         }
     }
 }
 
-/// WSI Swapchain implementation for PlatformPresenter
-pub struct IntegratedSwapchain<Surface: br::Surface> {
-    surface_info: crate::SurfaceInfo,
-    swapchain: crate::Discardable1<IntegratedSwapchainObject<DeviceObject, Surface>>,
-    rendering_order: br::SemaphoreObject<DeviceObject>,
-    buffer_ready_order: br::SemaphoreObject<DeviceObject>,
-    present_order: br::SemaphoreObject<DeviceObject>,
+pub struct SubmissionBatchBuilder<'d> {
+    wait_semaphores: Vec<br::VkHandleRef<'d, br::vk::VkSemaphore>>,
+    wait_dst_stages: Vec<br::PipelineStageFlags>,
+    command_buffers: Vec<br::VkHandleRef<'d, br::vk::VkCommandBuffer>>,
+    signal_semaphores: Vec<br::VkHandleRef<'d, br::vk::VkSemaphore>>,
 }
-impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
+impl<'d> SubmissionBatchBuilder<'d> {
+    pub fn new() -> Self {
+        Self {
+            wait_semaphores: Vec::new(),
+            wait_dst_stages: Vec::new(),
+            command_buffers: Vec::new(),
+            signal_semaphores: Vec::new(),
+        }
+    }
+
+    pub fn add_wait_semaphores(
+        &mut self,
+        wait_semaphores_with_dst_stages: impl IntoIterator<
+            Item = (
+                br::VkHandleRef<'d, br::vk::VkSemaphore>,
+                br::PipelineStageFlags,
+            ),
+        >,
+    ) -> &mut Self {
+        let iter = wait_semaphores_with_dst_stages.into_iter();
+        let (lb, ub) = iter.size_hint();
+        let ext = ub.unwrap_or(lb);
+        let _ = self.wait_semaphores.try_reserve(ext);
+        let _ = self.wait_dst_stages.try_reserve(ext);
+        for (o, s) in iter {
+            self.wait_semaphores.push(o);
+            self.wait_dst_stages.push(s);
+        }
+
+        self
+    }
+
+    pub fn add_command_buffers(
+        &mut self,
+        command_buffers: impl IntoIterator<Item = br::VkHandleRef<'d, br::vk::VkCommandBuffer>>,
+    ) -> &mut Self {
+        self.command_buffers.extend(command_buffers);
+
+        self
+    }
+
+    pub fn add_signal_semaphores(
+        &mut self,
+        semaphores: impl IntoIterator<Item = br::VkHandleRef<'d, br::vk::VkSemaphore>>,
+    ) -> &mut Self {
+        self.signal_semaphores.extend(semaphores);
+
+        self
+    }
+
+    pub fn build<'s, 'n>(&'s self) -> br::SubmitInfo<'s, 's, 'n> {
+        br::SubmitInfo::new(
+            &self.wait_semaphores,
+            &self.wait_dst_stages,
+            &self.command_buffers,
+            &self.signal_semaphores,
+        )
+    }
+}
+
+/// WSI Swapchain implementation for PlatformPresenter
+pub struct IntegratedSwapchain<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> {
+    surface_info: crate::SurfaceInfo,
+    swapchain: crate::Discardable1<IntegratedSwapchainObject<Surface>>,
+    rendering_order: br::vk::VkSemaphore,
+    buffer_ready_order: br::vk::VkSemaphore,
+    present_order: br::vk::VkSemaphore,
+    gfx_device: VulkanGfx,
+}
+impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> Drop for IntegratedSwapchain<Surface> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_semaphore(self.gfx_device.0.device, self.present_order, None);
+            br::vkfn_wrapper::destroy_semaphore(
+                self.gfx_device.0.device,
+                self.buffer_ready_order,
+                None,
+            );
+            br::vkfn_wrapper::destroy_semaphore(
+                self.gfx_device.0.device,
+                self.rendering_order,
+                None,
+            );
+        }
+    }
+}
+impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<Surface> {
     pub fn new(
         g: &crate::Graphics,
         surface: Surface,
         default_extent: peridot_math::Vector2<u32>,
     ) -> Self {
-        let surface_info = crate::SurfaceInfo::gather_info(&g.adapter, &surface)
-            .expect("Failed to gather surface info");
+        let surface_info = match crate::SurfaceInfo::gather_info(&g.gfx_device, &surface) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(cause = ?e, "Failed to gather surface info");
+                std::process::abort();
+            }
+        };
 
-        let rendering_order =
-            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
-                .expect("Failed to create Rendering Order Semaphore");
-        let buffer_ready_order =
-            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
-                .expect("Failed to create BufferReady Order Semaphore");
-        let present_order =
-            br::SemaphoreObject::new(g.device().clone(), &br::SemaphoreCreateInfo::new())
-                .expect("Failed to create Present Order Semaphore");
+        let rendering_order = unsafe {
+            br::vkfn_wrapper::create_semaphore(
+                g.gfx_device.0.device,
+                &br::SemaphoreCreateInfo::new(),
+                None,
+            )
+        };
+        let buffer_ready_order = unsafe {
+            br::vkfn_wrapper::create_semaphore(
+                g.gfx_device.0.device,
+                &br::SemaphoreCreateInfo::new(),
+                None,
+            )
+        };
+        let present_order = unsafe {
+            br::vkfn_wrapper::create_semaphore(
+                g.gfx_device.0.device,
+                &br::SemaphoreCreateInfo::new(),
+                None,
+            )
+        };
+        let (rendering_order, buffer_ready_order, present_order) = match (
+            rendering_order,
+            buffer_ready_order,
+            present_order,
+        ) {
+            (Ok(a), Ok(b), Ok(c)) => (a, b, c),
+            _ => {
+                if let Err(e) = rendering_order {
+                    tracing::error!(cause = ?e, "Failed to create rendering order semaphore");
+                }
+                if let Err(e) = buffer_ready_order {
+                    tracing::error!(cause = ?e, "Failed to create buffer ready order semaphore");
+                }
+                if let Err(e) = present_order {
+                    tracing::error!(cause = ?e, "Failed to create present order semaphore");
+                }
+
+                std::process::abort();
+            }
+        };
+
         #[cfg(feature = "debug")]
         {
-            rendering_order
-                .set_name(Some(c"Peridot-Default Presenter-Rendering Order Semaphore"))
-                .expect("Failed to set Rendering Order Semaphore name");
-            buffer_ready_order
-                .set_name(Some(
-                    c"Peridot-Default Presenter-BufferReady Order Semaphore",
-                ))
-                .expect("Failed to set BufferReady Order Semaphore name");
-            present_order
-                .set_name(Some(c"Peridot-Default Presenter-Present Order Semaphore"))
-                .expect("Failed to set Present Order Semaphore name");
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
+                    br::vk::VK_OBJECT_TYPE_SEMAPHORE,
+                    &rendering_order,
+                    c"[Peridot.DefaultPresenter] Rendering Order Semaphore",
+                );
+            }
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
+                    br::vk::VK_OBJECT_TYPE_SEMAPHORE,
+                    &buffer_ready_order,
+                    c"[Peridot.DefaultPresenter] BufferReady Order Semaphore",
+                );
+            }
+            unsafe {
+                g.gfx_device.dbg_set_object_name_raw(
+                    br::vk::VK_OBJECT_TYPE_SEMAPHORE,
+                    &present_order,
+                    c"[Peridot.DefaultPresenter] Present Order Semaphore",
+                );
+            }
         }
 
         Self {
@@ -187,6 +387,7 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
             rendering_order,
             buffer_ready_order,
             present_order,
+            gfx_device: g.gfx_device.clone(),
         }
     }
 
@@ -197,44 +398,59 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
 
     #[inline]
     pub fn back_buffer_count(&self) -> usize {
-        self.swapchain.get().back_buffer_images.len()
+        self.swapchain.get().back_buffer_image_handles.len()
     }
 
     #[inline]
-    pub fn back_buffer<'s>(
-        &'s self,
-        index: usize,
-    ) -> Option<
-        &'s SharedRef<
-            br::ImageViewObject<br::SwapchainImage<SharedSwapchainObject<DeviceObject, Surface>>>,
-        >,
-    > {
-        self.swapchain.get().back_buffer_images.get(index)
+    pub fn back_buffer<'s>(&'s self, index: usize) -> Option<br::VkHandleRef<'s, br::vk::VkImage>> {
+        self.swapchain
+            .get()
+            .back_buffer_image_handles
+            .get(index)
+            .map(|&x| unsafe { br::VkHandleRef::dangling(x) })
     }
 
-    pub fn emit_initialize_back_buffer_commands<
-        'r,
-        CB: br::CommandBuffer + br::VkHandleMut + ?Sized,
-    >(
+    #[inline]
+    pub fn back_buffer_mut<'s>(
+        &'s mut self,
+        index: usize,
+    ) -> Option<br::VkHandleRefMut<'s, br::vk::VkImage>> {
+        self.swapchain
+            .get()
+            .back_buffer_image_handles
+            .get(index)
+            .map(|&x| unsafe { br::VkHandleRefMut::dangling(x) })
+    }
+
+    // TODO: undefined -> anyが無条件に許可される環境だったらこれいらない気がする synchronization2拡張が有効じゃないとダメとかあったかもしれないのであとでVulkanの仕様をあたる
+    pub fn emit_initialize_back_buffer_commands<'r>(
         &self,
-        recorder: br::CmdRecord<'r, CB, DeviceObject>,
-    ) -> br::CmdRecord<'r, CB, DeviceObject> {
+        recorder: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
         let image_barriers = self
             .swapchain
             .get()
-            .back_buffer_images
+            .back_buffer_image_handles
             .iter()
-            .map(|v| {
-                v.by_ref()
-                    .subresource_range(br::AspectMask::COLOR, 0..1, 0..1)
-                    .memory_barrier(br::ImageLayout::PresentSrc.from_undefined())
+            .map(|&v| {
+                br::ImageMemoryBarrier::new(
+                    unsafe { &br::VkHandleRef::dangling(v) },
+                    br::vk::VkImageSubresourceRange {
+                        aspectMask: br::AspectMask::COLOR.bits(),
+                        baseMipLevel: 0,
+                        levelCount: 1,
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    },
+                    br::ImageLayout::PresentSrc.from_undefined(),
+                )
             })
             .collect::<Vec<_>>();
 
         recorder.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
-            false,
+            0,
             &[],
             &[],
             &image_barriers,
@@ -243,10 +459,15 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
 
     #[inline]
     pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
-        self.swapchain.get_mut().swapchain.acquire_next(
-            None,
-            br::CompletionHandlerMut::Queue(self.rendering_order.as_transparent_ref_mut()),
-        )
+        unsafe {
+            br::vkfn_wrapper::acquire_next_image(
+                self.gfx_device.0.device,
+                br::VkHandleRefMut::dangling(self.swapchain.get_mut().core.handle),
+                u64::MAX,
+                Some(br::VkHandleRefMut::dangling(self.rendering_order)),
+                None,
+            )
+        }
     }
 
     #[inline]
@@ -257,79 +478,79 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
         )
     }
 
-    pub fn render_and_present<'s>(
+    pub fn render_and_present<'s, 'r>(
         &'s mut self,
         g: &mut crate::Graphics,
-        last_render_fence: &mut impl br::FenceMut,
+        last_render_fence: &mut impl br::VkHandleMut<Handle = br::vk::VkFence>,
         bb_index: u32,
-        render_submission: impl br::SubmissionBatch,
-        update_submission: Option<impl br::SubmissionBatch>,
-    ) -> br::Result<()> {
-        if let Some(cs) = update_submission {
+        mut render_submission: SubmissionBatchBuilder<'r>,
+        mut update_submission: Option<SubmissionBatchBuilder<'r>>,
+    ) -> br::Result<()>
+    where
+        's: 'r,
+    {
+        if let Some(ref mut cs) = update_submission {
             // copy -> render
-            let update_signal = &[&self.buffer_ready_order];
-            let render_waits = &[
-                (
-                    &self.rendering_order,
-                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                ),
-                (
-                    &self.buffer_ready_order,
-                    br::PipelineStageFlags::VERTEX_INPUT,
-                ),
-            ];
-            let render_signal = &[&self.present_order];
-
-            let update_submission = cs.with_signal_semaphores(update_signal);
-            let render_submission = render_submission
-                .with_wait_semaphores(render_waits)
-                .with_signal_semaphores(render_signal);
+            cs.add_signal_semaphores([unsafe {
+                br::VkHandleRef::dangling(self.buffer_ready_order)
+            }]);
+            render_submission
+                .add_wait_semaphores([
+                    (
+                        unsafe { br::VkHandleRef::dangling(self.rendering_order) },
+                        br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    ),
+                    (
+                        unsafe { br::VkHandleRef::dangling(self.buffer_ready_order) },
+                        br::PipelineStageFlags::VERTEX_INPUT,
+                    ),
+                ])
+                .add_signal_semaphores([unsafe { br::VkHandleRef::dangling(self.present_order) }]);
 
             g.submit_buffered_commands(
-                &[
-                    Box::new(update_submission) as Box<dyn br::SubmissionBatch>,
-                    Box::new(render_submission),
-                ],
+                &[cs.build(), render_submission.build()],
                 last_render_fence,
             )?;
         } else {
             // render only (old logic)
-            let render_signal = &[&self.present_order];
-            let render_waits = &[(
-                &self.rendering_order,
-                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            )];
+            render_submission
+                .add_wait_semaphores([(
+                    unsafe { br::VkHandleRef::dangling(self.rendering_order) },
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                )])
+                .add_signal_semaphores([unsafe { br::VkHandleRef::dangling(self.present_order) }]);
 
-            let render_submission = render_submission
-                .with_signal_semaphores(render_signal)
-                .with_wait_semaphores(render_waits);
-
-            g.submit_buffered_commands(&[render_submission], last_render_fence)?;
+            g.submit_buffered_commands(&[render_submission.build()], last_render_fence)?;
         }
 
-        g.graphics_queue
-            .q
-            .get_mut()
-            .present(br::PresentInfo::new(
-                &[self.present_order.as_transparent_ref()],
-                &[self.swapchain.get().swapchain.as_transparent_ref()],
-                &[bb_index],
-            ))
+        unsafe {
+            br::vkfn_wrapper::queue_present(
+                g.graphics_queue.q,
+                &br::PresentInfo::new(
+                    &[br::VkHandleRef::dangling(self.present_order)],
+                    &[br::VkHandleRef::dangling(self.swapchain.get().core.handle)],
+                    &[bb_index],
+                    &mut [br::vk::VK_SUCCESS],
+                ),
+            )
             .map(drop)
+        }
     }
 
     pub fn resize(&mut self, g: &crate::Graphics, new_size: peridot_math::Vector2<u32>) {
         if let Some(mut old) = self.swapchain.take() {
-            old.back_buffer_images.clear();
-            let (_, s) = SharedRef::try_unwrap(old.swapchain)
-                .unwrap_or_else(|refs| {
-                    panic!(
+            old.back_buffer_image_handles.clear();
+            let s = match SharedRef::try_unwrap(old.core) {
+                Ok(x) => x.unwrap_surface(),
+                Err(refs) => {
+                    tracing::error!(
                         "there are some references of swapchain left: strong={} weak={}",
                         SharedRef::strong_count(&refs),
                         SharedRef::weak_count(&refs)
-                    )
-                })
-                .deconstruct();
+                    );
+                    std::process::abort();
+                }
+            };
             self.swapchain.set(IntegratedSwapchainObject::new(
                 g,
                 s,
@@ -337,5 +558,9 @@ impl<Surface: br::Surface> IntegratedSwapchain<Surface> {
                 new_size,
             ));
         }
+    }
+
+    pub fn back_buffer_size(&self) -> peridot_math::Vector2<u32> {
+        self.swapchain.get().buffer_size
     }
 }

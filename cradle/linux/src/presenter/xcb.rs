@@ -33,6 +33,9 @@ pub struct X11 {
     cached_window_size: peridot::math::Vector2<u32>,
     has_close_requested: bool,
 }
+// TODO: このへんも実はスレッドセーフじゃないのでなんとかしたい（が、そもそもxcbのサポートまだ必要か？というところからな気がする）
+unsafe impl Sync for X11 {}
+unsafe impl Send for X11 {}
 impl X11 {
     pub fn try_init() -> Option<Self> {
         let Ok((con, screen_index)) = xcb::Connection::connect(None) else {
@@ -217,6 +220,8 @@ impl EventProcessor for X11 {
             }
         }
     }
+
+    fn cancel_read(&mut self) {}
 
     fn has_close_requested(&self) -> bool {
         self.has_close_requested

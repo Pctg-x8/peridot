@@ -42,10 +42,10 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
     );
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
-    steps::merge_assets(
+    steps::process_assets(
         &ctx,
-        &ctx.cradle_directory.join("assets"),
         options.ext_asset_path.as_deref(),
+        &ctx.cradle_directory.join("assets"),
     );
 
     ctx.within_cradle_dir(|| {
@@ -253,37 +253,70 @@ fn build_apk(ctx: &steps::BuildContext) {
     GradleWrapper::new().assemble_debug();
 }
 
-fn run_apk(ctx: &steps::BuildContext, package_id: &str) {
-    ctx.print_step("Installing apk...");
+pub struct AndroidDeviceBridge {
+    exec_path: std::path::PathBuf,
+}
+impl AndroidDeviceBridge {
+    pub fn new() -> Self {
+        Self {
+            exec_path: std::path::PathBuf::from(
+                std::env::var("ANDROID_HOME").expect("no ANDROID_HOME set"),
+            )
+            .join("platform-tools/adb"),
+        }
+    }
 
-    let adb = std::path::PathBuf::from(std::env::var("ANDROID_HOME").expect("no ANDROID_HOME set"))
-        .join("platform-tools/adb");
+    #[inline]
+    pub fn uninstall(&self, package_id: &str) -> std::io::Result<()> {
+        std::process::Command::new(&self.exec_path)
+            .args(["uninstall", package_id])
+            .spawn()?
+            .wait()?;
+
+        Ok(())
+    }
+
+    #[inline]
+    pub fn install(&self, apk_path: &std::path::Path) -> std::io::Result<std::process::ExitStatus> {
+        std::process::Command::new(&self.exec_path)
+            .arg("install")
+            .arg(apk_path)
+            .spawn()?
+            .wait()
+    }
+
+    #[inline]
+    pub fn start_activity(
+        &self,
+        package_id: &str,
+        activity_class: &str,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        let launch_str = format!("{package_id}/{activity_class}");
+        std::process::Command::new(&self.exec_path)
+            .args(["shell", "am", "start", "-n", &launch_str])
+            .spawn()?
+            .wait()
+    }
+}
+
+fn run_apk(ctx: &steps::BuildContext, package_id: &str) {
+    ctx.print_step("Installing/Launching apk...");
+
+    let adb = AndroidDeviceBridge::new();
     let apk_path = ctx
         .cradle_directory
         .join("apkbuild/app/build/outputs/apk/debug/app-debug.apk");
-    std::process::Command::new(&adb)
-        .args(&["uninstall", package_id])
-        .spawn()
-        .expect("Failed to spawn uninstall command")
-        .wait()
-        .expect("Failed to wait uninstall completion");
-    let e = std::process::Command::new(&adb)
-        .args(&[
-            "install",
-            apk_path.to_str().expect("invalid sequence in apk path"),
-        ])
-        .spawn()
-        .expect("Failed to spawn install command")
-        .wait()
-        .expect("Failed to wait install completion");
-    crate::shellutil::handle_process_result("adb install command", e);
+    adb.uninstall(package_id)
+        .expect("Failed to exec uninstall command");
+    crate::shellutil::handle_process_result(
+        "adb install command",
+        adb.install(&apk_path)
+            .expect("Failed to exec install command"),
+    );
 
-    let native_activity_path = format!("{}/jp.ct2.peridot.NativeActivity", package_id);
-    let e = std::process::Command::new(&adb)
-        .args(&["shell", "am", "start", "-n", &native_activity_path])
-        .spawn()
-        .expect("Failed to spawn start command")
-        .wait()
-        .expect("Failed to wait start command");
-    crate::shellutil::handle_process_result("`adb shell am start`", e);
+    crate::shellutil::handle_process_result(
+        "`adb shell am start`",
+        adb.start_activity(package_id, "io.ct2.peridot.PeridotActivity")
+            .expect("Failed to exec start-activity command"),
+    );
 }
