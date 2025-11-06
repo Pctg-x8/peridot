@@ -3,6 +3,11 @@ name = "box-ui"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+use-freetype = ["peridot-vg/use-freetype"]
+use-fontconfig = ["peridot-vg/use-fontconfig"]
+
 [dependencies]
 peridot = { path = "../../base", features = ["mt"] }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack", features = [
