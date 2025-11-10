@@ -32,6 +32,60 @@ pub type NSUInteger = core::ffi::c_ulong;
 pub type NSUInteger = core::ffi::c_uint;
 
 #[repr(transparent)]
+pub struct CFOwned<T>(NonNull<T>);
+impl<T> Drop for CFOwned<T> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            CFRelease(self.0.as_ptr().cast());
+        }
+    }
+}
+impl<T> Deref for CFOwned<T> {
+    type Target = T;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { self.0.as_ref() }
+    }
+}
+impl<T> DerefMut for CFOwned<T> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { self.0.as_mut() }
+    }
+}
+impl<T> CFOwned<T> {
+    #[inline(always)]
+    pub const unsafe fn from_nonnull_ptr_unchecked(p: NonNull<T>) -> Self {
+        Self(p)
+    }
+
+    #[inline(always)]
+    pub const fn from_ptr_unchecked(p: *mut T) -> Self {
+        unsafe { Self::from_nonnull_ptr_unchecked(NonNull::new_unchecked(p)) }
+    }
+
+    #[inline(always)]
+    pub const fn from_ptr(p: *mut T) -> Option<Self> {
+        match NonNull::new(p) {
+            Some(x) => unsafe { Some(Self::from_nonnull_ptr_unchecked(x)) },
+            None => None,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn as_ptr(&self) -> *const T {
+        self.0.as_ptr().cast_const()
+    }
+
+    #[inline(always)]
+    pub const fn as_mut_ptr(&mut self) -> *mut T {
+        self.0.as_ptr()
+    }
+}
+
+#[repr(transparent)]
 pub struct Owned<T: NSObject>(NonNull<T>);
 impl<T: NSObject> Drop for Owned<T> {
     #[inline(always)]
