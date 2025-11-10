@@ -1,0 +1,12 @@
+[package]
+name = "apple-sdk-port"
+description = "SDKs for Apple Platform(macOS/iOS) port for Rust"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+# supress warnings from objc crate
+cargo-clippy = []
+
+[dependencies]
+objc = "0.2"
