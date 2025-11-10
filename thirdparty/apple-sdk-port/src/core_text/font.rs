@@ -188,7 +188,7 @@ unsafe extern "C" {
         count: CFIndex,
         options: CFOptionFlags,
     ) -> CGRect;
-    pub fn CTFontGetAdvancesFotGlyphs(
+    pub fn CTFontGetAdvancesForGlyphs(
         font: CTFontRef,
         orientation: CTFontOrientation,
         glyphs: *const CGGlyph,
