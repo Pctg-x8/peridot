@@ -17,7 +17,7 @@
           pkgs.cmake
           pkgs.ninja
         ];
-        text = "cd tools; cargo build; cd ..";
+        text = ''pushd "$PROJECT_ROOT"/tools; cargo build; popd'';
       };
     in
     {
@@ -27,9 +27,30 @@
           # for building cdeps
           pkgs.cmake
           pkgs.ninja
+          pkgs.pkg-config
+          pkgs.clang
+          pkgs.llvmPackages.libclang
+          # required libs for building engine
+          pkgs.pipewire
+          pkgs.udev
+          pkgs.wayland
+          pkgs.pulseaudio
+          pkgs.vulkan-loader
           # helper scripts
           build-tools
         ];
+
+        shellHook = ''
+          export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
+          # set library search paths for thirdparty
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/source-repo/build
+          # peridot specific env vars for development
+          export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
+          export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle
+        '';
+
+        # このへんはないとエラーになる
+        LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
       };
     };
 }
