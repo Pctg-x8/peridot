@@ -36,7 +36,7 @@ where
         let new_pos = match pos {
             std::io::SeekFrom::Start(x) => x,
             std::io::SeekFrom::Current(x) => (self.pos as i64 + x) as _,
-            std::io::SeekFrom::End(x) => (self.inner.byte_length()? as i64 - x) as _,
+            std::io::SeekFrom::End(x) => (self.inner.byte_length()? as i64 + x) as _,
         };
         self.pos = new_pos;
         Ok(new_pos)
@@ -150,7 +150,8 @@ impl<'r, R: crate::RandomReadBlobAsync + 'r> futures_io::AsyncSeek
                     "resulting file pointer is out of range!",
                 )
             })?,
-            std::io::SeekFrom::End(x) => pref.checked_sub_signed(x).ok_or_else(|| {
+            // TODO: ここ計算ただしくない(なんでこうなった？)のであとで直す ただBlobMetadata側の定義にも手を入れないといけないかも(Futureの具体型がとれない)
+            std::io::SeekFrom::End(x) => pref.checked_add_signed(x).ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "resulting file pointer is out of range!",
