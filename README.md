@@ -9,3 +9,19 @@ For new-generation game/multimedia development with arbitrary programming langua
 
 - [Cradle/Game Build Instruction](./build.md)
   - [Prerequisites for Android building](./cradle/android/build.md)
+
+## For development
+
+### `nix develop`
+
+default(bash based):
+
+```sh
+$ nix develop
+```
+
+fish based:
+
+```sh
+$ nix develop .#fish
+```
