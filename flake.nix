@@ -36,6 +36,8 @@
           pkgs.wayland
           pkgs.pulseaudio
           pkgs.vulkan-loader
+		  # required for workflow generator(also included in githooks)
+		  pkgs.stack
           # helper scripts
           build-tools
         ];
