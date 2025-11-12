@@ -1,6 +1,6 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, Device, Image, ImageChild, RenderPass,
-    SubmissionBatch, TypedVulkanStructure, VkHandle, VulkanStructure,
+    self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, Image, ImageChild,
+    RenderPass, ShaderModule, SubmissionBatch, TypedVulkanStructure, VkHandle, VulkanStructure,
 };
 use peridot::math::Zero;
 use peridot_vertex_processing_pack::PvpShaderModules;
@@ -15,6 +15,17 @@ pub struct Vertex {
 pub struct BoxInstance {
     pub pos_st: peridot::math::Vector4<f32>,
     pub col: peridot::math::Vector4<f32>,
+}
+
+#[repr(C)]
+pub struct CameraParameterUniformBlockData {
+    pub view_projection_matrix: peridot::math::Matrix4F32,
+    pub target_pixel_size: peridot::math::Vector2F32,
+}
+
+#[repr(C)]
+pub struct ObjectParameterUniformBlockData {
+    pub transform_matrix: peridot::math::Matrix4F32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1456,6 +1467,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     let screen_size = e.back_buffer_size();
     let mut scissor_rect = br::Extent2D::from(screen_size).into_rect(br::vk::VkOffset2D::ZERO);
     let mut viewport = scissor_rect.make_viewport(0.0..1.0);
+    let mut pmm = peridot_memory_manager::MemoryManager::new(e.graphics());
 
     let main_renderpass = br::RenderPassObject::new(
         e.graphics().device().clone(),
@@ -1510,57 +1522,162 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         })
         .collect::<Vec<_>>();
 
-    let unlit_fill_shader = e
-        .load("shaders.unlit_fill")
-        .expect("Failed to load unlit_fill shader");
-    let unlit_fill_shader_modules =
-        PvpShaderModules::new(e.graphics().device(), &unlit_fill_shader)
-            .expect("Failed to create unlit_fill shader modules");
+    let dsl_ub1 = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[
+            br::DescriptorType::UniformBuffer.make_binding(0, 1)
+        ]),
+    )
+    .expect("create descriptor set layout for ub1");
+
+    let shader = e
+        .load::<peridot_rendering_configuration::CompiledRenderingConfigurationVk>("shaders.ui")
+        .expect("loading shader");
     let unlit_fill_pipeline_layout = br::PipelineLayoutObject::new(
         e.graphics().device().clone(),
         &br::PipelineLayoutCreateInfo::new(
-            &[],
-            &[br::vk::VkPushConstantRange::for_type::<
-                peridot::math::Vector2<f32>,
-            >(br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0)],
+            &[dsl_ub1.as_transparent_ref(), dsl_ub1.as_transparent_ref()],
+            &if shader.push_constant_buffer_size_bytes > 0 {
+                vec![br::PushConstantRange::new(
+                    br::vk::VK_SHADER_STAGE_ALL,
+                    0..shader.push_constant_buffer_size_bytes as _,
+                )]
+            } else {
+                vec![]
+            },
         ),
     )
     .expect("Failed to create pipeline layout");
-    let [unlit_fill_pipeline] = e
-        .graphics()
-        .device()
-        .new_graphics_pipeline_array(
-            &[br::GraphicsPipelineCreateInfo::new(
-                &unlit_fill_pipeline_layout,
-                main_renderpass.subpass(0),
-                &[
-                    unlit_fill_shader_modules.pipeline_vertex_shader_stage(),
-                    unlit_fill_shader_modules
-                        .pipeline_fragment_shader_stage()
-                        .expect("no fsh?"),
-                ],
-                &br::PipelineVertexInputStateCreateInfo::new(
-                    &unlit_fill_shader.vertex_bindings,
-                    &unlit_fill_shader.vertex_attributes,
-                ),
-                &br::PipelineInputAssemblyStateCreateInfo::new(
-                    br::PrimitiveTopology::TriangleStrip,
-                ),
-                &br::PipelineViewportStateCreateInfo::new_array(&[viewport], &[scissor_rect]),
-                &br::PipelineRasterizationStateCreateInfo::new(
-                    br::PolygonMode::Fill,
-                    br::CullModeFlags::NONE,
-                    br::FrontFace::CounterClockwise,
-                ),
-                &br::PipelineColorBlendStateCreateInfo::new(&[
-                    br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
-                ]),
+    let [unlit_fill_pipeline] = match shader.passes["Unlit"] {
+        peridot_rendering_configuration::ShadingPassVk::SimpleDeriveBuiltinPass { ref name } => {
+            unreachable!("using builtin pass: {name}");
+        }
+        peridot_rendering_configuration::ShadingPassVk::Custom {
+            ref option_overrides,
+            ref vertex_semantic_to_location,
+            ref vertex_entry_point_name,
+            ref fragment_entry_point_name,
+            ref code,
+        } => {
+            let shader = br::ShaderModuleObject::new(
+                e.graphics().device().clone(),
+                &br::ShaderModuleCreateInfo::new(code),
             )
-            .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
-            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
-        )
-        .expect("Failed to create unlit fill pipeline");
+            .expect("ShaderModuleObject::new");
+            let mut shader_stage_with_ep_names = Vec::with_capacity(2);
+            if let Some(e) = vertex_entry_point_name {
+                shader_stage_with_ep_names.push((
+                    br::ShaderStage::Vertex,
+                    std::ffi::CString::new(e as &str).expect("invalid entry point name"),
+                ));
+            }
+            if let Some(e) = fragment_entry_point_name {
+                shader_stage_with_ep_names.push((
+                    br::ShaderStage::Fragment,
+                    std::ffi::CString::new(e as &str).expect("invalid entry point name"),
+                ));
+            }
+
+            e.graphics()
+                .device()
+                .new_graphics_pipeline_array(
+                    &[br::GraphicsPipelineCreateInfo::new(
+                        &unlit_fill_pipeline_layout,
+                        main_renderpass.subpass(0),
+                        &shader_stage_with_ep_names
+                            .iter()
+                            .map(|&(s, ref e)| shader.on_stage(s, e))
+                            .collect::<Vec<_>>(),
+                        &br::PipelineVertexInputStateCreateInfo::new(
+                            &[
+                                br::VertexInputBindingDescription::per_vertex_typed::<Vertex>(0),
+                                br::VertexInputBindingDescription::per_instance_typed::<BoxInstance>(1)
+                            ], &[
+                                br::VertexInputAttributeDescription {
+                                    binding: 0,
+                                    location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Position(0)],
+                                    format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                                    offset: core::mem::offset_of!(Vertex, pos) as _
+                                },
+                                br::VertexInputAttributeDescription {
+                                    binding: 1,
+                                    location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Position(1)],
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    offset: core::mem::offset_of!(BoxInstance, pos_st) as _
+                                },
+                                br::VertexInputAttributeDescription {
+                                    binding: 1,
+                                    location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Color(0)],
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    offset: core::mem::offset_of!(BoxInstance, col) as _
+                                }
+                            ]
+                        ),
+                        &br::PipelineInputAssemblyStateCreateInfo::new(
+                            br::PrimitiveTopology::TriangleStrip,
+                        ),
+                        &br::PipelineViewportStateCreateInfo::new_array(
+                            &[viewport],
+                            &[scissor_rect],
+                        ),
+                        &br::PipelineRasterizationStateCreateInfo::new(
+                            br::PolygonMode::Fill,
+                            br::CullModeFlags::NONE,
+                            br::FrontFace::CounterClockwise,
+                        ),
+                        &br::PipelineColorBlendStateCreateInfo::new(&[
+                            br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+                        ]),
+                    )
+                    .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+                    None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                )
+                .expect("new_graphics_pipeline_array")
+        }
+    };
     let mut unlit_fill_pipeline = unlit_fill_pipeline.clone_parent();
+
+    // rendering configuration default resources
+    let (prc_uniform_block_data, [prc_camera_parameter_offset, prc_object_parameter_offset]) = pmm
+        .allocate_device_local_buffer_with_content_array(
+            e.graphics(),
+            &[
+                peridot::BufferContent::uniform::<CameraParameterUniformBlockData>(),
+                peridot::BufferContent::uniform::<ObjectParameterUniformBlockData>(),
+            ],
+            br::BufferUsage::TRANSFER_DEST,
+        )
+        .expect("alloc prc_uniform_block_data");
+    let mut prc_descriptor_pool = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(2, &[br::DescriptorType::UniformBuffer.make_size(2)]),
+    )
+    .expect("DescriptorPoolObject::new");
+    let [prc_camera_parameter_descriptor_set, prc_object_parameter_descriptor_set] =
+        prc_descriptor_pool
+            .alloc_array(&[dsl_ub1.as_transparent_ref(), dsl_ub1.as_transparent_ref()])
+            .expect("prc_descriptor_pool.alloc_array");
+    e.graphics().device().update_descriptor_sets(
+        &[
+            prc_camera_parameter_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::uniform_buffer(
+                    &prc_uniform_block_data,
+                    prc_camera_parameter_offset
+                        ..prc_camera_parameter_offset
+                            + core::mem::size_of::<CameraParameterUniformBlockData>() as u64,
+                ),
+            ),
+            prc_object_parameter_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::uniform_buffer(
+                    &prc_uniform_block_data,
+                    prc_object_parameter_offset
+                        ..prc_object_parameter_offset
+                            + core::mem::size_of::<ObjectParameterUniformBlockData>() as u64,
+                ),
+            ),
+        ],
+        &[],
+    );
 
     let main_font = TextFontData::new(
         peridot_vg::DefaultFontProvider::new()
@@ -1913,7 +2030,6 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     println!("layout boxes: {}", boxes.len());
     // TODO: レイアウトボックスが1024を超えたときの対応（どうしよ）
     assert!(boxes.len() < 1024, "too many layout boxes!!");
-    let mut pmm = peridot_memory_manager::MemoryManager::new(e.graphics());
     let [vertex_buffer, instance_buffer] = pmm
         .allocate_device_local_buffer_array(
             e.graphics(),
@@ -1930,6 +2046,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     #[repr(C)]
     struct BufferInitContent {
         vertex: [Vertex; 4],
+        target_pixel_size: peridot::math::Vector2F32,
     }
     let mut init_buffer = pmm
         .allocate_upload_buffer(
@@ -1953,6 +2070,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                     pos: peridot::math::Vector2(1.0, 1.0),
                 },
             ],
+            target_pixel_size: peridot::math::Vector2(640.0, 480.0),
         })
         .expect("Failed to write init buffer content");
     let mut instance_init_buffer = pmm
@@ -1986,15 +2104,26 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                     size: (core::mem::size_of::<BoxInstance>() * boxes.len()) as _,
                 }],
             )
+            .copy_buffer(
+                &init_buffer,
+                &prc_uniform_block_data,
+                &[br::BufferCopy::copy_data::<peridot::math::Vector2F32>(
+                    core::mem::offset_of!(BufferInitContent, target_pixel_size) as _,
+                    prc_camera_parameter_offset
+                        + core::mem::offset_of!(CameraParameterUniformBlockData, target_pixel_size)
+                            as u64,
+                )],
+            )
             .pipeline_barrier(
                 br::PipelineStageFlags::TRANSFER,
-                br::PipelineStageFlags::VERTEX_INPUT,
+                br::PipelineStageFlags::VERTEX_INPUT | br::PipelineStageFlags::VERTEX_SHADER,
                 0,
                 &[br::vk::VkMemoryBarrier {
                     sType: br::vk::VkMemoryBarrier::TYPE,
                     pNext: core::ptr::null(),
                     srcAccessMask: br::AccessFlags::TRANSFER.write,
-                    dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ,
+                    dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ
+                        | br::AccessFlags::UNIFORM_READ,
                 }],
                 &[],
                 &[],
@@ -2032,11 +2161,15 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             .expect("Failed to begin ui render command recording")
     }
     .bind_pipeline(br::PipelineBindPoint::Graphics, &unlit_fill_pipeline)
-    .push_constant(
+    .bind_descriptor_sets(
+        br::PipelineBindPoint::Graphics,
         &unlit_fill_pipeline_layout,
-        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
         0,
-        &peridot::math::Vector2(640.0f32, 480.0),
+        &[
+            prc_camera_parameter_descriptor_set,
+            prc_object_parameter_descriptor_set,
+        ],
+        &[],
     )
     .bind_vertex_buffers(
         0,
@@ -2155,44 +2288,157 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                         })
                         .collect::<Vec<_>>();
 
-                    let [p1] = e
-                        .graphics()
-                        .device()
-                        .new_graphics_pipeline_array(
-                            &[br::GraphicsPipelineCreateInfo::new(
-                                &unlit_fill_pipeline_layout,
-                                main_renderpass.subpass(0),
-                                &[
-                                    unlit_fill_shader_modules.pipeline_vertex_shader_stage(),
-                                    unlit_fill_shader_modules
-                                        .pipeline_fragment_shader_stage()
-                                        .expect("no fsh?"),
-                                ],
-                                &br::PipelineVertexInputStateCreateInfo::new(
-                                    &unlit_fill_shader.vertex_bindings,
-                                    &unlit_fill_shader.vertex_attributes,
-                                ),
-                                &br::PipelineInputAssemblyStateCreateInfo::new(
-                                    br::PrimitiveTopology::TriangleStrip,
-                                ),
-                                &br::PipelineViewportStateCreateInfo::new_array(
-                                    &[viewport],
-                                    &[scissor_rect],
-                                ),
-                                &br::PipelineRasterizationStateCreateInfo::new(
-                                    br::PolygonMode::Fill,
-                                    br::CullModeFlags::NONE,
-                                    br::FrontFace::CounterClockwise,
-                                ),
-                                &br::PipelineColorBlendStateCreateInfo::new(&[
-                                    br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
-                                ]),
+                    let [pl] = match shader.passes["Unlit"] {
+                        peridot_rendering_configuration::ShadingPassVk::SimpleDeriveBuiltinPass { ref name } => {
+                            unreachable!("using builtin pass: {name}");
+                        }
+                        peridot_rendering_configuration::ShadingPassVk::Custom {
+                            ref option_overrides,
+                            ref vertex_semantic_to_location,
+                            ref vertex_entry_point_name,
+                            ref fragment_entry_point_name,
+                            ref code,
+                        } => {
+                            let shader = br::ShaderModuleObject::new(
+                                e.graphics().device().clone(),
+                                &br::ShaderModuleCreateInfo::new(code),
                             )
-                            .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
-                            None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                            .expect("ShaderModuleObject::new");
+                            let mut shader_stage_with_ep_names = Vec::with_capacity(2);
+                            if let Some(e) = vertex_entry_point_name {
+                                shader_stage_with_ep_names.push((
+                                    br::ShaderStage::Vertex,
+                                    std::ffi::CString::new(e as &str).expect("invalid entry point name"),
+                                ));
+                            }
+                            if let Some(e) = fragment_entry_point_name {
+                                shader_stage_with_ep_names.push((
+                                    br::ShaderStage::Fragment,
+                                    std::ffi::CString::new(e as &str).expect("invalid entry point name"),
+                                ));
+                            }
+
+                            e.graphics()
+                                .device()
+                                .new_graphics_pipeline_array(
+                                    &[br::GraphicsPipelineCreateInfo::new(
+                                        &unlit_fill_pipeline_layout,
+                                        main_renderpass.subpass(0),
+                                        &shader_stage_with_ep_names
+                                            .iter()
+                                            .map(|&(s, ref e)| shader.on_stage(s, e))
+                                            .collect::<Vec<_>>(),
+                                        &br::PipelineVertexInputStateCreateInfo::new(
+                                            &[
+                                                br::VertexInputBindingDescription::per_vertex_typed::<Vertex>(0),
+                                                br::VertexInputBindingDescription::per_instance_typed::<BoxInstance>(1)
+                                            ], &[
+                                                br::VertexInputAttributeDescription {
+                                                    binding: 0,
+                                                    location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Position(0)],
+                                                    format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                                                    offset: core::mem::offset_of!(Vertex, pos) as _
+                                                },
+                                                br::VertexInputAttributeDescription {
+                                                    binding: 1,
+                                                    location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Position(1)],
+                                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                                    offset: core::mem::offset_of!(BoxInstance, pos_st) as _
+                                                },
+                                                br::VertexInputAttributeDescription {
+                                                    binding: 1,
+                                                    location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Color(0)],
+                                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                                    offset: core::mem::offset_of!(BoxInstance, col) as _
+                                                }
+                                            ]
+                                        ),
+                                        &br::PipelineInputAssemblyStateCreateInfo::new(
+                                            br::PrimitiveTopology::TriangleStrip,
+                                        ),
+                                        &br::PipelineViewportStateCreateInfo::new_array(
+                                            &[viewport],
+                                            &[scissor_rect],
+                                        ),
+                                        &br::PipelineRasterizationStateCreateInfo::new(
+                                            br::PolygonMode::Fill,
+                                            br::CullModeFlags::NONE,
+                                            br::FrontFace::CounterClockwise,
+                                        ),
+                                        &br::PipelineColorBlendStateCreateInfo::new(&[
+                                            br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+                                        ]),
+                                    )
+                                    .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
+                                    None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
+                                )
+                                .expect("new_graphics_pipeline_array")
+                        }
+                    };
+                    unlit_fill_pipeline = pl.clone_parent();
+
+                    struct BufferUpdateContent {
+                        target_pixel_size: peridot::math::Vector2F32,
+                    }
+                    let mut update_buffer = pmm
+                        .allocate_upload_buffer(
+                            e.graphics(),
+                            br::BufferCreateInfo::new_for_type::<BufferUpdateContent>(
+                                br::BufferUsage::TRANSFER_SRC,
+                            ),
                         )
-                        .expect("Failed to create unlit fill pipeline");
-                    unlit_fill_pipeline = p1.clone_parent();
+                        .expect("allocate_upload_buffer");
+                    unsafe {
+                        update_buffer
+                            .write_content_unchecked(BufferUpdateContent {
+                                target_pixel_size: peridot::math::Vector2(
+                                    640.0,
+                                    640.0 * ns.1 as f32 / ns.0 as f32,
+                                ),
+                            })
+                            .expect("write_content(update)");
+                    }
+                    e.submit_commands(|rec| {
+                        rec.pipeline_barrier(
+                            br::PipelineStageFlags::VERTEX_SHADER,
+                            br::PipelineStageFlags::TRANSFER,
+                            0,
+                            &[br::vk::VkMemoryBarrier {
+                                sType: br::vk::VkMemoryBarrier::TYPE,
+                                pNext: core::ptr::null(),
+                                srcAccessMask: br::AccessFlags::UNIFORM_READ,
+                                dstAccessMask: br::AccessFlags::TRANSFER.write,
+                            }],
+                            &[],
+                            &[],
+                        )
+                        .copy_buffer(
+                            &update_buffer,
+                            &prc_uniform_block_data,
+                            &[br::BufferCopy::copy_data::<peridot::math::Vector2F32>(
+                                core::mem::offset_of!(BufferUpdateContent, target_pixel_size) as _,
+                                prc_camera_parameter_offset
+                                    + core::mem::offset_of!(
+                                        CameraParameterUniformBlockData,
+                                        target_pixel_size
+                                    ) as u64,
+                            )],
+                        )
+                        .pipeline_barrier(
+                            br::PipelineStageFlags::TRANSFER,
+                            br::PipelineStageFlags::VERTEX_SHADER,
+                            0,
+                            &[br::vk::VkMemoryBarrier {
+                                sType: br::vk::VkMemoryBarrier::TYPE,
+                                pNext: core::ptr::null(),
+                                srcAccessMask: br::AccessFlags::TRANSFER.write,
+                                dstAccessMask: br::AccessFlags::UNIFORM_READ,
+                            }],
+                            &[],
+                            &[],
+                        )
+                    })
+                    .expect("submit_commands(update commands)");
 
                     unsafe {
                         let inherit_info = br::CommandBufferInheritanceInfo::of_rendering(
@@ -2209,11 +2455,15 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                             .expect("Failed to begin ui render command recording")
                     }
                     .bind_pipeline(br::PipelineBindPoint::Graphics, &unlit_fill_pipeline)
-                    .push_constant(
+                    .bind_descriptor_sets(
+                        br::PipelineBindPoint::Graphics,
                         &unlit_fill_pipeline_layout,
-                        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                         0,
-                        &peridot::math::Vector2(640.0f32, ns.1 as f32 * 640.0f32 / ns.0 as f32),
+                        &[
+                            prc_camera_parameter_descriptor_set,
+                            prc_object_parameter_descriptor_set,
+                        ],
+                        &[],
                     )
                     .bind_vertex_buffers(
                         0,
