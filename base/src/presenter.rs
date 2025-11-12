@@ -120,7 +120,11 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             width: ew,
             height: eh,
         };
-        let buffer_count = 2.clamp(si.minImageCount, si.maxImageCount);
+        let buffer_count = if si.maxImageCount > 0 {
+            2.clamp(si.minImageCount, si.maxImageCount)
+        } else {
+            2.max(si.minImageCount)
+        };
         let pre_transform =
             if (si.supportedTransforms & br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0 {
                 br::SurfaceTransformFlags::IDENTITY
