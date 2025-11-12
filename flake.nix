@@ -33,6 +33,8 @@
         pkgs.wayland
         pkgs.pulseaudio
         pkgs.vulkan-loader
+        pkgs.freetype
+        pkgs.fontconfig
         # required for workflow generator(also included in githooks)
         pkgs.stack
         # helper scripts
