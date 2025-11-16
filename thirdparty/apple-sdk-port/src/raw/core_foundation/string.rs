@@ -1,4 +1,4 @@
-use crate::{Boolean, CFAllocatorRef, CFDataRef, CFDictionaryRef, CFIndex, CFRange, CFTypeID};
+use super::{Boolean, CFAllocatorRef, CFDataRef, CFDictionaryRef, CFIndex, CFRange, CFTypeID};
 use core::ffi::*;
 
 pub type CFStringEncoding = u32;

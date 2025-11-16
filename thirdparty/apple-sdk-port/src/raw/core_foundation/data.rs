@@ -1,4 +1,4 @@
-use crate::{CFAllocatorRef, CFIndex, CFOptionFlags, CFRange, CFTypeID};
+use super::{CFAllocatorRef, CFIndex, CFOptionFlags, CFRange, CFTypeID};
 
 #[repr(C)]
 pub struct __CFData(
@@ -16,7 +16,7 @@ unsafe extern "C" {
     pub fn CFDataGetTypeID() -> CFTypeID;
 
     pub fn CFDataCreate(allocator: CFAllocatorRef, bytes: *const u8, length: CFIndex) -> CFDataRef;
-    pub fn CDataCreateWithBytesNoCopy(
+    pub fn CFDataCreateWithBytesNoCopy(
         allocator: CFAllocatorRef,
         bytes: *const u8,
         length: CFIndex,

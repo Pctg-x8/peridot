@@ -82,9 +82,11 @@ impl Context {
     pub fn text<F>(&mut self, font: &F, text: &str) -> Result<&mut Self, GlyphLoadingError>
     where
         F: Font,
-        <F as Font>::GlyphID: Default,
     {
-        let glyphs = text.chars().map(|c| font.glyph_id(c).unwrap_or_default());
+        let glyphs = text.chars().map(|c| {
+            font.glyph_id(c)
+                .unwrap_or_else(|| font.glyph_id(' ').expect("invalid char"))
+        });
         let (mut left_offs, mut max_height) = (0.0, 0.0f32);
         let mut g0 = Partitioner::new();
         for g in glyphs {

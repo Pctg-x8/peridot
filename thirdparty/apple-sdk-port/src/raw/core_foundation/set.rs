@@ -1,4 +1,6 @@
-use crate::{Boolean, CFAllocatorRef, CFHashCode, CFIndex, CFStringRef, CFTypeID, FFIOpaqueStruct};
+use crate::FFIOpaqueStruct;
+
+use super::{Boolean, CFAllocatorRef, CFHashCode, CFIndex, CFStringRef, CFTypeID};
 use core::ffi::*;
 
 pub type CFSetRetainCallBack =

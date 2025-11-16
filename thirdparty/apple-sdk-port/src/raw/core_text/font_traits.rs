@@ -1,6 +1,6 @@
 #![allow(non_upper_case_globals)]
 
-use crate::CFStringRef;
+use crate::raw::CFStringRef;
 use core::ffi::*;
 
 pub const kCTFontClassMaskShift: c_int = 28;

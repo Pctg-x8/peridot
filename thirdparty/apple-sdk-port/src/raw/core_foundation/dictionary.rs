@@ -1,6 +1,6 @@
 use core::ffi::*;
 
-use crate::{Boolean, CFAllocatorRef, CFHashCode, CFIndex, CFStringRef, CFTypeID};
+use super::{Boolean, CFAllocatorRef, CFHashCode, CFIndex, CFStringRef, CFTypeID};
 
 pub type CFDictionaryRetainCallBack =
     extern "C" fn(allocator: CFAllocatorRef, value: *const c_void) -> *const c_void;

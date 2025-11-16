@@ -1,10 +1,13 @@
 #![allow(non_upper_case_globals)]
 
 use crate::{
-    CFArrayRef, CFCharacterSetRef, CFDictionaryRef, CFIndex, CFOptionFlags, CFRange,
-    CFStringEncoding, CFStringRef, CFTypeID, CFTypeRef, CGAffineTransform, CGFloat, CGFontRef,
-    CGGlyph, CGPathRef, CGRect, CGSize, CTFontDescriptorRef, CTFontOrientation,
-    CTFontSymbolicTraits, FFIOpaqueStruct, UniChar,
+    FFIOpaqueStruct,
+    raw::{
+        CFArrayRef, CFCharacterSetRef, CFDictionaryRef, CFIndex, CFOptionFlags, CFRange,
+        CFStringEncoding, CFStringRef, CFTypeID, CFTypeRef, CGAffineTransform, CGFloat, CGFontRef,
+        CGGlyph, CGPathRef, CGRect, CGSize, CTFontDescriptorRef, CTFontOrientation,
+        CTFontSymbolicTraits, UniChar,
+    },
 };
 use core::ffi::*;
 

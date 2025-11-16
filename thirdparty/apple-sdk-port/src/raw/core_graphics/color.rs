@@ -1,5 +1,9 @@
-use crate::{CGColorSpaceRef, CGFloat, FFIOpaqueStruct};
 use core::ffi::*;
+
+use crate::{
+    FFIOpaqueStruct,
+    raw::{CGColorSpaceRef, CGFloat},
+};
 
 #[repr(C)]
 pub struct CGColor(FFIOpaqueStruct);

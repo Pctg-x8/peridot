@@ -1,6 +1,9 @@
 #![allow(non_upper_case_globals)]
 
-use crate::{CGPoint, CGRect, FFIOpaqueStruct};
+use crate::{
+    FFIOpaqueStruct,
+    raw::{CGPoint, CGRect},
+};
 use core::ffi::*;
 
 #[repr(C)]

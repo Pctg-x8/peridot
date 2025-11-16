@@ -1,6 +1,6 @@
 #![allow(non_upper_case_globals)]
 
-use crate::CGFloat;
+use crate::raw::CGFloat;
 
 #[repr(C)]
 pub struct CGPoint {

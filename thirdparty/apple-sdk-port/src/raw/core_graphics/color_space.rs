@@ -1,6 +1,6 @@
 #![allow(non_upper_case_globals)]
 
-use crate::{CFStringRef, FFIOpaqueStruct};
+use crate::{FFIOpaqueStruct, raw::CFStringRef};
 
 #[repr(C)]
 pub struct CGColorSpace(FFIOpaqueStruct);

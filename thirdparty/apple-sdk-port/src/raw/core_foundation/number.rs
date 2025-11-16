@@ -1,4 +1,4 @@
-use crate::{Boolean, CFAllocatorRef, CFComparisonResult, CFIndex, CFTypeID};
+use super::{Boolean, CFAllocatorRef, CFComparisonResult, CFIndex, CFTypeID};
 use core::ffi::*;
 
 #[repr(C)]
@@ -42,7 +42,7 @@ unsafe extern "C" {
     pub fn CFBooleanGetValue(boolean: CFBooleanRef) -> Boolean;
 
     pub static kCFNumberPositiveInfinity: CFNumberRef;
-    pub static kCFNumberNativeInfinity: CFNumberRef;
+    pub static kCFNumberNegativeInfinity: CFNumberRef;
     pub static kCFNumberNaN: CFNumberRef;
 
     pub fn CFNumberGetTypeID() -> CFTypeID;
