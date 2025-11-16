@@ -137,18 +137,7 @@ extern "C" fn device_param(
         let first_pod = unsafe { core::mem::transmute::<&spa_pod, &spa_pod_object>(first_pod) };
 
         if first_pod.body.r#type == SPA_TYPE_OBJECT_ParamProfile {
-            let mut offs = 0;
-            // +8: spa_pod_object_bodyの頭のぶん
-            while offs + 8 < first_pod.pod.size as usize {
-                let param = unsafe {
-                    &*first_pod
-                        .body
-                        .props
-                        .as_ptr()
-                        .add(offs)
-                        .cast::<spa_pod_prop>()
-                };
-
+            for param in SPAPODObjectPropsIterator::new(first_pod) {
                 if param.key == SPA_PARAM_PROFILE_index {
                     let index = spa_assert_int(&param.value).value;
                     println!("  * index = {index}");
@@ -166,67 +155,32 @@ extern "C" fn device_param(
                     println!("  * available = {available}");
                 } else if param.key == SPA_PARAM_PROFILE_classes {
                     assert_eq!(param.value.r#type, SPA_TYPE_Struct);
-                    let value_pod =
-                        unsafe { core::mem::transmute::<&spa_pod, &spa_pod_struct>(&param.value) };
-                    let mut offs = 0;
-                    let member_pod =
-                        unsafe { &*value_pod.values.as_ptr().add(offs).cast::<spa_pod>() };
-                    let item_count = spa_assert_int(member_pod).value;
-                    offs += (member_pod.total_size() + 7) & !7;
+                    let mut members_iter = SPAPODStructMemberIterator::new(unsafe {
+                        core::mem::transmute::<&spa_pod, &spa_pod_struct>(&param.value)
+                    });
+
+                    let item_count = spa_assert_int(members_iter.next().unwrap()).value;
                     for _ in 0..item_count {
-                        let member_pod = unsafe {
-                            &*value_pod.values.as_ptr().add(offs).cast::<spa_pod_struct>()
-                        };
-                        assert_eq!(member_pod.pod.r#type, SPA_TYPE_Struct);
-                        let mut offs_entry = 0;
+                        let mut entry_members_iter = SPAPODStructMemberIterator::new(
+                            spa_assert_struct(members_iter.next().unwrap()),
+                        );
 
-                        let entry_member_pod = unsafe {
-                            &*member_pod.values.as_ptr().add(offs_entry).cast::<spa_pod>()
-                        };
-                        let class_name =
-                            spa_pod_string_get_value(spa_assert_string(entry_member_pod));
-                        offs_entry += (entry_member_pod.total_size() + 7) & !7;
-
-                        let entry_member_pod = unsafe {
-                            &*member_pod.values.as_ptr().add(offs_entry).cast::<spa_pod>()
-                        };
-                        let node_count = spa_assert_int(entry_member_pod).value;
-                        offs_entry += (entry_member_pod.total_size() + 7) & !7;
-
-                        let entry_member_pod = unsafe {
-                            &*member_pod.values.as_ptr().add(offs_entry).cast::<spa_pod>()
-                        };
-                        let property =
-                            spa_pod_string_get_value(spa_assert_string(entry_member_pod));
-                        offs_entry += (entry_member_pod.total_size() + 7) & !7;
-
-                        let entry_member_pod = unsafe {
-                            &*member_pod
-                                .values
-                                .as_ptr()
-                                .add(offs_entry)
-                                .cast::<spa_pod_array>()
-                        };
-                        assert_eq!(entry_member_pod.pod.r#type, SPA_TYPE_Array);
-                        let mut array_offs = 0;
-                        let mut device_indices = Vec::new();
-                        while array_offs < entry_member_pod.pod.size as usize {
-                            device_indices.push(unsafe {
-                                *entry_member_pod
-                                    .body
-                                    .values
-                                    .as_ptr()
-                                    .add(array_offs)
-                                    .cast::<i32>()
-                            });
-                            array_offs += entry_member_pod.body.child.size as usize;
-                        }
+                        let class_name = spa_pod_string_get_value(spa_assert_string(
+                            entry_members_iter.next().unwrap(),
+                        ));
+                        let node_count = spa_assert_int(entry_members_iter.next().unwrap()).value;
+                        let property = spa_pod_string_get_value(spa_assert_string(
+                            entry_members_iter.next().unwrap(),
+                        ));
+                        let device_indices = SPAPODArrayIterator::new(spa_assert_array(
+                            entry_members_iter.next().unwrap(),
+                        ))
+                        .copied()
+                        .collect::<Vec<i32>>();
 
                         println!(
                             "  * classes = {class_name:?} {node_count} {property:?} {device_indices:?}"
                         );
-
-                        offs += (member_pod.pod.total_size() + 7) & !7;
                     }
                 } else if param.key == SPA_PARAM_PROFILE_save {
                     let save = spa_assert_bool(&param.value).value;
@@ -237,22 +191,9 @@ extern "C" fn device_param(
                         param.key, param.value.r#type, param.value.size
                     );
                 }
-
-                offs += (param.total_size() + 7) & !7;
             }
         } else if first_pod.body.r#type == SPA_TYPE_OBJECT_ParamRoute {
-            let mut offs = 0;
-            // +8: spa_pod_object_bodyの頭のぶん
-            while offs + 8 < first_pod.pod.size as usize {
-                let param = unsafe {
-                    &*first_pod
-                        .body
-                        .props
-                        .as_ptr()
-                        .add(offs)
-                        .cast::<spa_pod_prop>()
-                };
-
+            for param in SPAPODObjectPropsIterator::new(first_pod) {
                 if param.key == SPA_PARAM_ROUTE_index {
                     let index = spa_assert_int(&param.value).value;
                     println!("  * index = {index}");
@@ -275,30 +216,14 @@ extern "C" fn device_param(
                     let available = spa_assert_id(&param.value).value;
                     println!("  * available = {available}");
                 } else if param.key == SPA_PARAM_ROUTE_profiles {
-                    assert_eq!(param.value.r#type, SPA_TYPE_Array);
-                    let value_pod =
-                        unsafe { core::mem::transmute::<&spa_pod, &spa_pod_array>(&param.value) };
-                    let mut array_offs = 0;
-                    let mut values = Vec::new();
-                    while array_offs < value_pod.pod.size as usize {
-                        values.push(unsafe {
-                            *value_pod.body.values.as_ptr().add(array_offs).cast::<i32>()
-                        });
-                        array_offs += value_pod.body.child.size as usize;
-                    }
+                    let values = SPAPODArrayIterator::new(spa_assert_array(&param.value))
+                        .copied()
+                        .collect::<Vec<i32>>();
                     println!("  * profiles = {values:?}");
                 } else if param.key == SPA_PARAM_ROUTE_devices {
-                    assert_eq!(param.value.r#type, SPA_TYPE_Array);
-                    let value_pod =
-                        unsafe { core::mem::transmute::<&spa_pod, &spa_pod_array>(&param.value) };
-                    let mut array_offs = 0;
-                    let mut values = Vec::new();
-                    while array_offs < value_pod.pod.size as usize {
-                        values.push(unsafe {
-                            *value_pod.body.values.as_ptr().add(array_offs).cast::<i32>()
-                        });
-                        array_offs += value_pod.body.child.size as usize;
-                    }
+                    let values = SPAPODArrayIterator::new(spa_assert_array(&param.value))
+                        .copied()
+                        .collect::<Vec<i32>>();
                     println!("  * devices = {values:?}");
                 } else if param.key == SPA_PARAM_ROUTE_profile {
                     let profile = spa_assert_int(&param.value).value;
@@ -307,48 +232,26 @@ extern "C" fn device_param(
                     let save = spa_assert_bool(&param.value).value;
                     println!("  * save = {save}");
                 } else if param.key == SPA_PARAM_ROUTE_info {
-                    assert_eq!(param.value.r#type, SPA_TYPE_Struct);
-                    let value_pod =
-                        unsafe { core::mem::transmute::<&spa_pod, &spa_pod_struct>(&param.value) };
-                    let mut offs = 0;
+                    let mut member_iter =
+                        SPAPODStructMemberIterator::new(spa_assert_struct(&param.value));
 
-                    let member_pod =
-                        unsafe { &*value_pod.values.as_ptr().add(offs).cast::<spa_pod>() };
-                    let item_count = spa_assert_int(member_pod).value;
-                    offs += (member_pod.total_size() + 7) & !7;
-
+                    let item_count = spa_assert_int(member_iter.next().unwrap()).value;
                     for _ in 0..item_count {
-                        let member_pod =
-                            unsafe { &*value_pod.values.as_ptr().add(offs).cast::<spa_pod>() };
-                        let key = spa_pod_string_get_value(spa_assert_string(member_pod));
-                        offs += (member_pod.total_size() + 7) & !7;
-
-                        let member_pod =
-                            unsafe { &*value_pod.values.as_ptr().add(offs).cast::<spa_pod>() };
-                        let value = spa_pod_string_get_value(spa_assert_string(member_pod));
-                        offs += (member_pod.total_size() + 7) & !7;
+                        let key = spa_pod_string_get_value(spa_assert_string(
+                            member_iter.next().unwrap(),
+                        ));
+                        let value = spa_pod_string_get_value(spa_assert_string(
+                            member_iter.next().unwrap(),
+                        ));
 
                         println!("  * info[{key:?}] = {value:?}");
                     }
                 } else if param.key == SPA_PARAM_ROUTE_props {
-                    assert_eq!(param.value.r#type, SPA_TYPE_Object);
-                    let value_pod =
-                        unsafe { core::mem::transmute::<&spa_pod, &spa_pod_object>(&param.value) };
-                    assert_eq!(value_pod.body.r#type, SPA_TYPE_OBJECT_Props);
-                    let mut offs = 0;
-                    while offs + 8 < value_pod.pod.size as usize {
-                        let prop_pod = unsafe {
-                            &*value_pod
-                                .body
-                                .props
-                                .as_ptr()
-                                .add(offs)
-                                .cast::<spa_pod_prop>()
-                        };
-
+                    for prop_pod in SPAPODObjectPropsIterator::new(spa_assert_object_of(
+                        &param.value,
+                        SPA_TYPE_OBJECT_Props,
+                    )) {
                         println!("  * prop {} {}", prop_pod.key, prop_pod.value.r#type);
-
-                        offs += (prop_pod.total_size() + 7) & !7;
                     }
                 } else {
                     println!(
@@ -356,8 +259,6 @@ extern "C" fn device_param(
                         param.key, param.value.r#type, param.value.size
                     );
                 }
-
-                offs += (param.total_size() + 7) & !7;
             }
         } else {
             println!(
@@ -395,6 +296,118 @@ fn spa_assert_string(v: &spa_pod) -> &spa_pod_string {
 }
 
 #[inline(always)]
+fn spa_assert_array(v: &spa_pod) -> &spa_pod_array {
+    assert_eq!(v.r#type, SPA_TYPE_Array);
+    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_array>(v) }
+}
+
+#[inline(always)]
+fn spa_assert_struct(v: &spa_pod) -> &spa_pod_struct {
+    assert_eq!(v.r#type, SPA_TYPE_Struct);
+    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_struct>(v) }
+}
+
+#[inline(always)]
+fn spa_assert_object(v: &spa_pod) -> &spa_pod_object {
+    assert_eq!(v.r#type, SPA_TYPE_Object);
+    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_object>(v) }
+}
+
+#[inline(always)]
+fn spa_assert_object_of(v: &spa_pod, object_type: spa_type) -> &spa_pod_object {
+    let v = spa_assert_object(v);
+    assert_eq!(v.body.r#type, object_type);
+    v
+}
+
+#[inline(always)]
 const fn spa_pod_string_get_value(v: &spa_pod_string) -> &core::ffi::CStr {
     unsafe { core::ffi::CStr::from_ptr(v.value.as_ptr() as _) }
+}
+
+pub struct SPAPODObjectPropsIterator<'a> {
+    pod: &'a spa_pod_object,
+    offset: usize,
+}
+impl<'a> SPAPODObjectPropsIterator<'a> {
+    pub fn new(pod: &'a spa_pod_object) -> Self {
+        Self { pod, offset: 0 }
+    }
+}
+impl<'a> Iterator for SPAPODObjectPropsIterator<'a> {
+    type Item = &'a spa_pod_prop;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // +8: spa_pod_object_bodyの頭のぶん
+        if self.offset + 8 >= self.pod.pod.size as usize {
+            return None;
+        }
+
+        let v = unsafe {
+            &*self
+                .pod
+                .body
+                .props
+                .as_ptr()
+                .add(self.offset)
+                .cast::<spa_pod_prop>()
+        };
+        // round up to 8 bytes
+        self.offset = (self.offset + v.total_size() + 7) & !7;
+        Some(v)
+    }
+}
+
+pub struct SPAPODStructMemberIterator<'a> {
+    pod: &'a spa_pod_struct,
+    offset: usize,
+}
+impl<'a> SPAPODStructMemberIterator<'a> {
+    pub fn new(pod: &'a spa_pod_struct) -> Self {
+        Self { pod, offset: 0 }
+    }
+}
+impl<'a> Iterator for SPAPODStructMemberIterator<'a> {
+    type Item = &'a spa_pod;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.pod.pod.size as usize {
+            return None;
+        }
+
+        let v = unsafe { &*self.pod.values.as_ptr().add(self.offset).cast::<spa_pod>() };
+        // round up to 8 bytes
+        self.offset = (self.offset + v.total_size() + 7) & !7;
+        Some(v)
+    }
+}
+
+pub struct SPAPODArrayIterator<'a, T> {
+    pod: &'a spa_pod_array,
+    offset: usize,
+    _marker: core::marker::PhantomData<*const T>,
+}
+impl<'a, T> SPAPODArrayIterator<'a, T> {
+    pub fn new(pod: &'a spa_pod_array) -> Self {
+        Self {
+            pod,
+            offset: 0,
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
+impl<'a, T: 'a> Iterator for SPAPODArrayIterator<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pod.body.child.size > 0
+            && self.offset + self.pod.body.child.size as usize >= self.pod.pod.size as usize
+        {
+            return None;
+        }
+
+        let v = unsafe { &*self.pod.body.values.as_ptr().add(self.offset).cast::<T>() };
+        self.offset += self.pod.body.child.size as usize;
+        Some(v)
+    }
 }
