@@ -4,6 +4,8 @@ pub type spa_direction = c_int;
 pub const SPA_DIRECTION_INPUT: spa_direction = 0;
 pub const SPA_DIRECTION_OUTPUT: spa_direction = 1;
 
+pub const SPA_ID_INVALID: u32 = 0xffff_ffff;
+
 #[repr(C)]
 pub struct spa_rectangle {
     pub width: u32,

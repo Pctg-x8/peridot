@@ -1,62 +1,54 @@
 use core::ffi::*;
-use pipewire::{
-    CoreEventListener, RegistryEventListener, core_event_fptbl, raw::*, registry_event_fptbl,
-};
+use pipewire::{CoreEventListener, PipewireProxy, RegistryEventListener, raw::*};
 
 fn main() {
     unsafe {
         pw_init(core::ptr::null_mut(), core::ptr::null_mut());
+    }
 
-        let ml = pw_main_loop_new(core::ptr::null());
-        let context = pw_context_new(pw_main_loop_get_loop(ml), core::ptr::null_mut(), 0);
-        let core = pw_context_connect(context, core::ptr::null_mut(), 0);
-        let mut event_ctx = PwCoreContext {
-            rt_seq: None,
-            mainloop_ptr: ml,
-            registry_ptr: core::ptr::null_mut(),
-        };
+    let ml = pipewire::MainLoop::new(core::ptr::null()).expect("MainLoop::new");
+    let mut context = pipewire::Context::new(ml.r#loop(), None, 0).expect("Context::new");
+    let mut core = context.connect(None, 0).expect("context.connect");
+    let mut event_ctx = PwCoreContext {
+        rt_seq: None,
+        mainloop_ptr: ml.as_ptr(),
+        registry_ptr: core::ptr::null_mut(),
+    };
+    let _core_event_listener = core
+        .add_listener(&mut event_ctx)
+        .expect("core.add_listener");
 
-        let mut core_event_listener = core::mem::MaybeUninit::zeroed();
-        let r = pw_core::add_listener(
-            core,
-            core_event_listener.as_mut_ptr(),
-            core_event_fptbl::<PwCoreContext>(),
-            &mut event_ctx as *mut _ as _,
-        );
-        assert!(r >= 0, "pw_core::add_listener: {r}");
+    let mut registry = core
+        .get_registry(PW_VERSION_REGISTRY, 0)
+        .expect("core.get_registry");
+    event_ctx.registry_ptr = registry.as_ptr();
+    let _registry_listener = unsafe { registry.as_mut() }
+        .add_listener(&mut event_ctx)
+        .expect("registry.add_listener");
 
-        let registry = pw_core::get_registry(core, PW_VERSION_REGISTRY, 0);
-        event_ctx.registry_ptr = registry;
-        let mut registry_listener = core::mem::MaybeUninit::zeroed();
-        pw_registry::add_listener(
-            registry,
-            registry_listener.as_mut_ptr(),
-            registry_event_fptbl::<PwCoreContext>(),
-            &mut event_ctx as *mut _ as _,
-        );
+    event_ctx.rt_seq = Some(core.sync().expect("issue sync"));
+    ml.run().expect("mainloop (roundtrip)");
 
-        event_ctx.rt_seq = Some(pw_core::sync(core, PW_ID_CORE, 0));
-        pw_main_loop_run(ml);
+    let mut format_pod = pipewire::spa::pod::Builder::with_capacity(1024);
+    format_pod
+        .begin_object(SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat as _)
+        .prop_heading(spa_format::mediaType as _, 0)
+        .id(spa_media_type::audio as _)
+        .prop_heading(spa_format::mediaSubtype as _, 0)
+        .id(spa_media_subtype::raw as _)
+        .prop_heading(spa_format::AUDIO_format as _, 0)
+        .id(SPA_AUDIO_FORMAT_F32_LE as _)
+        .prop_heading(spa_format::AUDIO_rate as _, 0)
+        .int(44100)
+        .prop_heading(spa_format::AUDIO_channels as _, 0)
+        .int(2)
+        .end_object();
+    let format_pod = format_pod.into_bytes();
 
-        let mut format_pod = pipewire::spa::pod::Builder::with_capacity(1024);
-        format_pod
-            .begin_object(SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat as _)
-            .prop_heading(spa_format::mediaType as _, 0)
-            .id(spa_media_type::audio as _)
-            .prop_heading(spa_format::mediaSubtype as _, 0)
-            .id(spa_media_subtype::raw as _)
-            .prop_heading(spa_format::AUDIO_format as _, 0)
-            .id(SPA_AUDIO_FORMAT_F32_LE as _)
-            .prop_heading(spa_format::AUDIO_rate as _, 0)
-            .int(44100)
-            .prop_heading(spa_format::AUDIO_channels as _, 0)
-            .int(2)
-            .end_object();
-        let format_pod = format_pod.into_bytes();
-
-        let stream = pw_stream_new(
-            core,
-            c"test-audio-source".as_ptr(),
+    let mut stream = pipewire::Stream::new(
+        &core,
+        c"test-audio-source",
+        Some(unsafe {
             pw_properties_new(
                 c"media.type".as_ptr(),
                 c"Audio".as_ptr(),
@@ -65,32 +57,33 @@ fn main() {
                 c"media.role".as_ptr(),
                 c"Game".as_ptr(),
                 core::ptr::null::<core::ffi::c_char>(),
-            ),
-        );
-        let mut stream_listener = core::mem::MaybeUninit::zeroed();
-        pw_stream_add_listener(
-            stream,
-            stream_listener.as_mut_ptr(),
-            STREAM_EVENT,
-            stream.cast(),
-        );
-        pw_stream_connect(
-            stream,
-            PW_DIRECTION_OUTPUT,
-            PW_ID_ANY,
-            PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_AUTOCONNECT,
-            [format_pod.as_ptr().cast()].as_mut_ptr(),
-            1,
-        );
+            )
+        }),
+    )
+    .expect("Stream::new");
+    let mut stream_engine = StreamEngine {
+        stream_ptr: stream.as_ptr(),
+        smp: 0,
+    };
+    let mut stream_listener = core::pin::pin!(core::mem::MaybeUninit::uninit());
+    stream.add_listener(stream_listener.as_mut(), &mut stream_engine);
+    stream
+        .connect(
+            pipewire::Direction::Output,
+            pipewire::StreamFlags::RT_PROCESS
+                | pipewire::StreamFlags::MAP_BUFFERS
+                | pipewire::StreamFlags::AUTOCONNECT,
+            &mut [format_pod.as_ptr().cast()],
+        )
+        .expect("stream.connect");
 
-        pw_main_loop_run(ml);
-    }
+    ml.run().expect("mainloop");
 }
 
 struct PwCoreContext {
     pub rt_seq: Option<core::ffi::c_int>,
-    pub mainloop_ptr: *mut pw_main_loop,
-    pub registry_ptr: *mut pw_registry,
+    pub mainloop_ptr: *mut pipewire::MainLoop,
+    pub registry_ptr: *mut pipewire::Registry,
 }
 impl CoreEventListener for PwCoreContext {
     fn done(&mut self, id: u32, seq: c_int) {
@@ -98,7 +91,7 @@ impl CoreEventListener for PwCoreContext {
             // done roundtrip
             self.rt_seq = None;
             unsafe {
-                pw_main_loop_quit(self.mainloop_ptr);
+                (*self.mainloop_ptr).quit().expect("quit roundtrip");
             }
         }
     }
@@ -116,9 +109,10 @@ impl RegistryEventListener for PwCoreContext {
 
         if r#type == c"PipeWire:Interface:Device" {
             unsafe {
-                let device =
-                    pw_registry::bind(self.registry_ptr, id, r#type.as_ptr(), PW_VERSION_DEVICE, 0)
-                        .cast::<pw_device>();
+                let device = (*self.registry_ptr)
+                    .bind::<pipewire::Device>(id, PW_VERSION_DEVICE, 0)
+                    .expect("bind<Device>")
+                    .leak();
                 let device_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
                 ((*(*device.cast::<spa_interface>())
                     .cb
@@ -136,9 +130,10 @@ impl RegistryEventListener for PwCoreContext {
 
         if r#type == c"PipeWire:Interface:Node" {
             unsafe {
-                let o =
-                    pw_registry::bind(self.registry_ptr, id, r#type.as_ptr(), PW_VERSION_NODE, 0)
-                        .cast::<pw_node>();
+                let o = (*self.registry_ptr)
+                    .bind::<pipewire::Node>(id, PW_VERSION_NODE, 0)
+                    .expect("bind<Node>")
+                    .leak();
                 let node_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
                 ((*(*o.cast::<spa_interface>())
                     .cb
@@ -154,11 +149,12 @@ impl RegistryEventListener for PwCoreContext {
             }
         }
 
-        if r#type == c"PipeWire:Interface:Port" {
+        if r#type == pipewire::Port::TYPE_NAME {
             unsafe {
-                let o =
-                    pw_registry::bind(self.registry_ptr, id, r#type.as_ptr(), PW_VERSION_PORT, 0)
-                        .cast::<pw_port>();
+                let o = (*self.registry_ptr)
+                    .bind::<pipewire::Port>(id, PW_VERSION_PORT, 0)
+                    .expect("bind<Port>")
+                    .leak();
                 let node_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
                 ((*(*o.cast::<spa_interface>())
                     .cb
@@ -180,71 +176,53 @@ impl RegistryEventListener for PwCoreContext {
     }
 }
 
-static STREAM_EVENT: &pw_stream_events = &pw_stream_events {
-    version: PW_VERSION_STREAM_EVENTS,
-    destroy: None,
-    state_changed: Some(stream_state_changed),
-    control_info: Some(stream_control_info),
-    io_changed: None,
-    param_changed: None,
-    add_buffer: None,
-    remove_buffer: None,
-    process: Some(stream_process),
-    drained: None,
-    command: None,
-    trigger_done: None,
-};
-
-extern "C" fn stream_state_changed(
-    data: *mut core::ffi::c_void,
-    old: pw_stream_state,
-    state: pw_stream_state,
-    error: *const core::ffi::c_char,
-) {
-    println!("state changed: {old} {state}");
+pub struct StreamEngine {
+    stream_ptr: *mut pipewire::Stream,
+    smp: usize,
 }
+impl pipewire::StreamEventListener for StreamEngine {
+    fn state_changed(
+        &mut self,
+        old: Result<pipewire::StreamState, c_int>,
+        state: Result<pipewire::StreamState, c_int>,
+        error: Option<&CStr>,
+    ) {
+        println!("state changed: {old:?} {state:?} {error:?}");
+    }
 
-extern "C" fn stream_control_info(
-    data: *mut core::ffi::c_void,
-    id: u32,
-    control: *const pw_stream_control,
-) {
-    println!("control info: {id} {:?}", unsafe {
-        core::ffi::CStr::from_ptr((*control).name)
-    });
-}
+    fn control_info(&mut self, id: u32, control: &pipewire::raw::pw_stream_control) {
+        println!("control info: {id} {:?}", unsafe {
+            core::ffi::CStr::from_ptr(control.name)
+        });
+    }
 
-static mut SMP: usize = 0;
+    fn process(&mut self) {
+        println!("stream process");
 
-extern "C" fn stream_process(data: *mut core::ffi::c_void) {
-    println!("stream process");
-
-    unsafe {
-        let buf = pw_stream_dequeue_buffer(data.cast::<pw_stream>());
-        if buf.is_null() {
+        let Some(mut buf) = (unsafe { (*self.stream_ptr).rent_buffer() }) else {
             eprintln!("out of buffer");
             return;
-        }
+        };
+        let requested_frames = buf.requested_frames();
+        let data = &mut buf.datas_mut()[0];
 
-        let mut frames = (*(*(*buf).buffer).datas).maxsize as u64 / (4 * 2);
-        if (*buf).requested != 0 {
-            frames = frames.min((*buf).requested);
-        }
+        let frames = data.max_size() as u64 / (4 * 2);
+        let frames = match requested_frames {
+            0 => frames,
+            x => frames.min(x),
+        };
 
-        for dst in core::slice::from_raw_parts_mut(
-            (*(*(*buf).buffer).datas).data.cast::<[f32; 2]>(),
-            frames as _,
-        ) {
-            let v = (core::f32::consts::TAU * 440.0 * SMP as f32 / 44100.0).sin() * 0.5;
+        for dst in unsafe {
+            core::slice::from_raw_parts_mut(data.data_ptr().cast::<[f32; 2]>(), frames as _)
+        } {
+            let v = (core::f32::consts::TAU * 440.0 * self.smp as f32 / 44100.0).sin() * 0.5;
             *dst = [v, v];
-            SMP += 1;
+            self.smp += 1;
         }
 
-        (*(*(*(*buf).buffer).datas).chunk).offset = 0;
-        (*(*(*(*buf).buffer).datas).chunk).stride = 4 * 2;
-        (*(*(*(*buf).buffer).datas).chunk).size = (frames * 4 * 2) as _;
-
-        pw_stream_queue_buffer(data.cast::<pw_stream>(), buf);
+        *data.chunk_offset_mut() = 0;
+        *data.chunk_stride_mut() = 4 * 2;
+        *data.chunk_size_mut() = (frames * 4 * 2) as _;
     }
 }
 
