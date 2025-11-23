@@ -27,57 +27,202 @@ pub const SPA_PARAM_ROUTE_devices: spa_param_route = 11;
 pub const SPA_PARAM_ROUTE_profile: spa_param_route = 12;
 pub const SPA_PARAM_ROUTE_save: spa_param_route = 13;
 
-pub type spa_prop = u32;
-pub const SPA_PROP_START: spa_prop = 0;
-pub const SPA_PROP_unknown: spa_prop = SPA_PROP_START + 1;
-pub const SPA_PROP_START_Device: spa_prop = 0x100;
-pub const SPA_PROP_device: spa_prop = SPA_PROP_START_Device + 1;
-pub const SPA_PROP_deviceName: spa_prop = SPA_PROP_START_Device + 2;
-pub const SPA_PROP_deviceFd: spa_prop = SPA_PROP_START_Device + 3;
-pub const SPA_PROP_card: spa_prop = SPA_PROP_START_Device + 4;
-pub const SPA_PROP_cardName: spa_prop = SPA_PROP_START_Device + 5;
-pub const SPA_PROP_minLatency: spa_prop = SPA_PROP_START_Device + 6;
-pub const SPA_PROP_maxLatency: spa_prop = SPA_PROP_START_Device + 7;
-pub const SPA_PROP_periods: spa_prop = SPA_PROP_START_Device + 8;
-pub const SPA_PROP_periodSize: spa_prop = SPA_PROP_START_Device + 9;
-pub const SPA_PROP_periodEvent: spa_prop = SPA_PROP_START_Device + 10;
-pub const SPA_PROP_live: spa_prop = SPA_PROP_START_Device + 11;
-pub const SPA_PROP_rate: spa_prop = SPA_PROP_START_Device + 12;
-pub const SPA_PROP_quality: spa_prop = SPA_PROP_START_Device + 13;
-pub const SPA_PROP_bluetoothAudioCodec: spa_prop = SPA_PROP_START_Device + 14;
-pub const SPA_PROP_bluetoothOffloadActive: spa_prop = SPA_PROP_START_Device + 15;
-pub const SPA_PROP_START_Audio: spa_prop = 0x10000;
-pub const SPA_PROP_waveType: spa_prop = SPA_PROP_START_Audio + 1;
-pub const SPA_PROP_frequency: spa_prop = SPA_PROP_START_Audio + 2;
-pub const SPA_PROP_volume: spa_prop = SPA_PROP_START_Audio + 3;
-pub const SPA_PROP_mute: spa_prop = SPA_PROP_START_Audio + 4;
-pub const SPA_PROP_patternType: spa_prop = SPA_PROP_START_Audio + 5;
-pub const SPA_PROP_ditherType: spa_prop = SPA_PROP_START_Audio + 6;
-pub const SPA_PROP_truncate: spa_prop = SPA_PROP_START_Audio + 7;
-pub const SPA_PROP_channelVolumes: spa_prop = SPA_PROP_START_Audio + 8;
-pub const SPA_PROP_volumeBase: spa_prop = SPA_PROP_START_Audio + 9;
-pub const SPA_PROP_volumeStep: spa_prop = SPA_PROP_START_Audio + 10;
-pub const SPA_PROP_channelMap: spa_prop = SPA_PROP_START_Audio + 11;
-pub const SPA_PROP_monitorMute: spa_prop = SPA_PROP_START_Audio + 12;
-pub const SPA_PROP_monitorVolumes: spa_prop = SPA_PROP_START_Audio + 13;
-pub const SPA_PROP_latencyOffsetNsec: spa_prop = SPA_PROP_START_Audio + 14;
-pub const SPA_PROP_softMute: spa_prop = SPA_PROP_START_Audio + 15;
-pub const SPA_PROP_softVolumes: spa_prop = SPA_PROP_START_Audio + 16;
-pub const SPA_PROP_iec958Codecs: spa_prop = SPA_PROP_START_Audio + 17;
-pub const SPA_PROP_volumeRampSamples: spa_prop = SPA_PROP_START_Audio + 18;
-pub const SPA_PROP_volumeRampStepSamples: spa_prop = SPA_PROP_START_Audio + 19;
-pub const SPA_PROP_volumeRampTime: spa_prop = SPA_PROP_START_Audio + 20;
-pub const SPA_PROP_volumeRampStepTime: spa_prop = SPA_PROP_START_Audio + 21;
-pub const SPA_PROP_volumeRampScale: spa_prop = SPA_PROP_START_Audio + 22;
-pub const SPA_PROP_START_Video: spa_prop = 0x20000;
-pub const SPA_PROP_brightness: spa_prop = SPA_PROP_START_Video + 1;
-pub const SPA_PROP_contrast: spa_prop = SPA_PROP_START_Video + 2;
-pub const SPA_PROP_saturation: spa_prop = SPA_PROP_START_Video + 3;
-pub const SPA_PROP_hue: spa_prop = SPA_PROP_START_Video + 4;
-pub const SPA_PROP_gamma: spa_prop = SPA_PROP_START_Video + 5;
-pub const SPA_PROP_exposure: spa_prop = SPA_PROP_START_Video + 6;
-pub const SPA_PROP_gain: spa_prop = SPA_PROP_START_Video + 7;
-pub const SPA_PROP_sharpness: spa_prop = SPA_PROP_START_Video + 8;
-pub const SPA_PROP_START_Other: spa_prop = 0x80000;
-pub const SPA_PROP_params: spa_prop = SPA_PROP_START_Other + 1;
-pub const SPA_PROP_START_CUSTOM: spa_prop = 0x1000000;
+#[repr(C)]
+pub enum spa_media_type {
+    unknown,
+    audio,
+    video,
+    image,
+    binary,
+    stream,
+    application,
+}
+
+#[repr(C)]
+pub enum spa_media_subtype {
+    unknown,
+    raw,
+    dsp,
+    iec958,
+    dsd,
+    START_Audio = 0x10000,
+    mp3,
+    aac,
+    vorbis,
+    wma,
+    ra,
+    sbc,
+    adpcm,
+    g723,
+    g726,
+    g729,
+    amr,
+    gsm,
+    alac,
+    flac,
+    ape,
+    opus,
+    START_Video = 0x20000,
+    h264,
+    mjpg,
+    dv,
+    mpegts,
+    h263,
+    mpeg1,
+    mpeg2,
+    mpeg4,
+    xvid,
+    vc1,
+    vp8,
+    vp9,
+    bayer,
+    START_Image = 0x30000,
+    jpeg,
+    START_Binary = 0x40000,
+    START_Stream = 0x50000,
+    midi,
+    START_Application = 0x60000,
+    control,
+}
+
+#[repr(C)]
+pub enum spa_format {
+    mediaType = 1,
+    mediaSubtype,
+    START_Audio = 0x10000,
+    AUDIO_format,
+    AUDIO_flags,
+    AUDIO_rate,
+    AUDIO_channels,
+    AUDIO_position,
+    AUDIO_iec958Codec,
+    AUDIO_bitorder,
+    AUDIO_interleave,
+    AUDIO_bitrate,
+    AUDIO_blockAlign,
+    AUDIO_ACC_streamFormat,
+    AUDIO_WMA_profile,
+    AUDIO_AMR_bandMode,
+    START_Video = 0x20000,
+    VIDEO_format,
+    VIDEO_modifier,
+    VIDEO_size,
+    VIDEO_framerate,
+    VIDEO_maxFramerate,
+    VIDEO_views,
+    VIDEO_interlaceMode,
+    VIDEO_pixelAspectRAtio,
+    VIDEO_multiviewMode,
+    VIDEO_multiviewFlags,
+    VIDEO_chromaSite,
+    VIDEO_colorRange,
+    VIDEO_colorMatrix,
+    VIDEO_transferFunction,
+    VIDEO_colorPrimaries,
+    VIDEO_profile,
+    VIDEO_level,
+    VIDEO_H264_streamFormat,
+    VIDEO_H264_alignment,
+    START_Image = 0x30000,
+    START_Binary = 0x40000,
+    START_Stream = 0x50000,
+    START_Application = 0x60000,
+    CONTROL_types,
+}
+
+#[repr(C)]
+pub enum spa_prop_info {
+    id = 1,
+    name = 2,
+    r#type = 3,
+    labels = 4,
+    container = 5,
+    params = 6,
+    description = 7,
+}
+
+#[repr(C)]
+pub enum spa_prop {
+    unknown = 1,
+    START_Device = 0x100,
+    device,
+    deviceName,
+    deviceFd,
+    card,
+    cardName,
+    minLatency,
+    maxLatency,
+    periods,
+    periodSize,
+    periodEvent,
+    live,
+    rate,
+    quality,
+    bluetoothAudioCodec,
+    bluetoothOffloadActive,
+    START_Audio = 0x10000,
+    waveType,
+    frequency,
+    volume,
+    mute,
+    patternType,
+    ditherType,
+    truncate,
+    channelVolumes,
+    volumeBase,
+    volumeStep,
+    channelMap,
+    monitorMute,
+    monitorVolumes,
+    latencyOffsetNsec,
+    softMute,
+    softVolumes,
+    iec958Codecs,
+    volumeRampSamples,
+    volumeRampStepSamples,
+    volumeRampTime,
+    volumeRampStepTime,
+    volumeRampScale,
+    START_Video = 0x20000,
+    brightness,
+    contrast,
+    saturation,
+    hue,
+    gamma,
+    exposure,
+    gain,
+    sharpness,
+    START_Other = 0x80000,
+    params,
+}
+
+#[repr(C)]
+pub enum spa_param_port_config_mode {
+    none,
+    pasthrough,
+    convert,
+    dsp,
+}
+
+#[repr(C)]
+pub enum spa_param_port_config {
+    direction = 1,
+    mode,
+    monitor,
+    control,
+    format,
+}
+
+#[repr(C)]
+pub enum spa_param_latency {
+    direction = 1,
+    minQuantum,
+    maxQuantum,
+    minRate,
+    maxRate,
+    minNs,
+    maxNs,
+}
+
+mod audio;
+pub use self::audio::*;

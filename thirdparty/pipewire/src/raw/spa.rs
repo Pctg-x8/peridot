@@ -7,6 +7,9 @@ pub use self::utils::*;
 mod param;
 pub use self::param::*;
 
+mod buffer;
+pub use self::buffer::*;
+
 #[repr(C)]
 pub struct spa_handle {
     pub version: u32,
@@ -278,6 +281,104 @@ pub struct spa_loop_utils_methods {
     pub destroy_source: Option<extern "C" fn(object: *mut c_void, source: *mut spa_source)>,
 }
 
+pub type spa_type = u32;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_START: spa_type = 0x00000;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_None: spa_type = 1;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Bool: spa_type = 2;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Id: spa_type = 3;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Int: spa_type = 4;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Long: spa_type = 5;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Float: spa_type = 6;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Double: spa_type = 7;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_String: spa_type = 8;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Bytes: spa_type = 9;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Rectangle: spa_type = 10;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Fraction: spa_type = 11;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Bitmap: spa_type = 12;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Array: spa_type = 13;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Struct: spa_type = 14;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Object: spa_type = 15;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Sequence: spa_type = 16;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Pointer: spa_type = 17;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Fd: spa_type = 18;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Choice: spa_type = 19;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_Pod: spa_type = 20;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_POINTER_START: spa_type = 0x10000;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_POINTER_Buffer: spa_type = SPA_TYPE_POINTER_START + 1;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_POINTER_Meta: spa_type = SPA_TYPE_POINTER_START + 2;
+#[allow(non_upper_case_globals)]
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_POINTER_Dict: spa_type = SPA_TYPE_POINTER_START + 3;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_EVENT_START: spa_type = 0x20000;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_EVENT_Device: spa_type = SPA_TYPE_EVENT_START + 1;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_EVENT_Node: spa_type = SPA_TYPE_EVENT_START + 2;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_COMMAND_START: spa_type = 0x30000;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_COMMAND_Device: spa_type = SPA_TYPE_COMMAND_START + 1;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_COMMAND_Node: spa_type = SPA_TYPE_COMMAND_START + 2;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_START: spa_type = 0x40000;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_PropInfo: spa_type = SPA_TYPE_OBJECT_START + 1;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_Props: spa_type = SPA_TYPE_OBJECT_START + 2;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_Format: spa_type = SPA_TYPE_OBJECT_START + 3;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamBuffers: spa_type = SPA_TYPE_OBJECT_START + 4;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamMeta: spa_type = SPA_TYPE_OBJECT_START + 5;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamIO: spa_type = SPA_TYPE_OBJECT_START + 6;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamProfile: spa_type = SPA_TYPE_OBJECT_START + 7;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamPortConfig: spa_type = SPA_TYPE_OBJECT_START + 8;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamRoute: spa_type = SPA_TYPE_OBJECT_START + 9;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_Profiler: spa_type = SPA_TYPE_OBJECT_START + 10;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamLatency: spa_type = SPA_TYPE_OBJECT_START + 11;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamProcessLatency: spa_type = SPA_TYPE_OBJECT_START + 12;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_OBJECT_ParamTag: spa_type = SPA_TYPE_OBJECT_START + 13;
+/* vendor extensions */
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_VENDOR_PipeWire: spa_type = 0x02000000;
+#[allow(non_upper_case_globals)]
+pub const SPA_TYPE_VENDOR_Other: spa_type = 0x7f000000;
+
 #[repr(C)]
 pub struct spa_pod {
     pub size: u32,
@@ -295,6 +396,12 @@ pub struct spa_pod_bool {
     pub pod: spa_pod,
     pub value: i32,
     pub _padding: i32,
+}
+impl spa_pod_bool {
+    #[inline(always)]
+    pub const fn as_bool(&self) -> bool {
+        self.value != 0
+    }
 }
 
 #[repr(C)]
@@ -396,6 +503,12 @@ pub struct spa_pod_choice_body {
 pub struct spa_pod_choice {
     pub pod: spa_pod,
     pub body: spa_pod_choice_body,
+}
+impl spa_pod_choice {
+    #[inline(always)]
+    pub const fn element_pod(&self) -> &spa_pod {
+        &self.body.child
+    }
 }
 
 #[repr(C)]
@@ -543,3 +656,25 @@ pub const SPA_PARAM_AVAILABILITY_unknown: spa_param_availability = 0;
 pub const SPA_PARAM_AVAILABILITY_no: spa_param_availability = 1;
 #[allow(non_upper_case_globals)]
 pub const SPA_PARAM_AVAILABILITY_yes: spa_param_availability = 2;
+
+#[repr(C)]
+pub struct spa_command_body {
+    pub body: spa_pod_object_body,
+}
+
+#[repr(C)]
+pub struct spa_command {
+    pub pod: spa_pod,
+    pub body: spa_command_body,
+}
+
+#[repr(C)]
+pub struct spa_event_body {
+    pub body: spa_pod_object_body,
+}
+
+#[repr(C)]
+pub struct spa_event {
+    pub pod: spa_pod,
+    pub body: spa_event_body,
+}

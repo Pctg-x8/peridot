@@ -5,6 +5,12 @@ use core::ffi::*;
 mod spa;
 pub use self::spa::*;
 
+#[repr(C)]
+struct FFIOpaqueStruct(
+    [u8; 0],
+    core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
+);
+
 pub type pw_direction = spa_direction;
 pub const PW_DIRECTION_INPUT: pw_direction = SPA_DIRECTION_INPUT;
 pub const PW_DIRECTION_OUTPUT: pw_direction = SPA_DIRECTION_OUTPUT;
@@ -256,6 +262,31 @@ pub struct pw_core_methods {
 }
 
 pub const PW_VERSION_CORE_METHODS: u32 = 0;
+
+impl pw_core {
+    pub unsafe fn add_listener(
+        object: *mut Self,
+        listener: *mut spa_hook,
+        events: *const pw_core_events,
+        data: *mut c_void,
+    ) -> c_int {
+        unsafe {
+            let _i: *mut spa_interface = object.cast::<spa_interface>();
+            ((*(*_i).cb.funcs.cast::<pw_core_methods>())
+                .add_listener
+                .unwrap_unchecked())((*_i).cb.data, listener, events, data)
+        }
+    }
+
+    pub unsafe fn sync(object: *mut Self, id: u32, seq: c_int) -> c_int {
+        unsafe {
+            let _i: *mut spa_interface = object.cast::<spa_interface>();
+            ((*(*_i).cb.funcs.cast::<pw_core_methods>())
+                .sync
+                .unwrap_unchecked())((*_i).cb.data, id, seq)
+        }
+    }
+}
 
 #[repr(C)]
 pub struct pw_registry_events {
@@ -524,6 +555,95 @@ pub struct pw_device_methods {
         extern "C" fn(objet: *mut c_void, id: u32, flags: u32, param: *const spa_pod) -> c_int,
     >,
 }
+
+#[repr(C)]
+pub struct pw_stream(
+    [u8; 0],
+    core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
+);
+
+pub type pw_stream_state = c_int;
+pub const PW_STREAM_STATE_ERROR: pw_stream_state = -1;
+pub const PW_STREAM_STATE_UNCONNECTED: pw_stream_state = 0;
+pub const PW_STREAM_STATE_CONNECTING: pw_stream_state = 1;
+pub const PW_STREAM_STATE_PAUSED: pw_stream_state = 2;
+pub const PW_STREAM_STATE_STREAMING: pw_stream_state = 3;
+
+#[repr(C)]
+pub struct pw_buffer {
+    pub buffer: *mut spa_buffer,
+    pub user_data: *mut c_void,
+    pub size: u64,
+    pub requested: u64,
+    pub time: u64,
+}
+
+#[repr(C)]
+pub struct pw_stream_control {
+    pub name: *const c_char,
+    pub flags: u32,
+    pub def: c_float,
+    pub min: c_float,
+    pub max: c_float,
+    pub values: *mut c_float,
+    pub n_values: u32,
+    pub max_values: u32,
+}
+
+#[repr(C)]
+pub struct pw_time {
+    pub now: i64,
+    pub rate: spa_fraction,
+    pub ticks: u64,
+    pub delay: i64,
+    pub queued: u64,
+    pub buffered: u64,
+    pub queued_buffers: u32,
+    pub avail_buffers: u32,
+    pub size: u64,
+}
+
+#[repr(C)]
+pub struct pw_stream_events {
+    pub version: u32,
+    pub destroy: Option<extern "C" fn(data: *mut c_void)>,
+    pub state_changed: Option<
+        extern "C" fn(
+            data: *mut c_void,
+            old: pw_stream_state,
+            state: pw_stream_state,
+            error: *const c_char,
+        ),
+    >,
+    pub control_info:
+        Option<extern "C" fn(data: *mut c_void, id: u32, control: *const pw_stream_control)>,
+    pub io_changed: Option<extern "C" fn(data: *mut c_void, id: u32, area: *mut c_void, size: u32)>,
+    pub param_changed: Option<extern "C" fn(data: *mut c_void, id: u32, param: *const spa_pod)>,
+    pub add_buffer: Option<extern "C" fn(data: *mut c_void, buffer: *mut pw_buffer)>,
+    pub remove_buffer: Option<extern "C" fn(data: *mut c_void, buffer: *mut pw_buffer)>,
+    pub process: Option<extern "C" fn(data: *mut c_void)>,
+    pub drained: Option<extern "C" fn(data: *mut c_void)>,
+    pub command: Option<extern "C" fn(data: *mut c_void, command: *const spa_command)>,
+    pub trigger_done: Option<extern "C" fn(data: *mut c_void)>,
+}
+
+pub const PW_VERSION_STREAM_EVENTS: u32 = 2;
+
+pub type pw_stream_flags = c_int;
+pub const PW_STREAM_FLAG_NONE: pw_stream_flags = 0;
+pub const PW_STREAM_FLAG_AUTOCONNECT: pw_stream_flags = 1 << 0;
+pub const PW_STREAM_FLAG_INACTIVE: pw_stream_flags = 1 << 1;
+pub const PW_STREAM_FLAG_MAP_BUFFERS: pw_stream_flags = 1 << 2;
+pub const PW_STREAM_FLAG_DRIVER: pw_stream_flags = 1 << 3;
+pub const PW_STREAM_FLAG_RT_PROCESS: pw_stream_flags = 1 << 4;
+pub const PW_STREAM_FLAG_NO_CONVERT: pw_stream_flags = 1 << 5;
+pub const PW_STREAM_FLAG_EXCLUSIVE: pw_stream_flags = 1 << 6;
+pub const PW_STREAM_FLAG_DONT_RECONNECT: pw_stream_flags = 1 << 7;
+pub const PW_STREAM_FLAG_ALLOC_BUFFERS: pw_stream_flags = 1 << 8;
+pub const PW_STREAM_FLAG_TRIGGER: pw_stream_flags = 1 << 9;
+pub const PW_STREAM_FLAG_ASYNC: pw_stream_flags = 1 << 10;
+pub const PW_STREAM_FLAG_EARLY_PROCESS: pw_stream_flags = 1 << 11;
+pub const PW_STREAM_FLAG_RT_TRIGGER_DONE: pw_stream_flags = 1 << 12;
 
 unsafe extern "C" {
     pub fn pw_init(argc: *mut c_int, argv: *mut *mut *mut c_char);
@@ -973,4 +1093,263 @@ unsafe extern "C" {
         reset: bool,
     ) -> *mut pw_device_info;
     pub fn pw_device_info_free(info: *mut pw_device_info);
+
+    pub fn pw_stream_state_as_string(state: pw_stream_state) -> *const c_char;
+    pub fn pw_stream_new(
+        core: *mut pw_core,
+        name: *const c_char,
+        props: *mut pw_properties,
+    ) -> *mut pw_stream;
+    pub fn pw_stream_new_simple(
+        r#loop: *mut pw_loop,
+        name: *const c_char,
+        props: *mut pw_properties,
+        events: *const pw_stream_events,
+        data: *mut c_void,
+    ) -> *mut pw_stream;
+    pub fn pw_stream_destroy(stream: *mut pw_stream);
+    pub fn pw_stream_add_listener(
+        stream: *mut pw_stream,
+        listener: *mut spa_hook,
+        events: *const pw_stream_events,
+        data: *mut c_void,
+    );
+    pub fn pw_stream_get_state(
+        stream: *mut pw_stream,
+        error: *mut *const c_char,
+    ) -> pw_stream_state;
+    pub fn pw_stream_get_name(stream: *mut pw_stream) -> *const c_char;
+    pub fn pw_stream_get_core(stream: *mut pw_stream) -> *mut pw_core;
+    pub fn pw_stream_get_properties(stream: *mut pw_stream) -> *const pw_properties;
+    pub fn pw_stream_update_properties(stream: *mut pw_stream, dict: *const spa_dict) -> c_int;
+    pub fn pw_stream_connect(
+        stream: *mut pw_stream,
+        direction: pw_direction,
+        target_id: u32,
+        flags: pw_stream_flags,
+        params: *mut *const spa_pod,
+        n_params: u32,
+    ) -> c_int;
+    pub fn pw_stream_get_node_id(stream: *mut pw_stream) -> u32;
+    pub fn pw_stream_disconnect(stream: *mut pw_stream) -> c_int;
+    pub fn pw_stream_set_error(
+        stream: *mut pw_stream,
+        res: c_int,
+        error: *const c_char,
+        ...
+    ) -> c_int;
+    pub fn pw_stream_update_params(
+        stream: *mut pw_stream,
+        params: *mut *const spa_pod,
+        n_params: u32,
+    ) -> c_int;
+    pub fn pw_stream_set_param(stream: *mut pw_stream, id: u32, param: *const spa_pod) -> c_int;
+    pub fn pw_stream_get_control(stream: *mut pw_stream, id: u32) -> *const pw_stream_control;
+    pub fn pw_stream_set_control(
+        stream: *mut pw_stream,
+        id: u32,
+        n_values: u32,
+        values: *mut c_float,
+        ...
+    ) -> c_int;
+    pub fn pw_stream_get_time_n(stream: *mut pw_stream, time: *mut pw_time, size: usize) -> c_int;
+    pub fn pw_stream_get_nsec(stream: *mut pw_stream) -> u64;
+    pub fn pw_stream_get_data_loop(stream: *mut pw_stream) -> *mut pw_loop;
+    pub fn pw_stream_dequeue_buffer(stream: *mut pw_stream) -> *mut pw_buffer;
+    pub fn pw_stream_queue_buffer(stream: *mut pw_stream, buffer: *mut pw_buffer) -> c_int;
+    pub fn pw_stream_return_buffer(stream: *mut pw_stream, buffer: *mut pw_buffer) -> c_int;
+    pub fn pw_stream_set_active(stream: *mut pw_stream, active: bool) -> c_int;
+    pub fn pw_stream_flush(stream: *mut pw_stream, drain: bool) -> c_int;
+    pub fn pw_stream_is_driving(stream: *mut pw_stream) -> bool;
+    pub fn pw_stream_is_lazy(stream: *mut pw_stream) -> bool;
+    pub fn pw_stream_trigger_process(stream: *mut pw_stream) -> c_int;
+    pub fn pw_stream_emit_event(stream: *mut pw_stream, event: *const spa_event) -> c_int;
+    pub fn pw_stream_set_rate(stream: *mut pw_stream, rate: c_double) -> c_int;
 }
+
+#[repr(C)]
+pub struct pw_node(FFIOpaqueStruct);
+pub const PW_VERSION_NODE: u32 = 3;
+
+#[repr(C)]
+pub enum pw_node_state {
+    Error = -1,
+    Creating = 0,
+    Ssupended = 1,
+    Idle = 2,
+    Running = 3,
+}
+
+#[repr(C)]
+pub struct pw_node_info {
+    pub id: u32,
+    pub max_input_ports: u32,
+    pub max_output_ports: u32,
+    pub change_mask: u64,
+    pub n_input_ports: u32,
+    pub n_output_ports: u32,
+    pub state: pw_node_state,
+    pub error: *const c_char,
+    pub props: *mut spa_dict,
+    pub params: *mut spa_param_info,
+    pub n_params: u32,
+}
+impl pw_node_info {
+    #[inline(always)]
+    pub const fn params(&self) -> &[spa_param_info] {
+        if self.params.is_null() {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(self.params, self.n_params as _) }
+        }
+    }
+}
+
+unsafe extern "C" {
+    pub fn pw_node_state_as_string(state: pw_node_state) -> *const c_char;
+    pub fn pw_node_info_update(
+        info: *mut pw_node_info,
+        update: *const pw_node_info,
+    ) -> *mut pw_node_info;
+    pub fn pw_node_info_merge(
+        info: *mut pw_node_info,
+        update: *const pw_node_info,
+        reset: bool,
+    ) -> *mut pw_node_info;
+    pub fn pw_node_info_free(info: *mut pw_node_info);
+}
+
+#[repr(C)]
+pub struct pw_node_events {
+    pub version: u32,
+    pub info: Option<extern "C" fn(data: *mut c_void, info: *const pw_node_info)>,
+    pub param: Option<
+        extern "C" fn(
+            data: *mut c_void,
+            seq: c_int,
+            id: u32,
+            index: u32,
+            next: u32,
+            param: *const spa_pod,
+        ),
+    >,
+}
+
+pub const PW_VERSION_NODE_EVENTS: u32 = 0;
+
+#[repr(C)]
+pub struct pw_node_methods {
+    pub version: u32,
+    pub add_listener: Option<
+        extern "C" fn(
+            object: *mut c_void,
+            listener: *mut spa_hook,
+            events: *const pw_node_events,
+            data: *mut c_void,
+        ) -> c_int,
+    >,
+    pub subscribe_params:
+        Option<extern "C" fn(object: *mut c_void, ids: *mut u32, n_ids: u32) -> c_int>,
+    pub enum_params: Option<
+        extern "C" fn(
+            object: *mut c_void,
+            seq: c_int,
+            id: u32,
+            start: u32,
+            num: u32,
+            filter: *const spa_pod,
+        ) -> c_int,
+    >,
+    pub set_param: Option<
+        extern "C" fn(object: *mut c_void, id: u32, flags: u32, param: *const spa_pod) -> c_int,
+    >,
+    pub send_command:
+        Option<extern "C" fn(object: *mut c_void, command: *const spa_command) -> c_int>,
+}
+
+pub const PW_VERSION_NODE_METHODS: u32 = 0;
+
+#[repr(C)]
+pub struct pw_port(FFIOpaqueStruct);
+pub const PW_VERSION_PORT: u32 = 3;
+
+unsafe extern "C" {
+    pub fn pw_direction_as_string(direction: pw_direction) -> *const c_char;
+}
+
+#[repr(C)]
+pub struct pw_port_info {
+    pub id: u32,
+    pub direction: pw_direction,
+    pub change_mask: u64,
+    pub props: *mut spa_dict,
+    pub params: *mut spa_param_info,
+    pub n_params: u32,
+}
+impl pw_port_info {
+    pub const fn params(&self) -> &[spa_param_info] {
+        if self.params.is_null() {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(self.params, self.n_params as _) }
+        }
+    }
+}
+
+unsafe extern "C" {
+    pub fn pw_port_info_update(
+        info: *mut pw_port_info,
+        update: *const pw_port_info,
+    ) -> *mut pw_port_info;
+    pub fn pw_port_info_merge(
+        info: *mut pw_port_info,
+        update: *const pw_port_info,
+        reset: bool,
+    ) -> *mut pw_port_info;
+    pub fn pw_port_info_free(info: *mut pw_port_info);
+}
+
+#[repr(C)]
+pub struct pw_port_events {
+    pub version: u32,
+    pub info: Option<extern "C" fn(data: *mut c_void, info: *const pw_port_info)>,
+    pub param: Option<
+        extern "C" fn(
+            data: *mut c_void,
+            seq: c_int,
+            id: u32,
+            index: u32,
+            next: u32,
+            param: *const spa_pod,
+        ),
+    >,
+}
+
+pub const PW_VERSION_PORT_EVENTS: u32 = 0;
+
+#[repr(C)]
+pub struct pw_port_methods {
+    pub version: u32,
+    pub add_listener: Option<
+        extern "C" fn(
+            object: *mut c_void,
+            listener: *mut spa_hook,
+            events: *const pw_port_events,
+            data: *mut c_void,
+        ) -> c_int,
+    >,
+    pub subscribe_params:
+        Option<extern "C" fn(object: *mut c_void, ids: *mut u32, n_ids: u32) -> c_int>,
+    pub enum_params: Option<
+        extern "C" fn(
+            object: *mut c_void,
+            seq: c_int,
+            id: u32,
+            start: u32,
+            num: u32,
+            filter: *const spa_pod,
+        ) -> c_int,
+    >,
+}
+
+pub const PW_VERSION_PORT_METHODS: u32 = 0;
