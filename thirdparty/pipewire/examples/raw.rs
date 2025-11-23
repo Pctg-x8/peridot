@@ -1,4 +1,7 @@
-use pipewire::raw::*;
+use core::ffi::*;
+use pipewire::{
+    CoreEventListener, RegistryEventListener, core_event_fptbl, raw::*, registry_event_fptbl,
+};
 
 fn main() {
     unsafe {
@@ -10,38 +13,26 @@ fn main() {
         let mut event_ctx = PwCoreContext {
             rt_seq: None,
             mainloop_ptr: ml,
+            registry_ptr: core::ptr::null_mut(),
         };
 
         let mut core_event_listener = core::mem::MaybeUninit::zeroed();
         let r = pw_core::add_listener(
             core,
             core_event_listener.as_mut_ptr(),
-            CORE_EVENTS,
+            core_event_fptbl::<PwCoreContext>(),
             &mut event_ctx as *mut _ as _,
         );
         assert!(r >= 0, "pw_core::add_listener: {r}");
 
-        let registry = ((*(*core.cast::<spa_interface>())
-            .cb
-            .funcs
-            .cast::<pw_core_methods>())
-        .get_registry
-        .unwrap_unchecked())(
-            (*core.cast::<spa_interface>()).cb.data,
-            PW_VERSION_REGISTRY,
-            0,
-        );
+        let registry = pw_core::get_registry(core, PW_VERSION_REGISTRY, 0);
+        event_ctx.registry_ptr = registry;
         let mut registry_listener = core::mem::MaybeUninit::zeroed();
-        ((*(*registry.cast::<spa_interface>())
-            .cb
-            .funcs
-            .cast::<pw_registry_methods>())
-        .add_listener
-        .unwrap_unchecked())(
-            (*registry.cast::<spa_interface>()).cb.data,
+        pw_registry::add_listener(
+            registry,
             registry_listener.as_mut_ptr(),
-            REGISTRY_EVENTS,
-            registry.cast(),
+            registry_event_fptbl::<PwCoreContext>(),
+            &mut event_ctx as *mut _ as _,
         );
 
         event_ctx.rt_seq = Some(pw_core::sync(core, PW_ID_CORE, 0));
@@ -88,10 +79,7 @@ fn main() {
             PW_DIRECTION_OUTPUT,
             PW_ID_ANY,
             PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_AUTOCONNECT,
-            [
-                /*format_spa_buf.as_ptr().cast::<spa_pod>()*/ format_pod.as_ptr().cast(),
-            ]
-            .as_mut_ptr(),
+            [format_pod.as_ptr().cast()].as_mut_ptr(),
             1,
         );
 
@@ -102,147 +90,94 @@ fn main() {
 struct PwCoreContext {
     pub rt_seq: Option<core::ffi::c_int>,
     pub mainloop_ptr: *mut pw_main_loop,
+    pub registry_ptr: *mut pw_registry,
 }
-
-static CORE_EVENTS: &pw_core_events = &pw_core_events {
-    version: PW_VERSION_CORE_EVENTS,
-    ping: None,
-    info: None,
-    error: None,
-    bound_id: None,
-    remove_id: None,
-    add_mem: None,
-    remove_mem: None,
-    bound_props: None,
-    done: Some(core_done),
-};
-
-extern "C" fn core_done(data: *mut core::ffi::c_void, id: u32, seq: core::ffi::c_int) {
-    let data = unsafe { &mut *data.cast::<PwCoreContext>() };
-
-    println!("pw core done: {id} {seq} 0x{seq:x}");
-    if id == PW_ID_CORE && data.rt_seq.is_some_and(|x| x == seq) {
-        // done roundtrip
-        data.rt_seq = None;
-        unsafe {
-            pw_main_loop_quit(data.mainloop_ptr);
+impl CoreEventListener for PwCoreContext {
+    fn done(&mut self, id: u32, seq: c_int) {
+        if id == PW_ID_CORE && self.rt_seq.is_some_and(|x| x == seq) {
+            // done roundtrip
+            self.rt_seq = None;
+            unsafe {
+                pw_main_loop_quit(self.mainloop_ptr);
+            }
         }
     }
 }
+impl RegistryEventListener for PwCoreContext {
+    fn global(
+        &mut self,
+        id: u32,
+        permissions: u32,
+        r#type: &CStr,
+        version: u32,
+        props: *const spa_dict,
+    ) {
+        println!("registry global: {id} {type:?} {version} {permissions:04o}");
 
-static REGISTRY_EVENTS: &pw_registry_events = &pw_registry_events {
-    version: PW_VERSION_REGISTRY_EVENTS,
-    global: Some(registry_global),
-    global_remove: Some(registry_global_remove),
-};
+        if r#type == c"PipeWire:Interface:Device" {
+            unsafe {
+                let device =
+                    pw_registry::bind(self.registry_ptr, id, r#type.as_ptr(), PW_VERSION_DEVICE, 0)
+                        .cast::<pw_device>();
+                let device_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
+                ((*(*device.cast::<spa_interface>())
+                    .cb
+                    .funcs
+                    .cast::<pw_device_methods>())
+                .add_listener
+                .unwrap_unchecked())(
+                    (*device.cast::<spa_interface>()).cb.data,
+                    device_listener.as_mut_ptr(),
+                    DEVICE_EVENT,
+                    device.cast(),
+                );
+            }
+        }
 
-extern "C" fn registry_global(
-    data: *mut core::ffi::c_void,
-    id: u32,
-    permissions: u32,
-    r#type: *const core::ffi::c_char,
-    version: u32,
-    props: *const spa_dict,
-) {
-    let r#type = unsafe { core::ffi::CStr::from_ptr(r#type) };
+        if r#type == c"PipeWire:Interface:Node" {
+            unsafe {
+                let o =
+                    pw_registry::bind(self.registry_ptr, id, r#type.as_ptr(), PW_VERSION_NODE, 0)
+                        .cast::<pw_node>();
+                let node_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
+                ((*(*o.cast::<spa_interface>())
+                    .cb
+                    .funcs
+                    .cast::<pw_node_methods>())
+                .add_listener
+                .unwrap_unchecked())(
+                    (*o.cast::<spa_interface>()).cb.data,
+                    node_listener.as_mut_ptr(),
+                    NODE_EVENTS,
+                    o.cast(),
+                );
+            }
+        }
 
-    println!("registry global: {id} {type:?} {version} {permissions:04o}");
-
-    if r#type == c"PipeWire:Interface:Device" {
-        unsafe {
-            let registry = data.cast::<pw_registry>();
-            let device = ((*(*registry.cast::<spa_interface>())
-                .cb
-                .funcs
-                .cast::<pw_registry_methods>())
-            .bind
-            .unwrap_unchecked())(
-                (*registry.cast::<spa_interface>()).cb.data,
-                id,
-                r#type.as_ptr(),
-                PW_VERSION_DEVICE,
-                0,
-            )
-            .cast::<pw_device>();
-            let device_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
-            ((*(*device.cast::<spa_interface>())
-                .cb
-                .funcs
-                .cast::<pw_device_methods>())
-            .add_listener
-            .unwrap_unchecked())(
-                (*device.cast::<spa_interface>()).cb.data,
-                device_listener.as_mut_ptr(),
-                DEVICE_EVENT,
-                device.cast(),
-            );
+        if r#type == c"PipeWire:Interface:Port" {
+            unsafe {
+                let o =
+                    pw_registry::bind(self.registry_ptr, id, r#type.as_ptr(), PW_VERSION_PORT, 0)
+                        .cast::<pw_port>();
+                let node_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
+                ((*(*o.cast::<spa_interface>())
+                    .cb
+                    .funcs
+                    .cast::<pw_port_methods>())
+                .add_listener
+                .unwrap_unchecked())(
+                    (*o.cast::<spa_interface>()).cb.data,
+                    node_listener.as_mut_ptr(),
+                    PORT_EVENTS,
+                    o.cast(),
+                );
+            }
         }
     }
 
-    if r#type == c"PipeWire:Interface:Node" {
-        unsafe {
-            let registry = data.cast::<pw_registry>();
-            let o = ((*(*registry.cast::<spa_interface>())
-                .cb
-                .funcs
-                .cast::<pw_registry_methods>())
-            .bind
-            .unwrap_unchecked())(
-                (*registry.cast::<spa_interface>()).cb.data,
-                id,
-                r#type.as_ptr(),
-                PW_VERSION_NODE,
-                0,
-            )
-            .cast::<pw_node>();
-            let node_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
-            ((*(*o.cast::<spa_interface>())
-                .cb
-                .funcs
-                .cast::<pw_node_methods>())
-            .add_listener
-            .unwrap_unchecked())(
-                (*o.cast::<spa_interface>()).cb.data,
-                node_listener.as_mut_ptr(),
-                NODE_EVENTS,
-                o.cast(),
-            );
-        }
+    fn global_remove(&mut self, id: u32) {
+        println!("global remove {id}");
     }
-
-    if r#type == c"PipeWire:Interface:Port" {
-        unsafe {
-            let registry = data.cast::<pw_registry>();
-            let o = ((*(*registry.cast::<spa_interface>())
-                .cb
-                .funcs
-                .cast::<pw_registry_methods>())
-            .bind
-            .unwrap_unchecked())(
-                (*registry.cast::<spa_interface>()).cb.data,
-                id,
-                r#type.as_ptr(),
-                PW_VERSION_PORT,
-                0,
-            )
-            .cast::<pw_port>();
-            let node_listener = Box::leak(Box::new(core::mem::MaybeUninit::zeroed()));
-            ((*(*o.cast::<spa_interface>())
-                .cb
-                .funcs
-                .cast::<pw_port_methods>())
-            .add_listener
-            .unwrap_unchecked())(
-                (*o.cast::<spa_interface>()).cb.data,
-                node_listener.as_mut_ptr(),
-                PORT_EVENTS,
-                o.cast(),
-            );
-        }
-    }
-}
-extern "C" fn registry_global_remove(data: *mut core::ffi::c_void, id: u32) {
-    println!("global remove {id}");
 }
 
 static STREAM_EVENT: &pw_stream_events = &pw_stream_events {
@@ -358,142 +293,167 @@ extern "C" fn device_param(
     param: *const spa_pod,
 ) {
     println!("device param {seq} {id} {index} {next}");
-    let first_pod = unsafe { &*param };
-    if first_pod.r#type == SPA_TYPE_Object {
-        let first_pod = unsafe { core::mem::transmute::<&spa_pod, &spa_pod_object>(first_pod) };
-
-        if first_pod.body.r#type == SPA_TYPE_OBJECT_ParamProfile {
+    let param = pipewire::spa::pod::Parser::new(unsafe { &*param });
+    if let Some(object_parser) = param.try_as_object() {
+        if object_parser.object_type() == SPA_TYPE_OBJECT_ParamProfile {
             println!("  * type: ParamProfile *");
-            for param in SPAPODObjectPropsIterator::new(first_pod) {
-                if param.key == SPA_PARAM_PROFILE_index {
-                    let index = spa_assert_int(&param.value).value;
+            for param in object_parser.iter_props() {
+                if param.key() == SPA_PARAM_PROFILE_index {
+                    let index = param.value().try_as_int().unwrap().value();
                     println!("  * index = {index}");
-                } else if param.key == SPA_PARAM_PROFILE_name {
-                    let name = spa_pod_string_get_value(spa_assert_string(&param.value));
+                } else if param.key() == SPA_PARAM_PROFILE_name {
+                    let name = param.value().try_as_string().unwrap().value();
                     println!("  * name = {name:?}");
-                } else if param.key == SPA_PARAM_PROFILE_description {
-                    let description = spa_pod_string_get_value(spa_assert_string(&param.value));
+                } else if param.key() == SPA_PARAM_PROFILE_description {
+                    let description = param.value().try_as_string().unwrap().value();
                     println!("  * description = {description:?}");
-                } else if param.key == SPA_PARAM_PROFILE_priority {
-                    let priority = spa_assert_int(&param.value).value;
+                } else if param.key() == SPA_PARAM_PROFILE_priority {
+                    let priority = param.value().try_as_int().unwrap().value();
                     println!("  * Priority = {priority}");
-                } else if param.key == SPA_PARAM_PROFILE_available {
-                    let available = spa_assert_id(&param.value).value;
+                } else if param.key() == SPA_PARAM_PROFILE_available {
+                    let available = param.value().try_as_id().unwrap().value();
                     println!("  * available = {available}");
-                } else if param.key == SPA_PARAM_PROFILE_classes {
-                    let mut members_iter =
-                        SPAPODStructMemberIterator::new(spa_assert_struct(&param.value));
+                } else if param.key() == SPA_PARAM_PROFILE_classes {
+                    let mut members_iter = param.value().try_as_struct().unwrap().iter_members();
 
-                    let item_count = spa_assert_int(members_iter.next().unwrap()).value;
+                    let item_count = members_iter.next().unwrap().try_as_int().unwrap().value();
                     for _ in 0..item_count {
-                        let mut entry_members_iter = SPAPODStructMemberIterator::new(
-                            spa_assert_struct(members_iter.next().unwrap()),
-                        );
+                        let mut entry_members_iter = members_iter
+                            .next()
+                            .unwrap()
+                            .try_as_struct()
+                            .unwrap()
+                            .iter_members();
 
-                        let class_name = spa_pod_string_get_value(spa_assert_string(
-                            entry_members_iter.next().unwrap(),
-                        ));
-                        let node_count = spa_assert_int(entry_members_iter.next().unwrap()).value;
-                        let property = spa_pod_string_get_value(spa_assert_string(
-                            entry_members_iter.next().unwrap(),
-                        ));
-                        let device_indices = SPAPODArrayIterator::new(spa_assert_array(
-                            entry_members_iter.next().unwrap(),
-                        ))
-                        .copied()
-                        .collect::<Vec<i32>>();
+                        let class_name = entry_members_iter
+                            .next()
+                            .unwrap()
+                            .try_as_string()
+                            .unwrap()
+                            .value();
+                        let node_count = entry_members_iter
+                            .next()
+                            .unwrap()
+                            .try_as_int()
+                            .unwrap()
+                            .value();
+                        let property = entry_members_iter
+                            .next()
+                            .unwrap()
+                            .try_as_string()
+                            .unwrap()
+                            .value();
+                        let device_indices = unsafe {
+                            entry_members_iter
+                                .next()
+                                .unwrap()
+                                .try_as_array()
+                                .unwrap()
+                                .values_unchecked::<i32>()
+                        };
 
                         println!(
                             "  * classes = {class_name:?} {node_count} {property:?} {device_indices:?}"
                         );
                     }
-                } else if param.key == SPA_PARAM_PROFILE_save {
-                    let save = spa_assert_bool(&param.value).value;
+                } else if param.key() == SPA_PARAM_PROFILE_save {
+                    let save = param.value().try_as_bool().unwrap().value();
                     println!("  * save = {save}");
                 } else {
                     println!(
-                        "  * ParamProfile prop: {} {} {}",
-                        param.key, param.value.r#type, param.value.size
+                        "  * ParamProfile prop: {} {:?} {}",
+                        param.key(),
+                        param.value().r#type(),
+                        param.value().size()
                     );
                 }
             }
-        } else if first_pod.body.r#type == SPA_TYPE_OBJECT_ParamRoute {
+        } else if object_parser.object_type() == SPA_TYPE_OBJECT_ParamRoute {
             println!("  * type: ParamRoute *");
-            for param in SPAPODObjectPropsIterator::new(first_pod) {
-                if param.key == SPA_PARAM_ROUTE_index {
-                    let index = spa_assert_int(&param.value).value;
+            for param in object_parser.iter_props() {
+                if param.key() == SPA_PARAM_ROUTE_index {
+                    let index = param.value().try_as_int().unwrap().value();
                     println!("  * index = {index}");
-                } else if param.key == SPA_PARAM_ROUTE_direction {
-                    let direction = spa_assert_id(&param.value).value;
+                } else if param.key() == SPA_PARAM_ROUTE_direction {
+                    let direction = param.value().try_as_id().unwrap().value();
                     println!("  * direction = {direction}");
-                } else if param.key == SPA_PARAM_ROUTE_device {
-                    let device_id = spa_assert_int(&param.value).value;
+                } else if param.key() == SPA_PARAM_ROUTE_device {
+                    let device_id = param.value().try_as_int().unwrap().value();
                     println!("  * device = {device_id}");
-                } else if param.key == SPA_PARAM_ROUTE_name {
-                    let name = spa_pod_string_get_value(spa_assert_string(&param.value));
+                } else if param.key() == SPA_PARAM_ROUTE_name {
+                    let name = param.value().try_as_string().unwrap().value();
                     println!("  * name = {name:?}");
-                } else if param.key == SPA_PARAM_ROUTE_description {
-                    let description = spa_pod_string_get_value(spa_assert_string(&param.value));
+                } else if param.key() == SPA_PARAM_ROUTE_description {
+                    let description = param.value().try_as_string().unwrap().value();
                     println!("  * description = {description:?}");
-                } else if param.key == SPA_PARAM_ROUTE_priority {
-                    let priority = spa_assert_int(&param.value).value;
+                } else if param.key() == SPA_PARAM_ROUTE_priority {
+                    let priority = param.value().try_as_int().unwrap().value();
                     println!("  * priority = {priority}");
-                } else if param.key == SPA_PARAM_ROUTE_available {
-                    let available = spa_assert_id(&param.value).value;
+                } else if param.key() == SPA_PARAM_ROUTE_available {
+                    let available = param.value().try_as_id().unwrap().value();
                     println!("  * available = {available}");
-                } else if param.key == SPA_PARAM_ROUTE_profiles {
-                    let values = SPAPODArrayIterator::new(spa_assert_array(&param.value))
-                        .copied()
-                        .collect::<Vec<i32>>();
+                } else if param.key() == SPA_PARAM_ROUTE_profiles {
+                    let values = unsafe {
+                        param
+                            .value()
+                            .try_as_array()
+                            .unwrap()
+                            .values_unchecked::<i32>()
+                    };
                     println!("  * profiles = {values:?}");
-                } else if param.key == SPA_PARAM_ROUTE_devices {
-                    let values = SPAPODArrayIterator::new(spa_assert_array(&param.value))
-                        .copied()
-                        .collect::<Vec<i32>>();
+                } else if param.key() == SPA_PARAM_ROUTE_devices {
+                    let values = unsafe {
+                        param
+                            .value()
+                            .try_as_array()
+                            .unwrap()
+                            .values_unchecked::<i32>()
+                    };
                     println!("  * devices = {values:?}");
-                } else if param.key == SPA_PARAM_ROUTE_profile {
-                    let profile = spa_assert_int(&param.value).value;
+                } else if param.key() == SPA_PARAM_ROUTE_profile {
+                    let profile = param.value().try_as_int().unwrap().value();
                     println!("  * profile = {profile}");
-                } else if param.key == SPA_PARAM_ROUTE_save {
-                    let save = spa_assert_bool(&param.value).value;
+                } else if param.key() == SPA_PARAM_ROUTE_save {
+                    let save = param.value().try_as_bool().unwrap().value();
                     println!("  * save = {save}");
-                } else if param.key == SPA_PARAM_ROUTE_info {
-                    let mut member_iter =
-                        SPAPODStructMemberIterator::new(spa_assert_struct(&param.value));
+                } else if param.key() == SPA_PARAM_ROUTE_info {
+                    let mut member_iter = param.value().try_as_struct().unwrap().iter_members();
 
-                    let item_count = spa_assert_int(member_iter.next().unwrap()).value;
+                    let item_count = member_iter.next().unwrap().try_as_int().unwrap().value();
                     for _ in 0..item_count {
-                        let key = spa_pod_string_get_value(spa_assert_string(
-                            member_iter.next().unwrap(),
-                        ));
-                        let value = spa_pod_string_get_value(spa_assert_string(
-                            member_iter.next().unwrap(),
-                        ));
+                        let key = member_iter.next().unwrap().try_as_string().unwrap().value();
+                        let value = member_iter.next().unwrap().try_as_string().unwrap().value();
 
                         println!("  * info[{key:?}] = {value:?}");
                     }
-                } else if param.key == SPA_PARAM_ROUTE_props {
-                    for prop_pod in SPAPODObjectPropsIterator::new(spa_assert_object_of(
-                        &param.value,
-                        SPA_TYPE_OBJECT_Props,
-                    )) {
-                        println!("  * prop {} {}", prop_pod.key, prop_pod.value.r#type);
+                } else if param.key() == SPA_PARAM_ROUTE_props {
+                    let o = param.value().try_as_object().unwrap();
+                    assert_eq!(o.object_type(), SPA_TYPE_OBJECT_Props);
+                    for prop_pod in o.iter_props() {
+                        println!(
+                            "  * prop {} {:?}",
+                            prop_pod.key(),
+                            prop_pod.value().r#type()
+                        );
                     }
                 } else {
                     println!(
-                        "  * ParamProfile prop: {} {} {}",
-                        param.key, param.value.r#type, param.value.size
+                        "  * ParamProfile prop: {} {:?} {}",
+                        param.key(),
+                        param.value().r#type(),
+                        param.value().size()
                     );
                 }
             }
         } else {
             println!(
                 "* object pod? {} {}",
-                first_pod.body.r#type, first_pod.body.id
+                object_parser.object_type(),
+                object_parser.object_id()
             );
         }
     } else {
-        println!("* first_pod? {} {}", first_pod.r#type, first_pod.size);
+        println!("* first_pod? {:?} {}", param.r#type(), param.size());
     }
 }
 
@@ -542,698 +502,275 @@ extern "C" fn node_params(
     let Some(pod) = (unsafe { param.as_ref() }) else {
         return;
     };
-    if pod.r#type == SPA_TYPE_Object {
-        let pod = unsafe { core::mem::transmute::<&spa_pod, &spa_pod_object>(pod) };
-        if pod.body.r#type == SPA_TYPE_OBJECT_PropInfo {
-            for prop in SPAPODObjectPropsIterator::new(pod) {
-                if prop.key == spa_prop_info::id as u32 {
-                    let value = spa_assert_id(&prop.value).value;
+    let pod = pipewire::spa::pod::Parser::new(pod);
+    if let Some(pod) = pod.try_as_object() {
+        if pod.object_type() == SPA_TYPE_OBJECT_PropInfo {
+            for prop in pod.iter_props() {
+                if prop.key() == spa_prop_info::id as u32 {
+                    let value = prop.value().try_as_id().unwrap().value();
                     println!("  * id = {value} (spa_prop)");
-                } else if prop.key == spa_prop_info::name as u32 {
-                    let value = spa_pod_string_get_value(spa_assert_string(&prop.value));
+                } else if prop.key() == spa_prop_info::name as u32 {
+                    let value = prop.value().try_as_string().unwrap().value();
                     println!("  * name = {value:?}");
-                } else if prop.key == spa_prop_info::r#type as u32 {
-                    if prop.value.r#type == SPA_TYPE_Id {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_id>(&prop.value).value
-                        };
+                } else if prop.key() == spa_prop_info::r#type as u32 {
+                    if let Some(v) = prop.value().try_as_id() {
+                        let value = v.value();
                         println!("  * type<id> = {value:?}");
-                    } else if prop.value.r#type == SPA_TYPE_Int {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_int>(&prop.value).value
-                        };
+                    } else if let Some(v) = prop.value().try_as_int() {
+                        let value = v.value();
                         println!("  * type<int> = {value:?}");
-                    } else if prop.value.r#type == SPA_TYPE_String {
-                        let value = spa_pod_string_get_value(unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_string>(&prop.value)
-                        });
+                    } else if let Some(v) = prop.value().try_as_string() {
+                        let value = v.value();
                         println!("  * type<string> = {value:?}");
-                    } else if prop.value.r#type == SPA_TYPE_Choice {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_choice>(&prop.value)
-                        };
-
-                        if value.body.r#type == SPA_CHOICE_Range {
-                            if value.element_pod().r#type == SPA_TYPE_Id {
-                                let r = unsafe { SPAPODChoiceRange::<u32>::read_unchecked(value) };
-                                println!("  * type = range<id> {r:?}");
-                            } else if value.element_pod().r#type == SPA_TYPE_Int {
-                                let r = unsafe { SPAPODChoiceRange::<i32>::read_unchecked(value) };
-                                println!("  * type = range<int> {r:?}");
-                            } else if value.element_pod().r#type == SPA_TYPE_Long {
-                                let r = unsafe { SPAPODChoiceRange::<i64>::read_unchecked(value) };
-                                println!("  * type = range<long> {r:?}");
-                            } else if value.element_pod().r#type == SPA_TYPE_Float {
-                                let r = unsafe { SPAPODChoiceRange::<f32>::read_unchecked(value) };
-                                println!("  * type = range<float> {r:?}");
-                            } else if value.element_pod().r#type == SPA_TYPE_Double {
-                                let r = unsafe { SPAPODChoiceRange::<f64>::read_unchecked(value) };
-                                println!("  * type = range<double> {r:?}");
-                            } else {
-                                panic!("?type[choice.range] = t:{}", value.element_pod().r#type);
+                    } else if let Some(v) = prop.value().try_as_choice() {
+                        if let Some(v) = v.try_as_range() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Id) => {
+                                    let r = unsafe { v.default_unchecked::<u32>() };
+                                    println!("  * type = range<id> {r}");
+                                }
+                                Ok(pipewire::spa::pod::Type::Int) => {
+                                    let r = unsafe { v.default_unchecked::<i32>() };
+                                    println!("  * type = range<int> {r}");
+                                }
+                                Ok(pipewire::spa::pod::Type::Long) => {
+                                    let r = unsafe { v.default_unchecked::<i64>() };
+                                    println!("  * type = range<long> {r}");
+                                }
+                                Ok(pipewire::spa::pod::Type::Float) => {
+                                    let r = unsafe { v.default_unchecked::<f32>() };
+                                    println!("  * type = range<float> {r}");
+                                }
+                                Ok(pipewire::spa::pod::Type::Double) => {
+                                    let r = unsafe { v.default_unchecked::<f64>() };
+                                    println!("  * type = range<double> {r}");
+                                }
+                                t => panic!("?type[choice.range] = t:{t:?}"),
                             }
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            if value.element_pod().r#type == SPA_TYPE_Bool {
-                                let values =
-                                    unsafe { SPAPODChoiceEnum::<i32>::read_unchecked(value) };
-                                println!("  * type = enum<bool> {values:?}");
-                            } else {
-                                panic!("?type[choice.enum] = t:{}", value.element_pod().r#type);
+                        } else if let Some(v) = v.try_as_enum() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Bool) => {
+                                    let default = unsafe {
+                                        v.default_unchecked::<pipewire::spa::pod::ArrayValueBool>()
+                                            .value()
+                                    };
+                                    let alternatives = unsafe {
+                                        v.alternatives_unchecked::<pipewire::spa::pod::ArrayValueBool>()
+                                    };
+
+                                    println!("  * type = enum<bool> {default} {alternatives:?}");
+                                }
+                                t => panic!("?type[choice.enum] = t:{t:?}"),
                             }
                         } else {
-                            panic!("?type[choice] = t:{}", value.body.r#type);
+                            panic!("?type[choice] = t:{:?}", v.choice_type());
                         }
                     } else {
-                        panic!("?type = t:{}", prop.value.r#type);
+                        panic!("?type = t:{:?}", prop.value().r#type());
                     }
-                } else if prop.key == spa_prop_info::labels as u32 {
-                    println!("  * labels = t:{}", prop.value.r#type);
-                } else if prop.key == spa_prop_info::container as u32 {
-                    let value = spa_assert_id(&prop.value).value;
+                } else if prop.key() == spa_prop_info::labels as u32 {
+                    println!("  * labels = t:{:?}", prop.value().r#type());
+                } else if prop.key() == spa_prop_info::container as u32 {
+                    let value = prop.value().try_as_id().unwrap().value();
                     println!("  * container = {value}");
-                } else if prop.key == spa_prop_info::params as u32 {
-                    let value = spa_assert_bool(&prop.value).as_bool();
+                } else if prop.key() == spa_prop_info::params as u32 {
+                    let value = prop.value().try_as_bool().unwrap().value();
                     println!("  * params = {value}");
-                } else if prop.key == spa_prop_info::description as u32 {
-                    let value = spa_pod_string_get_value(spa_assert_string(&prop.value));
+                } else if prop.key() == spa_prop_info::description as u32 {
+                    let value = prop.value().try_as_string().unwrap().value();
                     println!("  * description = {value:?}");
                 } else {
-                    println!("  * prop_info: {} {}", prop.key, prop.value.r#type);
+                    println!("  * prop_info: {} {:?}", prop.key(), prop.value().r#type());
                 }
             }
-        } else if pod.body.r#type == SPA_TYPE_OBJECT_Props {
-            for prop in SPAPODObjectPropsIterator::new(pod) {
-                if prop.key == spa_prop::device as u32 {
-                    let value = spa_pod_string_get_value(spa_assert_string(&prop.value));
+        } else if pod.object_type() == SPA_TYPE_OBJECT_Props {
+            for prop in pod.iter_props() {
+                if prop.key() == spa_prop::device as u32 {
+                    let value = prop.value().try_as_string().unwrap().value();
                     println!("  * device = {value:?}");
-                } else if prop.key == spa_prop::deviceName as u32 {
-                    let value = spa_pod_string_get_value(spa_assert_string(&prop.value));
+                } else if prop.key() == spa_prop::deviceName as u32 {
+                    let value = prop.value().try_as_string().unwrap().value();
                     println!("  * device name = {value:?}");
-                } else if prop.key == spa_prop::cardName as u32 {
-                    let value = spa_pod_string_get_value(spa_assert_string(&prop.value));
+                } else if prop.key() == spa_prop::cardName as u32 {
+                    let value = prop.value().try_as_string().unwrap().value();
                     println!("  * card name = {value:?}");
-                } else if prop.key == spa_prop::volume as u32 {
-                    let value = spa_assert_float(&prop.value).value;
+                } else if prop.key() == spa_prop::volume as u32 {
+                    let value = prop.value().try_as_float().unwrap().value();
                     println!("  * volume = {value}");
-                } else if prop.key == spa_prop::mute as u32 {
-                    let value = spa_assert_bool(&prop.value).as_bool();
+                } else if prop.key() == spa_prop::mute as u32 {
+                    let value = prop.value().try_as_bool().unwrap().value();
                     println!("  * mute = {value}");
-                } else if prop.key == spa_prop::channelVolumes as u32 {
-                    let values = SPAPODArrayIterator::new(spa_assert_array(&prop.value))
-                        .copied()
-                        .collect::<Vec<f32>>();
+                } else if prop.key() == spa_prop::channelVolumes as u32 {
+                    let values = unsafe {
+                        prop.value()
+                            .try_as_array()
+                            .unwrap()
+                            .values_unchecked::<f32>()
+                    };
                     println!("  * channel volumes = {values:?}");
-                } else if prop.key == spa_prop::channelMap as u32 {
-                    let channel_ids = SPAPODArrayIterator::new(spa_assert_array(&prop.value))
-                        .copied()
-                        .collect::<Vec<u32>>();
+                } else if prop.key() == spa_prop::channelMap as u32 {
+                    let channel_ids = unsafe {
+                        prop.value()
+                            .try_as_array()
+                            .unwrap()
+                            .values_unchecked::<u32>()
+                    };
                     println!("  * channel map = {channel_ids:?}");
-                } else if prop.key == spa_prop::monitorMute as u32 {
-                    let value = spa_assert_bool(&prop.value).as_bool();
+                } else if prop.key() == spa_prop::monitorMute as u32 {
+                    let value = prop.value().try_as_bool().unwrap().value();
                     println!("  * monitor mute = {value}");
-                } else if prop.key == spa_prop::monitorVolumes as u32 {
-                    let values = SPAPODArrayIterator::new(spa_assert_array(&prop.value))
-                        .copied()
-                        .collect::<Vec<f32>>();
+                } else if prop.key() == spa_prop::monitorVolumes as u32 {
+                    let values = unsafe {
+                        prop.value()
+                            .try_as_array()
+                            .unwrap()
+                            .values_unchecked::<f32>()
+                    };
                     println!("  * monitor volumes = {values:?}");
-                } else if prop.key == spa_prop::latencyOffsetNsec as u32 {
-                    let value = spa_assert_long(&prop.value).value;
+                } else if prop.key() == spa_prop::latencyOffsetNsec as u32 {
+                    let value = prop.value().try_as_long().unwrap().value();
                     println!("  * latency offset ns = {value}");
-                } else if prop.key == spa_prop::softMute as u32 {
-                    let value = spa_assert_bool(&prop.value).as_bool();
+                } else if prop.key() == spa_prop::softMute as u32 {
+                    let value = prop.value().try_as_bool().unwrap().value();
                     println!("  * soft mute = {value}");
-                } else if prop.key == spa_prop::softVolumes as u32 {
-                    let values = SPAPODArrayIterator::new(spa_assert_array(&prop.value))
-                        .copied()
-                        .collect::<Vec<f32>>();
+                } else if prop.key() == spa_prop::softVolumes as u32 {
+                    let values = unsafe {
+                        prop.value()
+                            .try_as_array()
+                            .unwrap()
+                            .values_unchecked::<f32>()
+                    };
                     println!("  * soft volumes = {values:?}");
-                } else if prop.key == spa_prop::params as u32 {
-                    let mut members_iter =
-                        SPAPODStructMemberIterator::new(spa_assert_struct(&prop.value));
+                } else if prop.key() == spa_prop::params as u32 {
+                    let mut members_iter = prop.value().try_as_struct().unwrap().iter_members();
                     while let Some(k) = members_iter.next() {
-                        let k = spa_assert_string(k);
+                        let k = k.try_as_string().unwrap().value();
                         let v = members_iter.next().unwrap();
 
-                        println!(
-                            "  * params[{:?}] = t:{} s:{}",
-                            spa_pod_string_get_value(k),
-                            v.r#type,
-                            v.size
-                        );
+                        println!("  * params[{k:?}] = t:{:?} s:{}", v.r#type(), v.size());
                     }
                 } else {
-                    println!("  * prop: {} {}", prop.key, prop.value.r#type);
+                    println!("  * prop: {} {:?}", prop.key(), prop.value().r#type());
                 }
             }
-        } else if pod.body.r#type == SPA_TYPE_OBJECT_Format {
-            for prop in SPAPODObjectPropsIterator::new(pod) {
-                if prop.key == spa_format::mediaType as u32 {
-                    if prop.value.r#type == SPA_TYPE_Id {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&prop.value) };
-                        println!("  * media type = {}", value.value);
-                    } else if prop.value.r#type == SPA_TYPE_Choice {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_choice>(&prop.value)
-                        };
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                };
-                                println!("  * media type = choice.none<u32> {current_value}");
-                            } else {
-                                panic!("media type.choice.none t:{}", value.body.child.r#type)
-                            }
-                        } else {
-                            panic!("media type.choice = t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("  * media type ?= t:{}", prop.value.r#type);
-                    }
-                } else if prop.key == spa_format::mediaSubtype as u32 {
-                    if prop.value.r#type == SPA_TYPE_Id {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&prop.value) };
-                        println!("  * media subtype = {}", value.value);
-                    } else if prop.value.r#type == SPA_TYPE_Choice {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_choice>(&prop.value)
-                        };
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                };
-                                println!("  * media subtype = choice.none<u32> {current_value}");
-                            } else {
-                                panic!("media subtype.choice.none t:{}", value.body.child.r#type)
-                            }
-                        } else {
-                            panic!("media subtype.choice = t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("  * media subtype ?= t:{}", prop.value.r#type);
-                    }
-                } else if prop.key == spa_format::AUDIO_format as u32 {
-                    if prop.value.r#type == SPA_TYPE_Id {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&prop.value) };
-                        println!("  * audio format = {}", value.value);
-                    } else if prop.value.r#type == SPA_TYPE_Choice {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_choice>(&prop.value)
-                        };
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                };
-                                println!("  * audio format = choice.none<id> {current_value}");
-                            } else {
-                                panic!("audio format.choice.none t:{}", value.body.child.r#type)
-                            }
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                };
-                                println!("  * audio format = choice.enum<id> {current_value}");
-                            } else {
-                                panic!("audio format.choice.enum t:{}", value.body.child.r#type)
-                            }
-                        } else {
-                            panic!("audio format.choice = t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("  * audio format ?= t:{}", prop.value.r#type);
-                    }
-                } else if prop.key == spa_format::AUDIO_rate as u32 {
-                    if prop.value.r#type == SPA_TYPE_Int {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_int>(&prop.value) };
-                        println!("  * audio rate = {}", value.value);
-                    } else if prop.value.r#type == SPA_TYPE_Choice {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_choice>(&prop.value)
-                        };
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            if value.body.child.r#type == SPA_TYPE_Int {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<i32>())
-                                };
-                                println!("  * audio rate = choice.none<int> {current_value}");
-                            } else {
-                                panic!("audio rate.choice.none t:{}", value.body.child.r#type)
-                            }
-                        } else if value.body.r#type == SPA_CHOICE_Range {
-                            if value.body.child.r#type == SPA_TYPE_Int {
-                                let range =
-                                    unsafe { SPAPODChoiceRange::<i32>::read_unchecked(value) };
-
-                                println!("  * audio rate = choice.range<int> {range:?}");
-                            } else {
-                                panic!("audio rate.choice.range t:{}", value.body.child.r#type)
-                            }
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                };
-                                println!("  * audio rate = choice.enum<id> {current_value}");
-                            } else {
-                                panic!("audio rate.choice.enum t:{}", value.body.child.r#type)
-                            }
-                        } else {
-                            panic!("audio rate.choice = t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("  * audio rate ?= t:{}", prop.value.r#type);
-                    }
-                } else if prop.key == spa_format::AUDIO_channels as u32 {
-                    if prop.value.r#type == SPA_TYPE_Int {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_int>(&prop.value) };
-                        println!("  * audio channels = {}", value.value);
-                    } else if prop.value.r#type == SPA_TYPE_Choice {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_choice>(&prop.value)
-                        };
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            if value.body.child.r#type == SPA_TYPE_Int {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().add(0).cast::<i32>())
-                                };
-                                println!("  * audio channels = choice.none<int> {current_value}");
-                            } else {
-                                panic!("audio channels.choice.none t:{}", value.body.child.r#type)
-                            }
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().add(0).cast::<u32>())
-                                };
-                                println!("  * audio channels = choice.enum<id> {current_value}");
-                            } else {
-                                panic!("audio channels.choice.enum t:{}", value.body.child.r#type)
-                            }
-                        } else {
-                            panic!("audio channels.choice = t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("  * audio channels ?= t:{}", prop.value.r#type);
-                    }
-                } else if prop.key == spa_format::AUDIO_position as u32 {
-                    if prop.value.r#type == SPA_TYPE_Id {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&prop.value) };
-                        println!("  * audio position = {}", value.value);
-                    } else if prop.value.r#type == SPA_TYPE_Array {
-                        let values = SPAPODArrayIterator::new(unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_array>(&prop.value)
-                        })
-                        .copied()
-                        .collect::<Vec<u32>>();
-                        println!("  * audio position = {values:?}");
-                    } else if prop.value.r#type == SPA_TYPE_Choice {
-                        let value = unsafe {
-                            core::mem::transmute::<&spa_pod, &spa_pod_choice>(&prop.value)
-                        };
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                };
-                                println!("  * audio position = choice.none<id> {current_value}");
-                            } else if value.body.child.r#type == SPA_TYPE_Array {
-                                let mut o = 0;
-                                let mut values = Vec::new();
-                                while o < value.body.child.size as usize {
-                                    values.push(unsafe {
-                                        core::ptr::read(
-                                            value.body.values.as_ptr().add(o).cast::<u32>(),
-                                        )
-                                    });
-                                    o += 4;
+        } else if pod.object_type() == SPA_TYPE_OBJECT_Format {
+            for prop in pod.iter_props() {
+                if prop.key() == spa_format::mediaType as u32 {
+                    if let Some(v) = prop.value().try_as_id() {
+                        let value = v.value();
+                        println!("  * media type = {value}");
+                    } else if let Some(v) = prop.value().try_as_choice() {
+                        if let Some(v) = v.try_as_none() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Id) => {
+                                    let current_value = unsafe { v.current_unchecked::<u32>() };
+                                    println!("  * media type = choice.none<u32> {current_value}");
                                 }
-
-                                println!("  * audio position = choice.none<array<id>> {values:?}");
-                            } else {
-                                panic!("audio position.choice.none t:{}", value.body.child.r#type)
-                            }
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            if value.body.child.r#type == SPA_TYPE_Id {
-                                let current_value = unsafe {
-                                    core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                };
-                                println!("  * audio position = choice.enum<id> {current_value}");
-                            } else {
-                                panic!("audio position.choice.enum t:{}", value.body.child.r#type)
+                                t => panic!("media type.choice.none t:{t:?}"),
                             }
                         } else {
-                            panic!("audio position.choice = t:{}", value.body.r#type);
+                            panic!("media type.choice = t:{:?}", v.choice_type());
                         }
                     } else {
-                        panic!("  * audio position ?= t:{}", prop.value.r#type);
+                        panic!("  * media type ?= t:{:?}", prop.value().r#type());
                     }
+                } else if prop.key() == spa_format::mediaSubtype as u32 {
+                    if let Some(v) = prop.value().try_as_id() {
+                        let value = v.value();
+                        println!("  * media subtype = {value}");
+                    } else if let Some(v) = prop.value().try_as_choice() {
+                        if let Some(v) = v.try_as_none() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Id) => {
+                                    let current_value = unsafe { v.current_unchecked::<u32>() };
+                                    println!(
+                                        "  * media subtype = choice.none<u32> {current_value}"
+                                    );
+                                }
+                                t => panic!("media subtype.choice.none t:{t:?}"),
+                            }
+                        } else {
+                            panic!("media subtype.choice = t:{:?}", v.choice_type());
+                        }
+                    } else {
+                        panic!("  * media subtype ?= t:{:?}", prop.value().r#type());
+                    }
+                } else if prop.key() == spa_format::AUDIO_format as u32 {
+                    if let Some(v) = prop.value().try_as_id() {
+                        let value = v.value();
+                        println!("  * audio format = {value}");
+                    } else if let Some(v) = prop.value().try_as_choice() {
+                        if let Some(v) = v.try_as_none() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Id) => {
+                                    let current_value = unsafe { v.current_unchecked::<u32>() };
+                                    println!("  * audio format = choice.none<u32> {current_value}");
+                                }
+                                t => panic!("audio format.choice.none t:{t:?}"),
+                            }
+                        } else if let Some(v) = v.try_as_enum() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Id) => {
+                                    let default = unsafe { v.default_unchecked::<u32>() };
+
+                                    println!("  * audio format = choice.enum<u32> {default}");
+                                }
+                                t => panic!("audio format.choice.enum t:{t:?}"),
+                            }
+                        } else {
+                            panic!("audio format.choice = t:{:?}", v.choice_type());
+                        }
+                    } else {
+                        panic!("  * audio format ?= t:{:?}", prop.value().r#type());
+                    }
+                } else if prop.key() == spa_format::AUDIO_rate as u32 {
+                    if let Some(v) = prop.value().try_as_int() {
+                        let value = v.value();
+                        println!("  * audio rate = {value}");
+                    } else if let Some(v) = prop.value().try_as_choice() {
+                        if let Some(v) = v.try_as_none() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Int) => {
+                                    let current_value = unsafe { v.current_unchecked::<i32>() };
+                                    println!("  * audio rate = choice.none<int> {current_value}");
+                                }
+                                t => panic!("audio rate.choice.none t:{t:?}"),
+                            }
+                        } else if let Some(v) = v.try_as_range() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Int) => {
+                                    let range = unsafe { v.values_unchecked::<i32>() };
+                                    println!("  * audio rate = choice.range<int> {range:?}");
+                                }
+                                t => panic!("audio rate.choice.range t:{t:?}"),
+                            }
+                        } else if let Some(v) = v.try_as_enum() {
+                            match v.child_type() {
+                                Ok(pipewire::spa::pod::Type::Id) => {
+                                    let default = unsafe { v.default_unchecked::<u32>() };
+                                    println!("  * audio rate = choice.enum<id> {default}");
+                                }
+                                t => panic!("audio rate.choice.enum t:{t:?}"),
+                            }
+                        } else {
+                            panic!("audio rate.choice = t:{:?}", v.choice_type());
+                        }
+                    } else {
+                        panic!("  * audio rate ?= t:{:?}", prop.value().r#type());
+                    }
+                } else if prop.key() == spa_format::AUDIO_channels as u32 {
+                    println!("  * audio channels ?= t:{:?}", prop.value().r#type());
+                } else if prop.key() == spa_format::AUDIO_position as u32 {
+                    println!("  * audio position ?= t:{:?}", prop.value().r#type());
                 } else {
-                    println!("  * format: {} {}", prop.key, prop.value.r#type);
+                    println!("  * format: {} {:?}", prop.key(), prop.value().r#type());
                 }
             }
-        } else if pod.body.r#type == SPA_TYPE_OBJECT_ParamPortConfig {
-            for p in SPAPODObjectPropsIterator::new(pod) {
-                if p.key == spa_param_port_config::direction as u32 {
-                    if p.value.r#type == SPA_TYPE_Id {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&p.value) };
-                        println!("  * direction = {}", value.value);
-                    } else if p.value.r#type == SPA_TYPE_Choice {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value) };
-                        assert_eq!(value.element_pod().r#type, SPA_TYPE_Id);
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            let value = unsafe {
-                                core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                            };
-                            println!("  * direction = choice.none<id> {value}");
-                        } else {
-                            panic!("direction.choice: t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("direction: t:{}", p.value.r#type);
-                    }
-                } else if p.key == spa_param_port_config::mode as u32 {
-                    if p.value.r#type == SPA_TYPE_Id {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&p.value) };
-                        println!("  * mode = {}", value.value);
-                    } else if p.value.r#type == SPA_TYPE_Choice {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value) };
-                        assert_eq!(value.element_pod().r#type, SPA_TYPE_Id);
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            let value = unsafe {
-                                core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                            };
-                            println!("  * mode = choice.none<id> {value}");
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            let values = unsafe { SPAPODChoiceEnum::<u32>::read_unchecked(value) };
-
-                            println!("  * mode = choice.enum<id> {values:?}");
-                        } else {
-                            panic!("mode.choice: t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("mode: t:{}", p.value.r#type);
-                    }
-                } else if p.key == spa_param_port_config::monitor as u32 {
-                    if p.value.r#type == SPA_TYPE_Bool {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&p.value) };
-                        println!("  * monitor = {}", value.value);
-                    } else if p.value.r#type == SPA_TYPE_Choice {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value) };
-                        assert_eq!(value.body.child.r#type, SPA_TYPE_Bool);
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            let value = unsafe {
-                                core::ptr::read(value.body.values.as_ptr().cast::<i32>())
-                            };
-                            println!("  * monitor = choice.none<bool> {value}");
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            let values = unsafe { SPAPODChoiceEnum::<i32>::read_unchecked(value) };
-
-                            println!("  * monitor = choice.enum<bool> {values:?}");
-                        } else {
-                            panic!("monitor.choice: t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("monitor: t:{}", p.value.r#type);
-                    }
-                } else if p.key == spa_param_port_config::control as u32 {
-                    if p.value.r#type == SPA_TYPE_Bool {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(&p.value) };
-                        println!("  * control = {}", value.value);
-                    } else if p.value.r#type == SPA_TYPE_Choice {
-                        let value =
-                            unsafe { core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value) };
-                        assert_eq!(value.body.child.r#type, SPA_TYPE_Bool);
-
-                        if value.body.r#type == SPA_CHOICE_None {
-                            let value = unsafe {
-                                core::ptr::read(value.body.values.as_ptr().cast::<i32>())
-                            };
-                            println!("  * control = choice.none<bool> {value}");
-                        } else if value.body.r#type == SPA_CHOICE_Enum {
-                            let values = unsafe { SPAPODChoiceEnum::<i32>::read_unchecked(value) };
-
-                            println!("  * control = choice.enum<bool> {values:?}");
-                        } else {
-                            panic!("control.choice: t:{}", value.body.r#type);
-                        }
-                    } else {
-                        panic!("control: t:{}", p.value.r#type);
-                    }
-                } else if p.key == spa_param_port_config::format as u32 {
-                    for p in SPAPODObjectPropsIterator::new(spa_assert_object_of(
-                        &p.value,
-                        SPA_TYPE_OBJECT_Format,
-                    )) {
-                        if p.key == spa_format::mediaType as u32 {
-                            if p.value.r#type == SPA_TYPE_Id {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_id>(&p.value)
-                                };
-                                println!("  * format.media type = {}", value.value);
-                            } else if p.value.r#type == SPA_TYPE_Choice {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value)
-                                };
-                                assert_eq!(value.element_pod().r#type, SPA_TYPE_Id);
-
-                                if value.body.r#type == SPA_CHOICE_None {
-                                    let current_value = unsafe {
-                                        core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                    };
-                                    println!(
-                                        "  * format.media type = choice.none<u32> {current_value}"
-                                    );
-                                } else {
-                                    panic!("format.media type.choice = t:{}", value.body.r#type);
-                                }
-                            } else {
-                                panic!("  * format.media type ?= t:{}", p.value.r#type);
-                            }
-                        } else if p.key == spa_format::mediaSubtype as u32 {
-                            if p.value.r#type == SPA_TYPE_Id {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_id>(&p.value).value
-                                };
-                                println!("  * format.media subtype = {value}");
-                            } else if p.value.r#type == SPA_TYPE_Choice {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value)
-                                };
-                                assert_eq!(value.element_pod().r#type, SPA_TYPE_Id);
-
-                                if value.body.r#type == SPA_CHOICE_None {
-                                    let current_value = unsafe {
-                                        core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                    };
-                                    println!(
-                                        "  * format.media subtype = choice.none<u32> {current_value}"
-                                    );
-                                } else {
-                                    panic!("format.media subtype.choice = t:{}", value.body.r#type);
-                                }
-                            } else {
-                                panic!("  * format.media subtype ?= t:{}", p.value.r#type);
-                            }
-                        } else if p.key == spa_format::AUDIO_format as u32 {
-                            if p.value.r#type == SPA_TYPE_Id {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_id>(&p.value).value
-                                };
-                                println!("  * format.audio format = {value}");
-                            } else if p.value.r#type == SPA_TYPE_Choice {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value)
-                                };
-                                assert_eq!(value.element_pod().r#type, SPA_TYPE_Id);
-
-                                if value.body.r#type == SPA_CHOICE_None {
-                                    let current_value = unsafe {
-                                        core::ptr::read(value.body.values.as_ptr().cast::<u32>())
-                                    };
-                                    println!(
-                                        "  * format.audio format = choice.none<id> {current_value}"
-                                    );
-                                } else if value.body.r#type == SPA_CHOICE_Enum {
-                                    let values =
-                                        unsafe { SPAPODChoiceEnum::<u32>::read_unchecked(value) };
-
-                                    println!(
-                                        "  * format.audio format = choice.enum<id> {values:?}"
-                                    );
-                                } else {
-                                    panic!("format.audio format.choice = t:{}", value.body.r#type);
-                                }
-                            } else {
-                                panic!("  * format.audio format ?= t:{}", p.value.r#type);
-                            }
-                        } else if p.key == spa_format::AUDIO_rate as u32 {
-                            if p.value.r#type == SPA_TYPE_Int {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_int>(&p.value).value
-                                };
-                                println!("  * audio rate = {value}");
-                            } else if p.value.r#type == SPA_TYPE_Choice {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value)
-                                };
-                                assert_eq!(value.body.child.r#type, SPA_TYPE_Int);
-
-                                if value.body.r#type == SPA_CHOICE_None {
-                                    let current_value = unsafe {
-                                        core::ptr::read(value.body.values.as_ptr().cast::<i32>())
-                                    };
-                                    println!(
-                                        "  * format.audio rate = choice.none<int> {current_value}"
-                                    );
-                                } else if value.body.r#type == SPA_CHOICE_Range {
-                                    let range =
-                                        unsafe { SPAPODChoiceRange::<i32>::read_unchecked(value) };
-
-                                    println!("  * format.audio rate = choice.range<int> {range:?}");
-                                } else if value.body.r#type == SPA_CHOICE_Enum {
-                                    let values =
-                                        unsafe { SPAPODChoiceEnum::<i32>::read_unchecked(value) };
-
-                                    println!("  * format.audio rate = choice.enum<id> {values:?}");
-                                } else {
-                                    panic!("format.audio rate.choice = t:{}", value.body.r#type);
-                                }
-                            } else {
-                                panic!("  * format.audio rate ?= t:{}", p.value.r#type);
-                            }
-                        } else if p.key == spa_format::AUDIO_channels as u32 {
-                            if p.value.r#type == SPA_TYPE_Int {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_int>(&p.value)
-                                };
-                                println!("  * format.audio channels = {}", value.value);
-                            } else if p.value.r#type == SPA_TYPE_Choice {
-                                let value = unsafe {
-                                    core::mem::transmute::<&spa_pod, &spa_pod_choice>(&p.value)
-                                };
-                                assert_eq!(value.element_pod().r#type, SPA_TYPE_Int);
-
-                                if value.body.r#type == SPA_CHOICE_None {
-                                    let current_value = unsafe {
-                                        core::ptr::read(value.body.values.as_ptr().cast::<i32>())
-                                    };
-                                    println!(
-                                        "  * format.audio channels = choice.none<int> {current_value}"
-                                    );
-                                } else if value.body.r#type == SPA_CHOICE_Enum {
-                                    let values =
-                                        unsafe { SPAPODChoiceEnum::<i32>::read_unchecked(value) };
-
-                                    println!(
-                                        "  * format.audio channels = choice.enum<id> {values:?}"
-                                    );
-                                } else {
-                                    panic!(
-                                        "format.audio channels.choice = t:{}",
-                                        value.body.r#type
-                                    );
-                                }
-                            } else {
-                                panic!("  * format.audio channels ?= t:{}", p.value.r#type);
-                            }
-                        } else if p.key == spa_format::AUDIO_position as u32 {
-                            let values = SPAPODArrayIterator::new(spa_assert_array(&p.value))
-                                .copied()
-                                .collect::<Vec<u32>>();
-                            println!("  * format.audio position = {values:?}");
-                        } else {
-                            println!("  * format.{} {}", p.key, p.value.r#type);
-                        }
-                    }
-                } else {
-                    println!("  * param port config: {} t:{}", p.key, p.value.r#type);
-                }
-            }
-        } else if pod.body.r#type == SPA_TYPE_OBJECT_ParamLatency {
-            let mut direction = None;
-            let mut min_quantum = None;
-            let mut max_quantum = None;
-            let mut min_rate = None;
-            let mut max_rate = None;
-            let mut min_ns = None;
-            let mut max_ns = None;
-            for p in SPAPODObjectPropsIterator::new(pod) {
-                if p.key == spa_param_latency::direction as u32 {
-                    assert!(direction.is_none(), "multiprop: direction");
-                    direction = Some(spa_assert_id(&p.value).value);
-                } else if p.key == spa_param_latency::minQuantum as u32 {
-                    assert!(min_quantum.is_none(), "multiprop: minQuantum");
-                    min_quantum = Some(spa_assert_float(&p.value).value);
-                } else if p.key == spa_param_latency::maxQuantum as u32 {
-                    assert!(max_quantum.is_none(), "multiprop: maxQuantum");
-                    max_quantum = Some(spa_assert_float(&p.value).value);
-                } else if p.key == spa_param_latency::minRate as u32 {
-                    assert!(min_rate.is_none(), "multiprop: minRate");
-                    min_rate = Some(spa_assert_int(&p.value).value);
-                } else if p.key == spa_param_latency::maxRate as u32 {
-                    assert!(max_rate.is_none(), "multiprop: maxRate");
-                    max_rate = Some(spa_assert_int(&p.value).value);
-                } else if p.key == spa_param_latency::minNs as u32 {
-                    assert!(min_ns.is_none(), "multiprop: minNs");
-                    min_ns = Some(spa_assert_long(&p.value).value);
-                } else if p.key == spa_param_latency::maxNs as u32 {
-                    assert!(max_ns.is_none(), "multiprop: maxNs");
-                    max_ns = Some(spa_assert_long(&p.value).value);
-                } else {
-                    panic!("param latency: {} t:{}", p.key, p.value.r#type);
-                }
-            }
-
-            #[derive(Debug)]
-            enum Direction {
-                In,
-                Out,
-            }
-
-            let direction = match direction.expect("missing: direction") {
-                v if v == SPA_DIRECTION_INPUT as u32 => Direction::In,
-                v if v == SPA_DIRECTION_OUTPUT as u32 => Direction::Out,
-                v => panic!("invalid direction id: {v}"),
-            };
-            let min_quantum = min_quantum.expect("missing: minQuantum");
-            let max_quantum = max_quantum.expect("missing: maxQuantum");
-            let min_rate = min_rate.expect("missing: minRate");
-            let max_rate = max_rate.expect("missing: maxRate");
-            let min_ns = min_ns.expect("missing: minNs");
-            let max_ns = max_ns.expect("missing: maxNs");
-            println!(
-                "  * param latency: {direction:?} {min_quantum}..{max_quantum} {min_rate}..{max_rate} {min_ns}..{max_ns}"
-            );
         } else {
-            println!("  * object param: {}", pod.body.r#type);
+            println!("  * object param: {}", pod.object_type());
         }
     } else {
-        println!("  * param type: {}", pod.r#type);
+        println!("  * param type: {:?}", pod.r#type());
     }
 }
 
@@ -1275,230 +812,5 @@ extern "C" fn port_params(
     next: u32,
     param: *const spa_pod,
 ) {
-    println!("node params {seq} {id} {index} {next}");
-}
-
-#[inline(always)]
-fn spa_assert_bool(v: &spa_pod) -> &spa_pod_bool {
-    assert_eq!(v.r#type, SPA_TYPE_Bool);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_bool>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_id(v: &spa_pod) -> &spa_pod_id {
-    assert_eq!(v.r#type, SPA_TYPE_Id);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_id>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_int(v: &spa_pod) -> &spa_pod_int {
-    assert_eq!(v.r#type, SPA_TYPE_Int);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_int>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_long(v: &spa_pod) -> &spa_pod_long {
-    assert_eq!(v.r#type, SPA_TYPE_Long);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_long>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_float(v: &spa_pod) -> &spa_pod_float {
-    assert_eq!(v.r#type, SPA_TYPE_Float);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_float>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_double(v: &spa_pod) -> &spa_pod_double {
-    assert_eq!(v.r#type, SPA_TYPE_Double);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_double>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_string(v: &spa_pod) -> &spa_pod_string {
-    assert_eq!(v.r#type, SPA_TYPE_String);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_string>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_array(v: &spa_pod) -> &spa_pod_array {
-    assert_eq!(v.r#type, SPA_TYPE_Array);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_array>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_choice(v: &spa_pod) -> &spa_pod_choice {
-    assert_eq!(v.r#type, SPA_TYPE_Choice);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_choice>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_struct(v: &spa_pod) -> &spa_pod_struct {
-    assert_eq!(v.r#type, SPA_TYPE_Struct);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_struct>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_object(v: &spa_pod) -> &spa_pod_object {
-    assert_eq!(v.r#type, SPA_TYPE_Object);
-    unsafe { core::mem::transmute::<&spa_pod, &spa_pod_object>(v) }
-}
-
-#[inline(always)]
-fn spa_assert_object_of(v: &spa_pod, object_type: spa_type) -> &spa_pod_object {
-    let v = spa_assert_object(v);
-    assert_eq!(v.body.r#type, object_type);
-    v
-}
-
-#[inline(always)]
-const fn spa_pod_string_get_value(v: &spa_pod_string) -> &core::ffi::CStr {
-    unsafe { core::ffi::CStr::from_ptr(v.value.as_ptr() as _) }
-}
-
-#[derive(Debug, Clone)]
-pub struct SPAPODChoiceRange<T> {
-    pub default: T,
-    pub min: T,
-    pub max: T,
-}
-impl<T> SPAPODChoiceRange<T> {
-    pub unsafe fn read_unchecked(pod: &spa_pod_choice) -> Self {
-        debug_assert!(pod.pod.size >= 16 + pod.element_pod().size * 3);
-
-        Self {
-            default: unsafe { core::ptr::read(pod.body.values.as_ptr().cast::<T>()) },
-            min: unsafe {
-                core::ptr::read(
-                    pod.body
-                        .values
-                        .as_ptr()
-                        .add(pod.element_pod().size as usize)
-                        .cast::<T>(),
-                )
-            },
-            max: unsafe {
-                core::ptr::read(
-                    pod.body
-                        .values
-                        .as_ptr()
-                        .add((pod.element_pod().size * 2) as usize)
-                        .cast::<T>(),
-                )
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SPAPODChoiceEnum<T> {
-    pub default: T,
-    pub alternatives: Vec<T>,
-}
-impl<T> SPAPODChoiceEnum<T> {
-    pub unsafe fn read_unchecked(pod: &spa_pod_choice) -> Self {
-        debug_assert!(pod.pod.size >= 16 + pod.element_pod().size);
-
-        let default = unsafe { core::ptr::read(pod.body.values.as_ptr().cast::<T>()) };
-        let mut alternatives = Vec::new();
-        let mut o = pod.element_pod().size as usize;
-        while o + 16 + pod.element_pod().size as usize <= pod.pod.size as usize {
-            alternatives
-                .push(unsafe { core::ptr::read(pod.body.values.as_ptr().add(o).cast::<T>()) });
-            o += pod.element_pod().size as usize;
-        }
-
-        Self {
-            default,
-            alternatives,
-        }
-    }
-}
-
-pub struct SPAPODObjectPropsIterator<'a> {
-    pod: &'a spa_pod_object,
-    offset: usize,
-}
-impl<'a> SPAPODObjectPropsIterator<'a> {
-    pub fn new(pod: &'a spa_pod_object) -> Self {
-        Self { pod, offset: 0 }
-    }
-}
-impl<'a> Iterator for SPAPODObjectPropsIterator<'a> {
-    type Item = &'a spa_pod_prop;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // +8: spa_pod_object_bodyの頭のぶん
-        if self.offset + 8 >= self.pod.pod.size as usize {
-            return None;
-        }
-
-        let v = unsafe {
-            &*self
-                .pod
-                .body
-                .props
-                .as_ptr()
-                .add(self.offset)
-                .cast::<spa_pod_prop>()
-        };
-        // round up to 8 bytes
-        self.offset = (self.offset + v.total_size() + 7) & !7;
-        Some(v)
-    }
-}
-
-pub struct SPAPODStructMemberIterator<'a> {
-    pod: &'a spa_pod_struct,
-    offset: usize,
-}
-impl<'a> SPAPODStructMemberIterator<'a> {
-    pub fn new(pod: &'a spa_pod_struct) -> Self {
-        Self { pod, offset: 0 }
-    }
-}
-impl<'a> Iterator for SPAPODStructMemberIterator<'a> {
-    type Item = &'a spa_pod;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.offset >= self.pod.pod.size as usize {
-            return None;
-        }
-
-        let v = unsafe { &*self.pod.values.as_ptr().add(self.offset).cast::<spa_pod>() };
-        // round up to 8 bytes
-        self.offset = (self.offset + v.total_size() + 7) & !7;
-        Some(v)
-    }
-}
-
-pub struct SPAPODArrayIterator<'a, T> {
-    pod: &'a spa_pod_array,
-    offset: usize,
-    _marker: core::marker::PhantomData<*const T>,
-}
-impl<'a, T> SPAPODArrayIterator<'a, T> {
-    pub fn new(pod: &'a spa_pod_array) -> Self {
-        Self {
-            pod,
-            offset: 0,
-            _marker: core::marker::PhantomData,
-        }
-    }
-}
-impl<'a, T: 'a> Iterator for SPAPODArrayIterator<'a, T> {
-    type Item = &'a T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // 8: spa_pod_array_body::valuesのオフセット
-        if self.pod.body.child.size > 0
-            && self.offset + 8 + self.pod.body.child.size as usize >= self.pod.pod.size as usize
-        {
-            return None;
-        }
-
-        let v = unsafe { &*self.pod.body.values.as_ptr().add(self.offset).cast::<T>() };
-        self.offset += self.pod.body.child.size as usize;
-        Some(v)
-    }
+    println!("port params {seq} {id} {index} {next}");
 }

@@ -264,6 +264,7 @@ pub struct pw_core_methods {
 pub const PW_VERSION_CORE_METHODS: u32 = 0;
 
 impl pw_core {
+    #[inline]
     pub unsafe fn add_listener(
         object: *mut Self,
         listener: *mut spa_hook,
@@ -278,12 +279,37 @@ impl pw_core {
         }
     }
 
+    #[inline]
     pub unsafe fn sync(object: *mut Self, id: u32, seq: c_int) -> c_int {
         unsafe {
             let _i: *mut spa_interface = object.cast::<spa_interface>();
             ((*(*_i).cb.funcs.cast::<pw_core_methods>())
                 .sync
                 .unwrap_unchecked())((*_i).cb.data, id, seq)
+        }
+    }
+
+    #[inline]
+    pub unsafe fn get_registry(
+        this: *mut Self,
+        version: u32,
+        user_data_size: usize,
+    ) -> *mut pw_registry {
+        unsafe {
+            let cb = &(*this.cast::<spa_interface>()).cb;
+            ((*cb.funcs.cast::<pw_core_methods>())
+                .get_registry
+                .unwrap_unchecked())(cb.data, version, user_data_size)
+        }
+    }
+
+    #[inline]
+    pub unsafe fn destroy(this: *mut Self, proxy: *mut c_void) -> c_int {
+        unsafe {
+            let cb = &(*this.cast::<spa_interface>()).cb;
+            ((*cb.funcs.cast::<pw_core_methods>())
+                .destroy
+                .unwrap_unchecked())(cb.data, proxy)
         }
     }
 }
@@ -330,6 +356,49 @@ pub struct pw_registry_methods {
 }
 
 pub const PW_VERSION_REGISTRY_METHOD: u32 = 0;
+
+impl pw_registry {
+    #[inline]
+    pub unsafe fn add_listener(
+        this: *mut Self,
+        listener: *mut spa_hook,
+        events: *const pw_registry_events,
+        data: *mut c_void,
+    ) -> c_int {
+        unsafe {
+            let cb = &(*this.cast::<spa_interface>()).cb;
+            ((*cb.funcs.cast::<pw_registry_methods>())
+                .add_listener
+                .unwrap_unchecked())(cb.data, listener, events, data)
+        }
+    }
+
+    #[inline]
+    pub unsafe fn bind(
+        this: *mut Self,
+        id: u32,
+        r#type: *const c_char,
+        version: u32,
+        user_data_size: usize,
+    ) -> *mut c_void {
+        unsafe {
+            let cb = &(*this.cast::<spa_interface>()).cb;
+            ((*cb.funcs.cast::<pw_registry_methods>())
+                .bind
+                .unwrap_unchecked())(cb.data, id, r#type, version, user_data_size)
+        }
+    }
+
+    #[inline]
+    pub unsafe fn destroy(this: *mut Self, id: u32) -> c_int {
+        unsafe {
+            let cb = &(*this.cast::<spa_interface>()).cb;
+            ((*cb.funcs.cast::<pw_registry_methods>())
+                .destroy
+                .unwrap_unchecked())(cb.data, id)
+        }
+    }
+}
 
 #[repr(C)]
 pub struct pw_client(

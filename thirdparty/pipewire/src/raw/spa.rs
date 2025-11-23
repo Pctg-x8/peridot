@@ -458,7 +458,7 @@ pub struct spa_pod_rectangle {
 #[repr(C)]
 pub struct spa_pod_fraction {
     pub pod: spa_pod,
-    pub valie: spa_fraction,
+    pub value: spa_fraction,
 }
 
 #[repr(C)]

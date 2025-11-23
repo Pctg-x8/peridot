@@ -1,6 +1,12 @@
-use std::io::{IoSlice, Write};
+use std::{ffi::CStr, ops::Deref};
 
-use crate::raw::spa_rectangle;
+use crate::raw::{
+    SPA_CHOICE_Enum, SPA_CHOICE_Flags, SPA_CHOICE_None, SPA_CHOICE_Range, SPA_CHOICE_Step,
+    spa_fraction, spa_pod, spa_pod_array, spa_pod_bitmap, spa_pod_bool, spa_pod_bytes,
+    spa_pod_choice, spa_pod_double, spa_pod_float, spa_pod_fraction, spa_pod_id, spa_pod_int,
+    spa_pod_long, spa_pod_object, spa_pod_prop, spa_pod_rectangle, spa_pod_string, spa_pod_struct,
+    spa_rectangle,
+};
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +31,18 @@ pub enum Type {
     Fd,
     Choice,
     Pod,
+}
+impl TryFrom<u32> for Type {
+    type Error = u32;
+
+    #[inline]
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if Self::None as u32 <= value && value <= Self::Pod as u32 {
+            Ok(unsafe { core::mem::transmute(value) })
+        } else {
+            Err(value)
+        }
+    }
 }
 
 pub struct Builder {
@@ -242,6 +260,739 @@ impl Builder {
     }
 }
 
+#[repr(transparent)]
+pub struct Parser(spa_pod);
+impl Parser {
+    pub fn new<'a>(head: &'a spa_pod) -> &'a Self {
+        unsafe { core::mem::transmute(head) }
+    }
+
+    #[inline(always)]
+    pub fn size(&self) -> u32 {
+        self.0.size
+    }
+
+    #[inline(always)]
+    pub fn r#type(&self) -> Result<Type, u32> {
+        self.0.r#type.try_into()
+    }
+
+    #[inline(always)]
+    pub fn try_as_none(&self) -> Option<&ParserNone> {
+        if self.r#type() == Ok(Type::None) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_bool(&self) -> Option<&ParserBool> {
+        if self.r#type() == Ok(Type::Bool) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_id(&self) -> Option<&ParserId> {
+        if self.r#type() == Ok(Type::Id) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_int(&self) -> Option<&ParserInt> {
+        if self.r#type() == Ok(Type::Int) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_long(&self) -> Option<&ParserLong> {
+        if self.r#type() == Ok(Type::Long) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_float(&self) -> Option<&ParserFloat> {
+        if self.r#type() == Ok(Type::Float) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_double(&self) -> Option<&ParserDouble> {
+        if self.r#type() == Ok(Type::Double) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_string(&self) -> Option<&ParserString> {
+        if self.r#type() == Ok(Type::String) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_bytes(&self) -> Option<&ParserBytes> {
+        if self.r#type() == Ok(Type::Bytes) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_rectangle(&self) -> Option<&ParserRectangle> {
+        if self.r#type() == Ok(Type::Rectangle) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_fraction(&self) -> Option<&ParserFraction> {
+        if self.r#type() == Ok(Type::Fraction) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_bitmap(&self) -> Option<&ParserBitmap> {
+        if self.r#type() == Ok(Type::Bitmap) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_array(&self) -> Option<&ParserArray> {
+        if self.r#type() == Ok(Type::Array) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_choice(&self) -> Option<&ParserChoice> {
+        if self.r#type() == Ok(Type::Choice) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_struct(&self) -> Option<&ParserStruct> {
+        if self.r#type() == Ok(Type::Struct) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_object(&self) -> Option<&ParserObject> {
+        if self.r#type() == Ok(Type::Object) {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserNone(spa_pod);
+
+#[repr(transparent)]
+pub struct ParserBool(spa_pod_bool);
+impl ParserBool {
+    #[inline(always)]
+    pub fn value(&self) -> bool {
+        self.0.value != 0
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserId(spa_pod_id);
+impl ParserId {
+    #[inline(always)]
+    pub fn value(&self) -> u32 {
+        self.0.value
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserInt(spa_pod_int);
+impl ParserInt {
+    #[inline(always)]
+    pub fn value(&self) -> i32 {
+        self.0.value
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserLong(spa_pod_long);
+impl ParserLong {
+    #[inline(always)]
+    pub fn value(&self) -> i64 {
+        self.0.value
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserFloat(spa_pod_float);
+impl ParserFloat {
+    #[inline(always)]
+    pub fn value(&self) -> f32 {
+        self.0.value
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserDouble(spa_pod_double);
+impl ParserDouble {
+    #[inline(always)]
+    pub fn value(&self) -> f64 {
+        self.0.value
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserString(spa_pod_string);
+impl ParserString {
+    #[inline(always)]
+    pub fn value(&self) -> &CStr {
+        debug_assert!(
+            unsafe {
+                core::slice::from_raw_parts(
+                    (&self.0 as *const spa_pod_string)
+                        .cast::<core::ffi::c_char>()
+                        .add(core::mem::size_of::<spa_pod>()),
+                    self.0.pod.size as usize,
+                )
+                .contains(&0)
+            },
+            "illformed spa_pod_string (no nul byte in the range)"
+        );
+
+        unsafe {
+            core::ffi::CStr::from_ptr(
+                (&self.0 as *const spa_pod_string)
+                    .cast::<core::ffi::c_char>()
+                    .add(core::mem::size_of::<spa_pod>()),
+            )
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserBytes(spa_pod_bytes);
+impl ParserBytes {
+    #[inline(always)]
+    pub fn value(&self) -> &[u8] {
+        unsafe {
+            core::slice::from_raw_parts(
+                (&self.0 as *const spa_pod_bytes)
+                    .cast::<u8>()
+                    .add(core::mem::size_of::<spa_pod>()),
+                self.0.pod.size as _,
+            )
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserRectangle(spa_pod_rectangle);
+impl ParserRectangle {
+    #[inline(always)]
+    pub fn value(&self) -> &spa_rectangle {
+        &self.0.value
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserFraction(spa_pod_fraction);
+impl ParserFraction {
+    #[inline(always)]
+    pub fn value(&self) -> &spa_fraction {
+        &self.0.value
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserBitmap(spa_pod_bitmap);
+impl ParserBitmap {
+    #[inline(always)]
+    pub fn value(&self) -> &[u8] {
+        unsafe {
+            core::slice::from_raw_parts(
+                (&self.0 as *const spa_pod_bitmap)
+                    .cast::<u8>()
+                    .add(core::mem::size_of::<spa_pod>()),
+                self.0.pod.size as _,
+            )
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserArray(spa_pod_array);
+impl ParserArray {
+    #[inline(always)]
+    pub fn child_type(&self) -> Result<Type, u32> {
+        self.0.body.child.r#type.try_into()
+    }
+
+    #[inline(always)]
+    pub fn child_size(&self) -> u32 {
+        self.0.body.child.size
+    }
+
+    #[inline(always)]
+    pub fn values_head_ptr<T>(&self) -> *const T {
+        self.0.body.values.as_ptr().cast()
+    }
+
+    #[inline(always)]
+    pub unsafe fn values_unchecked<T: ArrayValue>(&self) -> &[T] {
+        debug_assert!(self.0.pod.size as usize >= core::mem::size_of::<spa_pod>());
+        debug_assert_eq!(self.0.body.child.r#type, T::TYPE as u32);
+
+        unsafe {
+            core::slice::from_raw_parts(
+                self.values_head_ptr::<T>(),
+                (self.0.pod.size as usize - core::mem::size_of::<spa_pod>())
+                    / core::mem::size_of::<T>(),
+            )
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChoiceType {
+    None,
+    Range,
+    Step,
+    Enum,
+    Flags,
+}
+impl TryFrom<u32> for ChoiceType {
+    type Error = u32;
+
+    #[inline(always)]
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if Self::None as u32 <= value && value <= Self::Flags as u32 {
+            Ok(unsafe { core::mem::transmute(value) })
+        } else {
+            Err(value)
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserChoice(spa_pod_choice);
+impl ParserChoice {
+    #[inline(always)]
+    pub fn try_as_none(&self) -> Option<&ParserChoiceNone> {
+        if self.0.body.r#type == SPA_CHOICE_None {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_range(&self) -> Option<&ParserChoiceRange> {
+        if self.0.body.r#type == SPA_CHOICE_Range {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_step(&self) -> Option<&ParserChoiceStep> {
+        if self.0.body.r#type == SPA_CHOICE_Step {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_enum(&self) -> Option<&ParserChoiceEnum> {
+        if self.0.body.r#type == SPA_CHOICE_Enum {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn try_as_flags(&self) -> Option<&ParserChoiceFlags> {
+        if self.0.body.r#type == SPA_CHOICE_Flags {
+            Some(unsafe { core::mem::transmute(self) })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn choice_type(&self) -> Result<ChoiceType, u32> {
+        self.0.body.r#type.try_into()
+    }
+
+    #[inline(always)]
+    pub fn child_type(&self) -> Result<Type, u32> {
+        self.0.body.child.r#type.try_into()
+    }
+
+    #[inline(always)]
+    pub fn child_size(&self) -> u32 {
+        self.0.body.child.size
+    }
+
+    #[inline(always)]
+    pub fn values_head_ptr<T>(&self) -> *const T {
+        self.0.body.values.as_ptr().cast()
+    }
+}
+impl Deref for ParserChoice {
+    type Target = Parser;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserChoiceNone(spa_pod_choice);
+impl ParserChoiceNone {
+    #[inline(always)]
+    fn check_invariant_size<T>(&self) -> bool {
+        self.0.pod.size as usize
+            >= core::mem::size_of::<u32>()
+                + core::mem::size_of::<u32>()
+                + core::mem::size_of::<spa_pod>()
+                + core::mem::size_of::<T>()
+    }
+
+    #[inline(always)]
+    pub unsafe fn current_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>() }
+    }
+}
+impl Deref for ParserChoiceNone {
+    type Target = ParserChoice;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserChoiceRange(spa_pod_choice);
+impl ParserChoiceRange {
+    #[inline(always)]
+    fn check_invariant_size<T>(&self) -> bool {
+        self.0.pod.size as usize
+            >= core::mem::size_of::<u32>()
+                + core::mem::size_of::<u32>()
+                + core::mem::size_of::<spa_pod>()
+                + core::mem::size_of::<[T; 3]>()
+    }
+
+    #[inline(always)]
+    pub unsafe fn default_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn min_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>().add(1) }
+    }
+
+    #[inline(always)]
+    pub unsafe fn max_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>().add(2) }
+    }
+
+    #[inline(always)]
+    pub unsafe fn values_unchecked<T>(&self) -> &ChoiceRange<T> {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>().cast() }
+    }
+}
+impl Deref for ParserChoiceRange {
+    type Target = ParserChoice;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct ChoiceRange<T> {
+    pub default: T,
+    pub min: T,
+    pub max: T,
+}
+
+#[repr(transparent)]
+pub struct ParserChoiceStep(spa_pod_choice);
+impl ParserChoiceStep {
+    #[inline(always)]
+    fn check_invariant_size<T>(&self) -> bool {
+        self.0.pod.size as usize
+            >= core::mem::size_of::<u32>()
+                + core::mem::size_of::<u32>()
+                + core::mem::size_of::<spa_pod>()
+                + core::mem::size_of::<[T; 4]>()
+    }
+
+    #[inline(always)]
+    pub unsafe fn default_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn min_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>().add(1) }
+    }
+
+    #[inline(always)]
+    pub unsafe fn max_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>().add(2) }
+    }
+
+    #[inline(always)]
+    pub unsafe fn step_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>().add(3) }
+    }
+}
+impl Deref for ParserChoiceStep {
+    type Target = ParserChoice;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserChoiceEnum(spa_pod_choice);
+impl ParserChoiceEnum {
+    #[inline(always)]
+    fn check_invariant_size<T>(&self) -> bool {
+        self.0.pod.size as usize
+            >= core::mem::size_of::<u32>()
+                + core::mem::size_of::<u32>()
+                + core::mem::size_of::<spa_pod>()
+                + core::mem::size_of::<T>()
+    }
+
+    #[inline(always)]
+    pub unsafe fn default_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn alternatives_unchecked<T>(&self) -> &[T] {
+        debug_assert!(self.check_invariant_size::<T>());
+
+        unsafe {
+            core::slice::from_raw_parts(
+                self.values_head_ptr::<T>().add(1),
+                self.0.pod.size as usize
+                    - core::mem::size_of::<u32>()
+                    - core::mem::size_of::<u32>()
+                    - core::mem::size_of::<spa_pod>()
+                    - core::mem::size_of::<T>(),
+            )
+        }
+    }
+}
+impl Deref for ParserChoiceEnum {
+    type Target = ParserChoice;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserChoiceFlags(spa_pod_choice);
+impl ParserChoiceFlags {
+    #[inline(always)]
+    fn check_invariant_size<T>(&self) -> bool {
+        self.0.pod.size as usize
+            >= core::mem::size_of::<u32>()
+                + core::mem::size_of::<u32>()
+                + core::mem::size_of::<spa_pod>()
+                + core::mem::size_of::<T>()
+    }
+
+    #[inline(always)]
+    pub unsafe fn default_unchecked<T>(&self) -> &T {
+        debug_assert!(self.check_invariant_size::<T>());
+        unsafe { &*self.values_head_ptr::<T>() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn possible_flags_unchecked<T>(&self) -> &[T] {
+        debug_assert!(self.check_invariant_size::<T>());
+
+        unsafe {
+            core::slice::from_raw_parts(
+                self.values_head_ptr::<T>().add(1),
+                self.0.pod.size as usize
+                    - core::mem::size_of::<u32>()
+                    - core::mem::size_of::<u32>()
+                    - core::mem::size_of::<spa_pod>()
+                    - core::mem::size_of::<T>(),
+            )
+        }
+    }
+}
+impl Deref for ParserChoiceFlags {
+    type Target = ParserChoice;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserStruct(spa_pod_struct);
+impl ParserStruct {
+    #[inline(always)]
+    pub fn iter_members<'a>(&'a self) -> StructMemberIterator<'a> {
+        StructMemberIterator {
+            pod: &self.0,
+            offset: 0,
+        }
+    }
+}
+pub struct StructMemberIterator<'a> {
+    pod: &'a spa_pod_struct,
+    offset: usize,
+}
+impl<'a> Iterator for StructMemberIterator<'a> {
+    type Item = &'a Parser;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.offset >= self.pod.pod.size as usize {
+            return None;
+        }
+
+        let v = unsafe { &*self.pod.values.as_ptr().add(self.offset).cast::<Parser>() };
+        // round up to 8 bytes
+        self.offset = (self.offset + v.0.total_size() + 7) & !7;
+        Some(v)
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserObject(spa_pod_object);
+impl ParserObject {
+    #[inline(always)]
+    pub fn object_type(&self) -> u32 {
+        self.0.body.r#type
+    }
+
+    #[inline(always)]
+    pub fn object_id(&self) -> u32 {
+        self.0.body.id
+    }
+
+    #[inline(always)]
+    pub fn iter_props<'a>(&'a self) -> ObjectPropsIterator<'a> {
+        ObjectPropsIterator {
+            pod: &self.0,
+            offset: 0,
+        }
+    }
+}
+pub struct ObjectPropsIterator<'a> {
+    pod: &'a spa_pod_object,
+    offset: usize,
+}
+impl<'a> Iterator for ObjectPropsIterator<'a> {
+    type Item = &'a ParserProp;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // +8: spa_pod_object_bodyの頭のぶん
+        if self.offset + 8 >= self.pod.pod.size as usize {
+            return None;
+        }
+
+        let v = unsafe {
+            &*self
+                .pod
+                .body
+                .props
+                .as_ptr()
+                .add(self.offset)
+                .cast::<ParserProp>()
+        };
+        // round up to 8 bytes
+        self.offset = (self.offset + v.0.total_size() + 7) & !7;
+        Some(v)
+    }
+}
+
+#[repr(transparent)]
+pub struct ParserProp(spa_pod_prop);
+impl ParserProp {
+    #[inline(always)]
+    pub fn key(&self) -> u32 {
+        self.0.key
+    }
+
+    #[inline(always)]
+    pub fn value(&self) -> &Parser {
+        Parser::new(&self.0.value)
+    }
+}
+
 pub unsafe trait ArrayValue {
     const TYPE: Type;
 }
@@ -268,11 +1019,22 @@ impl ArrayValueBool {
     pub const fn new(v: bool) -> Self {
         Self(if v { 1 } else { 0 })
     }
+
+    #[inline(always)]
+    pub const fn value(&self) -> bool {
+        self.0 != 0
+    }
 }
 impl From<bool> for ArrayValueBool {
     #[inline(always)]
     fn from(value: bool) -> Self {
         Self::new(value)
+    }
+}
+impl core::fmt::Debug for ArrayValueBool {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (self.0 != 0).fmt(f)
     }
 }
 unsafe impl ArrayValue for ArrayValueBool {
