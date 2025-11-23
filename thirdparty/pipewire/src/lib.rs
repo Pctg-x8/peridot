@@ -7,7 +7,9 @@ use crate::raw::{
 use core::{
     cell::UnsafeCell,
     ffi::*,
+    mem::MaybeUninit,
     ops::{Deref, DerefMut},
+    pin::Pin,
     ptr::NonNull,
 };
 
@@ -113,6 +115,28 @@ impl<T: PipewireProxy> OwnedProxy<T> {
     }
 }
 
+pub trait AsLoop {
+    fn as_loop(&self) -> *mut raw::pw_loop;
+}
+impl<'a, T: 'a + ?Sized> AsLoop for &'a T
+where
+    T: AsLoop,
+{
+    #[inline(always)]
+    fn as_loop(&self) -> *mut raw::pw_loop {
+        T::as_loop(*self)
+    }
+}
+impl<T: PipewireDrop> AsLoop for Owned<T>
+where
+    T: AsLoop,
+{
+    #[inline(always)]
+    fn as_loop(&self) -> *mut raw::pw_loop {
+        T::as_loop(&**self)
+    }
+}
+
 #[repr(transparent)]
 pub struct Context(UnsafeCell<raw::pw_context>);
 impl PipewireDrop for Context {
@@ -124,13 +148,13 @@ impl PipewireDrop for Context {
 impl Context {
     #[inline]
     pub fn new(
-        main_loop: *mut raw::pw_loop,
+        main_loop: impl AsLoop,
         props: Option<&mut Properties>,
         user_data_size: usize,
     ) -> std::io::Result<Owned<Self>> {
         let r = unsafe {
             raw::pw_context_new(
-                main_loop,
+                main_loop.as_loop(),
                 props.map_or_else(core::ptr::null_mut, |x| x as *mut _ as _),
                 user_data_size,
             )
@@ -175,9 +199,9 @@ impl Core {
     #[inline(always)]
     pub fn add_listener<L: CoreEventListener + 'static>(
         &mut self,
+        mut hook: Pin<&mut MaybeUninit<raw::spa_hook>>,
         listener: &mut L,
-    ) -> std::io::Result<spa_hook> {
-        let mut hook = core::mem::MaybeUninit::uninit();
+    ) -> std::io::Result<()> {
         let r = unsafe {
             raw::pw_core::add_listener(
                 self.0.get_mut(),
@@ -189,7 +213,7 @@ impl Core {
         if r < 0 {
             Err(std::io::Error::from_raw_os_error(-r))
         } else {
-            Ok(unsafe { hook.assume_init() })
+            Ok(())
         }
     }
 
@@ -220,9 +244,9 @@ impl Registry {
     #[inline(always)]
     pub fn add_listener<L: RegistryEventListener + 'static>(
         &mut self,
+        mut hook: Pin<&mut MaybeUninit<raw::spa_hook>>,
         listener: &mut L,
-    ) -> std::io::Result<spa_hook> {
-        let mut hook = core::mem::MaybeUninit::uninit();
+    ) -> std::io::Result<()> {
         let r = unsafe {
             raw::pw_registry::add_listener(
                 self.0.get_mut(),
@@ -234,7 +258,7 @@ impl Registry {
         if r < 0 {
             Err(std::io::Error::from_raw_os_error(-r))
         } else {
-            Ok(unsafe { hook.assume_init() })
+            Ok(())
         }
     }
 
@@ -294,7 +318,7 @@ impl Stream {
     #[inline]
     pub fn add_listener<L: StreamEventListener + 'static>(
         &mut self,
-        mut hook: core::pin::Pin<&mut core::mem::MaybeUninit<raw::spa_hook>>,
+        mut hook: Pin<&mut MaybeUninit<raw::spa_hook>>,
         listener: &mut L,
     ) {
         unsafe {
@@ -422,10 +446,18 @@ impl PipewireDrop for MainLoop {
         unsafe { raw::pw_main_loop_destroy(self.0.get_mut()) }
     }
 }
+impl AsLoop for MainLoop {
+    #[inline(always)]
+    fn as_loop(&self) -> *mut raw::pw_loop {
+        unsafe { raw::pw_main_loop_get_loop(self.0.get()) }
+    }
+}
 impl MainLoop {
     #[inline]
-    pub fn new(props: *const spa_dict) -> std::io::Result<Owned<Self>> {
-        let r = unsafe { raw::pw_main_loop_new(props) };
+    pub fn new(props: Option<NonNull<spa_dict>>) -> std::io::Result<Owned<Self>> {
+        let r = unsafe {
+            raw::pw_main_loop_new(props.map_or_else(core::ptr::null, |x| x.as_ptr()) as _)
+        };
 
         Owned::from_raw(r.cast()).ok_or_else(std::io::Error::last_os_error)
     }
@@ -595,7 +627,7 @@ pub trait RegistryEventListener {
         permissions: u32,
         r#type: &CStr,
         version: u32,
-        props: *const spa_dict,
+        props: &spa::Dict,
     ) {
     }
     #[allow(unused_variables)]
@@ -618,7 +650,7 @@ pub const fn registry_event_fptbl<L: RegistryEventListener + 'static>()
                 permissions,
                 CStr::from_ptr(r#type),
                 version,
-                props,
+                &*props.cast(),
             )
         }
     }

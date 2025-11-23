@@ -124,4 +124,26 @@ impl<'k, 'v> DictItem<'k, 'v> {
             core::marker::PhantomData,
         )
     }
+
+    #[inline(always)]
+    pub const fn key(&self) -> &'k CStr {
+        unsafe { CStr::from_ptr(self.0.key) }
+    }
+
+    #[inline(always)]
+    pub const fn value(&self) -> &'k CStr {
+        unsafe { CStr::from_ptr(self.0.value) }
+    }
+}
+
+#[repr(transparent)]
+pub struct Dict<'k, 'v>(
+    raw::spa_dict,
+    core::marker::PhantomData<*const DictItem<'k, 'v>>,
+);
+impl<'k, 'v> Dict<'k, 'v> {
+    #[inline(always)]
+    pub const fn items<'a>(&'a self) -> &'a [DictItem<'k, 'v>] {
+        unsafe { core::slice::from_raw_parts(self.0.items.cast(), self.0.n_items as _) }
+    }
 }

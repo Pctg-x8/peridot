@@ -6,24 +6,25 @@ fn main() {
         pw_init(core::ptr::null_mut(), core::ptr::null_mut());
     }
 
-    let ml = pipewire::MainLoop::new(core::ptr::null()).expect("MainLoop::new");
-    let mut context = pipewire::Context::new(ml.r#loop(), None, 0).expect("Context::new");
+    let ml = pipewire::MainLoop::new(None).expect("MainLoop::new");
+    let mut context = pipewire::Context::new(&ml, None, 0).expect("Context::new");
     let mut core = context.connect(None, 0).expect("context.connect");
     let mut event_ctx = PwCoreContext {
         rt_seq: None,
         mainloop_ptr: ml.as_ptr(),
         registry_ptr: core::ptr::null_mut(),
     };
-    let _core_event_listener = core
-        .add_listener(&mut event_ctx)
+    let mut core_event_listener_hook = core::pin::pin!(core::mem::MaybeUninit::uninit());
+    core.add_listener(core_event_listener_hook.as_mut(), &mut event_ctx)
         .expect("core.add_listener");
 
     let mut registry = core
         .get_registry(PW_VERSION_REGISTRY, 0)
         .expect("core.get_registry");
     event_ctx.registry_ptr = registry.as_ptr();
-    let _registry_listener = unsafe { registry.as_mut() }
-        .add_listener(&mut event_ctx)
+    let mut registry_listener_hook = core::pin::pin!(core::mem::MaybeUninit::uninit());
+    unsafe { registry.as_mut() }
+        .add_listener(registry_listener_hook.as_mut(), &mut event_ctx)
         .expect("registry.add_listener");
 
     event_ctx.rt_seq = Some(core.sync().expect("issue sync"));
@@ -62,8 +63,8 @@ fn main() {
         stream_ptr: stream.as_ptr(),
         smp: 0,
     };
-    let mut stream_listener = core::pin::pin!(core::mem::MaybeUninit::uninit());
-    stream.add_listener(stream_listener.as_mut(), &mut stream_engine);
+    let mut stream_listener_hook = core::pin::pin!(core::mem::MaybeUninit::uninit());
+    stream.add_listener(stream_listener_hook.as_mut(), &mut stream_engine);
     stream
         .connect(
             pipewire::Direction::Output,
@@ -100,9 +101,12 @@ impl RegistryEventListener for PwCoreContext {
         permissions: u32,
         r#type: &CStr,
         version: u32,
-        props: *const spa_dict,
+        props: &pipewire::spa::Dict,
     ) {
-        println!("registry global: {id} {type:?} {version} {permissions:04o}");
+        println!("registry global: {id} {type:?} {version} {permissions:04o} {props:p}");
+        for p in props.items() {
+            println!("  * prop[{:?}] = {:?}", p.key(), p.value());
+        }
 
         if r#type == c"PipeWire:Interface:Device" {
             unsafe {
