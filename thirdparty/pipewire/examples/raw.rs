@@ -108,7 +108,7 @@ impl RegistryEventListener for PwCoreContext {
             println!("  * prop[{:?}] = {:?}", p.key(), p.value());
         }
 
-        if r#type == c"PipeWire:Interface:Device" {
+        if r#type == pipewire::Device::TYPE_NAME {
             unsafe {
                 let device = (*self.registry_ptr)
                     .bind::<pipewire::Device>(id, PW_VERSION_DEVICE, 0)
@@ -129,7 +129,7 @@ impl RegistryEventListener for PwCoreContext {
             }
         }
 
-        if r#type == c"PipeWire:Interface:Node" {
+        if r#type == pipewire::Node::TYPE_NAME {
             unsafe {
                 let o = (*self.registry_ptr)
                     .bind::<pipewire::Node>(id, PW_VERSION_NODE, 0)
