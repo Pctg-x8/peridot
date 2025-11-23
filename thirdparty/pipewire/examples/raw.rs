@@ -48,17 +48,14 @@ fn main() {
     let mut stream = pipewire::Stream::new(
         &core,
         c"test-audio-source",
-        Some(unsafe {
-            pw_properties_new(
-                c"media.type".as_ptr(),
-                c"Audio".as_ptr(),
-                c"media.category".as_ptr(),
-                c"Playback".as_ptr(),
-                c"media.role".as_ptr(),
-                c"Game".as_ptr(),
-                core::ptr::null::<core::ffi::c_char>(),
-            )
-        }),
+        Some(
+            pipewire::Properties::new(&[
+                pipewire::spa::DictItem::new(c"media.type", c"Audio"),
+                pipewire::spa::DictItem::new(c"media.category", c"Playback"),
+                pipewire::spa::DictItem::new(c"media.role", c"Game"),
+            ])
+            .expect("Properties::new"),
+        ),
     )
     .expect("Stream::new");
     let mut stream_engine = StreamEngine {
@@ -215,14 +212,17 @@ impl pipewire::StreamEventListener for StreamEngine {
         for dst in unsafe {
             core::slice::from_raw_parts_mut(data.data_ptr().cast::<[f32; 2]>(), frames as _)
         } {
-            let v = (core::f32::consts::TAU * 440.0 * self.smp as f32 / 44100.0).sin() * 0.5;
+            let v = (core::f32::consts::TAU * 440.0 * self.smp as f32 / 44100.0).sin() * 0.1;
             *dst = [v, v];
             self.smp += 1;
         }
 
-        *data.chunk_offset_mut() = 0;
-        *data.chunk_stride_mut() = 4 * 2;
-        *data.chunk_size_mut() = (frames * 4 * 2) as _;
+        data.update_chunk_info(
+            0,
+            4 * 2,
+            (frames * 4 * 2) as _,
+            pipewire::spa::ChunkFlags::NONE,
+        );
     }
 }
 

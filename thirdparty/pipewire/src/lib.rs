@@ -53,6 +53,12 @@ impl<T: PipewireDrop> Owned<T> {
     pub const fn as_ptr(&self) -> *mut T {
         self.0.as_ptr()
     }
+
+    pub const fn leak(self) -> *mut T {
+        let p = self.0.as_ptr();
+        core::mem::forget(self);
+        p
+    }
 }
 
 #[repr(transparent)]
@@ -119,13 +125,13 @@ impl Context {
     #[inline]
     pub fn new(
         main_loop: *mut raw::pw_loop,
-        props: Option<&mut raw::pw_properties>,
+        props: Option<&mut Properties>,
         user_data_size: usize,
     ) -> std::io::Result<Owned<Self>> {
         let r = unsafe {
             raw::pw_context_new(
                 main_loop,
-                props.map_or_else(core::ptr::null_mut, |x| x as *mut _),
+                props.map_or_else(core::ptr::null_mut, |x| x as *mut _ as _),
                 user_data_size,
             )
         };
@@ -136,13 +142,13 @@ impl Context {
     #[inline]
     pub fn connect(
         &mut self,
-        properties: Option<&mut raw::pw_properties>,
+        properties: Option<&mut Properties>,
         user_data_size: usize,
     ) -> std::io::Result<Owned<Core>> {
         let r = unsafe {
             raw::pw_context_connect(
                 self.0.get_mut(),
-                properties.map_or_else(core::ptr::null_mut, |x| x as *mut _),
+                properties.map_or_else(core::ptr::null_mut, |x| x as *mut _ as _),
                 user_data_size,
             )
         };
@@ -273,13 +279,13 @@ impl Stream {
     pub fn new(
         core: &Core,
         name: &CStr,
-        props: Option<*mut raw::pw_properties>,
+        props: Option<Owned<Properties>>,
     ) -> std::io::Result<Owned<Self>> {
         let r = unsafe {
             raw::pw_stream_new(
                 core.0.get(),
                 name.as_ptr(),
-                props.unwrap_or_else(core::ptr::null_mut),
+                props.map_or_else(core::ptr::null_mut, |x| x.leak()) as _,
             )
         };
         Owned::from_raw(r.cast()).ok_or_else(std::io::Error::last_os_error)
@@ -806,5 +812,25 @@ impl Buffer {
                 (*self.0.buffer).n_datas as _,
             )
         }
+    }
+}
+
+#[repr(C)]
+pub struct Properties(raw::pw_properties);
+impl PipewireDrop for Properties {
+    #[inline(always)]
+    unsafe fn pipewire_drop(&mut self) {
+        unsafe { raw::pw_properties_free(&mut self.0) }
+    }
+}
+impl Properties {
+    pub fn new(kvp_list: &[spa::DictItem]) -> std::io::Result<Owned<Self>> {
+        let spa_dict = raw::spa_dict {
+            flags: 0,
+            n_items: kvp_list.len() as _,
+            items: kvp_list.as_ptr().cast(),
+        };
+        let p = unsafe { raw::pw_properties_new_dict(&spa_dict) };
+        Owned::from_raw(p.cast()).ok_or_else(std::io::Error::last_os_error)
     }
 }

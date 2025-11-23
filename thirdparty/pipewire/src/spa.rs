@@ -1,6 +1,7 @@
 use bitflags::bitflags;
 
 use crate::raw;
+use core::ffi::*;
 
 pub mod pod;
 
@@ -30,6 +31,18 @@ impl Data {
     #[inline(always)]
     pub fn data_ptr(&self) -> *mut core::ffi::c_void {
         self.0.data
+    }
+
+    #[inline(always)]
+    pub fn update_chunk_info(&mut self, offset: u32, stride: i32, size: u32, flags: ChunkFlags) {
+        unsafe {
+            *self.0.chunk = raw::spa_chunk {
+                offset,
+                stride,
+                size,
+                flags: flags.bits(),
+            }
+        }
     }
 
     #[inline(always)]
@@ -92,5 +105,23 @@ impl TryFrom<u32> for DataType {
         } else {
             Err(value)
         }
+    }
+}
+
+#[repr(transparent)]
+pub struct DictItem<'k, 'v>(
+    raw::spa_dict_item,
+    core::marker::PhantomData<(&'k CStr, &'v CStr)>,
+);
+impl<'k, 'v> DictItem<'k, 'v> {
+    #[inline(always)]
+    pub const fn new(key: &'k CStr, value: &'v CStr) -> Self {
+        Self(
+            raw::spa_dict_item {
+                key: key.as_ptr(),
+                value: value.as_ptr(),
+            },
+            core::marker::PhantomData,
+        )
     }
 }
