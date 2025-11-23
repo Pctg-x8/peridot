@@ -38,6 +38,10 @@ impl AudioWriter {
         self.mixer.write().process(&mut generated);
         self.converter
             .convert(&generated, buf.datas_mut()[0].data().expect("null buffer?"));
+        let chunk = buf.datas_mut()[0].chunk_mut();
+        *chunk.offset_mut() = 0;
+        *chunk.stride_mut() = core::mem::size_of::<f32>() as _;
+        *chunk.size_mut() = (core::mem::size_of::<f32>() * sample_count) as _;
     }
 }
 impl Default for AudioWriter {
