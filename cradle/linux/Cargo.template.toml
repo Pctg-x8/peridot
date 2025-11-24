@@ -27,7 +27,6 @@ peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
     "content-type-v1"
 ] }
 pipewire = { path = "../../thirdparty/pipewire" }
-libspa-sys = "0.7.0"
 parking_lot = "0.12.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
