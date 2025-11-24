@@ -14,7 +14,7 @@ fn main() {
         mainloop_ptr: ml.as_ptr(),
         registry_ptr: core::ptr::null_mut(),
     };
-    let mut core_event_listener_hook = core::pin::pin!(core::mem::MaybeUninit::uninit());
+    let mut core_event_listener_hook = core::pin::pin!(pipewire::spa::Hook::new());
     core.add_listener(core_event_listener_hook.as_mut(), &mut event_ctx)
         .expect("core.add_listener");
 
@@ -22,7 +22,7 @@ fn main() {
         .get_registry(PW_VERSION_REGISTRY, 0)
         .expect("core.get_registry");
     event_ctx.registry_ptr = registry.as_ptr();
-    let mut registry_listener_hook = core::pin::pin!(core::mem::MaybeUninit::uninit());
+    let mut registry_listener_hook = core::pin::pin!(pipewire::spa::Hook::new());
     unsafe { registry.as_mut() }
         .add_listener(registry_listener_hook.as_mut(), &mut event_ctx)
         .expect("registry.add_listener");
@@ -63,7 +63,7 @@ fn main() {
         stream_ptr: stream.as_ptr(),
         smp: 0,
     };
-    let mut stream_listener_hook = core::pin::pin!(core::mem::MaybeUninit::uninit());
+    let mut stream_listener_hook = core::pin::pin!(pipewire::spa::Hook::new());
     stream.add_listener(stream_listener_hook.as_mut(), &mut stream_engine);
     stream
         .connect(

@@ -44,6 +44,20 @@ pub struct spa_list {
     pub next: *mut spa_list,
     pub prev: *mut spa_list,
 }
+impl spa_list {
+    #[inline]
+    pub fn is_initialized(&self) -> bool {
+        !self.prev.is_null()
+    }
+
+    #[inline]
+    pub fn remove(&mut self) {
+        unsafe {
+            (*self.prev).next = self.next;
+            (*self.next).prev = self.prev;
+        }
+    }
+}
 
 #[repr(C)]
 pub struct spa_dict_item {
@@ -84,4 +98,16 @@ pub struct spa_hook {
     pub cb: spa_callbacks,
     pub removed: Option<extern "C" fn(hook: *mut spa_hook)>,
     r#priv: *mut c_void,
+}
+impl spa_hook {
+    #[inline]
+    pub fn remove(&mut self) {
+        if self.link.is_initialized() {
+            self.link.remove();
+        }
+
+        if let Some(ref removed) = self.removed {
+            removed(self);
+        }
+    }
 }

@@ -3,6 +3,7 @@ name = "peridot-cradle-linux"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2021"
+build = "build.rs"
 
 [features]
 UseExternalAssetPath = []
@@ -25,7 +26,7 @@ peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
     "xdg-decoration-unstable-v1",
     "content-type-v1"
 ] }
-pipewire = "0.7.0"
+pipewire = { path = "../../thirdparty/pipewire" }
 libspa-sys = "0.7.0"
 parking_lot = "0.12.1"
 tracing = "0.1"
@@ -34,3 +35,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [dependencies.async-std]
 version = "1.13"
 features = ["attributes"]
+
+[build-dependencies]
+pipewire-linking.path = "../../thirdparty/pipewire/linking"

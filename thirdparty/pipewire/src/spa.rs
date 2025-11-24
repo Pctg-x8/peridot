@@ -147,3 +147,18 @@ impl<'k, 'v> Dict<'k, 'v> {
         unsafe { core::slice::from_raw_parts(self.0.items.cast(), self.0.n_items as _) }
     }
 }
+
+#[repr(transparent)]
+pub struct Hook(raw::spa_hook);
+impl Drop for Hook {
+    #[inline(always)]
+    fn drop(&mut self) {
+        self.0.remove()
+    }
+}
+impl Hook {
+    #[inline(always)]
+    pub const fn new() -> Self {
+        Self(unsafe { core::mem::MaybeUninit::zeroed().assume_init() })
+    }
+}

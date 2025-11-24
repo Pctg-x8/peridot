@@ -1,3 +1,6 @@
+[workspace]
+members = ["linking"]
+
 [package]
 name = "pipewire"
 version = "0.1.0"
@@ -7,3 +10,6 @@ build = "build.rs"
 [dependencies]
 bitflags = "2.10.0"
 libc = "0.2"
+
+[build-dependencies]
+pipewire-linking.path = "./linking"

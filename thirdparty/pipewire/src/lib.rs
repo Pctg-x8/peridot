@@ -217,13 +217,13 @@ impl Core {
     #[inline(always)]
     pub fn add_listener<L: CoreEventListener + 'static>(
         &mut self,
-        mut hook: Pin<&mut MaybeUninit<raw::spa_hook>>,
+        hook: Pin<&mut spa::Hook>,
         listener: &mut L,
     ) -> std::io::Result<()> {
         let r = unsafe {
             raw::pw_core::add_listener(
                 self.0.get_mut(),
-                hook.as_mut_ptr(),
+                hook.get_mut() as *mut _ as _,
                 core_event_fptbl::<L>(),
                 listener as *mut _ as _,
             )
@@ -264,13 +264,13 @@ impl Registry {
     #[inline(always)]
     pub fn add_listener<L: RegistryEventListener + 'static>(
         &mut self,
-        mut hook: Pin<&mut MaybeUninit<raw::spa_hook>>,
+        hook: Pin<&mut spa::Hook>,
         listener: &mut L,
     ) -> std::io::Result<()> {
         let r = unsafe {
             raw::pw_registry::add_listener(
                 self.0.get_mut(),
-                hook.as_mut_ptr(),
+                hook.get_mut() as *mut _ as _,
                 registry_event_fptbl::<L>(),
                 listener as *mut _ as _,
             )
@@ -340,13 +340,13 @@ impl Stream {
     #[inline]
     pub fn add_listener<L: StreamEventListener + 'static>(
         &mut self,
-        mut hook: Pin<&mut MaybeUninit<raw::spa_hook>>,
+        hook: Pin<&mut spa::Hook>,
         listener: &mut L,
     ) {
         unsafe {
             raw::pw_stream_add_listener(
                 self.0.get_mut(),
-                hook.as_mut_ptr(),
+                hook.get_mut() as *mut _ as _,
                 const { stream_event_fptbl::<L>() },
                 listener as *mut _ as _,
             );

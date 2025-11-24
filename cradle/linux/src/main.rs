@@ -160,8 +160,9 @@ impl<MainF: Future> GameDriver<MainF> {
             .set_nativelink(Box::new(input::InputNativeLink::new(pp)));
         engine.post_init();
         let _snd: Box<dyn SoundBackend> =
-            if sound_backend::pipewire::NativeAudioEngine::is_available() {
+            if let Some(init) = sound_backend::pipewire::NativeAudioEngine::try_init() {
                 Box::new(sound_backend::pipewire::NativeAudioEngine::new(
+                    init,
                     engine.audio_mixer(),
                 ))
             } else {
