@@ -8,122 +8,6 @@ use super::AudioBitstreamConverter;
 use super::Float32Converter;
 use super::SoundBackend;
 
-struct LoopDriver {
-    stream_ptr: *mut pw::Stream,
-    mixer: Arc<RwLock<peridot::audio::Mixer>>,
-    converter: Box<dyn AudioBitstreamConverter + Sync + Send>,
-}
-impl pw::StreamEventListener for LoopDriver {
-    #[tracing::instrument(
-        name = "<LoopDriver as pw::StreamEventListener>::state_changed",
-        skip(self)
-    )]
-    fn state_changed(
-        &mut self,
-        old: Result<pipewire::StreamState, std::ffi::c_int>,
-        state: Result<pipewire::StreamState, std::ffi::c_int>,
-        error: Option<&std::ffi::CStr>,
-    ) {
-        tracing::trace!("State Changed");
-    }
-
-    #[tracing::instrument(
-        name = "<LoopDriver as pw::StreamEventListener>::param_changed",
-        skip(self, param), fields(id = ?pw::spa::ParamTypeStr(id), with_param = param.is_some())
-    )]
-    fn param_changed(
-        &mut self,
-        id: pw::raw::spa_param_type,
-        param: Option<&pipewire::raw::spa_pod>,
-    ) {
-        if id == pw::raw::SPA_PARAM_Format {
-            // configure format
-            let Some(param) = param else {
-                tracing::warn!("no params passed?");
-                return;
-            };
-            let param_parser = pw::spa::pod::Parser::new(param)
-                .try_as_object()
-                .expect("not a object");
-            assert_eq!(param_parser.object_type(), pw::raw::SPA_TYPE_OBJECT_Format);
-
-            let mut format_changes = None;
-            for p in param_parser.iter_props() {
-                if p.key() == pw::raw::spa_format::AUDIO_format as _ {
-                    if let Some(v) = p.value().try_as_id() {
-                        format_changes = Some(v.value());
-                        continue;
-                    }
-                    if let Some(v) = p.value().try_as_choice() {
-                        if let Some(v) = v.try_as_none() {
-                            match v.child_type() {
-                                Ok(pw::spa::pod::Type::Id) => {
-                                    format_changes = Some(unsafe { *v.current_unchecked::<u32>() });
-                                }
-                                t => {
-                                    tracing::warn!(choice.none.child_type = ?t, "unexpected spa_format::AUDIO_format value");
-                                }
-                            }
-                            continue;
-                        }
-
-                        tracing::warn!(r#type = ?v.choice_type(), "unimplemented: format choice");
-                        continue;
-                    }
-
-                    tracing::warn!(r#type = ?p.value().r#type(), "unexpected spa_format::AUDIO_format value");
-                }
-            }
-
-            if let Some(f) = format_changes {
-                tracing::trace!(format = f, "audio format changed");
-
-                if f == pw::raw::SPA_AUDIO_FORMAT_F32_LE as _ {
-                    self.converter = Box::new(Float32Converter);
-                } else {
-                    tracing::warn!(format = f, "Format conversion not implemented");
-                }
-            }
-
-            return;
-        }
-
-        // logging unknown
-        if let Some(p) = param.map(pw::spa::pod::Parser::new) {
-            tracing::debug!(param_type = ?p.r#type(), "Unknown Param Changed");
-        } else {
-            tracing::debug!("Unknown Param Changed without value");
-        }
-    }
-
-    #[tracing::instrument(name = "<LoopDriver as pw::StreamEventListener>::process", skip(self))]
-    fn process(&mut self) {
-        let Some(mut buf) = unsafe { &mut *self.stream_ptr }.rent_buffer() else {
-            tracing::warn!("out of buffer");
-            return;
-        };
-
-        let sample_count = self
-            .converter
-            .sample_count(buf.datas_mut()[0].max_size() as _);
-
-        let mut generated = vec![0f32; sample_count];
-        self.mixer.write().process(&mut generated);
-        self.converter.convert(&generated, unsafe {
-            core::slice::from_raw_parts_mut(
-                buf.datas_mut()[0].data_ptr().cast(),
-                core::mem::size_of::<f32>() * sample_count as usize,
-            )
-        });
-        buf.datas_mut()[0].update_chunk_info(
-            0,
-            core::mem::size_of::<f32>() as _,
-            (core::mem::size_of::<f32>() * sample_count) as _,
-            pw::spa::ChunkFlags::NONE,
-        );
-    }
-}
-
 pub struct NativeAudioEngineInit {
     // Note: should be terminated in this order...
     core: pw::Owned<pw::Core>,
@@ -250,3 +134,119 @@ impl Drop for NativeAudioEngine {
     }
 }
 impl SoundBackend for NativeAudioEngine {}
+
+struct LoopDriver {
+    stream_ptr: *mut pw::Stream,
+    mixer: Arc<RwLock<peridot::audio::Mixer>>,
+    converter: Box<dyn AudioBitstreamConverter + Sync + Send>,
+}
+impl pw::StreamEventListener for LoopDriver {
+    #[tracing::instrument(
+        name = "<LoopDriver as pw::StreamEventListener>::state_changed",
+        skip(self)
+    )]
+    fn state_changed(
+        &mut self,
+        old: Result<pipewire::StreamState, std::ffi::c_int>,
+        state: Result<pipewire::StreamState, std::ffi::c_int>,
+        error: Option<&std::ffi::CStr>,
+    ) {
+        tracing::trace!("State Changed");
+    }
+
+    #[tracing::instrument(
+        name = "<LoopDriver as pw::StreamEventListener>::param_changed",
+        skip(self, param), fields(id = ?pw::spa::ParamTypeStr(id), with_param = param.is_some())
+    )]
+    fn param_changed(
+        &mut self,
+        id: pw::raw::spa_param_type,
+        param: Option<&pipewire::raw::spa_pod>,
+    ) {
+        if id == pw::raw::SPA_PARAM_Format {
+            // configure format
+            let Some(param) = param else {
+                tracing::warn!("no params passed?");
+                return;
+            };
+            let param_parser = pw::spa::pod::Parser::new(param)
+                .try_as_object()
+                .expect("not a object");
+            assert_eq!(param_parser.object_type(), pw::raw::SPA_TYPE_OBJECT_Format);
+
+            let mut format_changes = None;
+            for p in param_parser.iter_props() {
+                if p.key() == pw::raw::spa_format::AUDIO_format as _ {
+                    if let Some(v) = p.value().try_as_id() {
+                        format_changes = Some(v.value());
+                        continue;
+                    }
+                    if let Some(v) = p.value().try_as_choice() {
+                        if let Some(v) = v.try_as_none() {
+                            match v.child_type() {
+                                Ok(pw::spa::pod::Type::Id) => {
+                                    format_changes = Some(unsafe { *v.current_unchecked::<u32>() });
+                                }
+                                t => {
+                                    tracing::warn!(choice.none.child_type = ?t, "unexpected spa_format::AUDIO_format value");
+                                }
+                            }
+                            continue;
+                        }
+
+                        tracing::warn!(r#type = ?v.choice_type(), "unimplemented: format choice");
+                        continue;
+                    }
+
+                    tracing::warn!(r#type = ?p.value().r#type(), "unexpected spa_format::AUDIO_format value");
+                }
+            }
+
+            if let Some(f) = format_changes {
+                tracing::trace!(format = f, "audio format changed");
+
+                if f == pw::raw::SPA_AUDIO_FORMAT_F32_LE as _ {
+                    self.converter = Box::new(Float32Converter);
+                } else {
+                    tracing::warn!(format = f, "Format conversion not implemented");
+                }
+            }
+
+            return;
+        }
+
+        // logging unknown
+        if let Some(p) = param.map(pw::spa::pod::Parser::new) {
+            tracing::debug!(param_type = ?p.r#type(), "Unknown Param Changed");
+        } else {
+            tracing::debug!("Unknown Param Changed without value");
+        }
+    }
+
+    #[tracing::instrument(name = "<LoopDriver as pw::StreamEventListener>::process", skip(self))]
+    fn process(&mut self) {
+        let Some(mut buf) = unsafe { &mut *self.stream_ptr }.rent_buffer() else {
+            tracing::warn!("out of buffer");
+            return;
+        };
+
+        let sample_count = self
+            .converter
+            .sample_count(buf.datas_mut()[0].max_size() as _);
+
+        let mut generated = vec![0f32; sample_count];
+        self.mixer.write().process(&mut generated);
+        self.converter.convert(&generated, unsafe {
+            core::slice::from_raw_parts_mut(
+                buf.datas_mut()[0].data_ptr().cast(),
+                core::mem::size_of::<f32>() * sample_count as usize,
+            )
+        });
+        buf.datas_mut()[0].update_chunk_info(
+            0,
+            core::mem::size_of::<f32>() as _,
+            (core::mem::size_of::<f32>() * sample_count) as _,
+            pw::spa::ChunkFlags::NONE,
+        );
+    }
+}
