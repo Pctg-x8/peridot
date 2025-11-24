@@ -15,7 +15,7 @@ struct LoopDriver {
 }
 impl pw::StreamEventListener for LoopDriver {
     #[tracing::instrument(
-        name = "<LoopEngine as pw::StreamEventListener>::state_changed",
+        name = "<LoopDriver as pw::StreamEventListener>::state_changed",
         skip(self)
     )]
     fn state_changed(
@@ -28,7 +28,7 @@ impl pw::StreamEventListener for LoopDriver {
     }
 
     #[tracing::instrument(
-        name = "<LoopEngine as pw::StreamEventListener>::param_changed",
+        name = "<LoopDriver as pw::StreamEventListener>::param_changed",
         skip(self, param), fields(id = ?pw::spa::ParamTypeStr(id), with_param = param.is_some())
     )]
     fn param_changed(
@@ -96,7 +96,7 @@ impl pw::StreamEventListener for LoopDriver {
         }
     }
 
-    #[tracing::instrument(name = "<LoopEngine as pw::StreamEventListener>::process", skip(self))]
+    #[tracing::instrument(name = "<LoopDriver as pw::StreamEventListener>::process", skip(self))]
     fn process(&mut self) {
         let Some(mut buf) = unsafe { &mut *self.stream_ptr }.rent_buffer() else {
             tracing::warn!("out of buffer");
@@ -192,13 +192,13 @@ impl NativeAudioEngine {
         )
         .expect("Failed to create stream");
 
-        let mut loop_engine = LoopDriver {
+        let mut loop_driver = LoopDriver {
             stream_ptr: stream.as_ptr(),
             mixer,
             converter: Box::new(Float32Converter),
         };
         let mut stream_event_listener_hook = core::pin::pin!(pw::spa::Hook::new());
-        stream.add_listener(stream_event_listener_hook.as_mut(), &mut loop_engine);
+        stream.add_listener(stream_event_listener_hook.as_mut(), &mut loop_driver);
 
         let mut pod_builder = pw::spa::pod::Builder::with_capacity(1024);
         pod_builder
@@ -233,16 +233,19 @@ impl NativeAudioEngine {
     }
 }
 impl Drop for NativeAudioEngine {
+    #[tracing::instrument(name = "NativeAudioEngine::drop", skip(self))]
     fn drop(&mut self) {
-        unsafe { &mut *self.mainloop_ptr }
-            .quit()
-            .expect("mainloop.quit failed");
-        self.th
-            .take()
-            .expect("dropped twice?")
-            .join()
-            .expect("Communication Thread errored");
+        let Some(thread) = self.th.take() else {
+            tracing::warn!("NativeAudioEngine dropped twiece");
+            return;
+        };
 
+        if let Err(e) = unsafe { &mut *self.mainloop_ptr }.quit() {
+            tracing::warn!(reason = ?e, "mainloop.quit failed");
+        }
+        if let Err(e) = thread.join() {
+            tracing::warn!(reason = ?e, "error thrown in communication thread");
+        }
         pw::deinit();
     }
 }
