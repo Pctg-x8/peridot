@@ -4,8 +4,8 @@ use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 use presenter::PresenterProvider;
 use sound_backend::SoundBackend;
+use std::os::fd::AsRawFd;
 use std::{ffi::CStr, path::PathBuf, sync::Arc};
-use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
@@ -314,16 +314,14 @@ where
 }
 
 fn main() {
-    let fmt = tracing_subscriber::fmt::layer().pretty();
-    let env_filter = tracing_subscriber::filter::EnvFilter::from_default_env();
     tracing_subscriber::registry()
-        .with(fmt)
-        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().pretty())
+        .with(tracing_subscriber::filter::EnvFilter::from_default_env())
         .init();
 
     let io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
 
-    if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
+    if let Some(backend_name) = std::env::var_os("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
             run_with_window_backend(make_shared_mutable_ref(
                 Wayland::try_init().expect("Failed to initialize wayland backend"),
@@ -339,7 +337,7 @@ fn main() {
         }
 
         tracing::warn!(
-            { backend = backend_name },
+            { backend = ?backend_name },
             "unknown backend specified, ignoring"
         );
     }

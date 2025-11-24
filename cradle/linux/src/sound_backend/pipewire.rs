@@ -86,43 +86,41 @@ impl pw::StreamEventListener for LoopEngine {
                 .expect("not a object");
             assert_eq!(param_parser.object_type(), pw::raw::SPA_TYPE_OBJECT_Format);
 
+            let mut format_changes = None;
             for p in param_parser.iter_props() {
                 if p.key() == pw::raw::spa_format::AUDIO_format as _ {
                     if let Some(v) = p.value().try_as_id() {
-                        tracing::trace!(format = v.value(), "audio format changed");
-
-                        if v.value() == pw::raw::SPA_AUDIO_FORMAT_F32_LE as _ {
-                            self.writer.converter = Box::new(Float32Converter);
-                        } else {
-                            tracing::warn!(format = v.value(), "Format conversion not implemented");
-                        }
-                    } else if let Some(v) = p.value().try_as_choice() {
+                        format_changes = Some(v.value());
+                        continue;
+                    }
+                    if let Some(v) = p.value().try_as_choice() {
                         if let Some(v) = v.try_as_none() {
                             match v.child_type() {
                                 Ok(pw::spa::pod::Type::Id) => {
-                                    let current_value = unsafe { *v.current_unchecked::<u32>() };
-                                    tracing::trace!(format = current_value, "audio format changed");
-
-                                    if current_value == pw::raw::SPA_AUDIO_FORMAT_F32_LE as _ {
-                                        self.writer.converter = Box::new(Float32Converter);
-                                    } else {
-                                        tracing::warn!(
-                                            format = current_value,
-                                            "Format conversion not implemented"
-                                        );
-                                    }
+                                    format_changes = Some(unsafe { *v.current_unchecked::<u32>() });
                                 }
                                 t => {
-                                    tracing::warn!(child_type = ?t, "unexpected spa_format::AUDIO_format value")
+                                    tracing::warn!(choice.none.child_type = ?t, "unexpected spa_format::AUDIO_format value");
                                 }
                             }
-                        } else {
-                            tracing::warn!(r#type = ?v.choice_type(), "unimplemented: format choice");
+                            continue;
                         }
-                    } else {
-                        tracing::warn!(r#type = ?p.value().r#type(), "unexpected spa_format::AUDIO_format value");
+
+                        tracing::warn!(r#type = ?v.choice_type(), "unimplemented: format choice");
                         continue;
                     }
+
+                    tracing::warn!(r#type = ?p.value().r#type(), "unexpected spa_format::AUDIO_format value");
+                }
+            }
+
+            if let Some(f) = format_changes {
+                tracing::trace!(format = f, "audio format changed");
+
+                if f == pw::raw::SPA_AUDIO_FORMAT_F32_LE as _ {
+                    self.writer.converter = Box::new(Float32Converter);
+                } else {
+                    tracing::warn!(format = f, "Format conversion not implemented");
                 }
             }
         } else {
