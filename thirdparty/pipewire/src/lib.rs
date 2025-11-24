@@ -2,7 +2,7 @@ use bitflags::bitflags;
 
 use crate::raw::{
     PW_VERSION_CORE_EVENTS, PW_VERSION_REGISTRY_EVENTS, pw_core_events, pw_core_info,
-    pw_registry_events, spa_dict, spa_hook,
+    pw_registry_events, spa_dict,
 };
 use core::{
     cell::UnsafeCell,
@@ -16,6 +16,16 @@ use core::{
 pub mod raw;
 pub mod spa;
 
+#[inline(always)]
+pub fn init() {
+    unsafe { raw::pw_init(core::ptr::null_mut(), core::ptr::null_mut()) }
+}
+
+#[inline(always)]
+pub fn deinit() {
+    unsafe { raw::pw_deinit() }
+}
+
 pub trait PipewireDrop {
     unsafe fn pipewire_drop(&mut self);
 }
@@ -26,6 +36,8 @@ pub unsafe trait PipewireProxy {
 
 #[repr(transparent)]
 pub struct Owned<T: PipewireDrop>(NonNull<T>);
+unsafe impl<T: PipewireDrop + Sync> Sync for Owned<T> {}
+unsafe impl<T: PipewireDrop + Send> Send for Owned<T> {}
 impl<T: PipewireDrop> Drop for Owned<T> {
     #[inline(always)]
     fn drop(&mut self) {
@@ -65,6 +77,8 @@ impl<T: PipewireDrop> Owned<T> {
 
 #[repr(transparent)]
 pub struct OwnedProxy<T: PipewireProxy>(NonNull<T>);
+unsafe impl<T: PipewireProxy + Sync> Sync for OwnedProxy<T> {}
+unsafe impl<T: PipewireProxy + Send> Send for OwnedProxy<T> {}
 impl<T: PipewireProxy> Drop for OwnedProxy<T> {
     #[inline(always)]
     fn drop(&mut self) {
@@ -139,6 +153,8 @@ where
 
 #[repr(transparent)]
 pub struct Context(UnsafeCell<raw::pw_context>);
+unsafe impl Sync for Context {}
+unsafe impl Send for Context {}
 impl PipewireDrop for Context {
     #[inline(always)]
     unsafe fn pipewire_drop(&mut self) {
@@ -183,6 +199,8 @@ impl Context {
 
 #[repr(transparent)]
 pub struct Core(UnsafeCell<raw::pw_core>);
+unsafe impl Sync for Core {}
+unsafe impl Send for Core {}
 impl PipewireDrop for Core {
     #[inline(always)]
     unsafe fn pipewire_drop(&mut self) {
@@ -240,6 +258,8 @@ impl Core {
 
 #[repr(transparent)]
 pub struct Registry(UnsafeCell<raw::pw_registry>);
+unsafe impl Sync for Registry {}
+unsafe impl Send for Registry {}
 impl Registry {
     #[inline(always)]
     pub fn add_listener<L: RegistryEventListener + 'static>(
@@ -292,6 +312,8 @@ impl Registry {
 
 #[repr(transparent)]
 pub struct Stream(UnsafeCell<raw::pw_stream>);
+unsafe impl Sync for Stream {}
+unsafe impl Send for Stream {}
 impl PipewireDrop for Stream {
     #[inline(always)]
     unsafe fn pipewire_drop(&mut self) {
@@ -440,6 +462,8 @@ impl<'a> RentBuffer<'a> {
 
 #[repr(transparent)]
 pub struct MainLoop(UnsafeCell<raw::pw_main_loop>);
+unsafe impl Sync for MainLoop {}
+unsafe impl Send for MainLoop {}
 impl PipewireDrop for MainLoop {
     #[inline(always)]
     unsafe fn pipewire_drop(&mut self) {
@@ -516,18 +540,24 @@ bitflags! {
 
 #[repr(transparent)]
 pub struct Port(UnsafeCell<raw::pw_port>);
+unsafe impl Sync for Port {}
+unsafe impl Send for Port {}
 unsafe impl PipewireProxy for Port {
     const TYPE_NAME: &CStr = c"PipeWire:Interface:Port";
 }
 
 #[repr(transparent)]
 pub struct Node(UnsafeCell<raw::pw_node>);
+unsafe impl Sync for Node {}
+unsafe impl Send for Node {}
 unsafe impl PipewireProxy for Node {
     const TYPE_NAME: &CStr = c"PipeWire:Interface:Node";
 }
 
 #[repr(transparent)]
 pub struct Device(UnsafeCell<raw::pw_device>);
+unsafe impl Sync for Device {}
+unsafe impl Send for Device {}
 unsafe impl PipewireProxy for Device {
     const TYPE_NAME: &CStr = c"PipeWire:Interface:Device";
 }
