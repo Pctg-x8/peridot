@@ -26,7 +26,7 @@ peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
     "xdg-decoration-unstable-v1",
     "content-type-v1"
 ] }
-pipewire = { path = "../../thirdparty/pipewire" }
+peridot-tp-pipewire = { path = "../../thirdparty/pipewire" }
 parking_lot = "0.12.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
@@ -37,4 +37,4 @@ version = "1.13"
 features = ["attributes"]
 
 [build-dependencies]
-pipewire-linking.path = "../../thirdparty/pipewire/linking"
+peridot-tp-pipewire-linking.path = "../../thirdparty/pipewire/linking"

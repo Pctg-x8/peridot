@@ -1,7 +1,7 @@
 //! PipeWire Sound Backend
 
 use parking_lot::RwLock;
-use pipewire as pw;
+use peridot_tp_pipewire as pw;
 use std::sync::Arc;
 
 use super::AudioBitstreamConverter;
@@ -147,9 +147,9 @@ impl pw::StreamEventListener for LoopDriver {
     )]
     fn state_changed(
         &mut self,
-        old: Result<pipewire::StreamState, std::ffi::c_int>,
-        state: Result<pipewire::StreamState, std::ffi::c_int>,
-        error: Option<&std::ffi::CStr>,
+        old: Result<pw::StreamState, core::ffi::c_int>,
+        state: Result<pw::StreamState, core::ffi::c_int>,
+        error: Option<&core::ffi::CStr>,
     ) {
         tracing::trace!("State Changed");
     }
@@ -158,11 +158,7 @@ impl pw::StreamEventListener for LoopDriver {
         name = "<LoopDriver as pw::StreamEventListener>::param_changed",
         skip(self, param), fields(id = ?pw::spa::ParamTypeStr(id), with_param = param.is_some())
     )]
-    fn param_changed(
-        &mut self,
-        id: pw::raw::spa_param_type,
-        param: Option<&pipewire::raw::spa_pod>,
-    ) {
+    fn param_changed(&mut self, id: pw::raw::spa_param_type, param: Option<&pw::raw::spa_pod>) {
         if id == pw::raw::SPA_PARAM_Format {
             // configure format
             let Some(param) = param else {

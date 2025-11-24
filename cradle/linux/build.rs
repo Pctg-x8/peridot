@@ -1,3 +1,3 @@
 fn main() {
-    pipewire_linking::emit_link_args();
+    peridot_tp_pipewire_linking::emit_link_args();
 }

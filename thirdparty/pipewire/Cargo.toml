@@ -2,7 +2,7 @@
 members = ["linking"]
 
 [package]
-name = "pipewire"
+name = "peridot-tp-pipewire"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
@@ -12,4 +12,5 @@ bitflags = "2.10.0"
 libc = "0.2"
 
 [build-dependencies]
-pipewire-linking.path = "./linking"
+peridot-tp-pipewire-linking.path = "./linking"
+

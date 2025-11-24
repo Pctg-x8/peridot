@@ -1,5 +1,5 @@
 [package]
-name = "pipewire-linking"
+name = "peridot-tp-pipewire-linking"
 version = "0.1.0"
 edition = "2024"
 
