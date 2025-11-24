@@ -8,55 +8,12 @@ use super::AudioBitstreamConverter;
 use super::Float32Converter;
 use super::SoundBackend;
 
-struct AudioWriter {
+struct LoopDriver {
+    stream_ptr: *mut pw::Stream,
     mixer: Arc<RwLock<peridot::audio::Mixer>>,
     converter: Box<dyn AudioBitstreamConverter + Sync + Send>,
 }
-impl AudioWriter {
-    fn new(mixer: Arc<RwLock<peridot::audio::Mixer>>) -> Self {
-        Self {
-            mixer,
-            converter: Box::new(Float32Converter),
-        }
-    }
-
-    fn generate(&self, stream: &mut pw::Stream) {
-        let Some(mut buf) = stream.rent_buffer() else {
-            tracing::warn!("out of buffer");
-            return;
-        };
-
-        let sample_count = self
-            .converter
-            .sample_count(buf.datas_mut()[0].max_size() as _);
-
-        let mut generated = vec![0f32; sample_count];
-        self.mixer.write().process(&mut generated);
-        self.converter.convert(&generated, unsafe {
-            core::slice::from_raw_parts_mut(
-                buf.datas_mut()[0].data_ptr().cast(),
-                core::mem::size_of::<f32>() * sample_count as usize,
-            )
-        });
-        buf.datas_mut()[0].update_chunk_info(
-            0,
-            core::mem::size_of::<f32>() as _,
-            (core::mem::size_of::<f32>() * sample_count) as _,
-            pw::spa::ChunkFlags::NONE,
-        );
-    }
-}
-impl Default for AudioWriter {
-    fn default() -> Self {
-        unimplemented!("needs default?");
-    }
-}
-
-pub struct LoopEngine {
-    stream_ptr: *mut pw::Stream,
-    writer: AudioWriter,
-}
-impl pw::StreamEventListener for LoopEngine {
+impl pw::StreamEventListener for LoopDriver {
     #[tracing::instrument(
         name = "<LoopEngine as pw::StreamEventListener>::state_changed",
         skip(self)
@@ -72,12 +29,16 @@ impl pw::StreamEventListener for LoopEngine {
 
     #[tracing::instrument(
         name = "<LoopEngine as pw::StreamEventListener>::param_changed",
-        skip(self)
+        skip(self, param), fields(id = ?pw::spa::ParamTypeStr(id), with_param = param.is_some())
     )]
-    fn param_changed(&mut self, id: u32, param: *const pipewire::raw::spa_pod) {
-        if id == pw::raw::SPA_PARAM_Format as _ {
+    fn param_changed(
+        &mut self,
+        id: pw::raw::spa_param_type,
+        param: Option<&pipewire::raw::spa_pod>,
+    ) {
+        if id == pw::raw::SPA_PARAM_Format {
             // configure format
-            let Some(param) = (unsafe { param.as_ref() }) else {
+            let Some(param) = param else {
                 tracing::warn!("no params passed?");
                 return;
             };
@@ -118,23 +79,48 @@ impl pw::StreamEventListener for LoopEngine {
                 tracing::trace!(format = f, "audio format changed");
 
                 if f == pw::raw::SPA_AUDIO_FORMAT_F32_LE as _ {
-                    self.writer.converter = Box::new(Float32Converter);
+                    self.converter = Box::new(Float32Converter);
                 } else {
                     tracing::warn!(format = f, "Format conversion not implemented");
                 }
             }
+
+            return;
+        }
+
+        // logging unknown
+        if let Some(p) = param.map(pw::spa::pod::Parser::new) {
+            tracing::debug!(param_type = ?p.r#type(), "Unknown Param Changed");
         } else {
-            if let Some(p) = unsafe { param.as_ref().map(pw::spa::pod::Parser::new) } {
-                tracing::trace!(param_type = ?p.r#type(), "Unknown Param Changed");
-            } else {
-                tracing::trace!("Unknown Param Changed without value");
-            }
+            tracing::debug!("Unknown Param Changed without value");
         }
     }
 
     #[tracing::instrument(name = "<LoopEngine as pw::StreamEventListener>::process", skip(self))]
     fn process(&mut self) {
-        self.writer.generate(unsafe { &mut *self.stream_ptr });
+        let Some(mut buf) = unsafe { &mut *self.stream_ptr }.rent_buffer() else {
+            tracing::warn!("out of buffer");
+            return;
+        };
+
+        let sample_count = self
+            .converter
+            .sample_count(buf.datas_mut()[0].max_size() as _);
+
+        let mut generated = vec![0f32; sample_count];
+        self.mixer.write().process(&mut generated);
+        self.converter.convert(&generated, unsafe {
+            core::slice::from_raw_parts_mut(
+                buf.datas_mut()[0].data_ptr().cast(),
+                core::mem::size_of::<f32>() * sample_count as usize,
+            )
+        });
+        buf.datas_mut()[0].update_chunk_info(
+            0,
+            core::mem::size_of::<f32>() as _,
+            (core::mem::size_of::<f32>() * sample_count) as _,
+            pw::spa::ChunkFlags::NONE,
+        );
     }
 }
 
@@ -177,10 +163,10 @@ impl NativeAudioEngine {
         tracing::info!("Starting AudioEngine via PipeWire......");
 
         let mainloop_ptr = init.mainloop.as_ptr();
-        let writer = AudioWriter::new(mixer.clone());
+        let mixer = mixer.clone();
         let th = std::thread::Builder::new()
             .name(String::from("Peridot-PipeWire Processing Thread"))
-            .spawn(move || Self::process_thread(init, writer))
+            .spawn(move || Self::process_thread(init, mixer))
             .expect("Failed to spawn communication thread");
 
         Self {
@@ -189,7 +175,7 @@ impl NativeAudioEngine {
         }
     }
 
-    fn process_thread(init: NativeAudioEngineInit, writer: AudioWriter) {
+    fn process_thread(init: NativeAudioEngineInit, mixer: Arc<RwLock<peridot::audio::Mixer>>) {
         let mut stream = pw::Stream::new(
             &init.core,
             &unsafe {
@@ -206,9 +192,10 @@ impl NativeAudioEngine {
         )
         .expect("Failed to create stream");
 
-        let mut loop_engine = LoopEngine {
+        let mut loop_engine = LoopDriver {
             stream_ptr: stream.as_ptr(),
-            writer,
+            mixer,
+            converter: Box::new(Float32Converter),
         };
         let mut stream_event_listener_hook = core::pin::pin!(pw::spa::Hook::new());
         stream.add_listener(stream_event_listener_hook.as_mut(), &mut loop_engine);

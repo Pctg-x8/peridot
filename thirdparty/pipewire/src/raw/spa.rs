@@ -626,6 +626,12 @@ pub const SPA_PARAM_Latency: spa_param_type = 15;
 pub const SPA_PARAM_ProcessLatency: spa_param_type = 16;
 #[allow(non_upper_case_globals)]
 pub const SPA_PARAM_Tag: spa_param_type = 17;
+#[allow(non_upper_case_globals)]
+pub const SPA_PARAM_PeerEnumFormat: spa_param_type = 18;
+#[allow(non_upper_case_globals)]
+pub const SPA_PARAM_Capability: spa_param_type = 19;
+#[allow(non_upper_case_globals)]
+pub const SPA_PARAM_PeerCapability: spa_param_type = 20;
 
 #[repr(C)]
 pub struct spa_param_info {

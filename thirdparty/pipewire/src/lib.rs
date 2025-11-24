@@ -711,7 +711,7 @@ pub trait StreamEventListener {
     #[allow(unused_variables)]
     fn io_changed(&mut self, id: u32, area: *mut c_void, size: u32) {}
     #[allow(unused_variables)]
-    fn param_changed(&mut self, id: u32, param: *const raw::spa_pod) {}
+    fn param_changed(&mut self, id: raw::spa_param_type, param: Option<&raw::spa_pod>) {}
     #[allow(unused_variables)]
     fn add_buffer(&mut self, buffer: *mut raw::pw_buffer) {}
     #[allow(unused_variables)]
@@ -768,7 +768,7 @@ const fn stream_event_fptbl<L: StreamEventListener + 'static>() -> &'static raw:
         id: u32,
         param: *const raw::spa_pod,
     ) {
-        unsafe { L::param_changed(&mut *data.cast(), id, param) }
+        unsafe { L::param_changed(&mut *data.cast(), id as _, param.as_ref()) }
     }
     extern "C" fn add_buffer<L: StreamEventListener + 'static>(
         data: *mut c_void,

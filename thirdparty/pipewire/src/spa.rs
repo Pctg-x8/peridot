@@ -162,3 +162,35 @@ impl Hook {
         Self(unsafe { core::mem::MaybeUninit::zeroed().assume_init() })
     }
 }
+
+#[repr(transparent)]
+pub struct ParamTypeStr(pub raw::spa_param_type);
+impl core::fmt::Debug for ParamTypeStr {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            raw::SPA_PARAM_Invalid => f.write_str("spa_param_type::Invalid"),
+            raw::SPA_PARAM_PropInfo => f.write_str("spa_param_type::PropInfo"),
+            raw::SPA_PARAM_Props => f.write_str("spa_param_type::Props"),
+            raw::SPA_PARAM_EnumFormat => f.write_str("spa_param_type::EnumFormat"),
+            raw::SPA_PARAM_Format => f.write_str("spa_param_type::Format"),
+            raw::SPA_PARAM_Buffers => f.write_str("spa_param_type::Buffers"),
+            raw::SPA_PARAM_Meta => f.write_str("spa_param_type::Meta"),
+            raw::SPA_PARAM_IO => f.write_str("spa_param_type::IO"),
+            raw::SPA_PARAM_EnumProfile => f.write_str("spa_param_type::EnumProfile"),
+            raw::SPA_PARAM_Profile => f.write_str("spa_param_type::Profile"),
+            raw::SPA_PARAM_EnumPortConfig => f.write_str("spa_param_type::EnumPortConfig"),
+            raw::SPA_PARAM_PortConfig => f.write_str("spa_param_type::PortConfig"),
+            raw::SPA_PARAM_EnumRoute => f.write_str("spa_param_type::EnumRoute"),
+            raw::SPA_PARAM_Route => f.write_str("spa_param_type::Route"),
+            raw::SPA_PARAM_Control => f.write_str("spa_param_type::Control"),
+            raw::SPA_PARAM_Latency => f.write_str("spa_param_type::Latency"),
+            raw::SPA_PARAM_ProcessLatency => f.write_str("spa_param_type::ProcessLatency"),
+            raw::SPA_PARAM_Tag => f.write_str("spa_param_type::Tag"),
+            raw::SPA_PARAM_PeerEnumFormat => f.write_str("spa_param_type::PeerEnumFormat"),
+            raw::SPA_PARAM_Capability => f.write_str("spa_param_type::Capability"),
+            raw::SPA_PARAM_PeerCapability => f.write_str("spa_param_type::PeerCapability"),
+            v => write!(f, "spa_param_type({v})"),
+        }
+    }
+}
