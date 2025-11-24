@@ -30,6 +30,7 @@ pipewire = { path = "../../thirdparty/pipewire" }
 parking_lot = "0.12.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+linux-udev = { path = "../../platform/linux/udev" }
 
 [dependencies.async-std]
 version = "1.13"

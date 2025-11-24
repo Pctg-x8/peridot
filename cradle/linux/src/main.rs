@@ -16,7 +16,6 @@ mod epoll;
 mod input;
 mod kernel_input;
 mod presenter;
-mod udev;
 mod userlib;
 
 pub struct PlatformAssetLoader {
