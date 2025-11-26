@@ -1,12 +1,14 @@
 //! Input Handlers
 
-use crate::{epoll::Epoll, kernel_input};
+use crate::kernel_input;
+use linux_epoll::Epoll;
 use linux_udev as udev;
 use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef, SharedWeakRef};
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    os::fd::AsRawFd,
     sync::{Arc, Weak},
 };
 
@@ -176,6 +178,12 @@ pub struct EventDevice {
     fd: core::ffi::c_int,
     is_mouse: bool,
 }
+impl AsRawFd for EventDevice {
+    #[inline(always)]
+    fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
+        self.fd
+    }
+}
 impl EventDevice {
     #[inline]
     pub fn open(path: &core::ffi::CStr, is_mouse: bool) -> std::io::Result<Self> {
@@ -225,7 +233,7 @@ impl EventDeviceManager {
         let mut device_id_by_node = HashMap::with_capacity(initial_devices.size_hint().0);
         for (n, (node, d)) in initial_devices.enumerate() {
             epoll
-                .add_fd(d.fd, libc::EPOLLIN as _, n as u64 + epoll_id_resv)
+                .add(&d, libc::EPOLLIN as _, n as u64 + epoll_id_resv)
                 .expect("Failed to register initial device fd to epoll");
             devices_by_id.insert(n as u64, d);
             device_id_by_node.insert(node, n as u64);
@@ -249,7 +257,7 @@ impl EventDeviceManager {
             .id_free_list
             .pop_first()
             .unwrap_or_else(|| self.devices_by_id.len() as u64);
-        if let Err(e) = epoll.add_fd(device.fd, libc::EPOLLIN as _, id + self.epoll_id_resv) {
+        if let Err(e) = epoll.add(&device, libc::EPOLLIN as _, id + self.epoll_id_resv) {
             tracing::warn!(reason = ?e, "Failed to register device fd to epoll")
         };
         self.devices_by_id.insert(id, device);
@@ -264,7 +272,7 @@ impl EventDeviceManager {
         };
 
         self.id_free_list.insert(id);
-        if let Err(e) = epoll.remove_fd(d.fd) {
+        if let Err(e) = epoll.del(&d) {
             tracing::warn!(reason = ?e, "Failed to unregister device fd from epoll");
         }
     }
@@ -335,7 +343,7 @@ impl InputSystem {
         let monitor_fd = monitor.fd().expect("Failed to retrieve udev monitor fd");
 
         epoll
-            .add_fd(monitor_fd, libc::EPOLLIN as _, epid_monitor)
+            .add(&monitor_fd, libc::EPOLLIN as _, epid_monitor)
             .expect("Failed to add udev monitor fd");
 
         Self {

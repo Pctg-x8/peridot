@@ -1,5 +1,6 @@
 use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
+use linux_epoll::Epoll;
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 use presenter::PresenterProvider;
@@ -12,7 +13,6 @@ use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::Subs
 mod sound_backend;
 
 use crate::presenter::{wayland::Wayland, BorrowFd, EventProcessor, WindowBackend};
-mod epoll;
 mod input;
 mod kernel_input;
 mod presenter;
@@ -200,24 +200,27 @@ impl<MainF: Future> GameDriver<MainF> {
 }
 
 pub struct EpollTemporaryAddFd<'e> {
-    instance: &'e epoll::Epoll,
+    instance: &'e Epoll,
     fd: RawFd,
 }
 impl<'e> EpollTemporaryAddFd<'e> {
     pub fn add(
-        instance: &'e epoll::Epoll,
-        fd: RawFd,
+        instance: &'e Epoll,
+        fd: &(impl AsRawFd + ?Sized),
         events: u32,
         extras: u64,
     ) -> std::io::Result<Self> {
-        instance.add_fd(fd, events, extras)?;
-        Ok(Self { instance, fd })
+        instance.add(fd, events, extras)?;
+        Ok(Self {
+            instance,
+            fd: fd.as_raw_fd(),
+        })
     }
 }
 impl Drop for EpollTemporaryAddFd<'_> {
     fn drop(&mut self) {
         self.instance
-            .remove_fd(self.fd)
+            .del(&self.fd)
             .expect("Failed to remove fd from epoll instance");
     }
 }
@@ -231,33 +234,33 @@ where
         userlib::game_main(&mut engine).await;
     });
 
-    let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
+    let ep = Epoll::new(0).expect("Failed to create epoll interface");
     let mut input = input::InputSystem::new(&ep, 1, 2);
 
     window_backend.borrow_mut().show();
     gd.engine_audio.write().start();
-    let mut events = Vec::new();
+    let mut events = Vec::with_capacity(8);
     let mut last_drawn_geometry = window_backend.borrow().geometry();
     while !window_backend.borrow().has_close_requested() {
         // step usercode before wait
         gd.step();
 
-        if events.len() != 2 + input.managed_devices_count() {
-            // resize
-            events.resize(2 + input.managed_devices_count(), unsafe {
-                std::mem::MaybeUninit::zeroed().assume_init()
-            });
+        if events.capacity() > (2 + input.managed_devices_count() * 2).max(8) {
+            // reduce memory consumption
+            events = Vec::with_capacity(8);
         }
+        // resize capacity
+        events.reserve(2 + input.managed_devices_count());
 
         let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
-            window_backend_readiness_guard.borrow_fd().as_raw_fd(),
+            &window_backend_readiness_guard.borrow_fd(),
             libc::EPOLLIN as _,
             0,
         );
 
-        let count = match ep.wait(&mut events, Some(1)) {
+        let count = match ep.wait(events.spare_capacity_mut(), Some(1)) {
             Ok(x) => x,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => 0,
             Err(e) => {
@@ -283,7 +286,7 @@ where
         }
 
         let mut rg = Some(window_backend_readiness_guard);
-        for e in &events[..count as usize] {
+        for e in unsafe { core::slice::from_raw_parts(events.as_ptr(), count as _) } {
             if e.u64 == 0 {
                 window_backend
                     .borrow_mut()
@@ -335,10 +338,7 @@ fn main() {
             return;
         }
 
-        tracing::warn!(
-            { backend = ?backend_name },
-            "unknown backend specified, ignoring"
-        );
+        tracing::warn!(backend = ?backend_name, "unknown backend specified, ignoring");
     }
 
     if let Some(x) = Wayland::try_init() {
