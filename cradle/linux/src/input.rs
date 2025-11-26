@@ -276,7 +276,7 @@ impl InputSystem {
             .expect("Failed to set initialized filter");
         enumerator.scan_devices().expect("Failed to scan devices");
         let event_device_regex = unsafe { regex::Regex::new("event[0-9]+$").unwrap_unchecked() };
-        let initial_devices = enumerator.iter().filter_map(|e| {
+        let devmgr = EventDeviceManager::new(enumerator.iter().filter_map(|e| {
             let syspath = e.name().expect("no name?");
             let device =
                 udev::Device::from_syspath(&udev, syspath).expect("Failed to create udev Device");
@@ -299,7 +299,7 @@ impl InputSystem {
                     is_mouse: device.is_mouse()
                 }
             ))
-        });
+        }), epid_devices_start, epoll);
 
         let monitor =
             udev::Monitor::from_netlink(&udev, c"udev").expect("Failed to create udev monitor");
@@ -319,7 +319,7 @@ impl InputSystem {
         }
 
         Self {
-            devmgr: EventDeviceManager::new(initial_devices, epid_devices_start, epoll),
+            devmgr,
             event_device_regex,
             monitor,
         }
