@@ -1,7 +1,7 @@
 use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
 use linux_epoll::Epoll;
-use linux_eventfd::EventFD;
+use linux_eventfd::{EventFD, EventFDFlags};
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 use presenter::PresenterProvider;
@@ -184,7 +184,8 @@ impl<MainF: Future> GameDriver<MainF> {
         let engine_input = engine.input().clone();
         let engine_audio = engine.audio_mixer().clone();
         let usercode = Box::pin(usercode_launcher(engine));
-        let usercode_event = Box::pin(EventFD::new(0, libc::EFD_NONBLOCK).expect("EventFD::new"));
+        let usercode_event =
+            Box::pin(EventFD::new(0, EventFDFlags::NONBLOCK).expect("EventFD::new"));
         if let Err(e) = epoll.add(
             usercode_event.as_ref().get_ref(),
             libc::EPOLLIN as _,
@@ -307,7 +308,6 @@ where
             drop(window_backend_readiness_guard);
             let current_geometry = window_backend.borrow().geometry();
             if last_drawn_geometry != current_geometry {
-                println!("resize {current_geometry:?}");
                 last_drawn_geometry = current_geometry;
                 gd.event_queue
                     .enqueue(peridot::Event::Resize(last_drawn_geometry));

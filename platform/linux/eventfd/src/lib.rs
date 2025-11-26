@@ -1,6 +1,8 @@
 use core::ffi::*;
 use std::os::fd::AsRawFd;
 
+use bitflags::bitflags;
+
 #[repr(transparent)]
 pub struct EventFD(c_int);
 impl Drop for EventFD {
@@ -21,13 +23,8 @@ impl AsRawFd for EventFD {
 }
 impl EventFD {
     #[inline(always)]
-    pub fn new(initval: c_uint, flags: c_int) -> std::io::Result<Self> {
-        debug_assert!(
-            flags & libc::EFD_SEMAPHORE == 0,
-            "no semaphore mode support"
-        );
-
-        match unsafe { libc::eventfd(initval, flags) } {
+    pub fn new(initval: c_uint, flags: EventFDFlags) -> std::io::Result<Self> {
+        match unsafe { libc::eventfd(initval, flags.bits()) } {
             r if r < 0 => Err(std::io::Error::last_os_error()),
             r => Ok(Self(r)),
         }
@@ -48,5 +45,13 @@ impl EventFD {
             r if r < 0 => Err(std::io::Error::last_os_error()),
             _ => Ok(()),
         }
+    }
+}
+
+bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct EventFDFlags : c_int {
+        const CLOEXEC = libc::EFD_CLOEXEC;
+        const NONBLOCK = libc::EFD_NONBLOCK;
     }
 }
