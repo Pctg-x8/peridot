@@ -1,14 +1,14 @@
 //! Input Handlers
 
 use linux_epoll::{Epoll, EpollEventBits};
-use linux_input::{AbsoluteAxes, EventType, InputEvent, Key, RelativeAxes};
+use linux_input::{AbsoluteAxes, EventDevice, EventType, Key, RelativeAxes};
 use linux_udev as udev;
 use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef, SharedWeakRef};
 
+use core::ffi::*;
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    os::fd::AsRawFd,
     sync::{Arc, Weak},
 };
 
@@ -174,58 +174,20 @@ fn diag_device(d: &udev::Device) {
     }
 }
 
-pub struct EventDevice {
-    fd: core::ffi::c_int,
+struct Device {
+    evdev: EventDevice,
     is_mouse: bool,
 }
-impl AsRawFd for EventDevice {
-    #[inline(always)]
-    fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
-        self.fd
-    }
-}
-impl EventDevice {
-    #[inline]
-    pub fn open(path: &core::ffi::CStr, is_mouse: bool) -> std::io::Result<Self> {
-        match unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) } {
-            r if r < 0 => Err(std::io::Error::last_os_error()),
-            fd => Ok(Self { fd, is_mouse }),
-        }
-    }
 
-    pub fn read(&self) -> std::io::Result<InputEvent> {
-        let mut ev = core::mem::MaybeUninit::uninit();
-        match unsafe {
-            libc::read(
-                self.fd,
-                ev.as_mut_ptr() as _,
-                core::mem::size_of::<InputEvent>(),
-            )
-        } {
-            r if r < 0 => Err(std::io::Error::last_os_error()),
-            _ => Ok(unsafe { ev.assume_init() }),
-        }
-    }
-}
-impl Drop for EventDevice {
-    #[tracing::instrument(name = "EventDevice::drop", skip(self))]
-    fn drop(&mut self) {
-        if unsafe { libc::close(self.fd) } < 0 {
-            let e = std::io::Error::last_os_error();
-            tracing::warn!(reason = ?e, "close fd failed");
-        }
-    }
-}
-
-pub struct EventDeviceManager {
+struct EventDeviceManager {
     pub epoll_id_resv: u64,
-    pub devices_by_id: BTreeMap<u64, EventDevice>,
+    pub devices_by_id: BTreeMap<u64, Device>,
     pub id_free_list: BTreeSet<u64>,
     pub device_id_by_node: HashMap<std::ffi::CString, u64>,
 }
 impl EventDeviceManager {
-    pub fn new(
-        initial_devices: impl Iterator<Item = (std::ffi::CString, EventDevice)>,
+    fn new(
+        initial_devices: impl Iterator<Item = (std::ffi::CString, Device)>,
         epoll_id_resv: u64,
         epoll: &Epoll,
     ) -> Self {
@@ -233,7 +195,7 @@ impl EventDeviceManager {
         let mut device_id_by_node = HashMap::with_capacity(initial_devices.size_hint().0);
         for (n, (node, d)) in initial_devices.enumerate() {
             epoll
-                .add(&d, EpollEventBits::IN, n as u64 + epoll_id_resv)
+                .add(&d.evdev, EpollEventBits::IN, n as u64 + epoll_id_resv)
                 .expect("Failed to register initial device fd to epoll");
             devices_by_id.insert(n as u64, d);
             device_id_by_node.insert(node, n as u64);
@@ -247,17 +209,18 @@ impl EventDeviceManager {
         }
     }
 
-    pub fn len(&self) -> usize {
+    #[inline(always)]
+    fn len(&self) -> usize {
         self.devices_by_id.len()
     }
 
     /// Returns assigned id(in EventDeviceManager)
-    pub fn add(&mut self, node: std::ffi::CString, device: EventDevice, epoll: &Epoll) -> u64 {
+    fn add(&mut self, node: std::ffi::CString, device: Device, epoll: &Epoll) -> u64 {
         let id = self
             .id_free_list
             .pop_first()
             .unwrap_or_else(|| self.devices_by_id.len() as u64);
-        if let Err(e) = epoll.add(&device, EpollEventBits::IN, id + self.epoll_id_resv) {
+        if let Err(e) = epoll.add(&device.evdev, EpollEventBits::IN, id + self.epoll_id_resv) {
             tracing::warn!(reason = ?e, "Failed to register device fd to epoll")
         };
         self.devices_by_id.insert(id, device);
@@ -266,24 +229,29 @@ impl EventDeviceManager {
         id
     }
 
-    pub fn remove(&mut self, id: u64, epoll: &Epoll) {
+    fn remove(&mut self, id: u64, epoll: &Epoll) {
         let Some(d) = self.devices_by_id.remove(&id) else {
             return;
         };
 
         self.id_free_list.insert(id);
-        if let Err(e) = epoll.del(&d) {
+        if let Err(e) = epoll.del(&d.evdev) {
             tracing::warn!(reason = ?e, "Failed to unregister device fd from epoll");
         }
     }
 
-    pub fn lookup_id_by_node(&self, node: &core::ffi::CStr) -> Option<u64> {
+    #[inline(always)]
+    fn lookup_id_by_node(&self, node: &CStr) -> Option<u64> {
         self.device_id_by_node.get(node).copied()
     }
-    pub fn translate_epoll_value(&self, epoll_value: u64) -> u64 {
+
+    #[inline(always)]
+    const fn translate_epoll_value(&self, epoll_value: u64) -> u64 {
         epoll_value - self.epoll_id_resv
     }
-    pub fn get_device(&self, id: u64) -> Option<&EventDevice> {
+
+    #[inline(always)]
+    fn device(&self, id: u64) -> Option<&Device> {
         self.devices_by_id.get(&id)
     }
 }
@@ -322,11 +290,15 @@ impl InputSystem {
             // diag_device(&device);
 
             tracing::trace!(?devnode, device_name = ?lookup_device_name(&device), "Registering Input Device");
-            let edev = EventDevice::open(devnode, device.is_mouse())
-                .inspect_err(|e| tracing::warn!(reason = ?e, "Failed to open event device"))
-                .ok()?;
-
-            Some((devnode.to_owned(), edev))
+            Some((
+                devnode.to_owned(),
+                Device {
+                    evdev: EventDevice::open(devnode)
+                        .inspect_err(|e| tracing::warn!(reason = ?e, "Failed to open event device"))
+                        .ok()?,
+                    is_mouse: device.is_mouse()
+                }
+            ))
         });
 
         let monitor =
@@ -387,9 +359,16 @@ impl InputSystem {
             Some(a) if a == c"add" => {
                 tracing::trace!("Registering Input Device");
 
-                match EventDevice::open(devnode, device.is_mouse()) {
+                match EventDevice::open(devnode) {
                     Ok(x) => {
-                        self.devmgr.add(devnode.to_owned(), x, ep);
+                        self.devmgr.add(
+                            devnode.to_owned(),
+                            Device {
+                                evdev: x,
+                                is_mouse: device.is_mouse(),
+                            },
+                            ep,
+                        );
                     }
                     Err(e) => {
                         tracing::warn!(reason = ?e, "Failed to open added device");
@@ -419,12 +398,12 @@ impl InputSystem {
     ) {
         let Some(dev) = self
             .devmgr
-            .get_device(self.devmgr.translate_epoll_value(ep_value))
+            .device(self.devmgr.translate_epoll_value(ep_value))
         else {
             tracing::warn!("no device bound to epoll");
             return;
         };
-        let (ev, is_mouse) = match dev.read() {
+        let (ev, is_mouse) = match dev.evdev.read() {
             Ok(ev) => (ev, dev.is_mouse),
             Err(e) => {
                 tracing::warn!(reason = ?e, "Failed to read from device");

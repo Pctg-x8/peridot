@@ -1,3 +1,47 @@
+use core::ffi::*;
+use std::os::fd::AsRawFd;
+
+#[repr(transparent)]
+pub struct EventDevice(c_int);
+impl AsRawFd for EventDevice {
+    #[inline(always)]
+    fn as_raw_fd(&self) -> std::os::unix::prelude::RawFd {
+        self.0
+    }
+}
+impl EventDevice {
+    #[inline]
+    pub fn open(path: &CStr) -> std::io::Result<Self> {
+        match unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) } {
+            r if r < 0 => Err(std::io::Error::last_os_error()),
+            r => Ok(Self(r)),
+        }
+    }
+
+    pub fn read(&self) -> std::io::Result<InputEvent> {
+        let mut ev = core::mem::MaybeUninit::uninit();
+        match unsafe {
+            libc::read(
+                self.0,
+                ev.as_mut_ptr() as _,
+                core::mem::size_of::<InputEvent>(),
+            )
+        } {
+            r if r < 0 => Err(std::io::Error::last_os_error()),
+            _ => Ok(unsafe { ev.assume_init() }),
+        }
+    }
+}
+impl Drop for EventDevice {
+    #[tracing::instrument(name = "EventDevice::drop", skip(self))]
+    fn drop(&mut self) {
+        if unsafe { libc::close(self.0) } < 0 {
+            let e = std::io::Error::last_os_error();
+            tracing::warn!(reason = ?e, "close fd failed");
+        }
+    }
+}
+
 #[repr(C)]
 pub struct InputEvent {
     pub time: libc::timeval,
