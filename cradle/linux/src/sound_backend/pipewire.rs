@@ -4,6 +4,9 @@ use parking_lot::RwLock;
 use peridot_tp_pipewire as pw;
 use std::sync::Arc;
 
+use crate::sound_backend::SignedInt16LEConverter;
+use crate::sound_backend::SignedInt24LEConverter;
+
 use super::AudioBitstreamConverter;
 use super::Float32Converter;
 use super::SoundBackend;
@@ -102,6 +105,42 @@ impl NativeAudioEngine {
             .int(2)
             .end_object();
         let format_pod = pod_builder.into_bytes();
+        let mut pod_builder = pw::spa::pod::Builder::with_capacity(1024);
+        pod_builder
+            .begin_object(
+                pw::raw::SPA_TYPE_OBJECT_Format,
+                pw::raw::SPA_PARAM_EnumFormat as _,
+            )
+            .prop_heading(pw::raw::spa_format::mediaType as _, 0)
+            .id(pw::raw::spa_media_type::audio as _)
+            .prop_heading(pw::raw::spa_format::mediaSubtype as _, 0)
+            .id(pw::raw::spa_media_subtype::raw as _)
+            .prop_heading(pw::raw::spa_format::AUDIO_format as _, 0)
+            .id(pw::raw::SPA_AUDIO_FORMAT_S16_LE as _)
+            .prop_heading(pw::raw::spa_format::AUDIO_rate as _, 0)
+            .int(44100)
+            .prop_heading(pw::raw::spa_format::AUDIO_channels as _, 0)
+            .int(2)
+            .end_object();
+        let format_pod2 = pod_builder.into_bytes();
+        let mut pod_builder = pw::spa::pod::Builder::with_capacity(1024);
+        pod_builder
+            .begin_object(
+                pw::raw::SPA_TYPE_OBJECT_Format,
+                pw::raw::SPA_PARAM_EnumFormat as _,
+            )
+            .prop_heading(pw::raw::spa_format::mediaType as _, 0)
+            .id(pw::raw::spa_media_type::audio as _)
+            .prop_heading(pw::raw::spa_format::mediaSubtype as _, 0)
+            .id(pw::raw::spa_media_subtype::raw as _)
+            .prop_heading(pw::raw::spa_format::AUDIO_format as _, 0)
+            .id(pw::raw::SPA_AUDIO_FORMAT_S24_LE as _)
+            .prop_heading(pw::raw::spa_format::AUDIO_rate as _, 0)
+            .int(44100)
+            .prop_heading(pw::raw::spa_format::AUDIO_channels as _, 0)
+            .int(2)
+            .end_object();
+        let format_pod3 = pod_builder.into_bytes();
 
         stream
             .connect(
@@ -109,7 +148,11 @@ impl NativeAudioEngine {
                 pw::StreamFlags::MAP_BUFFERS
                     | pw::StreamFlags::RT_PROCESS
                     | pw::StreamFlags::AUTOCONNECT,
-                &mut [format_pod.as_ptr().cast::<pw::raw::spa_pod>()],
+                &mut [
+                    format_pod.as_ptr().cast(),
+                    format_pod2.as_ptr().cast(),
+                    format_pod3.as_ptr().cast(),
+                ],
             )
             .expect("Failed to connect stream");
 
@@ -203,6 +246,10 @@ impl pw::StreamEventListener for LoopDriver {
 
                 if f == pw::raw::SPA_AUDIO_FORMAT_F32_LE as _ {
                     self.converter = Box::new(Float32Converter);
+                } else if f == pw::raw::SPA_AUDIO_FORMAT_S16_LE as _ {
+                    self.converter = Box::new(SignedInt16LEConverter);
+                } else if f == pw::raw::SPA_AUDIO_FORMAT_S24_LE as _ {
+                    self.converter = Box::new(SignedInt24LEConverter);
                 } else {
                     tracing::warn!(format = f, "Format conversion not implemented");
                 }
