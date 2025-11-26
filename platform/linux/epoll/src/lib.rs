@@ -1,6 +1,8 @@
 use core::{ffi::*, mem::MaybeUninit};
 use std::os::fd::AsRawFd;
 
+use bitflags::bitflags;
+
 #[repr(transparent)]
 pub struct Epoll(c_int);
 impl Drop for Epoll {
@@ -51,7 +53,7 @@ impl Epoll {
     #[inline(always)]
     pub fn wait(
         &self,
-        event_data: &mut [MaybeUninit<libc::epoll_event>],
+        event_data: &mut [MaybeUninit<EpollEvent>],
         timeout: Option<c_int>,
     ) -> std::io::Result<c_uint> {
         match unsafe {
@@ -71,14 +73,14 @@ impl Epoll {
     pub fn add(
         &self,
         fd: &(impl AsRawFd + ?Sized),
-        events: u32,
+        events: EpollEventBits,
         extras: u64,
     ) -> std::io::Result<()> {
         self.ctl(
             libc::EPOLL_CTL_ADD,
             fd.as_raw_fd(),
             Some(&mut libc::epoll_event {
-                events,
+                events: events.bits() as _,
                 u64: extras,
             }),
         )
@@ -93,16 +95,46 @@ impl Epoll {
     pub fn r#mod(
         &self,
         fd: &(impl AsRawFd + ?Sized),
-        events: u32,
+        events: EpollEventBits,
         extras: u64,
     ) -> std::io::Result<()> {
         self.ctl(
             libc::EPOLL_CTL_MOD,
             fd.as_raw_fd(),
             Some(&mut libc::epoll_event {
-                events,
+                events: events.bits() as _,
                 u64: extras,
             }),
         )
+    }
+}
+
+#[repr(C)]
+pub struct EpollEvent(libc::epoll_event);
+impl EpollEvent {
+    #[inline(always)]
+    pub const fn events(&self) -> EpollEventBits {
+        EpollEventBits::from_bits_retain(self.0.events as _)
+    }
+
+    #[inline(always)]
+    pub const fn value(&self) -> u64 {
+        self.0.u64
+    }
+}
+
+bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct EpollEventBits : c_int {
+        const IN = libc::EPOLLIN;
+        const OUT = libc::EPOLLOUT;
+        const ET = libc::EPOLLET;
+        const HUP = libc::EPOLLHUP;
+        const RDHUP = libc::EPOLLRDHUP;
+        const PRI = libc::EPOLLPRI;
+        const ERR = libc::EPOLLERR;
+        const ONESHOT = libc::EPOLLONESHOT;
+        const WAKEUP = libc::EPOLLWAKEUP;
+        const EXCLUSIVE = libc::EPOLLEXCLUSIVE;
     }
 }

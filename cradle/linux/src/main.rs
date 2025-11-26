@@ -1,6 +1,6 @@
 use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
-use linux_epoll::Epoll;
+use linux_epoll::{Epoll, EpollEventBits};
 use linux_eventfd::{EventFD, EventFDFlags};
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
@@ -188,7 +188,7 @@ impl<MainF: Future> GameDriver<MainF> {
             Box::pin(EventFD::new(0, EventFDFlags::NONBLOCK).expect("EventFD::new"));
         if let Err(e) = epoll.add(
             usercode_event.as_ref().get_ref(),
-            libc::EPOLLIN as _,
+            EpollEventBits::IN,
             USERCODE_FUTURE_WAKE_EVENT_ID,
         ) {
             tracing::warn!(reason = ?e, "ep.add usercode_event failed");
@@ -231,7 +231,7 @@ impl<'e> EpollTemporaryAddFd<'e> {
     pub fn add(
         instance: &'e Epoll,
         fd: &(impl AsRawFd + ?Sized),
-        events: u32,
+        events: EpollEventBits,
         extras: u64,
     ) -> std::io::Result<Self> {
         instance.add(fd, events, extras)?;
@@ -288,7 +288,7 @@ where
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
             &window_backend_readiness_guard.borrow_fd(),
-            libc::EPOLLIN as _,
+            EpollEventBits::IN,
             WINDOW_BACKEND_EVENT_ID,
         );
 
@@ -320,17 +320,17 @@ where
         let mut has_window_events = false;
         let mut has_usercode_wakes = false;
         for e in unsafe { core::slice::from_raw_parts(events.as_ptr(), count as _) } {
-            if e.u64 == WINDOW_BACKEND_EVENT_ID {
+            if e.value() == WINDOW_BACKEND_EVENT_ID {
                 has_window_events = true;
-            } else if e.u64 == USERCODE_FUTURE_WAKE_EVENT_ID {
+            } else if e.value() == USERCODE_FUTURE_WAKE_EVENT_ID {
                 has_usercode_wakes = true;
-            } else if e.u64 == UDEV_MONITOR_EVENT_ID {
+            } else if e.value() == UDEV_MONITOR_EVENT_ID {
                 input.process_monitor_event(&ep);
             } else {
                 let mut input_lock = gd.engine_input.state_write_lock();
                 input.process_device_event(
                     &mut input_lock.make_event_receiver(),
-                    e.u64,
+                    e.value(),
                     &*window_backend.borrow(),
                 );
             }

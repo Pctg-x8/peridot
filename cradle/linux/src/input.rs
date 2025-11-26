@@ -1,6 +1,6 @@
 //! Input Handlers
 
-use linux_epoll::Epoll;
+use linux_epoll::{Epoll, EpollEventBits};
 use linux_input::{AbsoluteAxes, EventType, InputEvent, Key, RelativeAxes};
 use linux_udev as udev;
 use parking_lot::RwLock;
@@ -233,7 +233,7 @@ impl EventDeviceManager {
         let mut device_id_by_node = HashMap::with_capacity(initial_devices.size_hint().0);
         for (n, (node, d)) in initial_devices.enumerate() {
             epoll
-                .add(&d, libc::EPOLLIN as _, n as u64 + epoll_id_resv)
+                .add(&d, EpollEventBits::IN, n as u64 + epoll_id_resv)
                 .expect("Failed to register initial device fd to epoll");
             devices_by_id.insert(n as u64, d);
             device_id_by_node.insert(node, n as u64);
@@ -257,7 +257,7 @@ impl EventDeviceManager {
             .id_free_list
             .pop_first()
             .unwrap_or_else(|| self.devices_by_id.len() as u64);
-        if let Err(e) = epoll.add(&device, libc::EPOLLIN as _, id + self.epoll_id_resv) {
+        if let Err(e) = epoll.add(&device, EpollEventBits::IN, id + self.epoll_id_resv) {
             tracing::warn!(reason = ?e, "Failed to register device fd to epoll")
         };
         self.devices_by_id.insert(id, device);
@@ -342,9 +342,9 @@ impl InputSystem {
             .expect("Failed to set monitor receiving enable");
         let monitor_fd = monitor.fd().expect("Failed to retrieve udev monitor fd");
 
-        epoll
-            .add(&monitor_fd, libc::EPOLLIN as _, epid_monitor)
-            .expect("Failed to add udev monitor fd");
+        if let Err(e) = epoll.add(&monitor_fd, EpollEventBits::IN, epid_monitor) {
+            tracing::warn!(reason = ?e, "Failed to add udev monitor to epoll");
+        }
 
         Self {
             devmgr: EventDeviceManager::new(initial_devices, epid_devices_start, epoll),
