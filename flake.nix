@@ -39,6 +39,8 @@
         pkgs.stack
         # helper scripts
         build-tools
+        # debugging
+        pkgs.vulkan-validation-layers
       ];
       nativeDeps = [ pkgs.pkg-config ];
       shellSetCommonEnvVars = ''

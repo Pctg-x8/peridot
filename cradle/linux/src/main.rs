@@ -1,6 +1,7 @@
 use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
 use linux_epoll::Epoll;
+use linux_eventfd::EventFD;
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 use presenter::PresenterProvider;
@@ -108,8 +109,16 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
 
 static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |ptr| core::task::RawWaker::new(ptr, &USERCODE_WAKER_VTABLE),
-    |_| {},
-    |_| {},
+    |ptr| unsafe {
+        if let Err(e) = (*ptr.cast::<EventFD>()).inc(1) {
+            tracing::warn!(reason = ?e, "usercode wake failed");
+        }
+    },
+    |ptr| unsafe {
+        if let Err(e) = (*ptr.cast::<EventFD>()).inc(1) {
+            tracing::warn!(reason = ?e, "usercode wake failed");
+        }
+    },
     |_| {},
 );
 
@@ -121,12 +130,14 @@ pub struct GameDriver<MainF> {
     frame_timing_sender: async_std::channel::Sender<()>,
     event_queue: Pin<Box<peridot::EventQueue>>,
     usercode: Pin<Box<MainF>>,
+    usercode_event: Pin<Box<EventFD>>,
     // self-referential struct
     _pinned: core::marker::PhantomPinned,
 }
 impl<MainF: Future> GameDriver<MainF> {
     fn new<PP>(
         pp: SharedMutableRef<PP>,
+        epoll: &Epoll,
         usercode_launcher: impl FnOnce(
             peridot::Engine<'static, NativeLink<SharedMutableRef<PP>>>,
         ) -> MainF,
@@ -173,6 +184,14 @@ impl<MainF: Future> GameDriver<MainF> {
         let engine_input = engine.input().clone();
         let engine_audio = engine.audio_mixer().clone();
         let usercode = Box::pin(usercode_launcher(engine));
+        let usercode_event = Box::pin(EventFD::new(0, libc::EFD_NONBLOCK).expect("EventFD::new"));
+        if let Err(e) = epoll.add(
+            usercode_event.as_ref().get_ref(),
+            libc::EPOLLIN as _,
+            USERCODE_FUTURE_WAKE_EVENT_ID,
+        ) {
+            tracing::warn!(reason = ?e, "ep.add usercode_event failed");
+        }
 
         Self {
             engine_input,
@@ -182,14 +201,19 @@ impl<MainF: Future> GameDriver<MainF> {
             frame_timing_sender,
             event_queue,
             usercode,
+            usercode_event,
             _pinned: core::marker::PhantomPinned,
         }
     }
 
     /// returns true if usercode coroutine has done
     pub fn step(&mut self) -> bool {
-        let usercode_waker =
-            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
+        let usercode_waker = unsafe {
+            core::task::Waker::new(
+                self.usercode_event.as_ref().get_ref() as *const _ as _,
+                &USERCODE_WAKER_VTABLE,
+            )
+        };
 
         self.usercode
             .as_mut()
@@ -224,39 +248,47 @@ impl Drop for EpollTemporaryAddFd<'_> {
     }
 }
 
+const UDEV_MONITOR_EVENT_ID: u64 = 2;
+const UDEV_DEVICE_EVENT_ID_START: u64 = 3;
+const FIXED_EVENT_COUNT: usize = 3;
+const WINDOW_BACKEND_EVENT_ID: u64 = 0;
+const USERCODE_FUTURE_WAKE_EVENT_ID: u64 = 1;
+
 fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
     W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
     SharedMutableRef<W>: PresenterProvider,
 {
-    let mut gd = GameDriver::new(window_backend.clone(), |mut engine| async move {
+    let ep = Epoll::new(0).expect("Failed to create epoll interface");
+    let mut input = input::InputSystem::new(&ep, UDEV_MONITOR_EVENT_ID, UDEV_DEVICE_EVENT_ID_START);
+
+    let mut gd = GameDriver::new(window_backend.clone(), &ep, |mut engine| async move {
         userlib::game_main(&mut engine).await;
     });
 
-    let ep = Epoll::new(0).expect("Failed to create epoll interface");
-    let mut input = input::InputSystem::new(&ep, 1, 2);
-
     window_backend.borrow_mut().show();
     gd.engine_audio.write().start();
+
+    // initial uesrcode step
+    gd.step();
+
     let mut events = Vec::with_capacity(8);
     let mut last_drawn_geometry = window_backend.borrow().geometry();
-    while !window_backend.borrow().has_close_requested() {
-        // step usercode before wait
-        gd.step();
-
-        if events.capacity() > (2 + input.managed_devices_count() * 2).max(8) {
+    'app: while !window_backend.borrow().has_close_requested() {
+        if events.capacity() > (FIXED_EVENT_COUNT + input.managed_devices_count() * 2).max(8) {
             // reduce memory consumption
-            events = Vec::with_capacity(8);
+            events = Vec::with_capacity((FIXED_EVENT_COUNT + input.managed_devices_count()).max(8));
+        } else {
+            // resize capacity
+            events.reserve(FIXED_EVENT_COUNT + input.managed_devices_count());
         }
-        // resize capacity
-        events.reserve(2 + input.managed_devices_count());
 
         let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
             &window_backend_readiness_guard.borrow_fd(),
             libc::EPOLLIN as _,
-            0,
+            WINDOW_BACKEND_EVENT_ID,
         );
 
         let count = match ep.wait(events.spare_capacity_mut(), Some(1)) {
@@ -275,6 +307,7 @@ where
             drop(window_backend_readiness_guard);
             let current_geometry = window_backend.borrow().geometry();
             if last_drawn_geometry != current_geometry {
+                println!("resize {current_geometry:?}");
                 last_drawn_geometry = current_geometry;
                 gd.event_queue
                     .enqueue(peridot::Event::Resize(last_drawn_geometry));
@@ -284,13 +317,14 @@ where
             continue;
         }
 
-        let mut rg = Some(window_backend_readiness_guard);
+        let mut has_window_events = false;
+        let mut has_usercode_wakes = false;
         for e in unsafe { core::slice::from_raw_parts(events.as_ptr(), count as _) } {
-            if e.u64 == 0 {
-                window_backend
-                    .borrow_mut()
-                    .process_all_events(rg.take().expect("window events signaled twice"));
-            } else if e.u64 == 1 {
+            if e.u64 == WINDOW_BACKEND_EVENT_ID {
+                has_window_events = true;
+            } else if e.u64 == USERCODE_FUTURE_WAKE_EVENT_ID {
+                has_usercode_wakes = true;
+            } else if e.u64 == UDEV_MONITOR_EVENT_ID {
                 input.process_monitor_event(&ep);
             } else {
                 let mut input_lock = gd.engine_input.state_write_lock();
@@ -301,9 +335,25 @@ where
                 );
             }
         }
-        if rg.is_some() {
+
+        if has_window_events {
+            window_backend
+                .borrow_mut()
+                .process_all_events(window_backend_readiness_guard);
+        } else {
             // no window server events processed
+            // Note: これ先にキャンセルしてあげないとVulkan WSI関係の呼び出しでとまる
             window_backend.borrow_mut().cancel_read();
+        }
+
+        if has_usercode_wakes {
+            if let Err(e) = gd.usercode_event.take() {
+                tracing::warn!(reason = ?e, "usercode_event.take failed");
+            }
+
+            if gd.step() {
+                break 'app;
+            }
         }
     }
 

@@ -33,6 +33,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 linux-udev = { path = "../../platform/linux/udev" }
 linux-epoll = { path = "../../platform/linux/epoll" }
 linux-input = { path = "../../platform/linux/input" }
+linux-eventfd = { path = "../../platform/linux/eventfd" }
 
 [dependencies.async-std]
 version = "1.13"
