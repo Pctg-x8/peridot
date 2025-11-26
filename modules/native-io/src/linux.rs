@@ -615,9 +615,11 @@ impl Drop for IoReactorThread {
 
         reactor_handle.pusher.push(|sqe| {
             sqe.opcode = linux_io_uring::ffi::IORING_OP_MSG_RING as _;
+            sqe.flags = linux_io_uring::ffi::IOSQE_CQE_SKIP_SUCCESS;
             sqe.fd = reactor_handle.pusher.context.uring.as_raw_fd();
             sqe.len = 0;
             sqe.union1.off = 0;
+            sqe.union2.addr = 0; // これが必要
         });
         join_handle.join().expect("err in IoReactorThread");
     }

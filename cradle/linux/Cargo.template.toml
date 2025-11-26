@@ -3,6 +3,7 @@ name = "peridot-cradle-linux"
 version = "0.1.0"
 authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
 edition = "2021"
+build = "build.rs"
 
 [features]
 UseExternalAssetPath = []
@@ -18,19 +19,24 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
 ] }
 xcb = { version = "1.1", optional = true }
 pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
-libc = "0.2"
 regex = "1.4"
 peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
     "xdg-shell",
     "xdg-decoration-unstable-v1",
     "content-type-v1"
 ] }
-pipewire = "0.7.0"
-libspa-sys = "0.7.0"
+peridot-tp-pipewire = { path = "../../thirdparty/pipewire" }
 parking_lot = "0.12.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+linux-udev = { path = "../../platform/linux/udev" }
+linux-epoll = { path = "../../platform/linux/epoll" }
+linux-input = { path = "../../platform/linux/input" }
+linux-eventfd = { path = "../../platform/linux/eventfd" }
 
 [dependencies.async-std]
 version = "1.13"
 features = ["attributes"]
+
+[build-dependencies]
+peridot-tp-pipewire-linking.path = "../../thirdparty/pipewire/linking"

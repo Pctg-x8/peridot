@@ -41,11 +41,11 @@ pub struct NativeAudioEngine {
     _wh: Pin<Box<AudioDataWriter>>,
 }
 impl NativeAudioEngine {
-    extern "C" fn state_callback(_: *mut pa::ffi::pa_context, user: *mut libc::c_void) {
+    extern "C" fn state_callback(_: *mut pa::ffi::pa_context, user: *mut core::ffi::c_void) {
         let p = unsafe { &mut *(user as *mut pa::mainloop::Threaded) };
         p.signal(false);
     }
-    extern "C" fn stream_state_callback(_: *mut pa::ffi::pa_stream, user: *mut libc::c_void) {
+    extern "C" fn stream_state_callback(_: *mut pa::ffi::pa_stream, user: *mut core::ffi::c_void) {
         let p = unsafe { &mut *(user as *mut pa::mainloop::Threaded) };
         p.signal(false);
     }
