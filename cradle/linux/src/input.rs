@@ -1,7 +1,7 @@
 //! Input Handlers
 
-use crate::kernel_input;
 use linux_epoll::Epoll;
+use linux_input::{AbsoluteAxes, EventType, InputEvent, Key, RelativeAxes};
 use linux_udev as udev;
 use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef, SharedWeakRef};
@@ -193,13 +193,13 @@ impl EventDevice {
         }
     }
 
-    pub fn read(&self) -> std::io::Result<kernel_input::InputEvent> {
+    pub fn read(&self) -> std::io::Result<InputEvent> {
         let mut ev = core::mem::MaybeUninit::uninit();
         match unsafe {
             libc::read(
                 self.fd,
                 ev.as_mut_ptr() as _,
-                core::mem::size_of::<kernel_input::InputEvent>(),
+                core::mem::size_of::<InputEvent>(),
             )
         } {
             r if r < 0 => Err(std::io::Error::last_os_error()),
@@ -432,7 +432,7 @@ impl InputSystem {
             }
         };
 
-        if ev.type_ == kernel_input::EventType::Synchronize as u16 {
+        if ev.type_ == EventType::Synchronize as u16 {
             // ignore dataframe sync
             if ev.code == 0 {
                 return;
@@ -441,7 +441,7 @@ impl InputSystem {
             tracing::trace!(code = ev.code, value = ev.value, "syn event");
             return;
         }
-        if ev.type_ == kernel_input::EventType::Key as u16 {
+        if ev.type_ == EventType::Key as u16 {
             let is_press = match ev.value {
                 0 => false,
                 1 => true,
@@ -480,7 +480,7 @@ impl InputSystem {
 
             return;
         }
-        if ev.type_ == kernel_input::EventType::Relative as u16 {
+        if ev.type_ == EventType::Relative as u16 {
             if !window_backend.query_input_focus() {
                 // Ignore if window doesn't have the input focus.
                 return;
@@ -498,9 +498,9 @@ impl InputSystem {
 
             return;
         }
-        if ev.type_ == kernel_input::EventType::Absolute as u16 {
+        if ev.type_ == EventType::Absolute as u16 {
             // ignore misc event from mouse, bitmask of pressed buttons
-            if is_mouse && ev.code == kernel_input::AbsoluteAxes::Misc as u16 {
+            if is_mouse && ev.code == AbsoluteAxes::Misc as u16 {
                 return;
             }
 
@@ -529,7 +529,7 @@ impl InputSystem {
         }
 
         // ignore keyscan misc
-        if ev.type_ == kernel_input::EventType::Misc as u16 && ev.code == 4 {
+        if ev.type_ == EventType::Misc as u16 && ev.code == 4 {
             return;
         }
 
@@ -691,9 +691,9 @@ fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
         return GAMEPAD_MAP[key as usize - 0x130];
     }
 
-    if (kernel_input::Key::Left as u16..=kernel_input::Key::Task as u16).contains(&key) {
+    if (Key::Left as u16..=Key::Task as u16).contains(&key) {
         return Some(peridot::NativeButtonInput::Mouse(
-            (key - kernel_input::Key::Left as u16) as _,
+            (key - Key::Left as u16) as _,
         ));
     }
 
@@ -702,13 +702,13 @@ fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
 }
 
 fn map_mouse_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
-    if code == kernel_input::RelativeAxes::X as u16 {
+    if code == RelativeAxes::X as u16 {
         return Some(peridot::NativeAnalogInput::MouseX);
     }
-    if code == kernel_input::RelativeAxes::Y as u16 {
+    if code == RelativeAxes::Y as u16 {
         return Some(peridot::NativeAnalogInput::MouseY);
     }
-    if code == kernel_input::RelativeAxes::Wheel as u16 {
+    if code == RelativeAxes::Wheel as u16 {
         return Some(peridot::NativeAnalogInput::ScrollWheel);
     }
 
@@ -716,22 +716,22 @@ fn map_mouse_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
 }
 
 fn map_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
-    if code == kernel_input::RelativeAxes::X as u16 {
+    if code == RelativeAxes::X as u16 {
         return Some(peridot::NativeAnalogInput::StickX(0));
     }
-    if code == kernel_input::RelativeAxes::RX as u16 {
+    if code == RelativeAxes::RX as u16 {
         return Some(peridot::NativeAnalogInput::StickX(1));
     }
-    if code == kernel_input::RelativeAxes::Y as u16 {
+    if code == RelativeAxes::Y as u16 {
         return Some(peridot::NativeAnalogInput::StickY(0));
     }
-    if code == kernel_input::RelativeAxes::RY as u16 {
+    if code == RelativeAxes::RY as u16 {
         return Some(peridot::NativeAnalogInput::StickY(1));
     }
-    if code == kernel_input::RelativeAxes::Z as u16 {
+    if code == RelativeAxes::Z as u16 {
         return Some(peridot::NativeAnalogInput::StickZ(0));
     }
-    if code == kernel_input::RelativeAxes::RZ as u16 {
+    if code == RelativeAxes::RZ as u16 {
         return Some(peridot::NativeAnalogInput::StickZ(1));
     }
 
@@ -739,13 +739,13 @@ fn map_input_rel(code: u16) -> Option<peridot::NativeAnalogInput> {
 }
 
 fn map_mouse_input_abs(code: u16) -> Option<peridot::NativeAnalogInput> {
-    if code == kernel_input::AbsoluteAxes::X as u16 {
+    if code == AbsoluteAxes::X as u16 {
         return Some(peridot::NativeAnalogInput::MouseX);
     }
-    if code == kernel_input::AbsoluteAxes::Y as u16 {
+    if code == AbsoluteAxes::Y as u16 {
         return Some(peridot::NativeAnalogInput::MouseY);
     }
-    if code == kernel_input::AbsoluteAxes::Wheel as u16 {
+    if code == AbsoluteAxes::Wheel as u16 {
         return Some(peridot::NativeAnalogInput::ScrollWheel);
     }
 
@@ -753,22 +753,22 @@ fn map_mouse_input_abs(code: u16) -> Option<peridot::NativeAnalogInput> {
 }
 
 fn map_input_abs(code: u16) -> Option<peridot::NativeAnalogInput> {
-    if code == kernel_input::AbsoluteAxes::X as u16 {
+    if code == AbsoluteAxes::X as u16 {
         return Some(peridot::NativeAnalogInput::StickX(0));
     }
-    if code == kernel_input::AbsoluteAxes::RX as u16 {
+    if code == AbsoluteAxes::RX as u16 {
         return Some(peridot::NativeAnalogInput::StickX(1));
     }
-    if code == kernel_input::AbsoluteAxes::Y as u16 {
+    if code == AbsoluteAxes::Y as u16 {
         return Some(peridot::NativeAnalogInput::StickY(0));
     }
-    if code == kernel_input::AbsoluteAxes::RY as u16 {
+    if code == AbsoluteAxes::RY as u16 {
         return Some(peridot::NativeAnalogInput::StickY(1));
     }
-    if code == kernel_input::AbsoluteAxes::Z as u16 {
+    if code == AbsoluteAxes::Z as u16 {
         return Some(peridot::NativeAnalogInput::StickZ(0));
     }
-    if code == kernel_input::AbsoluteAxes::RZ as u16 {
+    if code == AbsoluteAxes::RZ as u16 {
         return Some(peridot::NativeAnalogInput::StickZ(1));
     }
 

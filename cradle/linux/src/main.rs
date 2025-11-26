@@ -14,7 +14,6 @@ mod sound_backend;
 
 use crate::presenter::{wayland::Wayland, BorrowFd, EventProcessor, WindowBackend};
 mod input;
-mod kernel_input;
 mod presenter;
 mod userlib;
 
