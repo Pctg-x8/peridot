@@ -75,7 +75,7 @@ impl wl::XdgSurfaceEventListener for State {
         skip(self, surface)
     )]
     fn configure(&mut self, surface: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
-        tracing::trace!("configure xdgsurface");
+        tracing::trace!("configure");
 
         if let Err(e) = surface.ack_configure(serial) {
             tracing::warn!(reason = ?e, "ack_configure failed");
@@ -94,7 +94,7 @@ impl wl::XdgSurfaceEventListener for State {
 impl wl::XdgToplevelEventListener for State {
     #[tracing::instrument(
         name = "<State as XdgToplevelEventListener>::configure",
-        skip(self, _toplevel, states)
+        skip(self, _toplevel), fields(states = ?unsafe { states.as_slice::<u32>() })
     )]
     fn configure(
         &mut self,
@@ -103,8 +103,7 @@ impl wl::XdgToplevelEventListener for State {
         height: i32,
         states: &mut wl::ffi::Array,
     ) {
-        let states = unsafe { core::slice::from_raw_parts(states.data as _, states.size) };
-        tracing::trace!(width, height, ?states, "configure xdgtoplevel");
+        tracing::trace!("configure");
 
         if width > 0 && height > 0 {
             self.geometry = peridot::math::Vector2(width as _, height as _);
@@ -421,7 +420,7 @@ impl EventProcessor for Wayland {
                 Ok(_) => break,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     if let Err(e) = self.con.dispatch_pending() {
-                        tracing::error!(reason = ?e, "Faield to dispatch pending events");
+                        tracing::error!(reason = ?e, "Failed to dispatch pending events");
                         std::process::abort();
                     }
                 }

@@ -28,16 +28,21 @@
         pkgs.clang
         pkgs.llvmPackages.libclang
         # required libs for building engine
-        pkgs.pipewire
         pkgs.udev
         pkgs.wayland
         pkgs.pulseaudio
+        pkgs.pipewire
         pkgs.vulkan-loader
+        # required for some asset processing
+        pkgs.shaderc
         # required for workflow generator(also included in githooks)
         pkgs.stack
         # helper scripts
         build-tools
+        # debugging
+        pkgs.vulkan-validation-layers
       ];
+      nativeDeps = [ pkgs.pkg-config ];
       shellSetCommonEnvVars = ''
         export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
         # set library search paths for thirdparty
@@ -52,6 +57,7 @@
       devShells."${system}" = {
         default = pkgs.mkShell {
           buildInputs = deps;
+          nativeBuildInputs = nativeDeps;
           shellHook = shellSetCommonEnvVars;
 
           # このへんはないとエラーになる
@@ -73,6 +79,7 @@
           in
           pkgs.mkShell {
             buildInputs = deps ++ [ pkgs.fish ];
+            nativeBuildInputs = nativeDeps;
             shellHook = ''
               ${shellSetCommonEnvVars}
 

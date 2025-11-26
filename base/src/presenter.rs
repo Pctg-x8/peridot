@@ -548,9 +548,9 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
                 Ok(x) => x.unwrap_surface(),
                 Err(refs) => {
                     tracing::error!(
-                        "there are some references of swapchain left: strong={} weak={}",
-                        SharedRef::strong_count(&refs),
-                        SharedRef::weak_count(&refs)
+                        strong = SharedRef::strong_count(&refs),
+                        weak = SharedRef::weak_count(&refs),
+                        "there are some references of swapchain left",
                     );
                     std::process::abort();
                 }

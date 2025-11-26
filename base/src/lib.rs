@@ -188,6 +188,7 @@ pub struct FrameData {
     pub backbuffer_index: u32,
 }
 
+#[derive(Debug)]
 pub enum Event {
     NextFrame,
     Shutdown,
