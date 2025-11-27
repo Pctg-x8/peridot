@@ -79,6 +79,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let content =
