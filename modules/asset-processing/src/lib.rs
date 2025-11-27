@@ -21,7 +21,7 @@ pub trait AssetProcessor {
     fn process(
         &self,
         source_path: &Path,
-        metadata: &HashMap<String, String>,
+        metadata: &HashMap<metadata::Key, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>>;
 }

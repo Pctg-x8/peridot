@@ -36,7 +36,7 @@ impl<'s> Parser<'s> {
     }
 }
 impl<'s> Iterator for Parser<'s> {
-    type Item = Result<(String, &'s str), ParseError>;
+    type Item = Result<(Key, &'s str), ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.state {
@@ -95,10 +95,10 @@ impl<'s> Iterator for Parser<'s> {
                     self.state = ParserState::Value;
 
                     let new_buffer_cap = self.key_buffer.capacity();
-                    let key = core::mem::replace(
+                    let key = Key::from_raw_parsed(core::mem::replace(
                         &mut self.key_buffer,
                         String::with_capacity(new_buffer_cap),
-                    );
+                    ));
                     let value = &self.content[self.value_byte_range.clone()];
 
                     Some(Ok((key, value)))
@@ -113,15 +113,43 @@ impl<'s> Iterator for Parser<'s> {
                     self.state = ParserState::Finished;
 
                     let new_buffer_cap = self.key_buffer.capacity();
-                    let key = core::mem::replace(
+                    let key = Key::from_raw_parsed(core::mem::replace(
                         &mut self.key_buffer,
                         String::with_capacity(new_buffer_cap),
-                    );
+                    ));
                     let value = &self.content[self.value_byte_range.clone()];
 
                     Some(Ok((key, value)))
                 }
             },
         }
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Key(String);
+impl Key {
+    fn from_raw_parsed(mut key: String) -> Self {
+        // truncate ending whitespaces
+        key.truncate(key.trim_ascii_end().len());
+        // case insensitive
+        key.make_ascii_lowercase();
+
+        Self(key)
+    }
+}
+impl core::ops::Deref for Key {
+    type Target = str;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+impl core::borrow::Borrow<str> for Key {
+    #[inline(always)]
+    fn borrow(&self) -> &str {
+        &self.0
     }
 }
