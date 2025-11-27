@@ -79,34 +79,67 @@ pub fn process(
 
     let metadata_path = source_path.as_ref().with_extension("p-meta");
     let dest_path = processor.dest_path(source_file_name, dest_dir);
-    if !options.force_rebuild
-        && let (Ok(source_meta), Ok(meta_meta), Ok(dest_meta)) = (
-            source_path.as_ref().metadata().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving file metadata failed"),
-            ),
-            metadata_path.metadata().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving file metadata failed"),
-            ),
-            dest_path.metadata().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving file metadata failed"),
-            ),
-        )
-        && let (Ok(source_modtime), Ok(meta_modtime), Ok(dest_modtime)) = (
-            source_meta.modified().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving modified time failed"),
-            ),
-            meta_meta.modified().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving modified time failed"),
-            ),
-            dest_meta.modified().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving modified time failed"),
-            )
-        )
-        && source_modtime <= dest_modtime
-        && meta_modtime <= dest_modtime
-    {
-        tracing::info!(reason = "modified time", "skip asset");
-        return Some(dest_path);
+
+    'determine_rebuild: {
+        if options.force_rebuild {
+            // forced
+            break 'determine_rebuild;
+        }
+
+        let source_meta = match source_path.as_ref().metadata() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving file metadata failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let meta_meta = match metadata_path.metadata() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving file metadata failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let dest_meta = match dest_path.metadata() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?dest_path, "retrieving file metadata failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+
+        let source_modtime = match source_meta.modified() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving modified time failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let meta_modtime = match meta_meta.modified() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving modified time failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let dest_modtime = match dest_meta.modified() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?dest_path, "retrieving modified time failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+
+        if source_modtime <= dest_modtime && meta_modtime <= dest_modtime {
+            tracing::info!(reason = "modified time", "skip asset");
+            return Some(dest_path);
+        }
     }
 
     let metadata = 'load_metadata: {
