@@ -95,7 +95,8 @@ pub fn process(
             }
         };
         let meta_meta = match metadata_path.metadata() {
-            Ok(x) => x,
+            Ok(x) => Some(x),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => {
                 tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving file metadata failed");
                 // cannot determine(force rebuild)
@@ -119,7 +120,7 @@ pub fn process(
                 break 'determine_rebuild;
             }
         };
-        let meta_modtime = match meta_meta.modified() {
+        let meta_modtime = match meta_meta.map(|x| x.modified()).transpose() {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving modified time failed");
@@ -136,7 +137,7 @@ pub fn process(
             }
         };
 
-        if source_modtime <= dest_modtime && meta_modtime <= dest_modtime {
+        if source_modtime <= dest_modtime && meta_modtime.is_some_and(|x| x <= dest_modtime) {
             tracing::info!(reason = "modified time", "skip asset");
             return Some(dest_path);
         }
