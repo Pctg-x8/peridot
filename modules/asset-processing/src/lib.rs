@@ -143,9 +143,16 @@ pub fn process(
     }
 
     let metadata = 'load_metadata: {
-        if metadata_path.try_exists().inspect_err(|e| tracing::warn!(reason = ?e, path = ?metadata_path, "querying metadata existential failed")).unwrap_or(false) {
-            tracing::trace!(source_path = ?source_path.as_ref(), metadata_path = ?metadata_path, "no metadata exists for this asset");
-            break 'load_metadata None;
+        match metadata_path.try_exists() {
+            Ok(true) => (),
+            Ok(false) => {
+                tracing::trace!(source_path = ?source_path.as_ref(), metadata_path = ?metadata_path, "no metadata exists for this asset");
+                break 'load_metadata None;
+            }
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?metadata_path, "querying metadata existential failed");
+                break 'load_metadata None;
+            }
         }
 
         let content = match std::fs::read_to_string(&metadata_path) {
@@ -156,7 +163,16 @@ pub fn process(
             }
         };
 
-        Some(metadata::Parser::new(&content).filter_map(|x| x.inspect_err(|e| tracing::error!(reason = ?e, path = ?metadata_path, "parsing metadata failed")).ok()).map(|(k, v)| (k, v.to_owned())).collect::<HashMap<_, _>>())
+        Some(
+            metadata::Parser::new(&content)
+                .filter_map(
+                    |x| x
+                        .inspect_err(|e| tracing::error!(reason = ?e, path = ?metadata_path, "parsing metadata failed"))
+                        .ok()
+                )
+                .map(|(k, v)| (k, v.to_owned()))
+                .collect::<HashMap<_, _>>()
+        )
     };
     let metadata = metadata.unwrap_or_else(HashMap::new);
 
