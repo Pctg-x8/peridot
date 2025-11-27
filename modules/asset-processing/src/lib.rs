@@ -78,6 +78,37 @@ pub fn process(
     }
 
     let metadata_path = source_path.as_ref().with_extension("p-meta");
+    let dest_path = processor.dest_path(source_file_name, dest_dir);
+    if !options.force_rebuild
+        && let (Ok(source_meta), Ok(meta_meta), Ok(dest_meta)) = (
+            source_path.as_ref().metadata().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving file metadata failed"),
+            ),
+            metadata_path.metadata().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving file metadata failed"),
+            ),
+            dest_path.metadata().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving file metadata failed"),
+            ),
+        )
+        && let (Ok(source_modtime), Ok(meta_modtime), Ok(dest_modtime)) = (
+            source_meta.modified().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving modified time failed"),
+            ),
+            meta_meta.modified().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving modified time failed"),
+            ),
+            dest_meta.modified().inspect_err(
+                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving modified time failed"),
+            )
+        )
+        && source_modtime <= dest_modtime
+        && meta_modtime <= dest_modtime
+    {
+        tracing::info!(reason = "modified time", "skip asset");
+        return Some(dest_path);
+    }
+
     let metadata = 'load_metadata: {
         if metadata_path.try_exists().inspect_err(|e| tracing::warn!(reason = ?e, path = ?metadata_path, "querying metadata existential failed")).unwrap_or(false) {
             tracing::trace!(source_path = ?source_path.as_ref(), metadata_path = ?metadata_path, "no metadata exists for this asset");
@@ -95,30 +126,6 @@ pub fn process(
         Some(metadata::Parser::new(&content).filter_map(|x| x.inspect_err(|e| tracing::error!(reason = ?e, path = ?metadata_path, "parsing metadata failed")).ok()).map(|(k, v)| (k, v.to_owned())).collect::<HashMap<_, _>>())
     };
     let metadata = metadata.unwrap_or_else(HashMap::new);
-
-    let dest_path = processor.dest_path(source_file_name, dest_dir);
-    if !options.force_rebuild
-        && let (Ok(x), Ok(y)) = (
-            source_path.as_ref().metadata().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving metadata failed"),
-            ),
-            dest_path.metadata().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving metadata failed"),
-            ),
-        )
-        && let (Ok(x), Ok(y)) = (
-            x.modified().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving modified date failed"),
-            ),
-            y.modified().inspect_err(
-                |e| tracing::warn!(reason = ?e, path = ?dest_path, "retrieving modified date failed"),
-            )
-        )
-        && x <= y
-    {
-        tracing::info!(reason = "modified time", "skip asset");
-        return Some(dest_path);
-    }
 
     if let Err(e) = processor.process(source_path.as_ref(), &metadata, &dest_path) {
         tracing::error!(reason = ?e, "Failed to process asset");
