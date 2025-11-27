@@ -92,7 +92,7 @@ impl<'s> Iterator for Parser<'s> {
                 Some(c @ '\n') => {
                     self.pointer_bytes += c.len_utf8();
                     self.pointer_line += 1;
-                    self.state = ParserState::Value;
+                    self.state = ParserState::Key;
 
                     let new_buffer_cap = self.key_buffer.capacity();
                     let key = Key::from_raw_parsed(core::mem::replace(
