@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
 };
@@ -36,6 +37,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        _metadata: &HashMap<String, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let img = image::open(source_path).map_err(ImageAssetProcessError::OpenFailed)?;
@@ -108,6 +110,7 @@ impl crate::AssetProcessor for SoundAssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        _metadata: &HashMap<String, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?

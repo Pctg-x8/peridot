@@ -1,9 +1,11 @@
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
 };
 
 pub mod builtin;
+pub mod metadata;
 
 /// An asset processor interface.
 pub trait AssetProcessor {
@@ -19,6 +21,7 @@ pub trait AssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        metadata: &HashMap<String, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>>;
 }
@@ -74,6 +77,25 @@ pub fn process(
         return None;
     }
 
+    let metadata_path = source_path.as_ref().with_extension("p-meta");
+    let metadata = 'load_metadata: {
+        if metadata_path.try_exists().inspect_err(|e| tracing::warn!(reason = ?e, path = ?metadata_path, "querying metadata existential failed")).unwrap_or(false) {
+            tracing::trace!(source_path = ?source_path.as_ref(), metadata_path = ?metadata_path, "no metadata exists for this asset");
+            break 'load_metadata None;
+        }
+
+        let content = match std::fs::read_to_string(&metadata_path) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, path = ?metadata_path, "reading metadata content failed");
+                break 'load_metadata None;
+            }
+        };
+
+        Some(metadata::Parser::new(&content).filter_map(|x| x.inspect_err(|e| tracing::error!(reason = ?e, path = ?metadata_path, "parsing metadata failed")).ok()).map(|(k, v)| (k, v.to_owned())).collect::<HashMap<_, _>>())
+    };
+    let metadata = metadata.unwrap_or_else(HashMap::new);
+
     let dest_path = processor.dest_path(source_file_name, dest_dir);
     if !options.force_rebuild
         && let (Ok(x), Ok(y)) = (
@@ -98,7 +120,7 @@ pub fn process(
         return Some(dest_path);
     }
 
-    if let Err(e) = processor.process(source_path.as_ref(), &dest_path) {
+    if let Err(e) = processor.process(source_path.as_ref(), &metadata, &dest_path) {
         tracing::error!(reason = ?e, "Failed to process asset");
         return None;
     }
