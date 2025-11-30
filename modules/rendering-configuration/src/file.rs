@@ -8,7 +8,7 @@ use pinned_futures_helper::{read_byte_async, read_exact_async_pinned};
 
 use crate::{
     DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
-    PropertyMappingVk, PropertyType, RenderingOptionOverrides,
+    PropertyMappingVk, PropertyType, RenderingOptionOverrides, VariantKey,
 };
 
 #[inline(always)]
@@ -301,87 +301,36 @@ impl ShadingPassDirectoryEntry {
 
 pub struct ShadingPassVk {
     pub option_overrides: RenderingOptionOverrides,
-    pub vertex_semantic_to_location: Vec<(VertexInputSemantic, u32)>,
-    pub vertex_entry_point_name: Option<String>,
-    pub fragment_entry_point_name: Option<String>,
-    pub code: Vec<u32>,
+    pub variants: Vec<(VariantKey, Code)>,
 }
 impl ShadingPassVk {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
         let mut writes = self.option_overrides.write(sink)?;
 
-        writes += VariableUInt(self.vertex_semantic_to_location.len() as _).write(sink)?;
-        for (n, l) in self.vertex_semantic_to_location.iter() {
-            writes += n.write(sink)?;
-            writes += VariableUInt(*l).write(sink)?;
+        writes += VariableUInt(self.variants.len() as _).write(sink)?;
+        for (k, v) in self.variants.iter() {
+            writes += k.write(sink)?;
+            writes += v.write(sink)?;
         }
 
-        let mut stage_flags = 0u8;
-        if self.vertex_entry_point_name.is_some() {
-            stage_flags |= 0x01;
-        }
-        if self.fragment_entry_point_name.is_some() {
-            stage_flags |= 0x02;
-        }
-        sink.write_all(&[stage_flags])?;
-        writes += 1;
-        if let Some(ref x) = self.vertex_entry_point_name {
-            writes += PascalStr(x).write(sink)?;
-        }
-        if let Some(ref x) = self.fragment_entry_point_name {
-            writes += PascalStr(x).write(sink)?;
-        }
-
-        writes += VariableUInt(self.code.len() as _).write(sink)?;
-        sink.write_all(unsafe {
-            core::slice::from_raw_parts(self.code.as_ptr() as *const u8, self.code.len() << 2)
-        })?;
-
-        Ok(writes + (self.code.len() << 2))
+        Ok(writes)
     }
 
     pub fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
         let option_overrides = RenderingOptionOverrides::read(source)?;
 
-        let vertex_semantic_to_location_count = VariableUInt::read(source)?.0 as usize;
-        let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
-        for _ in 0..vertex_semantic_to_location_count {
-            let name = VertexInputSemantic::read(source)?;
-            let location = VariableUInt::read(source)?.0;
-            vertex_semantic_to_location.push((name, location));
-        }
+        let variant_count = VariableUInt::read(source)?.0 as usize;
+        let mut variants = Vec::with_capacity(variant_count);
+        for _ in 0..variant_count {
+            let key = VariantKey::read(source)?;
+            let variant = Code::read(source)?;
 
-        let mut stage_flags = [0u8];
-        source.read_exact(&mut stage_flags)?;
-        let vertex_entry_point_name = if (stage_flags[0] & 0x01) == 0x01 {
-            Some(PascalString::read(source)?.0)
-        } else {
-            None
-        };
-        let fragment_entry_point_name = if (stage_flags[0] & 0x02) == 0x02 {
-            Some(PascalString::read(source)?.0)
-        } else {
-            None
-        };
-
-        let code_word_count = VariableUInt::read(source)?.0 as usize;
-        let mut code = Vec::<u32>::with_capacity(code_word_count);
-        source.read_exact(unsafe {
-            core::slice::from_raw_parts_mut(
-                code.spare_capacity_mut().as_mut_ptr() as *mut u8,
-                code_word_count << 2,
-            )
-        })?;
-        unsafe {
-            code.set_len(code.capacity());
+            variants.push((key, variant));
         }
 
         Ok(Self {
             option_overrides,
-            vertex_semantic_to_location,
-            vertex_entry_point_name,
-            fragment_entry_point_name,
-            code,
+            variants,
         })
     }
 
@@ -390,46 +339,45 @@ impl ShadingPassVk {
     ) -> std::io::Result<Self> {
         let option_overrides = RenderingOptionOverrides::read_async(source.as_mut()).await?;
 
-        let vertex_semantic_to_location_count =
-            VariableUInt::read_async(source.as_mut()).await?.0 as usize;
-        let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
-        for _ in 0..vertex_semantic_to_location_count {
-            let name = VertexInputSemantic::read_async(source.as_mut()).await?;
-            let location = VariableUInt::read_async(source.as_mut()).await?.0;
-            vertex_semantic_to_location.push((name, location));
-        }
+        let variant_count = VariableUInt::read_async(source.as_mut()).await?.0 as usize;
+        let mut variants = Vec::with_capacity(variant_count);
+        for _ in 0..variant_count {
+            let key = VariantKey::read_async(source.as_mut()).await?;
+            let variant = Code::read_async(source.as_mut()).await?;
 
-        let stage_flags = read_byte_async(source.as_mut()).await?;
-        let vertex_entry_point_name = if stage_flags & 0x01 != 0 {
-            Some(PascalString::read_async(source.as_mut()).await?.0)
-        } else {
-            None
-        };
-        let fragment_entry_point_name = if stage_flags & 0x02 != 0 {
-            Some(PascalString::read_async(source.as_mut()).await?.0)
-        } else {
-            None
-        };
-
-        let code_word_count = VariableUInt::read_async(source.as_mut()).await?.0 as usize;
-        let mut code = Vec::<u32>::with_capacity(code_word_count);
-        read_exact_async_pinned(source.as_mut(), unsafe {
-            core::slice::from_raw_parts_mut(
-                code.spare_capacity_mut().as_mut_ptr() as *mut core::mem::MaybeUninit<u8>,
-                code_word_count << 2,
-            )
-        })
-        .await?;
-        unsafe {
-            code.set_len(code.capacity());
+            variants.push((key, variant));
         }
 
         Ok(Self {
             option_overrides,
-            vertex_semantic_to_location,
-            vertex_entry_point_name,
-            fragment_entry_point_name,
-            code,
+            variants,
+        })
+    }
+}
+
+impl VariantKey {
+    fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        sink.write_all(&[if self.instancing { 0x01 } else { 0x00 }])?;
+
+        Ok(1)
+    }
+
+    fn read(source: &mut impl Read) -> std::io::Result<Self> {
+        let mut flags = [0u8];
+        source.read_exact(&mut flags)?;
+
+        Ok(Self {
+            instancing: flags[0] & 0x01 != 0,
+        })
+    }
+
+    async fn read_async(source: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
+        let mut flags = [core::mem::MaybeUninit::<u8>::uninit()];
+        read_exact_async_pinned(source, &mut flags).await?;
+        let flags = unsafe { flags[0].assume_init() };
+
+        Ok(Self {
+            instancing: flags & 0x01 != 0,
         })
     }
 }
@@ -507,6 +455,134 @@ impl RenderingOptionOverrides {
             mode,
             culling,
             front_face,
+        })
+    }
+}
+
+pub struct Code {
+    pub vertex_semantic_to_location: Vec<(VertexInputSemantic, u32)>,
+    pub vertex_entry_point_name: Option<String>,
+    pub fragment_entry_point_name: Option<String>,
+    pub words: Vec<u32>,
+}
+impl Code {
+    pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        let mut writes = 0;
+
+        writes += VariableUInt(self.vertex_semantic_to_location.len() as _).write(sink)?;
+        for (n, l) in self.vertex_semantic_to_location.iter() {
+            writes += n.write(sink)?;
+            writes += VariableUInt(*l).write(sink)?;
+        }
+
+        let mut stage_flags = 0u8;
+        if self.vertex_entry_point_name.is_some() {
+            stage_flags |= 0x01;
+        }
+        if self.fragment_entry_point_name.is_some() {
+            stage_flags |= 0x02;
+        }
+        sink.write_all(&[stage_flags])?;
+        writes += 1;
+        if let Some(ref x) = self.vertex_entry_point_name {
+            writes += PascalStr(x).write(sink)?;
+        }
+        if let Some(ref x) = self.fragment_entry_point_name {
+            writes += PascalStr(x).write(sink)?;
+        }
+
+        writes += VariableUInt(self.words.len() as _).write(sink)?;
+        sink.write_all(unsafe {
+            core::slice::from_raw_parts(self.words.as_ptr() as *const u8, self.words.len() << 2)
+        })?;
+
+        Ok(writes + (self.words.len() << 2))
+    }
+
+    pub fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
+        let vertex_semantic_to_location_count = VariableUInt::read(source)?.0 as usize;
+        let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
+        for _ in 0..vertex_semantic_to_location_count {
+            let name = VertexInputSemantic::read(source)?;
+            let location = VariableUInt::read(source)?.0;
+            vertex_semantic_to_location.push((name, location));
+        }
+
+        let mut stage_flags = [0u8];
+        source.read_exact(&mut stage_flags)?;
+        let vertex_entry_point_name = if (stage_flags[0] & 0x01) == 0x01 {
+            Some(PascalString::read(source)?.0)
+        } else {
+            None
+        };
+        let fragment_entry_point_name = if (stage_flags[0] & 0x02) == 0x02 {
+            Some(PascalString::read(source)?.0)
+        } else {
+            None
+        };
+
+        let word_count = VariableUInt::read(source)?.0 as usize;
+        let mut words = Vec::<u32>::with_capacity(word_count);
+        source.read_exact(unsafe {
+            core::slice::from_raw_parts_mut(
+                words.spare_capacity_mut().as_mut_ptr() as *mut u8,
+                word_count << 2,
+            )
+        })?;
+        unsafe {
+            words.set_len(words.capacity());
+        }
+
+        Ok(Self {
+            vertex_semantic_to_location,
+            vertex_entry_point_name,
+            fragment_entry_point_name,
+            words,
+        })
+    }
+
+    pub async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        let vertex_semantic_to_location_count =
+            VariableUInt::read_async(source.as_mut()).await?.0 as usize;
+        let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
+        for _ in 0..vertex_semantic_to_location_count {
+            let name = VertexInputSemantic::read_async(source.as_mut()).await?;
+            let location = VariableUInt::read_async(source.as_mut()).await?.0;
+            vertex_semantic_to_location.push((name, location));
+        }
+
+        let stage_flags = read_byte_async(source.as_mut()).await?;
+        let vertex_entry_point_name = if stage_flags & 0x01 != 0 {
+            Some(PascalString::read_async(source.as_mut()).await?.0)
+        } else {
+            None
+        };
+        let fragment_entry_point_name = if stage_flags & 0x02 != 0 {
+            Some(PascalString::read_async(source.as_mut()).await?.0)
+        } else {
+            None
+        };
+
+        let word_count = VariableUInt::read_async(source.as_mut()).await?.0 as usize;
+        let mut words = Vec::<u32>::with_capacity(word_count);
+        read_exact_async_pinned(source.as_mut(), unsafe {
+            core::slice::from_raw_parts_mut(
+                words.spare_capacity_mut().as_mut_ptr() as *mut core::mem::MaybeUninit<u8>,
+                word_count << 2,
+            )
+        })
+        .await?;
+        unsafe {
+            words.set_len(words.capacity());
+        }
+
+        Ok(Self {
+            vertex_semantic_to_location,
+            vertex_entry_point_name,
+            fragment_entry_point_name,
+            words,
         })
     }
 }

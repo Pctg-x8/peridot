@@ -107,11 +107,26 @@ pub enum ShadingPassVk {
     },
     Custom {
         option_overrides: RenderingOptionOverrides,
-        vertex_semantic_to_location: HashMap<VertexInputSemantic, u32>,
-        vertex_entry_point_name: Option<String>,
-        fragment_entry_point_name: Option<String>,
-        code: Vec<u32>,
+        variants: HashMap<VariantKey, Code>,
     },
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct VariantKey {
+    pub instancing: bool,
+}
+impl Default for VariantKey {
+    #[inline(always)]
+    fn default() -> Self {
+        Self { instancing: false }
+    }
+}
+
+pub struct Code {
+    pub vertex_semantic_to_location: HashMap<VertexInputSemantic, u32>,
+    pub vertex_entry_point_name: Option<String>,
+    pub fragment_entry_point_name: Option<String>,
+    pub words: Vec<u32>,
 }
 
 #[derive(Debug)]
@@ -190,6 +205,19 @@ impl Default for FrontFace {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum InstancingSupport {
+    None,
+    Allowed,
+    Only,
+}
+impl Default for InstancingSupport {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PropertyType {
     Texture2D,
@@ -247,20 +275,30 @@ pub fn write(
             }
             ShadingPassVk::Custom {
                 option_overrides,
-                vertex_semantic_to_location,
-                vertex_entry_point_name,
-                fragment_entry_point_name,
-                code,
+                variants,
             } => {
                 shading_pass_directory
                     .entries
                     .push((n, file::ShadingPassDirectoryEntry::Located(writes as _)));
                 writes += file::ShadingPassVk {
                     option_overrides,
-                    vertex_semantic_to_location: vertex_semantic_to_location.into_iter().collect(),
-                    vertex_entry_point_name,
-                    fragment_entry_point_name,
-                    code,
+                    variants: variants
+                        .into_iter()
+                        .map(|(k, v)| {
+                            (
+                                k,
+                                file::Code {
+                                    vertex_semantic_to_location: v
+                                        .vertex_semantic_to_location
+                                        .into_iter()
+                                        .collect(),
+                                    vertex_entry_point_name: v.vertex_entry_point_name,
+                                    fragment_entry_point_name: v.fragment_entry_point_name,
+                                    words: v.words,
+                                },
+                            )
+                        })
+                        .collect(),
                 }
                 .write(sink)?;
             }
@@ -330,25 +368,39 @@ pub async fn read_async(
                     ))
                     .await?;
 
-                    let mut vertex_semantic_to_location =
-                        HashMap::with_capacity(pass_data.vertex_semantic_to_location.len());
-                    for (n, l) in pass_data.vertex_semantic_to_location {
-                        match vertex_semantic_to_location.entry(n) {
+                    let mut variants = HashMap::with_capacity(pass_data.variants.len());
+                    for (k, v) in pass_data.variants {
+                        let mut vertex_semantic_to_location =
+                            HashMap::with_capacity(v.vertex_semantic_to_location.len());
+                        for (n, l) in v.vertex_semantic_to_location {
+                            match vertex_semantic_to_location.entry(n) {
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert(l);
+                                }
+                                std::collections::hash_map::Entry::Occupied(x) => {
+                                    panic!("conflicting vertex semantic: {:?}", x.key());
+                                }
+                            }
+                        }
+
+                        match variants.entry(k) {
                             std::collections::hash_map::Entry::Vacant(x) => {
-                                x.insert(l);
+                                x.insert(Code {
+                                    vertex_semantic_to_location,
+                                    vertex_entry_point_name: v.vertex_entry_point_name,
+                                    fragment_entry_point_name: v.fragment_entry_point_name,
+                                    words: v.words,
+                                });
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
-                                panic!("conflicting vertex semantic: {:?}", x.key());
+                                panic!("conflicting variant: {:?}", x.key());
                             }
                         }
                     }
 
                     x.insert(ShadingPassVk::Custom {
                         option_overrides: pass_data.option_overrides,
-                        vertex_semantic_to_location,
-                        vertex_entry_point_name: pass_data.vertex_entry_point_name,
-                        fragment_entry_point_name: pass_data.fragment_entry_point_name,
-                        code: pass_data.code,
+                        variants,
                     });
                 }
             },
@@ -397,25 +449,39 @@ pub fn read(
                     source.seek(SeekFrom::Start(loc))?;
                     let pass_data = file::ShadingPassVk::read(source)?;
 
-                    let mut vertex_semantic_to_location =
-                        HashMap::with_capacity(pass_data.vertex_semantic_to_location.len());
-                    for (n, l) in pass_data.vertex_semantic_to_location {
-                        match vertex_semantic_to_location.entry(n) {
+                    let mut variants = HashMap::with_capacity(pass_data.variants.len());
+                    for (k, v) in pass_data.variants {
+                        let mut vertex_semantic_to_location =
+                            HashMap::with_capacity(v.vertex_semantic_to_location.len());
+                        for (n, l) in v.vertex_semantic_to_location {
+                            match vertex_semantic_to_location.entry(n) {
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert(l);
+                                }
+                                std::collections::hash_map::Entry::Occupied(x) => {
+                                    panic!("conflicting vertex semantic: {:?}", x.key());
+                                }
+                            }
+                        }
+
+                        match variants.entry(k) {
                             std::collections::hash_map::Entry::Vacant(x) => {
-                                x.insert(l);
+                                x.insert(Code {
+                                    vertex_semantic_to_location,
+                                    vertex_entry_point_name: v.vertex_entry_point_name,
+                                    fragment_entry_point_name: v.fragment_entry_point_name,
+                                    words: v.words,
+                                });
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
-                                panic!("conflicting vertex semantic: {:?}", x.key());
+                                panic!("conflicting variant: {:?}", x.key());
                             }
                         }
                     }
 
                     x.insert(ShadingPassVk::Custom {
                         option_overrides: pass_data.option_overrides,
-                        vertex_semantic_to_location,
-                        vertex_entry_point_name: pass_data.vertex_entry_point_name,
-                        fragment_entry_point_name: pass_data.fragment_entry_point_name,
-                        code: pass_data.code,
+                        variants,
                     });
                 }
             },

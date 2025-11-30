@@ -3,8 +3,8 @@ use std::{borrow::Cow, collections::HashMap};
 use peridot_semantic_shader::VertexInputSemantic;
 
 use crate::{
-    DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
-    PropertyMappingVk, PropertyType, RenderingOptionOverrides,
+    DescriptorTypeVk, FaceCulling, FrontFace, InstancingSupport, PolygonRasterizationMode,
+    PropertyDestinationVk, PropertyMappingVk, PropertyType, RenderingOptionOverrides,
 };
 
 use super::{syntax, tokenizer::Identifier};
@@ -69,6 +69,7 @@ impl RenderingConfiguration {
                         name.as_str().into(),
                         PassData {
                             option_overrides: None,
+                            instancing_support: InstancingSupport::None,
                             deriving: Some(org_name.as_str().into()),
                             vertex_bindings: Vec::new(),
                             shader_code: None,
@@ -83,6 +84,7 @@ impl RenderingConfiguration {
                     let mut vertex_bindings = None;
                     let mut shader_code = None;
                     let mut option_overrides = None::<RenderingOptionOverrides>;
+                    let mut instancing_support = None::<InstancingSupport>;
 
                     for c in contents {
                         match c {
@@ -168,6 +170,24 @@ impl RenderingConfiguration {
                                         }
 
                                         o.front_face = Some(FrontFace::Clockwise);
+                                    } else if e.as_str() == "NotInstanced" {
+                                        if let Some(x) = instancing_support {
+                                            panic!("conflicting Instancing: {x:?}");
+                                        }
+
+                                        instancing_support = Some(InstancingSupport::None);
+                                    } else if e.as_str() == "Instanced" {
+                                        if let Some(x) = instancing_support {
+                                            panic!("conflicting Instancing: {x:?}");
+                                        }
+
+                                        instancing_support = Some(InstancingSupport::Allowed);
+                                    } else if e.as_str() == "InstancedOnly" {
+                                        if let Some(x) = instancing_support {
+                                            panic!("conflicting Instancing: {x:?}");
+                                        }
+
+                                        instancing_support = Some(InstancingSupport::Only);
                                     } else {
                                         panic!("unknown option: {}", e.as_str());
                                     }
@@ -180,6 +200,7 @@ impl RenderingConfiguration {
                         name.as_str().into(),
                         PassData {
                             option_overrides,
+                            instancing_support: instancing_support.unwrap_or_default(),
                             deriving: None,
                             vertex_bindings: vertex_bindings.unwrap_or_else(Vec::new),
                             shader_code,
@@ -195,6 +216,7 @@ impl RenderingConfiguration {
     // いったんターゲットをVulkanに限定する(他API対応もでてきたらそのときに対応する)
     pub fn gen_vk_prelude(
         &self,
+        instancing: bool,
     ) -> (
         String,
         HashMap<String, (PropertyType, PropertyMappingVk)>,
@@ -356,6 +378,24 @@ impl RenderingConfiguration {
         let mut code = String::new();
 
         // builtin prelude
+        if instancing {
+            code.push_str(
+                r#"namespace PeridotInstancing {
+struct Vars {
+    uint id : SV_InstanceID;
+    uint baseIndex : SV_StartInstanceLocation;
+
+    property uint instanceIndex {
+        inline get { return this.baseIndex + this.id; }
+    }
+}
+}
+            "#,
+            );
+        } else {
+            code.push_str("#define PERIDOT_INSTANCE_VARS \n");
+        }
+
         code.push_str(
             r#"namespace PeridotCameraParameters {
 struct UniformBlock {
@@ -370,8 +410,25 @@ static inline float4x4 viewProjectionMatrix() {
 }
 "#,
         );
-        code.push_str(
-            r#"namespace PeridotObjectParameters {
+        if instancing {
+            code.push_str(
+                r#"namespace PeridotObjectParameters {
+struct UniformBlock {
+    float4x4 transformMatrix;
+}
+[vk::binding(0, 1)]
+StructuredBuffer<UniformBlock> uniformBlock;
+
+static inline float4x4 transformMatrix(PeridotInstancing::Vars instanceVars) {
+    return uniformBlock[instanceVars.instanceIndex].transformMatrix;
+}
+}
+#define PERIDOT_OBJECT_PARAMETERS_ARGS(v) v.__peridot_instanceVars
+"#,
+            );
+        } else {
+            code.push_str(
+                r#"namespace PeridotObjectParameters {
 struct UniformBlock {
     float4x4 transformMatrix;
 }
@@ -382,8 +439,10 @@ static inline float4x4 transformMatrix() {
     return uniformBlock.transformMatrix;
 }
 }
+#define PERIDOT_OBJECT_PARAMETERS_ARGS(v) 
 "#,
-        );
+            );
+        }
 
         // material prelude
         code.push_str("namespace PeridotMaterialParameters {\n");
@@ -472,12 +531,13 @@ pub enum PropertyUpdateFrequency {
 #[derive(Debug)]
 pub struct PassData {
     pub option_overrides: Option<RenderingOptionOverrides>,
+    pub instancing_support: InstancingSupport,
     pub deriving: Option<String>,
     pub vertex_bindings: Vec<PassVertexBindingData>,
     pub shader_code: Option<String>,
 }
 impl PassData {
-    pub fn gen_vk_code(&self) -> (String, HashMap<VertexInputSemantic, u32>) {
+    pub fn gen_vk_code(&self, for_instancing: bool) -> (String, HashMap<VertexInputSemantic, u32>) {
         let mut semantic_to_location_map = HashMap::with_capacity(self.vertex_bindings.len());
 
         let mut code = String::new();
@@ -509,6 +569,9 @@ impl PassData {
                 code.push_str(" : ");
                 print_vi_semantic(&vb.semantic, &mut code);
                 code.push_str(";\n");
+            }
+            if for_instancing {
+                code.push_str("    PeridotInstancing::Vars __peridot_instanceVars;\n");
             }
             code.push_str("}\n\n");
         }
