@@ -201,6 +201,18 @@ pub enum PropertyType {
     Float4,
 }
 
+#[cfg(feature = "with-loader-impl")]
+#[repr(C)]
+pub struct UniformCameraParameters {
+    pub view_projection_matrix: peridot::math::Matrix4F32,
+}
+
+#[cfg(feature = "with-loader-impl")]
+#[repr(C)]
+pub struct UniformObjectParameters {
+    pub transform_matrix: peridot::math::Matrix4F32,
+}
+
 pub fn write(
     sink: &mut impl Write,
     compiled: CompiledRenderingConfigurationVk,
