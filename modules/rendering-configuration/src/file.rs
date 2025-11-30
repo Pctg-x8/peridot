@@ -8,7 +8,7 @@ use pinned_futures_helper::{read_byte_async, read_exact_async_pinned};
 
 use crate::{
     DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
-    PropertyMappingVk, PropertyType, RenderingOptionOverrides, VariantKey,
+    PropertyMappingVk, PropertyType, RenderingOptionOverrides, VariantKey, VectorPropertyMappingVk,
 };
 
 #[inline(always)]
@@ -646,6 +646,84 @@ impl PropertyMappingVk {
 
                 Ok(1 + content_writes)
             }
+            Self::Texture2D { object, uvst } => {
+                sink.write_all(&[2])?;
+                let mut content_writes = object.write(sink)?;
+                content_writes += uvst.write(sink)?;
+
+                Ok(1 + content_writes)
+            }
+        }
+    }
+
+    fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
+        let mut first_byte = [0u8];
+        source.read_exact(&mut first_byte)?;
+
+        match first_byte[0] {
+            0 => Ok(Self::Direct(PropertyDestinationVk::read(source)?)),
+            1 => {
+                let count = VariableUInt::read(source)?.0 as usize;
+                let mut xs = Vec::with_capacity(count);
+                for _ in 0..count {
+                    xs.push(PropertyDestinationVk::read(source)?);
+                }
+
+                Ok(Self::Splitted(xs))
+            }
+            2 => {
+                let object = PropertyDestinationVk::read(source)?;
+                let uvst = VectorPropertyMappingVk::read(source)?;
+
+                Ok(Self::Texture2D { object, uvst })
+            }
+            x => panic!("invalid PropertyMappingVk first byte: 0x{x:02x}"),
+        }
+    }
+
+    async fn read_async(
+        mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        match read_byte_async(source.as_mut()).await? {
+            0 => Ok(Self::Direct(
+                PropertyDestinationVk::read_async(source).await?,
+            )),
+            1 => {
+                let VariableUInt(count) = VariableUInt::read_async(source.as_mut()).await?;
+                let mut xs = Vec::with_capacity(count as _);
+                for _ in 0..count {
+                    xs.push(PropertyDestinationVk::read_async(source.as_mut()).await?);
+                }
+
+                Ok(Self::Splitted(xs))
+            }
+            2 => {
+                let object = PropertyDestinationVk::read_async(source.as_mut()).await?;
+                let uvst = VectorPropertyMappingVk::read_async(source.as_mut()).await?;
+
+                Ok(Self::Texture2D { object, uvst })
+            }
+            x => panic!("invalid PropertyMappingVk first byte: 0x{x:02x}"),
+        }
+    }
+}
+
+impl VectorPropertyMappingVk {
+    fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
+        match self {
+            Self::Direct(x) => {
+                sink.write_all(&[0])?;
+                Ok(1 + x.write(sink)?)
+            }
+            Self::Splitted(xs) => {
+                sink.write_all(&[1])?;
+                let mut content_writes = VariableUInt(xs.len() as _).write(sink)?;
+                for x in xs {
+                    content_writes += x.write(sink)?;
+                }
+
+                Ok(1 + content_writes)
+            }
         }
     }
 
@@ -708,6 +786,14 @@ impl PropertyDestinationVk {
                 sink.write_all(&[3])?;
                 Ok(1 + VariableUInt(n as _).write(sink)?)
             }
+            Self::InstanceBuffer(n) => {
+                sink.write_all(&[4])?;
+                Ok(1 + VariableUInt(n as _).write(sink)?)
+            }
+            Self::DescriptorSetUniformBuffer(n) => {
+                sink.write_all(&[5])?;
+                Ok(1 + VariableUInt(n as _).write(sink)?)
+            }
         }
     }
 
@@ -720,6 +806,10 @@ impl PropertyDestinationVk {
             1 => Ok(Self::PushConstantBlock(VariableUInt::read(source)?.0 as _)),
             2 => Ok(Self::DescriptorSet(VariableUInt::read(source)?.0 as _)),
             3 => Ok(Self::RealtimeBuffer(VariableUInt::read(source)?.0 as _)),
+            4 => Ok(Self::InstanceBuffer(VariableUInt::read(source)?.0 as _)),
+            5 => Ok(Self::DescriptorSetUniformBuffer(
+                VariableUInt::read(source)?.0 as _,
+            )),
             x => panic!("invalid PropertyDestinationVk first byte: 0x{x:02x}"),
         }
     }
@@ -740,6 +830,12 @@ impl PropertyDestinationVk {
             3 => Ok(Self::RealtimeBuffer(
                 VariableUInt::read_async(source).await?.0 as _,
             )),
+            4 => Ok(Self::InstanceBuffer(
+                VariableUInt::read_async(source).await?.0 as _,
+            )),
+            5 => Ok(Self::DescriptorSetUniformBuffer(
+                VariableUInt::read_async(source).await?.0 as _,
+            )),
             x => panic!("invalid PropertyDestinationVk first byte: 0x{x:02x}"),
         }
     }
@@ -756,6 +852,10 @@ impl DescriptorTypeVk {
                 sink.write_all(&[1])?;
                 Ok(1)
             }
+            &Self::StorageBuffer { size_bytes } => {
+                sink.write_all(&[2])?;
+                Ok(1 + VariableUInt(size_bytes as _).write(sink)?)
+            }
         }
     }
 
@@ -768,6 +868,9 @@ impl DescriptorTypeVk {
                 size_bytes: VariableUInt::read(source)?.0 as _,
             }),
             1 => Ok(Self::CombinedImageSampler),
+            2 => Ok(Self::StorageBuffer {
+                size_bytes: VariableUInt::read(source)?.0 as _,
+            }),
             x => panic!("invalid DescriptorTypeVk first byte: 0x{x:02x}"),
         }
     }
@@ -780,6 +883,9 @@ impl DescriptorTypeVk {
                 size_bytes: VariableUInt::read_async(source).await?.0 as _,
             }),
             1 => Ok(Self::CombinedImageSampler),
+            2 => Ok(Self::StorageBuffer {
+                size_bytes: VariableUInt::read_async(source).await?.0 as _,
+            }),
             x => panic!("invalid DescriptorTypeVk first byte: 0x{x:02x}"),
         }
     }

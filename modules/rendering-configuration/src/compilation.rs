@@ -213,11 +213,34 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 asset.push_constant_buffer_size_bytes =
                     tl.size(slang::reflection::ParameterCategory::PushConstantBuffer);
             }
+            if let Some(t) =
+                refl.find_type_by_name(c"PeridotMaterialParameters.UniformPropertyBlock")
+            {
+                let tl = refl
+                    .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
+                    .expect("no type layout for uniform property block");
+                asset
+                    .descriptor_set_bindings
+                    .push(DescriptorTypeVk::UniformBuffer {
+                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                    });
+            }
+            if let Some(t) =
+                refl.find_type_by_name(c"PeridotMaterialParameters.InstancedPropertyBlock")
+            {
+                let tl = refl
+                    .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
+                    .expect("no type layout for uniform property block");
+                asset
+                    .descriptor_set_bindings
+                    .push(DescriptorTypeVk::StorageBuffer {
+                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                    });
+            }
             if let Some(t) = refl.find_type_by_name(c"PeridotMaterialParameters.RealtimeBuffer") {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for realtime buffer");
-                // Realtime Bufferのbindingは一番最後に生える(ようにcodegenではなってる)
                 asset
                     .descriptor_set_bindings
                     .push(DescriptorTypeVk::UniformBuffer {

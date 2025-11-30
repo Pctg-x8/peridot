@@ -133,6 +133,16 @@ pub struct Code {
 pub enum PropertyMappingVk {
     Direct(PropertyDestinationVk),
     Splitted(Vec<PropertyDestinationVk>),
+    Texture2D {
+        object: PropertyDestinationVk,
+        uvst: VectorPropertyMappingVk,
+    },
+}
+
+#[derive(Debug)]
+pub enum VectorPropertyMappingVk {
+    Direct(PropertyDestinationVk),
+    Splitted(Vec<PropertyDestinationVk>),
 }
 
 #[derive(Debug)]
@@ -140,12 +150,15 @@ pub enum PropertyDestinationVk {
     SpecConstant(usize),
     PushConstantBlock(usize),
     DescriptorSet(usize),
+    DescriptorSetUniformBuffer(usize),
     RealtimeBuffer(usize),
+    InstanceBuffer(usize),
 }
 
 #[derive(Debug)]
 pub enum DescriptorTypeVk {
     UniformBuffer { size_bytes: usize },
+    StorageBuffer { size_bytes: usize },
     CombinedImageSampler,
 }
 
