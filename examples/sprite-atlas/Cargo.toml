@@ -12,3 +12,4 @@ peridot-rendering-configuration = { path = "../../modules/rendering-configuratio
     "with-loader-impl",
 ] }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
+rand = "0.9"

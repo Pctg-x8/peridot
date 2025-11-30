@@ -3,13 +3,14 @@ use bedrock::{
     TypedVulkanStructure, VkHandle,
 };
 use peridot::math::One;
+use rand::Rng;
 
 pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) {
     let mut camera = peridot::math::Camera {
         projection: Some(peridot::math::ProjectionMethod::Perspective {
             fov: 60.0f32.to_radians(),
         }),
-        position: peridot::math::Vector3(0.0, 0.0, -5.0),
+        position: peridot::math::Vector3(0.0, 0.0, -20.0),
         rotation: peridot::math::Quaternion::ONE,
         depth_range: 0.1..100.0,
     };
@@ -28,18 +29,33 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
+    const DEPTH_BUFFER_FORMAT: br::Format = br::vk::VK_FORMAT_D32_SFLOAT;
+
     let render_pass = br::RenderPassObject::new(
         e.graphics().device().clone(),
         &br::RenderPassCreateInfo::new(
-            &[e.back_buffer_attachment_desc()
-                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
-            &[br::SubpassDescription::new().color_attachments(
-                &[br::vk::VkAttachmentReference::new(
-                    0,
-                    br::ImageLayout::ColorAttachmentOpt,
-                )],
-                &[],
-            )],
+            &[
+                e.back_buffer_attachment_desc()
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
+                br::vk::VkAttachmentDescription::new(
+                    DEPTH_BUFFER_FORMAT,
+                    br::ImageLayout::Undefined,
+                    br::ImageLayout::DepthStencilAttachmentOpt,
+                )
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare),
+            ],
+            &[br::SubpassDescription::new()
+                .color_attachments(
+                    &[br::vk::VkAttachmentReference::new(
+                        0,
+                        br::ImageLayout::ColorAttachmentOpt,
+                    )],
+                    &[],
+                )
+                .depth_stencil_attachment(&br::vk::VkAttachmentReference::new(
+                    1,
+                    br::ImageLayout::DepthStencilAttachmentOpt,
+                ))],
             &[peridot::SubpassDependencyTemplates::to_color_attachment_in(
                 None, 0, true,
             )],
@@ -183,23 +199,17 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                             },
                     ),
                     &br::PipelineColorBlendStateCreateInfo::new(&[
-                        br::vk::VkPipelineColorBlendAttachmentState::NOBLEND
+                        br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED
                     ])
                 ).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                .set_depth_stencil_state(&br::PipelineDepthStencilStateCreateInfo::new().config_depth(Some(br::CompareOp::Less), true))
             ],
                 None::<&br::PipelineCacheObject<peridot::DeviceObject>>).expect("pipeline new");
             pipeline = objects.clone_parent();
         }
     }
 
-    let (
-        fixed_device_buffer,
-        [
-            mesh_vertex_offset,
-            camera_parameters_offset,
-            object_parameters_offset,
-        ],
-    ) = memory_manager
+    let (fixed_device_buffer, [mesh_vertex_offset, camera_parameters_offset]) = memory_manager
         .allocate_device_local_buffer_with_content_array(
             e.graphics(),
             &[
@@ -207,26 +217,31 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 peridot::BufferContent::uniform::<
                     peridot_rendering_configuration::UniformCameraParameters,
                 >(),
-                peridot::BufferContent::uniform::<
-                    peridot_rendering_configuration::UniformObjectParameters,
-                >(),
             ],
             br::BufferUsage::TRANSFER_DEST,
         )
         .expect("alloc device buffer(fixed)");
-    let instance_buffer = memory_manager
-        .allocate_device_local_buffer(
+    let (
+        instance_buffer,
+        [
+            instance_offset_object_parameter,
+            instance_offset_material_props,
+        ],
+    ) = memory_manager
+        .allocate_device_local_buffer_with_content_array(
             e.graphics(),
-            br::BufferCreateInfo::new(
-                core::mem::size_of::<peridot::math::Vector4F32>() * 1024,
-                br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::TRANSFER_DEST,
-            ),
+            &[
+                peridot::BufferContent::storage_dynarray::<
+                    peridot_rendering_configuration::UniformObjectParameters,
+                >(1024),
+                peridot::BufferContent::storage_dynarray::<peridot::math::Vector4F32>(1024),
+            ],
+            br::BufferUsage::TRANSFER_DEST,
         )
         .expect("alloc device buffer(dynamic instances)");
 
     pub struct BufferInitContent {
         camera_parameters: peridot_rendering_configuration::UniformCameraParameters,
-        object_parameters: peridot_rendering_configuration::UniformObjectParameters,
     }
     let mesh_vertices_size = core::mem::size_of_val(&mesh.vertices[..]);
     let mut upload_buffer = memory_manager
@@ -245,24 +260,35 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 camera_parameters: peridot_rendering_configuration::UniformCameraParameters {
                     view_projection_matrix: camera.view_projection_matrix(screen_aspect),
                 },
-                object_parameters: peridot_rendering_configuration::UniformObjectParameters {
-                    transform_matrix: peridot::math::Matrix4::ONE,
-                },
             };
         })
         .expect("write upload content");
-    let mut instance_staging_buffer = memory_manager
-        .allocate_upload_buffer(
+    let (
+        mut instance_staging_buffer,
+        [
+            instance_staging_offset_object_parameter,
+            instance_staging_offset_material_props,
+        ],
+    ) = memory_manager
+        .allocate_upload_buffer_with_content_array(
             e.graphics(),
-            br::BufferCreateInfo::new(
-                core::mem::size_of::<peridot::math::Vector4F32>() * 1024,
-                br::BufferUsage::TRANSFER_SRC,
-            ),
+            &[
+                peridot::BufferContent::raw_dynarray::<
+                    peridot_rendering_configuration::UniformObjectParameters,
+                >(1024),
+                peridot::BufferContent::raw_dynarray::<peridot::math::Vector4F32>(1024),
+            ],
+            br::BufferUsage::TRANSFER_SRC,
         )
         .expect("alloc instance staging buffer");
     instance_staging_buffer
         .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
-            *p.get_mut_at(0) = peridot::math::Vector4(1.0f32, 1.0, 0.0, 0.0);
+            *p.get_mut_at(instance_staging_offset_object_parameter as _) =
+                peridot_rendering_configuration::UniformObjectParameters {
+                    transform_matrix: peridot::math::Matrix4::ONE,
+                };
+            *p.get_mut_at(instance_staging_offset_material_props as _) =
+                peridot::math::Vector4(1.0f32, 1.0, 0.0, 0.0);
         })
         .expect("write instance staging data");
 
@@ -283,13 +309,18 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 (mesh_vertices_size + core::mem::offset_of!(BufferInitContent, camera_parameters)) as _,
                 camera_parameters_offset
             ),
-            br::BufferCopy::copy_data::<peridot_rendering_configuration::UniformObjectParameters>(
-                (mesh_vertices_size + core::mem::offset_of!(BufferInitContent, object_parameters)) as _,
-                object_parameters_offset
-            )
         ])
         .copy_buffer(&instance_staging_buffer, &instance_buffer, &[
-            br::BufferCopy::mirror(0, (core::mem::size_of::<peridot::math::Vector4F32>() * 1024) as _)
+            br::BufferCopy {
+                srcOffset: instance_staging_offset_object_parameter,
+                dstOffset: instance_offset_object_parameter,
+                size: (core::mem::size_of::<peridot_rendering_configuration::UniformObjectParameters>() * 1024) as _
+            },
+            br::BufferCopy {
+                srcOffset: instance_staging_offset_material_props,
+                dstOffset: instance_offset_material_props,
+                size: (core::mem::size_of::<peridot::math::Vector4F32>() * 1024) as _
+            }
         ]).pipeline_barrier(
             br::PipelineStageFlags::TRANSFER,
             br::PipelineStageFlags::VERTEX_INPUT | br::PipelineStageFlags::VERTEX_SHADER,
@@ -305,6 +336,21 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         )
     }).expect("setup command error");
 
+    let mut depth_buffer = memory_manager
+        .allocate_device_local_image(
+            e.graphics(),
+            br::ImageCreateInfo::new(screen_size, DEPTH_BUFFER_FORMAT).set_usage(
+                br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                    | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+            ),
+        )
+        .expect("alloc depth buffer");
+    let mut depth_buffer_view = br::ImageViewBuilder::new(
+        depth_buffer,
+        br::ImageSubresourceRange::new(br::AspectMask::DEPTH, 0..1, 0..1),
+    )
+    .create()
+    .expect("depth buffer view create");
     let mut back_buffer_views = e
         .iter_back_buffers()
         .map(|x| LocalImageView {
@@ -331,7 +377,10 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 e.graphics().device().clone(),
                 &br::FramebufferCreateInfo::new(
                     &render_pass,
-                    &[b.as_transparent_ref()],
+                    &[
+                        b.as_transparent_ref(),
+                        depth_buffer_view.as_transparent_ref(),
+                    ],
                     screen_size.0,
                     screen_size.1,
                 ),
@@ -392,24 +441,81 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             ),
             descriptor_object_parameters.binding_at(0).write(
                 br::DescriptorContents::storage_buffer(
-                    &fixed_device_buffer,
-                    object_parameters_offset
-                        ..object_parameters_offset
-                            + core::mem::size_of::<
+                    &instance_buffer,
+                    instance_offset_object_parameter
+                        ..instance_offset_object_parameter
+                            + (core::mem::size_of::<
                                 peridot_rendering_configuration::UniformObjectParameters,
-                            >() as u64,
+                            >() * 1024) as u64,
                 ),
             ),
             descriptor_mat
                 .binding_at(1)
                 .write(br::DescriptorContents::storage_buffer(
                     &instance_buffer,
-                    0..(core::mem::size_of::<peridot::math::Vector4F32>() * 1024) as u64,
+                    instance_offset_material_props
+                        ..instance_offset_material_props
+                            + (core::mem::size_of::<peridot::math::Vector4F32>() * 1024) as u64,
                 )),
         ],
         &[],
     );
 
+    const OBJECTS: usize = 100;
+
+    let mut update_cb =
+        peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, 1)
+            .expect("update command bundle new");
+    update_cb
+        .synchronized_nth(0)
+        .begin(&br::CommandBufferBeginInfo::new())
+        .expect("update command buffer begin")
+        .pipeline_barrier(
+            br::PipelineStageFlags::VERTEX_SHADER,
+            br::PipelineStageFlags::TRANSFER,
+            0,
+            &[br::vk::VkMemoryBarrier {
+                sType: br::vk::VkMemoryBarrier::TYPE,
+                pNext: core::ptr::null(),
+                srcAccessMask: br::AccessFlags::SHADER.read,
+                dstAccessMask: br::AccessFlags::TRANSFER.write,
+            }],
+            &[],
+            &[],
+        )
+        .copy_buffer(
+            &instance_staging_buffer,
+            &instance_buffer,
+            &[
+                br::BufferCopy {
+                    srcOffset: instance_staging_offset_object_parameter,
+                    dstOffset: instance_offset_object_parameter,
+                    size: (core::mem::size_of::<
+                        peridot_rendering_configuration::UniformObjectParameters,
+                    >() * 1024) as _,
+                },
+                br::BufferCopy {
+                    srcOffset: instance_staging_offset_material_props,
+                    dstOffset: instance_offset_material_props,
+                    size: (core::mem::size_of::<peridot::math::Vector4F32>() * 1024) as _,
+                },
+            ],
+        )
+        .pipeline_barrier(
+            br::PipelineStageFlags::TRANSFER,
+            br::PipelineStageFlags::VERTEX_SHADER,
+            0,
+            &[br::vk::VkMemoryBarrier {
+                sType: br::vk::VkMemoryBarrier::TYPE,
+                pNext: core::ptr::null(),
+                srcAccessMask: br::AccessFlags::TRANSFER.write,
+                dstAccessMask: br::AccessFlags::SHADER.read,
+            }],
+            &[],
+            &[],
+        )
+        .end()
+        .expect("update command buffer end");
     let mut render_cb = peridot::CommandBundle::new(
         e.graphics(),
         peridot::CBSubmissionType::Graphics,
@@ -426,7 +532,10 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 &render_pass,
                 fb,
                 br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO),
-                &[br::ClearValue::color_f32([0.0; 4])],
+                &[
+                    br::ClearValue::color_f32([0.0; 4]),
+                    br::ClearValue::depth_stencil(1.0, 0),
+                ],
             ),
             br::SubpassContents::Inline,
         )
@@ -447,11 +556,43 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             &[fixed_device_buffer.as_transparent_ref()],
             &[mesh_vertex_offset],
         )
-        .draw(4, 1, 0, 0)
+        .draw(4, OBJECTS as _, 0, 0)
         .end_render_pass()
         .end()
         .expect("cb end");
     }
+
+    struct PlaneState {
+        r: f32,
+        p: peridot::math::Vector3F32,
+    }
+    let mut plane_states = [const {
+        PlaneState {
+            r: 0.0,
+            p: peridot::math::Vector3(0.0, 5.0, 0.0),
+        }
+    }; OBJECTS];
+    let mut rng = rand::rng();
+    for p in plane_states.iter_mut() {
+        p.r = rng.random_range(0.0..360.0);
+        p.p = peridot::math::Vector3(
+            rng.random_range(-10.0..=10.0),
+            rng.random_range(-10.0..=10.0),
+            rng.random_range(-10.0..=10.0),
+        );
+    }
+    instance_staging_buffer
+        .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
+            let material_props = p.slice_mut::<peridot::math::Vector4F32>(
+                instance_staging_offset_material_props as _,
+                1024,
+            );
+
+            for (n, p) in plane_states.iter_mut().enumerate() {
+                material_props[n] = peridot::math::Vector4(1.0, 1.0, 0.0, 0.0);
+            }
+        })
+        .expect("update instance staging buffer");
 
     loop {
         match e.next_event().await {
@@ -464,20 +605,41 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                     }
                 };
 
+                instance_staging_buffer
+                    .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
+                        let object_parameters = p.slice_mut::<peridot_rendering_configuration::UniformObjectParameters>(instance_staging_offset_object_parameter as _, 1024);
+                        let material_props = p.slice_mut::<peridot::math::Vector4F32>(instance_staging_offset_material_props as _, 1024);
+
+                        for (n, p) in plane_states.iter_mut().enumerate() {
+                            p.r += 60.0 * fd.delta_time.as_secs_f32();
+                            p.p.1 -= 1.0 * fd.delta_time.as_secs_f32();
+                            if p.p.1 < -10.0 {
+                                p.p = peridot::math::Vector3(rng.random_range(-10.0..=10.0), p.p.1 + 20.0, rng.random_range(-10.0..=10.0));
+                                material_props[n] = peridot::math::Vector4(1.0, 1.0, 0.0, 0.0);
+                            }
+
+                            object_parameters[n].transform_matrix = peridot::math::Matrix4::trs(p.p.clone(), peridot::math::Quaternion::new(p.r.to_radians(), peridot::math::Vector3::up()), peridot::math::Vector3::ONE);
+                        }
+                    })
+                    .expect("update instance staging buffer");
+
                 let render_cb = render_cb.nth_ref(fd.backbuffer_index as _);
                 let mut render_batch = peridot::SubmissionBatchBuilder::new();
                 render_batch.add_command_buffers([render_cb.as_transparent_ref()]);
+                let update_cb = update_cb.nth_ref(0);
+                let mut update_batch = peridot::SubmissionBatchBuilder::new();
+                update_batch.add_command_buffers([update_cb.as_transparent_ref()]);
 
-                e.do_render(fd.backbuffer_index, None, render_batch)
+                e.do_render(fd.backbuffer_index, Some(update_batch), render_batch)
                     .expect("do_render");
             }
-            peridot::Event::Resize(new_size) => {
-                e.wait_for_last_rendering_completion()
-                    .expect("wait_for_last_rendering_completion");
-                e.resize_presenter_backbuffers(new_size);
-            }
+            peridot::Event::Resize(_new_size) => {}
         }
     }
+
+    e.graphics_mut()
+        .wait_operations()
+        .expect("wait gfx operations");
 }
 
 struct LocalImageView {
