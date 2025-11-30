@@ -100,7 +100,6 @@ pub fn update_deps(ctx: &BuildContext) {
 }
 
 pub struct Cargo<'x> {
-    ctx: &'x BuildContext<'x>,
     ext_features: Vec<&'x str>,
     env: HashMap<&'x str, &'x str>,
     target_spec: Option<&'x str>,
@@ -128,8 +127,6 @@ impl<'x> Cargo<'x> {
     }
 
     fn run_raw_subcommand(self, subcommand: &str) {
-        self.ctx.print_step("Compiling code...");
-
         let mut cmd = std::process::Command::new("cargo");
         cmd.arg(subcommand).envs(self.env);
         if let Some(t) = self.target_spec {
@@ -168,9 +165,8 @@ impl<'x> Cargo<'x> {
     }
 }
 
-pub fn cargo<'x>(ctx: &'x BuildContext) -> Cargo<'x> {
+pub fn cargo<'x>() -> Cargo<'x> {
     Cargo {
-        ctx,
         ext_features: Vec::new(),
         env: HashMap::new(),
         target_spec: None,
