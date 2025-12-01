@@ -1,6 +1,6 @@
 Properties
   [Instanceable]
-  maintex: Texture2D = "white"
+  maintex: Texture2D = Use "Texture2D.white"
 End
 
 Pass "Unlit"
@@ -32,7 +32,10 @@ VertexOutput vertMain(Vertex v) {
 
 [shader("fragment")]
 float4 fragMain(FragmentInput input : Varyings) : SV_Target {
-    return float4(input.uv, 1.0, 1.0);
+    // return float4(input.uv, 1.0, 1.0);
+    float4 col = PeridotMaterialParameters::maintex.Sample(input.uv);
+    col.rgb *= col.a;
+    return col;
 }
     End
 End

@@ -12,4 +12,6 @@ peridot-rendering-configuration = { path = "../../modules/rendering-configuratio
     "with-loader-impl",
 ] }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
+peridot-sprite-atlas = { path = "../../modules/sprite-atlas", features = ["with-loader-impl"] }
+ktx = { path = "../../thirdparty/ktx" }
 rand = "0.9"

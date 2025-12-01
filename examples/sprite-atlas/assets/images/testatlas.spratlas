@@ -1,0 +1,5 @@
+?=256,256
+0=0,0,0,0,0,0,./testpic1.png,testpic1
+1=0,0,0,0,32,0,./testpic2.png,testpic2
+2=0,0,0,0,0,32,./testpic3.png,testpic3
+3=0,0,0,0,96,0,./testpic4.png,testpic4

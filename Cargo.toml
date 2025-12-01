@@ -25,7 +25,7 @@ members = [
     "modules/rendering-configuration",
     "modules/asset-processing",
     "modules/native-io",
-    "base-lib/pinned-futures-helper",
+    "base-lib/pinned-futures-helper", "modules/sprite-atlas",
 ]
 
 [workspace.dependencies]

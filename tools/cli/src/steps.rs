@@ -258,6 +258,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         Box::new(peridot_rendering_configuration::AssetProcessor),
         Box::new(peridot_asset_processing::builtin::ImageAssetProcessor),
         Box::new(peridot_asset_processing::builtin::SoundAssetProcessor),
+        Box::new(peridot_sprite_atlas::AssetProcessor),
     ];
 
     fn process_recursive(

@@ -10,6 +10,7 @@ default = ["process-assets"]
 process-assets = [
     "dep:peridot-rendering-configuration",
     "dep:peridot-asset-processing",
+    "dep:peridot-sprite-atlas"
 ]
 
 [[bin]]
@@ -28,4 +29,5 @@ peridot-rendering-configuration = { path = "../../modules/rendering-configuratio
     "with-asset-processing",
 ] }
 peridot-asset-processing = { path = "../../modules/asset-processing", optional = true }
+peridot-sprite-atlas = { path = "../../modules/sprite-atlas", optional = true, features = ["with-asset-processing"] }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
