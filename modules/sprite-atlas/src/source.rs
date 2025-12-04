@@ -19,21 +19,27 @@ pub struct SpriteAtlasSourceAsset {
 
 #[derive(Debug)]
 pub enum Record {
-    Configuration {
-        width: u32,
-        height: u32,
-    },
-    Sprite {
-        id: String,
-        left: u32,
-        top: u32,
-        border_left: u32,
-        border_top: u32,
-        border_right: u32,
-        border_bottom: u32,
-        source_file_path: PathBuf,
-        name: String,
-    },
+    Configuration(ConfigurationRecord),
+    Sprite(SpriteRecord),
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfigurationRecord {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpriteRecord {
+    pub id: String,
+    pub left: u32,
+    pub top: u32,
+    pub border_left: u32,
+    pub border_top: u32,
+    pub border_right: u32,
+    pub border_bottom: u32,
+    pub source_file_path: PathBuf,
+    pub name: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -173,7 +179,10 @@ impl<'s> Iterator for Parser<'s> {
                         Err(_) => return Some(Err(ParseError::InvalidValue)),
                     };
 
-                    Some(Ok(Record::Configuration { width, height }))
+                    Some(Ok(Record::Configuration(ConfigurationRecord {
+                        width,
+                        height,
+                    })))
                 }
                 Some(c @ ',') => {
                     content_byte_ranges.push(*content_head_bytes..self.pointer_bytes);
@@ -230,7 +239,10 @@ impl<'s> Iterator for Parser<'s> {
                         Err(_) => return Some(Err(ParseError::InvalidValue)),
                     };
 
-                    Some(Ok(Record::Configuration { width, height }))
+                    Some(Ok(Record::Configuration(ConfigurationRecord {
+                        width,
+                        height,
+                    })))
                 }
             },
             ParseState::ReadSprite {
@@ -354,7 +366,7 @@ impl<'s> Iterator for Parser<'s> {
                     }]
                     .to_owned();
 
-                    Some(Ok(Record::Sprite {
+                    Some(Ok(Record::Sprite(SpriteRecord {
                         id,
                         border_left,
                         border_top,
@@ -364,7 +376,7 @@ impl<'s> Iterator for Parser<'s> {
                         top,
                         source_file_path,
                         name,
-                    }))
+                    })))
                 }
                 Some(c @ ',') => {
                     content_byte_ranges.push(*content_head_bytes..self.pointer_bytes);
@@ -491,7 +503,7 @@ impl<'s> Iterator for Parser<'s> {
                     }]
                     .to_owned();
 
-                    Some(Ok(Record::Sprite {
+                    Some(Ok(Record::Sprite(SpriteRecord {
                         id,
                         border_left,
                         border_top,
@@ -501,7 +513,7 @@ impl<'s> Iterator for Parser<'s> {
                         top,
                         source_file_path,
                         name,
-                    }))
+                    })))
                 }
             },
         }

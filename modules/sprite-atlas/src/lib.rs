@@ -251,6 +251,11 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             .with_extension("pa1-sprite-atlas")
     }
 
+    #[tracing::instrument(
+        name = "AssetProcessor::process",
+        skip(self, _metadata),
+        fields(atlas_width, atlas_height)
+    )]
     fn process(
         &self,
         source_path: &std::path::Path,
@@ -260,8 +265,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         use ktx::Texture;
 
         let source = std::fs::read_to_string(source_path)?;
-        let mut atlas_width = None;
-        let mut atlas_height = None;
+        let mut config = None;
         let mut sprites = HashMap::new();
         let mut has_content_error = false;
         for x in source::Parser::new(&source) {
@@ -270,38 +274,26 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                     tracing::error!(reason = ?e, "error in parsing content");
                     has_content_error = true;
                 }
-                Ok(source::Record::Configuration { width, height }) => {
-                    atlas_width = Some(width);
-                    atlas_height = Some(height);
-                }
-                Ok(source::Record::Sprite {
-                    id,
-                    left,
-                    top,
-                    border_left,
-                    border_top,
-                    border_right,
-                    border_bottom,
-                    source_file_path,
-                    name,
-                }) => match sprites.entry(id) {
-                    std::collections::hash_map::Entry::Vacant(x) => {
-                        x.insert((
-                            left,
-                            top,
-                            border_left,
-                            border_top,
-                            border_right,
-                            border_bottom,
-                            source_file_path,
-                            name,
-                        ));
-                    }
-                    std::collections::hash_map::Entry::Occupied(x) => {
-                        tracing::error!(id = x.key(), "conflicting sprite atlas id");
+                Ok(source::Record::Configuration(cfg)) => match config {
+                    Some(_) => {
+                        tracing::error!("already configured");
                         has_content_error = true;
                     }
+                    None => {
+                        config = Some(cfg);
+                    }
                 },
+                Ok(source::Record::Sprite(mut s)) => {
+                    match sprites.entry(core::mem::replace(&mut s.id, String::new())) {
+                        std::collections::hash_map::Entry::Vacant(x) => {
+                            x.insert(s);
+                        }
+                        std::collections::hash_map::Entry::Occupied(x) => {
+                            tracing::error!(id = x.key(), "conflicting sprite atlas id");
+                            has_content_error = true;
+                        }
+                    }
+                }
             }
         }
 
@@ -309,70 +301,75 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             return Err(ProcessError::InvalidContent.into());
         }
 
-        let atlas_width = atlas_width.unwrap_or_else(|| {
-            tracing::warn!("no atlas width specified, defaulting 512");
-            512
+        let config = config.unwrap_or_else(|| {
+            tracing::warn!("no configuration specified, using default value");
+
+            source::ConfigurationRecord {
+                width: 512,
+                height: 512,
+            }
         });
-        let atlas_height = atlas_height.unwrap_or_else(|| {
-            tracing::warn!("no atlas height specified, defaulting 512");
-            512
-        });
+        tracing::Span::current().record("atlas_width", config.width);
+        tracing::Span::current().record("atlas_height", config.height);
+
         let mut pixel_format = None;
         let mut pixels = Vec::new();
         let mut out_sprites = HashMap::with_capacity(sprites.len());
-        for (
-            id,
-            (
-                left,
-                top,
-                border_left,
-                border_top,
-                border_right,
-                border_bottom,
-                source_file_path,
-                _name,
-            ),
-        ) in sprites
-        {
+        for (id, s) in sprites {
             let img = image::open(match source_path.parent() {
-                None => source_file_path,
-                Some(p) => p.join(source_file_path),
+                None => s.source_file_path,
+                Some(p) => p.join(s.source_file_path),
             })
             .expect("image::open");
             let width = img.width();
             let height = img.height();
-            let (color_bytes, bpp) = match pixel_format {
+            let (color_bytes, bpp);
+            match pixel_format {
                 None => {
                     let c = img.color();
                     tracing::debug!(format = ?c, "inferred pixel format");
                     pixel_format = Some(c);
                     pixels = vec![
                         0u8;
-                        (atlas_width * atlas_height) as usize
+                        (config.width * config.height) as usize
                             * (c.bits_per_pixel() as usize >> 3)
                     ];
 
-                    (img.into_bytes(), c.bits_per_pixel())
+                    color_bytes = img.into_bytes();
+                    bpp = c.bits_per_pixel();
                 }
                 Some(p) => {
                     if p == img.color() {
-                        (img.into_bytes(), p.bits_per_pixel())
+                        color_bytes = img.into_bytes();
+                        bpp = p.bits_per_pixel();
                     } else {
                         todo!("pixel format conversion");
                     }
                 }
-            };
+            }
 
-            for y in 0..height {
+            let actual_width = width.min(config.width - s.left);
+            let actual_height = height.min(config.height - s.top);
+            if width != actual_width || height != actual_height {
+                tracing::warn!(
+                    left = s.left,
+                    top = s.top,
+                    width,
+                    height,
+                    "the sprite rect cannot be fitted into the atlas, some visual may be cropped"
+                );
+            }
+
+            for y in 0..actual_height {
                 unsafe {
                     core::ptr::copy_nonoverlapping(
                         color_bytes
                             .as_ptr()
                             .add((y * width) as usize * (bpp as usize >> 3)),
-                        pixels
-                            .as_mut_ptr()
-                            .add(((y + top) * atlas_width + left) as usize * (bpp as usize >> 3)),
-                        width as usize * (bpp as usize >> 3),
+                        pixels.as_mut_ptr().add(
+                            ((y + s.top) * config.width + s.left) as usize * (bpp as usize >> 3),
+                        ),
+                        actual_width as usize * (bpp as usize >> 3),
                     );
                 }
             }
@@ -380,16 +377,20 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             out_sprites.insert(
                 id,
                 Sprite {
-                    left,
-                    top,
-                    width,
-                    height,
-                    // ここではつかわない
-                    uvst: peridot_math::Vector4(0.0, 0.0, 0.0, 0.0),
-                    border_left,
-                    border_top,
-                    border_right,
-                    border_bottom,
+                    left: s.left,
+                    top: s.top,
+                    width: actual_width,
+                    height: actual_height,
+                    uvst: peridot_math::Vector4(
+                        actual_width as f32 / config.width as f32,
+                        actual_height as f32 / config.height as f32,
+                        s.left as f32 / config.width as f32,
+                        s.top as f32 / config.height as f32,
+                    ),
+                    border_left: s.border_left,
+                    border_top: s.border_top,
+                    border_right: s.border_right,
+                    border_bottom: s.border_bottom,
                 },
             );
         }
@@ -397,13 +398,14 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         let mut ktx = ktx::Texture2::new(
             &ktx::ffi::ktxTextureCreateInfo {
                 glInternalformat: 0,
-                vkFormat: match pixel_format.expect("no pixel format") {
+                // TODO: いったん空出力の場合はRgba8を想定する そのうちカラーフォーマットは指定できるようにしたいかも
+                vkFormat: match pixel_format.unwrap_or(image::ColorType::Rgba8) {
                     image::ColorType::Rgba8 => br::vk::VK_FORMAT_R8G8B8A8_UNORM as _,
                     _ => todo!("vkFormat"),
                 },
                 pDfd: core::ptr::null_mut(),
-                baseWidth: atlas_width,
-                baseHeight: atlas_height,
+                baseWidth: config.width,
+                baseHeight: config.height,
                 baseDepth: 1,
                 numDimensions: 2,
                 numLevels: 1,
@@ -414,16 +416,18 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             },
             true,
         )
-        .expect("ktx::Texture2::new");
-        ktx.set_image_from_memory(0, 0, 0, &pixels)
-            .expect("ktx.set_image_from_memory");
+        .inspect_err(|e| tracing::error!(reason = ?e, "Failed to create ktx2 texture"))?;
+        ktx.set_image_from_memory(0, 0, 0, &pixels).inspect_err(
+            |e| tracing::error!(reason = ?e, "Failed to set image data into ktx2 texture"),
+        )?;
         ktx.compress_basis_ex(&mut ktx::BasisParams::new().uastc().uastc_rdo())
-            .expect("ktx.compress_basis_ex");
-        ktx.deflate_zstd(11).expect("deflate");
+            .inspect_err(|e| tracing::error!(reason = ?e, "Failed to compress ktx2 texture"))?;
+        ktx.deflate_zstd(11)
+            .inspect_err(|e| tracing::error!(reason = ?e, "Failed to deflate ktx2 texture"))?;
 
         SpriteAtlasAsset {
-            width: atlas_width,
-            height: atlas_height,
+            width: config.width,
+            height: config.height,
             sprites: out_sprites,
             content: ktx,
         }
@@ -433,10 +437,19 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 .truncate(true)
                 .create(true)
                 .open(out_path)
-                .expect("output file open"),
+                .inspect_err(|e| tracing::error!(reason = ?e, "Failed to open output"))?,
         )
-        .expect("write asset");
+        .inspect_err(|e| tracing::error!(reason = ?e, "Failed to write asset data"))?;
 
         Ok(())
     }
+}
+
+#[cfg(feature = "with-asset-processing")]
+#[derive(Debug, thiserror::Error)]
+pub enum AssetProcessError {
+    #[error(transparent)]
+    KtxOperationFailure(#[from] ktx::Error),
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
 }
