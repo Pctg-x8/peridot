@@ -62,10 +62,11 @@ pub fn build(
             steps::update_deps(&ctx);
         }
 
-        let mut cargo = steps::cargo(&ctx).with_ext_features(options.engine_features.clone());
+        let mut cargo = steps::cargo().with_ext_features(options.engine_features.clone());
         if options.release {
             cargo = cargo.enable_release_build();
         }
+        ctx.print_step("Compiling code...");
         match build_mode {
             BuildMode::Normal | BuildMode::Run => cargo.build(),
             BuildMode::Test => cargo.test(),

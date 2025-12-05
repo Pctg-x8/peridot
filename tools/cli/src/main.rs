@@ -19,6 +19,7 @@ pub enum SubCommands {
     /// Test game code
     Test(subcommands::build::Args),
     GenManifest(subcommands::gen_manifest::Args),
+    New(subcommands::new::Args),
 }
 
 fn main() {
@@ -32,5 +33,6 @@ fn main() {
         SubCommands::Check(b) => subcommands::build::run_check(b),
         SubCommands::Test(b) => subcommands::build::run_test(b),
         SubCommands::GenManifest(b) => subcommands::gen_manifest::run(b),
+        SubCommands::New(b) => subcommands::new::run(b),
     }
 }

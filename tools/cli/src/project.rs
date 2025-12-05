@@ -1,20 +1,20 @@
 use std::collections::HashMap;
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct Project {
     pub app_package_id: String,
     pub title: Option<String>,
     pub entry_fn_name: Option<String>,
     pub asset_dir: Option<std::path::PathBuf>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub features: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub engine_features: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub platform: HashMap<String, PlatformOverrides>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct PlatformOverrides {
     pub app_package_id: Option<String>,
     pub asset_dir: Option<std::path::PathBuf>,
@@ -51,5 +51,10 @@ impl Project {
                 .and_then(|o| o.engine_features.as_ref())
                 .unwrap_or(&self.engine_features),
         }
+    }
+
+    #[inline(always)]
+    pub fn serialize(&self) -> Result<String, toml::ser::Error> {
+        toml::to_string_pretty(self)
     }
 }

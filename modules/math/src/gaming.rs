@@ -110,9 +110,14 @@ impl Camera {
         let eyedir = (target - self.position).normalize();
         let basedir = Vector3(0.0f32, 0.0, 1.0);
 
-        let axis = basedir.cross(&eyedir).normalize();
+        let axis = basedir.cross(&eyedir);
+        if axis.len2() == 0.0 {
+            // same direction as basedir
+            self.rotation = Quaternion::<f32>::ONE;
+            return;
+        }
         let angle = basedir.dot(eyedir).acos();
-        self.rotation = Quaternion::<f32>::new(-angle, axis);
+        self.rotation = Quaternion::<f32>::new(-angle, axis.normalize());
     }
 }
 impl Default for Camera {

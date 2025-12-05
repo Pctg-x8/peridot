@@ -3,8 +3,9 @@ use std::{borrow::Cow, collections::HashMap};
 use peridot_semantic_shader::VertexInputSemantic;
 
 use crate::{
-    DescriptorTypeVk, FaceCulling, FrontFace, PolygonRasterizationMode, PropertyDestinationVk,
-    PropertyMappingVk, PropertyType, RenderingOptionOverrides,
+    DescriptorTypeVk, FaceCulling, FrontFace, InstancingSupport, PolygonRasterizationMode,
+    PropertyDestinationVk, PropertyMappingVk, PropertyType, RenderingOptionOverrides,
+    VectorPropertyMappingVk,
 };
 
 use super::{syntax, tokenizer::Identifier};
@@ -26,6 +27,7 @@ impl RenderingConfiguration {
                     struct Attributes {
                         immutable: bool,
                         per_draw_call: bool,
+                        instanceable: bool,
                     }
 
                     let mut attr = Attributes::default();
@@ -36,6 +38,8 @@ impl RenderingConfiguration {
                                     attr.immutable = true;
                                 } else if a.name.as_str() == "PerDrawCall" {
                                     attr.per_draw_call = true;
+                                } else if a.name.as_str() == "Instanceable" {
+                                    attr.instanceable = true;
                                 } else {
                                     panic!("unknown attribute: {:?}", a.name);
                                 }
@@ -54,6 +58,7 @@ impl RenderingConfiguration {
                                     r#type: property_type_from_syntax(p.r#type),
                                     default: fold_expr(p.default),
                                     update_frequency,
+                                    instanceable: attr.instanceable,
                                 });
                                 attr = Attributes::default();
                             }
@@ -69,6 +74,7 @@ impl RenderingConfiguration {
                         name.as_str().into(),
                         PassData {
                             option_overrides: None,
+                            instancing_support: InstancingSupport::None,
                             deriving: Some(org_name.as_str().into()),
                             vertex_bindings: Vec::new(),
                             shader_code: None,
@@ -83,6 +89,7 @@ impl RenderingConfiguration {
                     let mut vertex_bindings = None;
                     let mut shader_code = None;
                     let mut option_overrides = None::<RenderingOptionOverrides>;
+                    let mut instancing_support = None::<InstancingSupport>;
 
                     for c in contents {
                         match c {
@@ -168,6 +175,24 @@ impl RenderingConfiguration {
                                         }
 
                                         o.front_face = Some(FrontFace::Clockwise);
+                                    } else if e.as_str() == "NotInstanced" {
+                                        if let Some(x) = instancing_support {
+                                            panic!("conflicting Instancing: {x:?}");
+                                        }
+
+                                        instancing_support = Some(InstancingSupport::None);
+                                    } else if e.as_str() == "Instanced" {
+                                        if let Some(x) = instancing_support {
+                                            panic!("conflicting Instancing: {x:?}");
+                                        }
+
+                                        instancing_support = Some(InstancingSupport::Allowed);
+                                    } else if e.as_str() == "InstancedOnly" {
+                                        if let Some(x) = instancing_support {
+                                            panic!("conflicting Instancing: {x:?}");
+                                        }
+
+                                        instancing_support = Some(InstancingSupport::Only);
                                     } else {
                                         panic!("unknown option: {}", e.as_str());
                                     }
@@ -180,6 +205,7 @@ impl RenderingConfiguration {
                         name.as_str().into(),
                         PassData {
                             option_overrides,
+                            instancing_support: instancing_support.unwrap_or_default(),
                             deriving: None,
                             vertex_bindings: vertex_bindings.unwrap_or_else(Vec::new),
                             shader_code,
@@ -195,45 +221,128 @@ impl RenderingConfiguration {
     // いったんターゲットをVulkanに限定する(他API対応もでてきたらそのときに対応する)
     pub fn gen_vk_prelude(
         &self,
+        instancing: bool,
     ) -> (
         String,
         HashMap<String, (PropertyType, PropertyMappingVk)>,
         Vec<DescriptorTypeVk>,
     ) {
+        use core::fmt::Write;
+
         let mut specialized_constants = Vec::<(Cow<str>, &PropertyType)>::new();
         let mut combined_constants = Vec::new();
         let mut push_constant_block_members = Vec::new();
         let mut descriptor_sets = Vec::new();
+        let mut descriptor_set_uniform_buffer_members = Vec::new();
         let mut descriptor_set_bindings = Vec::new();
         let mut realtime_buffer_members = Vec::new();
         let mut property_mapping = HashMap::new();
+        let mut instanced_property_buffer_members = Vec::new();
 
         for p in self.properties.iter() {
-            match p.update_frequency {
-                // compound typeはそのままspecialized constantsにできないのでスカラ型に分解
-                PropertyUpdateFrequency::Immutable => match p.r#type {
-                    PropertyType::Float2 => {
-                        let r_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants.push((
-                            format!("{name}_R", name = p.name).into(),
-                            &PropertyType::Float,
-                        ));
-                        let g_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants.push((
-                            format!("{name}_G", name = p.name).into(),
-                            &PropertyType::Float,
-                        ));
-                        combined_constants.push(format!(
-                            "static const float2 {name} = float2({name}_R, {name}_G);",
-                            name = p.name
-                        ));
+            match p.r#type {
+                PropertyType::Texture2D => {
+                    let uvst_var_name = Cow::Owned(format!("{}_uvst", p.name));
+                    // Texture2Dはuvstだけどこに入るかが変わる
+                    let uvst_dest = match (p.instanceable, &p.update_frequency) {
+                        (true, _) => {
+                            instanced_property_buffer_members
+                                .push((uvst_var_name, &PropertyType::Float4));
+                            VectorPropertyMappingVk::Direct(PropertyDestinationVk::InstanceBuffer(
+                                instanced_property_buffer_members.len() - 1,
+                            ))
+                        }
+                        // そのままspecialized constantsにできないのでスカラ型に分解
+                        (false, PropertyUpdateFrequency::Immutable) => {
+                            let x_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_X", name = uvst_var_name).into(),
+                                &PropertyType::Float,
+                            ));
+                            let y_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_Y", name = uvst_var_name).into(),
+                                &PropertyType::Float,
+                            ));
+                            let z_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_Z", name = uvst_var_name).into(),
+                                &PropertyType::Float,
+                            ));
+                            let w_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_W", name = uvst_var_name).into(),
+                                &PropertyType::Float,
+                            ));
+
+                            combined_constants.push(format!(
+                                "static const float4 {name} = float4({name}_X, {name}_Y, {name}_Z, {name}_W);", name = uvst_var_name
+                            ));
+                            VectorPropertyMappingVk::Splitted(vec![x_dest, y_dest, z_dest, w_dest])
+                        }
+                        (false, PropertyUpdateFrequency::PerDrawCall) => {
+                            push_constant_block_members
+                                .push((uvst_var_name, &PropertyType::Float4));
+                            VectorPropertyMappingVk::Direct(
+                                PropertyDestinationVk::PushConstantBlock(
+                                    push_constant_block_members.len() - 1,
+                                ),
+                            )
+                        }
+                        (false, PropertyUpdateFrequency::Dynamic) => {
+                            descriptor_set_uniform_buffer_members
+                                .push((uvst_var_name, &PropertyType::Float4));
+                            VectorPropertyMappingVk::Direct(
+                                PropertyDestinationVk::DescriptorSetUniformBuffer(
+                                    descriptor_set_uniform_buffer_members.len() - 1,
+                                ),
+                            )
+                        }
+                        (false, PropertyUpdateFrequency::Realtime) => {
+                            realtime_buffer_members.push((uvst_var_name, &PropertyType::Float4));
+                            VectorPropertyMappingVk::Direct(PropertyDestinationVk::RealtimeBuffer(
+                                realtime_buffer_members.len() - 1,
+                            ))
+                        }
+                    };
+
+                    // もの本体はDescriptorSetにしか入れられない
+                    descriptor_sets.push((Cow::Borrowed(&p.name), &p.r#type));
+                    let object_dest =
+                        PropertyDestinationVk::DescriptorSet(descriptor_sets.len() - 1);
+
+                    match property_mapping.entry(p.name.clone()) {
+                        std::collections::hash_map::Entry::Vacant(x) => {
+                            x.insert((
+                                p.r#type.clone(),
+                                PropertyMappingVk::Texture2D {
+                                    object: object_dest,
+                                    uvst: uvst_dest,
+                                },
+                            ));
+                        }
+                        std::collections::hash_map::Entry::Occupied(x) => {
+                            panic!("property {} conflicting with {:?}", x.key(), x.get());
+                        }
+                    }
+                }
+                _ => match (p.instanceable, &p.update_frequency) {
+                    (true, _) => {
+                        // 一旦Instanceableマークされたプロパティは全部同じStorageにいれる（Realtimeとかは分割したほうがいいかもしれないけど必要になりそうなら検討）
+                        instanced_property_buffer_members.push((Cow::Borrowed(&p.name), &p.r#type));
                         match property_mapping.entry(p.name.clone()) {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyMappingVk::Splitted(vec![r_dest, g_dest]),
+                                    PropertyMappingVk::Direct(
+                                        PropertyDestinationVk::InstanceBuffer(
+                                            instanced_property_buffer_members.len() - 1,
+                                        ),
+                                    ),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -241,41 +350,109 @@ impl RenderingConfiguration {
                             }
                         }
                     }
-                    PropertyType::Float4 | PropertyType::RGB => {
-                        let r_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants.push((
-                            format!("{name}_R", name = p.name).into(),
-                            &PropertyType::Float,
-                        ));
-                        let g_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants.push((
-                            format!("{name}_G", name = p.name).into(),
-                            &PropertyType::Float,
-                        ));
-                        let b_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants.push((
-                            format!("{name}_B", name = p.name).into(),
-                            &PropertyType::Float,
-                        ));
-                        let a_dest =
-                            PropertyDestinationVk::SpecConstant(specialized_constants.len());
-                        specialized_constants.push((
-                            format!("{name}_A", name = p.name).into(),
-                            &PropertyType::Float,
-                        ));
-                        combined_constants.push(format!(
+                    // compound typeはそのままspecialized constantsにできないのでスカラ型に分解
+                    (false, PropertyUpdateFrequency::Immutable) => match p.r#type {
+                        PropertyType::Float2 => {
+                            let r_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_R", name = p.name).into(),
+                                &PropertyType::Float,
+                            ));
+                            let g_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_G", name = p.name).into(),
+                                &PropertyType::Float,
+                            ));
+                            combined_constants.push(format!(
+                                "static const float2 {name} = float2({name}_R, {name}_G);",
+                                name = p.name
+                            ));
+                            match property_mapping.entry(p.name.clone()) {
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert((
+                                        p.r#type.clone(),
+                                        PropertyMappingVk::Splitted(vec![r_dest, g_dest]),
+                                    ));
+                                }
+                                std::collections::hash_map::Entry::Occupied(x) => {
+                                    panic!("property {} conflicting with {:?}", x.key(), x.get());
+                                }
+                            }
+                        }
+                        PropertyType::Float4 | PropertyType::RGB => {
+                            let r_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_R", name = p.name).into(),
+                                &PropertyType::Float,
+                            ));
+                            let g_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_G", name = p.name).into(),
+                                &PropertyType::Float,
+                            ));
+                            let b_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_B", name = p.name).into(),
+                                &PropertyType::Float,
+                            ));
+                            let a_dest =
+                                PropertyDestinationVk::SpecConstant(specialized_constants.len());
+                            specialized_constants.push((
+                                format!("{name}_A", name = p.name).into(),
+                                &PropertyType::Float,
+                            ));
+                            combined_constants.push(format!(
                             "static const float4 {name} = float4({name}_R, {name}_G, {name}_B, {name}_A);", name = p.name
                         ));
+                            match property_mapping.entry(p.name.clone()) {
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert((
+                                        p.r#type.clone(),
+                                        PropertyMappingVk::Splitted(vec![
+                                            r_dest, g_dest, b_dest, a_dest,
+                                        ]),
+                                    ));
+                                }
+                                std::collections::hash_map::Entry::Occupied(x) => {
+                                    panic!("property {} conflicting with {:?}", x.key(), x.get());
+                                }
+                            }
+                        }
+                        _ => {
+                            specialized_constants.push(((&p.name).into(), &p.r#type));
+                            match property_mapping.entry(p.name.clone()) {
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert((
+                                        p.r#type.clone(),
+                                        PropertyMappingVk::Direct(
+                                            PropertyDestinationVk::SpecConstant(
+                                                specialized_constants.len() - 1,
+                                            ),
+                                        ),
+                                    ));
+                                }
+                                std::collections::hash_map::Entry::Occupied(x) => {
+                                    panic!("property {} conflicting with {:?}", x.key(), x.get());
+                                }
+                            }
+                        }
+                    },
+                    (false, PropertyUpdateFrequency::PerDrawCall) => {
+                        push_constant_block_members.push((Cow::Borrowed(&p.name), &p.r#type));
                         match property_mapping.entry(p.name.clone()) {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyMappingVk::Splitted(vec![
-                                        r_dest, g_dest, b_dest, a_dest,
-                                    ]),
+                                    PropertyMappingVk::Direct(
+                                        PropertyDestinationVk::PushConstantBlock(
+                                            push_constant_block_members.len() - 1,
+                                        ),
+                                    ),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -283,15 +460,35 @@ impl RenderingConfiguration {
                             }
                         }
                     }
-                    _ => {
-                        specialized_constants.push(((&p.name).into(), &p.r#type));
+                    (false, PropertyUpdateFrequency::Dynamic) => {
+                        descriptor_sets.push((Cow::Borrowed(&p.name), &p.r#type));
                         match property_mapping.entry(p.name.clone()) {
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert((
                                     p.r#type.clone(),
-                                    PropertyMappingVk::Direct(PropertyDestinationVk::SpecConstant(
-                                        specialized_constants.len() - 1,
-                                    )),
+                                    PropertyMappingVk::Direct(
+                                        PropertyDestinationVk::DescriptorSet(
+                                            descriptor_sets.len() - 1,
+                                        ),
+                                    ),
+                                ));
+                            }
+                            std::collections::hash_map::Entry::Occupied(x) => {
+                                panic!("property {} conflicting with {:?}", x.key(), x.get());
+                            }
+                        }
+                    }
+                    (false, PropertyUpdateFrequency::Realtime) => {
+                        realtime_buffer_members.push((Cow::Borrowed(&p.name), &p.r#type));
+                        match property_mapping.entry(p.name.clone()) {
+                            std::collections::hash_map::Entry::Vacant(x) => {
+                                x.insert((
+                                    p.r#type.clone(),
+                                    PropertyMappingVk::Direct(
+                                        PropertyDestinationVk::RealtimeBuffer(
+                                            realtime_buffer_members.len() - 1,
+                                        ),
+                                    ),
                                 ));
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
@@ -300,62 +497,30 @@ impl RenderingConfiguration {
                         }
                     }
                 },
-                PropertyUpdateFrequency::PerDrawCall => {
-                    push_constant_block_members.push((&p.name, &p.r#type));
-                    match property_mapping.entry(p.name.clone()) {
-                        std::collections::hash_map::Entry::Vacant(x) => {
-                            x.insert((
-                                p.r#type.clone(),
-                                PropertyMappingVk::Direct(
-                                    PropertyDestinationVk::PushConstantBlock(
-                                        push_constant_block_members.len() - 1,
-                                    ),
-                                ),
-                            ));
-                        }
-                        std::collections::hash_map::Entry::Occupied(x) => {
-                            panic!("property {} conflicting with {:?}", x.key(), x.get());
-                        }
-                    }
-                }
-                PropertyUpdateFrequency::Dynamic => {
-                    descriptor_sets.push((&p.name, &p.r#type));
-                    match property_mapping.entry(p.name.clone()) {
-                        std::collections::hash_map::Entry::Vacant(x) => {
-                            x.insert((
-                                p.r#type.clone(),
-                                PropertyMappingVk::Direct(PropertyDestinationVk::DescriptorSet(
-                                    descriptor_sets.len() - 1,
-                                )),
-                            ));
-                        }
-                        std::collections::hash_map::Entry::Occupied(x) => {
-                            panic!("property {} conflicting with {:?}", x.key(), x.get());
-                        }
-                    }
-                }
-                PropertyUpdateFrequency::Realtime => {
-                    realtime_buffer_members.push((&p.name, &p.r#type));
-                    match property_mapping.entry(p.name.clone()) {
-                        std::collections::hash_map::Entry::Vacant(x) => {
-                            x.insert((
-                                p.r#type.clone(),
-                                PropertyMappingVk::Direct(PropertyDestinationVk::RealtimeBuffer(
-                                    realtime_buffer_members.len() - 1,
-                                )),
-                            ));
-                        }
-                        std::collections::hash_map::Entry::Occupied(x) => {
-                            panic!("property {} conflicting with {:?}", x.key(), x.get());
-                        }
-                    }
-                }
             }
         }
 
         let mut code = String::new();
 
         // builtin prelude
+        if instancing {
+            code.push_str(
+                r#"namespace PeridotInstancing {
+struct Vars {
+    uint id : SV_InstanceID;
+    uint baseIndex : SV_StartInstanceLocation;
+
+    property uint instanceIndex {
+        inline get { return this.baseIndex + this.id; }
+    }
+}
+}
+            "#,
+            );
+        } else {
+            code.push_str("#define PERIDOT_INSTANCE_VARS \n");
+        }
+
         code.push_str(
             r#"namespace PeridotCameraParameters {
 struct UniformBlock {
@@ -370,8 +535,25 @@ static inline float4x4 viewProjectionMatrix() {
 }
 "#,
         );
-        code.push_str(
-            r#"namespace PeridotObjectParameters {
+        if instancing {
+            code.push_str(
+                r#"namespace PeridotObjectParameters {
+struct UniformBlock {
+    float4x4 transformMatrix;
+}
+[vk::binding(0, 1)]
+StructuredBuffer<UniformBlock> uniformBlock;
+
+static inline float4x4 transformMatrix(PeridotInstancing::Vars instanceVars) {
+    return uniformBlock[instanceVars.instanceIndex].transformMatrix;
+}
+}
+#define PERIDOT_OBJECT_PARAMETERS_ARGS(v) v.__peridot_instanceVars
+"#,
+            );
+        } else {
+            code.push_str(
+                r#"namespace PeridotObjectParameters {
 struct UniformBlock {
     float4x4 transformMatrix;
 }
@@ -382,8 +564,10 @@ static inline float4x4 transformMatrix() {
     return uniformBlock.transformMatrix;
 }
 }
+#define PERIDOT_OBJECT_PARAMETERS_ARGS(v) 
 "#,
-        );
+            );
+        }
 
         // material prelude
         code.push_str("namespace PeridotMaterialParameters {\n");
@@ -408,29 +592,58 @@ static inline float4x4 transformMatrix() {
                 code.push_str("    ");
                 print_property_type(ty, &mut code);
                 code.push(' ');
-                code.push_str(name);
+                code.push_str(&name);
                 code.push_str(";\n");
             }
             code.push_str("}\n[vk::push_constant]\nPerDrawCall perDrawCall;\n");
         }
 
-        let realtime_buffer_binding_index = descriptor_sets.len();
-        for (n, (name, ty)) in descriptor_sets.into_iter().enumerate() {
+        let mut binding_index = 0;
+        for (name, ty) in descriptor_sets.into_iter() {
             // set indexはあとで調整(直接うめこみたくはないな......)
-            code.push_str("[vk::binding(");
-            code.push_str(&n.to_string());
-            code.push_str(", 2)]\n");
+            write!(code, "[vk::binding({binding_index}, 2)] ").expect("write failed");
             print_property_type(ty, &mut code);
             code.push(' ');
-            code.push_str(name);
+            code.push_str(&name);
             code.push_str(";\n");
 
             descriptor_set_bindings.push(match ty {
                 PropertyType::Texture2D => DescriptorTypeVk::CombinedImageSampler,
                 x => {
-                    todo!("non-texture dynamic properties(constructs single uniform block): {x:?}")
+                    unreachable!("non-texture dynamic properties(constructs single uniform block): {name} {x:?}")
                 }
             });
+            binding_index += 1;
+        }
+
+        if !descriptor_set_uniform_buffer_members.is_empty() {
+            code.push_str("struct UniformPropertyBlock {\n");
+            for (name, ty) in descriptor_set_uniform_buffer_members {
+                code.push_str("    ");
+                print_property_type(ty, &mut code);
+                code.push(' ');
+                code.push_str(&name);
+                code.push_str(";\n");
+            }
+            // set indexはあとで調整(直接うめこみたくはないな......)
+            writeln!(code, "}}\n[vk::binding({binding_index}, 2)] ConstantBuffer<UniformPropertyBlock> property;").expect("write failed");
+
+            binding_index += 1;
+        }
+
+        if !instanced_property_buffer_members.is_empty() {
+            code.push_str("struct InstancedPropertyBlock {\n");
+            for (name, ty) in instanced_property_buffer_members {
+                code.push_str("    ");
+                print_property_type(ty, &mut code);
+                code.push(' ');
+                code.push_str(&name);
+                code.push_str(";\n");
+            }
+            // set indexはあとで調整(直接うめこみたくはないな......)
+            writeln!(code, "}}\n[vk::binding({binding_index}, 2)] StructuredBuffer<InstancedPropertyBlock> instancedProperty;").expect("write failed");
+
+            binding_index += 1;
         }
 
         if !realtime_buffer_members.is_empty() {
@@ -439,12 +652,15 @@ static inline float4x4 transformMatrix() {
                 code.push_str("    ");
                 print_property_type(ty, &mut code);
                 code.push(' ');
-                code.push_str(name);
+                code.push_str(&name);
                 code.push_str(";\n");
             }
-            code.push_str("}\n[vk::binding(");
-            code.push_str(&realtime_buffer_binding_index.to_string());
-            code.push_str(", 2)]\nConstantBuffer<RealtimeBuffer> realtime;\n");
+
+            write!(
+                code,
+                "}}\n[vk::binding({binding_index}, 2)] ConstantBuffer<RealtimeBuffer> realtime;\n"
+            )
+            .expect("write failed");
         }
 
         code.push_str("}\n");
@@ -458,6 +674,7 @@ pub struct PropertyData {
     pub r#type: PropertyType,
     pub default: Value,
     pub update_frequency: PropertyUpdateFrequency,
+    pub instanceable: bool,
 }
 
 #[derive(Debug, Default)]
@@ -472,12 +689,13 @@ pub enum PropertyUpdateFrequency {
 #[derive(Debug)]
 pub struct PassData {
     pub option_overrides: Option<RenderingOptionOverrides>,
+    pub instancing_support: InstancingSupport,
     pub deriving: Option<String>,
     pub vertex_bindings: Vec<PassVertexBindingData>,
     pub shader_code: Option<String>,
 }
 impl PassData {
-    pub fn gen_vk_code(&self) -> (String, HashMap<VertexInputSemantic, u32>) {
+    pub fn gen_vk_code(&self, for_instancing: bool) -> (String, HashMap<VertexInputSemantic, u32>) {
         let mut semantic_to_location_map = HashMap::with_capacity(self.vertex_bindings.len());
 
         let mut code = String::new();
@@ -509,6 +727,9 @@ impl PassData {
                 code.push_str(" : ");
                 print_vi_semantic(&vb.semantic, &mut code);
                 code.push_str(";\n");
+            }
+            if for_instancing {
+                code.push_str("    PeridotInstancing::Vars __peridot_instanceVars;\n");
             }
             code.push_str("}\n\n");
         }
