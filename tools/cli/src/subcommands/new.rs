@@ -32,6 +32,10 @@ pub fn run(args: Args) {
             .expect("cargo process wait failed"),
     );
 
+    let has_assets = std::fs::create_dir(args.path.join("assets"))
+        .inspect_err(|e| tracing::error!(reason = ?e, "Failed to create assets directory"))
+        .is_ok();
+
     let peridot_project = crate::project::Project {
         app_package_id: args.app_id.unwrap_or_else(|| {
             args.path
@@ -44,7 +48,7 @@ pub fn run(args: Args) {
         }),
         title: None,
         entry_fn_name: None,
-        asset_dir: None,
+        asset_dir: has_assets.then(|| "assets".into()),
         features: Vec::new(),
         engine_features: Vec::new(),
         platform: HashMap::new(),
