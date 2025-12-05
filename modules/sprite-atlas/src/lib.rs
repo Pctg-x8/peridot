@@ -316,13 +316,20 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         let mut pixels = Vec::new();
         let mut out_sprites = HashMap::with_capacity(sprites.len());
         for (id, s) in sprites {
-            let img = image::open(match source_path.parent() {
+            let path = match source_path.parent() {
                 None => s.source_file_path,
                 Some(p) => p.join(s.source_file_path),
-            })
-            .expect("image::open");
+            };
+            let img = match image::open(&path) {
+                Ok(x) => x,
+                Err(e) => {
+                    tracing::error!(reason = ?e, ?path, "Failed to open source image");
+                    continue;
+                }
+            };
             let width = img.width();
             let height = img.height();
+
             let (color_bytes, bpp);
             match pixel_format {
                 None => {

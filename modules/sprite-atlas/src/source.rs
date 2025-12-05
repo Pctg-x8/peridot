@@ -100,18 +100,18 @@ impl<'s> Iterator for Parser<'s> {
                 Some(c @ '=') => {
                     self.pointer_bytes += c.len_utf8();
                     let id = core::mem::replace(content_buffer, String::new());
-                    if id == "?" {
-                        self.state = ParseState::ReadConfiguration {
+                    self.state = if id == "?" {
+                        ParseState::ReadConfiguration {
                             content_byte_ranges: Vec::with_capacity(2),
                             content_head_bytes: self.pointer_bytes,
-                        };
+                        }
                     } else {
-                        self.state = ParseState::ReadSprite {
+                        ParseState::ReadSprite {
                             id,
                             content_byte_ranges: Vec::with_capacity(8),
                             content_head_bytes: self.pointer_bytes,
-                        };
-                    }
+                        }
+                    };
 
                     self.next()
                 }
@@ -151,38 +151,10 @@ impl<'s> Iterator for Parser<'s> {
                         unreachable!()
                     };
 
-                    let mut contents_iter = content_byte_ranges.into_iter();
-                    let width = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingConfiguration("width"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let height = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingConfiguration("height"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-
-                    Some(Ok(Record::Configuration(ConfigurationRecord {
-                        width,
-                        height,
-                    })))
+                    Some(
+                        self.build_configuration_record(content_byte_ranges)
+                            .map(Record::Configuration),
+                    )
                 }
                 Some(c @ ',') => {
                     content_byte_ranges.push(*content_head_bytes..self.pointer_bytes);
@@ -211,38 +183,10 @@ impl<'s> Iterator for Parser<'s> {
                         unreachable!()
                     };
 
-                    let mut contents_iter = content_byte_ranges.into_iter();
-                    let width = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingConfiguration("width"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let height = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingConfiguration("height"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-
-                    Some(Ok(Record::Configuration(ConfigurationRecord {
-                        width,
-                        height,
-                    })))
+                    Some(
+                        self.build_configuration_record(content_byte_ranges)
+                            .map(Record::Configuration),
+                    )
                 }
             },
             ParseState::ReadSprite {
@@ -269,114 +213,10 @@ impl<'s> Iterator for Parser<'s> {
                         unreachable!()
                     };
 
-                    let mut contents_iter = content_byte_ranges.into_iter();
-                    let border_left = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_left"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let border_top = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_top"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let border_right = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_right"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let border_bottom = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_bottom"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let left = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("left"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let top = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("top"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let source_file_path = match PathBuf::from_str(
-                        self.source[match contents_iter.next() {
-                            Some(x) => x,
-                            None => {
-                                return Some(Err(ParseError::MissingSpriteParam("source_path")));
-                            }
-                        }]
-                        .trim(),
-                    ) {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let name = self.source[match contents_iter.next() {
-                        Some(x) => x,
-                        None => return Some(Err(ParseError::MissingSpriteParam("name"))),
-                    }]
-                    .to_owned();
-
-                    Some(Ok(Record::Sprite(SpriteRecord {
-                        id,
-                        border_left,
-                        border_top,
-                        border_right,
-                        border_bottom,
-                        left,
-                        top,
-                        source_file_path,
-                        name,
-                    })))
+                    Some(
+                        self.build_sprite_record(id, content_byte_ranges)
+                            .map(Record::Sprite),
+                    )
                 }
                 Some(c @ ',') => {
                     content_byte_ranges.push(*content_head_bytes..self.pointer_bytes);
@@ -406,116 +246,103 @@ impl<'s> Iterator for Parser<'s> {
                         unreachable!()
                     };
 
-                    let mut contents_iter = content_byte_ranges.into_iter();
-                    let border_left = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_left"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let border_top = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_top"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let border_right = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_right"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let border_bottom = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("border_bottom"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let left = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("left"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let top = match self.source[match contents_iter
-                        .next()
-                        .ok_or(ParseError::MissingSpriteParam("top"))
-                    {
-                        Ok(x) => x,
-                        Err(e) => return Some(Err(e)),
-                    }]
-                    .trim()
-                    .parse()
-                    {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let source_file_path = match PathBuf::from_str(
-                        self.source[match contents_iter.next() {
-                            Some(x) => x,
-                            None => {
-                                return Some(Err(ParseError::MissingSpriteParam("source_path")));
-                            }
-                        }]
-                        .trim(),
-                    ) {
-                        Ok(x) => x,
-                        Err(_) => return Some(Err(ParseError::InvalidValue)),
-                    };
-                    let name = self.source[match contents_iter.next() {
-                        Some(x) => x,
-                        None => return Some(Err(ParseError::MissingSpriteParam("name"))),
-                    }]
-                    .to_owned();
-
-                    Some(Ok(Record::Sprite(SpriteRecord {
-                        id,
-                        border_left,
-                        border_top,
-                        border_right,
-                        border_bottom,
-                        left,
-                        top,
-                        source_file_path,
-                        name,
-                    })))
+                    Some(
+                        self.build_sprite_record(id, content_byte_ranges)
+                            .map(Record::Sprite),
+                    )
                 }
             },
         }
+    }
+}
+impl<'s> Parser<'s> {
+    fn build_configuration_record(
+        &self,
+        content_byte_ranges: Vec<Range<usize>>,
+    ) -> Result<ConfigurationRecord, ParseError> {
+        let mut contents_iter = content_byte_ranges.into_iter();
+
+        let width = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingConfiguration("width"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+        let height = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingConfiguration("height"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+
+        Ok(ConfigurationRecord { width, height })
+    }
+
+    fn build_sprite_record(
+        &self,
+        id: String,
+        content_byte_ranges: Vec<Range<usize>>,
+    ) -> Result<SpriteRecord, ParseError> {
+        let mut contents_iter = content_byte_ranges.into_iter();
+
+        let source_file_path = PathBuf::from_str(
+            self.source[contents_iter
+                .next()
+                .ok_or(ParseError::MissingSpriteParam("source_path"))?]
+            .trim(),
+        )
+        .map_err(|_| ParseError::InvalidValue)?;
+        let name = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingSpriteParam("name"))?]
+        .to_owned();
+        let left = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingSpriteParam("left"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+        let top = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingSpriteParam("top"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+        let border_left = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingSpriteParam("border_left"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+        let border_top = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingSpriteParam("border_top"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+        let border_right = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingSpriteParam("border_right"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+        let border_bottom = self.source[contents_iter
+            .next()
+            .ok_or(ParseError::MissingSpriteParam("border_bottom"))?]
+        .trim()
+        .parse()
+        .map_err(|_| ParseError::InvalidValue)?;
+
+        Ok(SpriteRecord {
+            id,
+            border_left,
+            border_top,
+            border_right,
+            border_bottom,
+            left,
+            top,
+            source_file_path,
+            name,
+        })
     }
 }
