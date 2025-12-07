@@ -28,10 +28,14 @@ pub enum ProjectionMethod {
 
 #[derive(Debug, Clone, Copy)]
 pub enum PhysicalScreenFitting {
-    CropVertical,
-    CropHorizontal,
-    OverscanVertical,
-    OverscanHorizontal,
+    // 縦のみ合わせる
+    Vertical,
+    // 横のみ合わせる
+    Horizontal,
+    // 画面からはみ出さないように調整
+    Shrink,
+    // 画面をすべて覆うように調整
+    Enlarge,
 }
 
 /// A camera
@@ -96,24 +100,72 @@ impl Camera {
                 sensor_height,
                 screen_fitting,
             }) => {
-                // focal_length_meters = focal_lenght / 1000
-                // sensor_width_meters = sensor_width / 1000
-                // sensor_height_meters = sensor_height / 1000
-                // zd = zfar - znear
-                //
-                // scaling_tan = z / y = focal_length_meters / sensor_height_meters
-                // z = (z - znear) / (zfar - znear) = z / (zfar - znear) - znear / (zfar - znear)
                 let focal_length_meters = focal_length / 1000.0;
                 let sensor_width_meters = sensor_width / 1000.0;
                 let sensor_height_meters = sensor_height / 1000.0;
                 let zd = self.depth_range.end - self.depth_range.start;
 
-                // vertical fitting
-                let scaling_tan = focal_length_meters / sensor_height_meters;
+                let (scaling_x, scaling_y);
+                match screen_fitting {
+                    PhysicalScreenFitting::Vertical => {
+                        // let scaling_tan = sensor_height_meters / focal_length_meters;
+
+                        // scaling_x = (aspect_wh * scaling_tan).recip();
+                        scaling_x = focal_length_meters / (aspect_wh * sensor_height_meters);
+                        // scaling_y = scaling_tan.recip();
+                        scaling_y = focal_length_meters / sensor_height_meters;
+                    }
+                    PhysicalScreenFitting::Horizontal => {
+                        // let scaling_tan = sensor_width_meters / focal_length_meters;
+
+                        // scaling_x = scaling_tan.recip();
+                        scaling_x = focal_length_meters / sensor_width_meters;
+                        // scaling_y = (scaling_tan / aspect_wh).recip();
+                        scaling_y = (focal_length_meters * aspect_wh) / sensor_width_meters;
+                    }
+                    PhysicalScreenFitting::Shrink => {
+                        let sensor_aspect_wh = sensor_width / sensor_height;
+                        if sensor_aspect_wh < aspect_wh {
+                            // let scaling_tan = sensor_height_meters / focal_length_meters;
+
+                            // scaling_x = (aspect_wh * scaling_tan).recip();
+                            scaling_x = focal_length_meters / (aspect_wh * sensor_height_meters);
+                            // scaling_y = scaling_tan.recip();
+                            scaling_y = focal_length_meters / sensor_height_meters;
+                        } else {
+                            // let scaling_tan = sensor_width_meters / focal_length_meters;
+
+                            // scaling_x = scaling_tan.recip();
+                            scaling_x = focal_length_meters / sensor_width_meters;
+                            // scaling_y = (scaling_tan / aspect_wh).recip();
+                            scaling_y = (focal_length_meters * aspect_wh) / sensor_width_meters;
+                        }
+                    }
+                    PhysicalScreenFitting::Enlarge => {
+                        let sensor_aspect_wh = sensor_width / sensor_height;
+                        if sensor_aspect_wh > aspect_wh {
+                            // let scaling_tan = sensor_height_meters / focal_length_meters;
+
+                            // scaling_x = (aspect_wh * scaling_tan).recip();
+                            scaling_x = focal_length_meters / (aspect_wh * sensor_height_meters);
+                            // scaling_y = scaling_tan.recip();
+                            scaling_y = focal_length_meters / sensor_height_meters;
+                        } else {
+                            // let scaling_tan = sensor_width_meters / focal_length_meters;
+
+                            // scaling_x = scaling_tan.recip();
+                            scaling_x = focal_length_meters / sensor_width_meters;
+                            // scaling_y = (scaling_tan / aspect_wh).recip();
+                            scaling_y = (focal_length_meters * aspect_wh) / sensor_width_meters;
+                        }
+                    }
+                }
+
+                // z = (z - znear) / (zfar - znear) = z / (zfar - znear) - znear / (zfar - znear)
 
                 Matrix4(
-                    [(aspect_wh * scaling_tan).recip(), 0.0, 0.0, 0.0],
-                    [0.0, -scaling_tan.recip(), 0.0, 0.0],
+                    [scaling_x, 0.0, 0.0, 0.0],
+                    [0.0, -scaling_y, 0.0, 0.0],
                     [0.0, 0.0, zd.recip(), -self.depth_range.start / zd],
                     [0.0, 0.0, 1.0, 0.0],
                 )

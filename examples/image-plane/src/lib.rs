@@ -106,7 +106,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             focal_length: 20.0,
             sensor_width: 35.0,
             sensor_height: 24.0,
-            screen_fitting: peridot::math::PhysicalScreenFitting::OverscanHorizontal,
+            screen_fitting: peridot::math::PhysicalScreenFitting::Shrink,
         }),
         position: Vector3(-4.0, -1.0, -3.0),
         rotation: Quaternion::ONE,
