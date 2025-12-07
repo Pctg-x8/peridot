@@ -114,7 +114,7 @@ impl Camera {
                 Matrix4(
                     [(aspect_wh * scaling_tan).recip(), 0.0, 0.0, 0.0],
                     [0.0, -scaling_tan.recip(), 0.0, 0.0],
-                    [0.0, 0.0, zd.recip(), -self.depth_range.end / zd],
+                    [0.0, 0.0, zd.recip(), -self.depth_range.start / zd],
                     [0.0, 0.0, 1.0, 0.0],
                 )
             }
