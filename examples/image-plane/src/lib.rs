@@ -102,8 +102,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
     let mut cam = Camera {
-        projection: Some(ProjectionMethod::Perspective {
-            fov: 75.0f32.to_radians(),
+        projection: Some(ProjectionMethod::Physical {
+            focal_length: 30.0,
+            sensor_size: peridot::math::Vector2(35.0, 24.0),
+            screen_fitting: peridot::math::PhysicalScreenFitting::Shrink,
+            lens_shift: peridot::math::Vector2(0.0, 0.0),
         }),
         position: Vector3(-4.0, -1.0, -3.0),
         rotation: Quaternion::ONE,
@@ -385,6 +388,9 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     prc::DescriptorTypeVk::UniformBuffer { .. } => {
                         br::DescriptorType::UniformBuffer.make_binding(n as _, 1)
                     }
+                    prc::DescriptorTypeVk::StorageBuffer { .. } => {
+                        br::DescriptorType::StorageBuffer.make_binding(n as _, 1)
+                    }
                 })
                 .collect::<Vec<_>>(),
         ),
@@ -399,6 +405,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     .expect("Create DescriptorSetLayout with UniformBuffer(x1)");
     let mut descriptor_uniform_counts = 2; // camera+object
     let mut descriptor_sampler_counts = 0;
+    let mut descriptor_storage_counts = 0;
     for x in rc.descriptor_set_bindings.iter() {
         match x {
             prc::DescriptorTypeVk::CombinedImageSampler => {
@@ -406,6 +413,9 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             }
             prc::DescriptorTypeVk::UniformBuffer { .. } => {
                 descriptor_uniform_counts += 1;
+            }
+            prc::DescriptorTypeVk::StorageBuffer { .. } => {
+                descriptor_storage_counts += 1;
             }
         }
     }
@@ -415,6 +425,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             3,
             &[
                 br::DescriptorType::UniformBuffer.make_size(descriptor_uniform_counts),
+                br::DescriptorType::StorageBuffer.make_size(descriptor_storage_counts),
                 br::DescriptorType::CombinedImageSampler.make_size(descriptor_sampler_counts),
             ],
         ),
@@ -446,17 +457,20 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         }
         prc::ShadingPassVk::Custom {
             ref option_overrides,
-            ref vertex_semantic_to_location,
-            ref vertex_entry_point_name,
-            ref fragment_entry_point_name,
-            ref code,
+            ref variants,
         } => {
+            let prc::Code {
+                ref words,
+                ref vertex_entry_point_name,
+                ref fragment_entry_point_name,
+                ref vertex_semantic_to_location,
+            } = variants[&prc::VariantKey { instancing: false }];
             let sc = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
             let vp = [sc[0].make_viewport(0.0..1.0)];
 
             let shader = br::ShaderModuleObject::new(
                 e.graphics().device().clone(),
-                &br::ShaderModuleCreateInfo::new(code),
+                &br::ShaderModuleCreateInfo::new(words),
             )
             .expect("Failed to instantiate pass shader");
             let mut stage_with_ep_names = Vec::with_capacity(2);

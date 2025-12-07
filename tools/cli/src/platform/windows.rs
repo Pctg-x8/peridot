@@ -88,13 +88,14 @@ pub fn build(
     );
     ext_features.push("UseExternalAssetPath");
 
-    let mut cargo = steps::cargo(&ctx)
+    let mut cargo = steps::cargo()
         .with_env(env)
         .with_ext_features(ext_features)
         .with_target_spec("x86_64-pc-windows-msvc");
     if options.release {
         cargo = cargo.enable_release_build();
     }
+    ctx.print_step("Compiling code...");
     match build_mode {
         BuildMode::Normal => cargo.build(),
         BuildMode::Run => cargo.run(),

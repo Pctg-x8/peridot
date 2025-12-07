@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
 };
@@ -36,9 +37,40 @@ impl crate::AssetProcessor for ImageAssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        metadata: &HashMap<crate::metadata::Key, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let img = image::open(source_path).map_err(ImageAssetProcessError::OpenFailed)?;
+
+        let uastc_level_flag = metadata
+            .get("peridot.image.uastc-level")
+            .and_then(|x| match x {
+                x if x.eq_ignore_ascii_case("slower") => {
+                    Some(ktx::ffi::KTX_PACK_UASTC_LEVEL_VERYSLOW)
+                }
+                x if x.eq_ignore_ascii_case("slow") => Some(ktx::ffi::KTX_PACK_UASTC_LEVEL_SLOWER),
+                x if x.eq_ignore_ascii_case("default") => {
+                    Some(ktx::ffi::KTX_PACK_UASTC_LEVEL_DEFAULT)
+                }
+                x if x.eq_ignore_ascii_case("fast") => Some(ktx::ffi::KTX_PACK_UASTC_LEVEL_FASTER),
+                x if x.eq_ignore_ascii_case("fastest") => {
+                    Some(ktx::ffi::KTX_PACK_UASTC_LEVEL_FASTEST)
+                }
+                _ => None,
+            })
+            .unwrap_or(ktx::ffi::KTX_PACK_UASTC_LEVEL_DEFAULT);
+        let zstd_level = metadata
+            .get("peridot.image.zstd-level")
+            .and_then(|x| x.parse().ok())
+            .unwrap_or(11);
+        let generate_mipmaps = metadata
+            .get("peridot.image.generate-mipmaps")
+            .and_then(|x| match x {
+                x if x.eq_ignore_ascii_case("true") => Some(true),
+                x if x.eq_ignore_ascii_case("false") => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false);
 
         let mut ktx = ktx::Texture2::new(
             &ktx::ffi::ktxTextureCreateInfo {
@@ -53,7 +85,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
                 numLayers: 1,
                 numFaces: 1,
                 isArray: false,
-                generateMipmaps: false,
+                generateMipmaps: generate_mipmaps,
             },
             true,
         )
@@ -65,11 +97,11 @@ impl crate::AssetProcessor for ImageAssetProcessor {
         ktx.compress_basis_ex(
             &mut ktx::BasisParams::new()
                 .uastc()
-                .uastc_flags(ktx::ffi::KTX_PACK_UASTC_LEVEL_DEFAULT)
+                .uastc_flags(uastc_level_flag)
                 .uastc_rdo(),
         )
         .map_err(|e| ImageAssetProcessError::Ktx2OperationFailure("compress_basis_ex", e))?;
-        ktx.deflate_zstd(11)
+        ktx.deflate_zstd(zstd_level)
             .map_err(|e| ImageAssetProcessError::Ktx2OperationFailure("deflate_zstd", e))?;
         ktx.write_to_named_file(
             &std::ffi::CString::new(
@@ -108,6 +140,7 @@ impl crate::AssetProcessor for SoundAssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        _metadata: &HashMap<crate::metadata::Key, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?
