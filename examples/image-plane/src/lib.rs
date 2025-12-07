@@ -104,9 +104,9 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let mut cam = Camera {
         projection: Some(ProjectionMethod::Physical {
             focal_length: 20.0,
-            sensor_width: 35.0,
-            sensor_height: 24.0,
+            sensor_size: peridot::math::Vector2(35.0, 24.0),
             screen_fitting: peridot::math::PhysicalScreenFitting::Shrink,
+            lens_shift: peridot::math::Vector2(0.0, 0.0),
         }),
         position: Vector3(-4.0, -1.0, -3.0),
         rotation: Quaternion::ONE,

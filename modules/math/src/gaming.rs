@@ -14,9 +14,9 @@ pub enum ProjectionMethod {
     /// The perspective projection but computed from physically-based units(millimeters).
     Physical {
         focal_length: f32,
-        sensor_width: f32,
-        sensor_height: f32,
+        sensor_size: crate::Vector2F32,
         screen_fitting: PhysicalScreenFitting,
+        lens_shift: crate::Vector2F32,
     },
     /// UI layouting optimized projection: (0, 0)-(design_width, design_height) will be mapped to (-1, -1)-(1, 1)
     /// This projection ignores aspect ratio.
@@ -96,13 +96,13 @@ impl Camera {
             }
             Some(ProjectionMethod::Physical {
                 focal_length,
-                sensor_width,
-                sensor_height,
+                sensor_size,
                 screen_fitting,
+                lens_shift,
             }) => {
                 let focal_length_meters = focal_length / 1000.0;
-                let sensor_width_meters = sensor_width / 1000.0;
-                let sensor_height_meters = sensor_height / 1000.0;
+                let sensor_width_meters = sensor_size.0 / 1000.0;
+                let sensor_height_meters = sensor_size.1 / 1000.0;
                 let zd = self.depth_range.end - self.depth_range.start;
 
                 let (scaling_x, scaling_y);
@@ -124,8 +124,7 @@ impl Camera {
                         scaling_y = (focal_length_meters * aspect_wh) / sensor_width_meters;
                     }
                     PhysicalScreenFitting::Shrink => {
-                        let sensor_aspect_wh = sensor_width / sensor_height;
-                        if sensor_aspect_wh < aspect_wh {
+                        if sensor_size.aspect_wh() < aspect_wh {
                             // let scaling_tan = sensor_height_meters / focal_length_meters;
 
                             // scaling_x = (aspect_wh * scaling_tan).recip();
@@ -142,8 +141,7 @@ impl Camera {
                         }
                     }
                     PhysicalScreenFitting::Enlarge => {
-                        let sensor_aspect_wh = sensor_width / sensor_height;
-                        if sensor_aspect_wh > aspect_wh {
+                        if sensor_size.aspect_wh() > aspect_wh {
                             // let scaling_tan = sensor_height_meters / focal_length_meters;
 
                             // scaling_x = (aspect_wh * scaling_tan).recip();
@@ -163,12 +161,15 @@ impl Camera {
 
                 // z = (z - znear) / (zfar - znear) = z / (zfar - znear) - znear / (zfar - znear)
 
-                Matrix4(
+                let projection = Matrix4(
                     [scaling_x, 0.0, 0.0, 0.0],
                     [0.0, -scaling_y, 0.0, 0.0],
                     [0.0, 0.0, zd.recip(), -self.depth_range.start / zd],
                     [0.0, 0.0, 1.0, 0.0],
-                )
+                );
+                let lens_shift = Matrix4::translation(lens_shift.with_z(0.0));
+
+                lens_shift * projection
             }
             Some(ProjectionMethod::UI {
                 design_width,
