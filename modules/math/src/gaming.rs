@@ -5,11 +5,19 @@ use crate::{One, Zero};
 use std::ops::Range;
 
 /// How the camera will project vertices?
+#[derive(Debug, Clone)]
 pub enum ProjectionMethod {
     /// The orthographic projection
     Orthographic { size: f32 },
     /// The perspective projection. requires fov(unit: radians)
     Perspective { fov: f32 },
+    /// The perspective projection but computed from physically-based units(millimeters).
+    Physical {
+        focal_length: f32,
+        sensor_width: f32,
+        sensor_height: f32,
+        screen_fitting: PhysicalScreenFitting,
+    },
     /// UI layouting optimized projection: (0, 0)-(design_width, design_height) will be mapped to (-1, -1)-(1, 1)
     /// This projection ignores aspect ratio.
     UI {
@@ -17,6 +25,15 @@ pub enum ProjectionMethod {
         design_height: f32,
     },
 }
+
+#[derive(Debug, Clone, Copy)]
+pub enum PhysicalScreenFitting {
+    CropVertical,
+    CropHorizontal,
+    OverscanVertical,
+    OverscanHorizontal,
+}
+
 /// A camera
 /// ## Examples
 ///
@@ -72,6 +89,34 @@ impl Camera {
                 ));
 
                 s * t
+            }
+            Some(ProjectionMethod::Physical {
+                focal_length,
+                sensor_width,
+                sensor_height,
+                screen_fitting,
+            }) => {
+                // focal_length_meters = focal_lenght / 1000
+                // sensor_width_meters = sensor_width / 1000
+                // sensor_height_meters = sensor_height / 1000
+                // zd = zfar - znear
+                //
+                // scaling_tan = z / y = focal_length_meters / sensor_height_meters
+                // z = (z - znear) / (zfar - znear) = z / (zfar - znear) - znear / (zfar - znear)
+                let focal_length_meters = focal_length / 1000.0;
+                let sensor_width_meters = sensor_width / 1000.0;
+                let sensor_height_meters = sensor_height / 1000.0;
+                let zd = self.depth_range.end - self.depth_range.start;
+
+                // vertical fitting
+                let scaling_tan = focal_length_meters / sensor_height_meters;
+
+                Matrix4(
+                    [(aspect_wh * scaling_tan).recip(), 0.0, 0.0, 0.0],
+                    [0.0, -scaling_tan.recip(), 0.0, 0.0],
+                    [0.0, 0.0, zd.recip(), -self.depth_range.end / zd],
+                    [0.0, 0.0, 1.0, 0.0],
+                )
             }
             Some(ProjectionMethod::UI {
                 design_width,

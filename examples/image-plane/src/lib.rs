@@ -102,8 +102,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
     let mut cam = Camera {
-        projection: Some(ProjectionMethod::Perspective {
-            fov: 75.0f32.to_radians(),
+        projection: Some(ProjectionMethod::Physical {
+            focal_length: 20.0,
+            sensor_width: 35.0,
+            sensor_height: 24.0,
+            screen_fitting: peridot::math::PhysicalScreenFitting::OverscanHorizontal,
         }),
         position: Vector3(-4.0, -1.0, -3.0),
         rotation: Quaternion::ONE,
