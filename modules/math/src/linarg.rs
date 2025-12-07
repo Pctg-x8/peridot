@@ -607,6 +607,30 @@ where
     }
 }
 
+// Aspect Rate
+impl<T> Vector2<T>
+where
+    T: Copy + Div<T, Output = T> + PartialEq + Zero,
+{
+    #[inline(always)]
+    pub fn aspect_wh(&self) -> T {
+        if self.1 == T::ZERO {
+            T::ZERO
+        } else {
+            self.0 / self.1
+        }
+    }
+
+    #[inline(always)]
+    pub fn aspect_hw(&self) -> T {
+        if self.0 == T::ZERO {
+            T::ZERO
+        } else {
+            self.1 / self.0
+        }
+    }
+}
+
 /// identity
 impl<T: One + Zero> One for Quaternion<T> {
     const ONE: Self = Quaternion(T::ZERO, T::ZERO, T::ZERO, T::ONE);
