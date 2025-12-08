@@ -184,12 +184,13 @@ impl TextFontData {
     pub fn request_char(&self, c: char, size: f32) -> CharacterData {
         let glyph_id = self.internal.glyph_id(c).expect("font.glyph_id failed");
         let bounds = self.internal.bounds(&glyph_id).expect("font.bounds failed");
+        // println!("char {c} {bounds:?}");
 
         CharacterData {
             width: bounds.size.width * size / self.ref_font_size,
             height: bounds.size.height * size / self.ref_font_size,
             left_offset: bounds.min_x() * size / self.ref_font_size,
-            top_offset: 0.0,
+            top_offset: -bounds.min_y() * size / self.ref_font_size,
             advance_x: self
                 .internal
                 .advance_h(&glyph_id)
@@ -213,7 +214,6 @@ impl TextFontData {
                 bounds.size.height.ceil() as u32 + self.sdf_max_distance_pixels * 2,
             )
             .expect("glyph_atlas.alloc failed");
-        println!("glyph atlas rect: {c} {gr:?}");
 
         gr
     }
@@ -1215,8 +1215,8 @@ fn layout1(target: &UIElement, boxes: &mut BoxInstanceEmitter, layout_rect: Layo
                     pos_st: peridot::math::Vector4(
                         cd.width * target.scale.0,
                         cd.height * target.scale.1,
-                        layout_rect.pos.0 + char_offset_x,
-                        layout_rect.pos.1 + cd.ascend - cd.height,
+                        layout_rect.pos.0 + char_offset_x + cd.left_offset,
+                        layout_rect.pos.1 + cd.ascend + cd.top_offset,
                     ),
                     // TODO: ここでUV化してるけどアトラスのサイズが後で変わる可能性があるかも
                     uv_st: peridot::math::Vector4(
