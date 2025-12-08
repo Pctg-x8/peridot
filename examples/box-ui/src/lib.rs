@@ -164,7 +164,7 @@ impl TextFontData {
     pub fn new(
         internal: peridot_vg::DefaultFont,
         mm: &mut peridot_memory_manager::MemoryManager,
-        g: &peridot::Graphics,
+        g: &mut peridot::Graphics,
         glyph_atlas_init_size: u32,
         sdf_max_distance_pixels: u32,
     ) -> Self {
@@ -234,7 +234,7 @@ impl TextFontData {
         } = &mut *locked_atlas;
         let mut renderer = TwoPassStencilSDFRenderer::new(
             e,
-            br::vk::VK_FORMAT_R32_SFLOAT,
+            br::vk::VK_FORMAT_R8_UNORM,
             br::ImageLayout::ShaderReadOnlyOpt,
             br::PipelineStageFlags::FRAGMENT_SHADER,
             br::Extent2D { width, height },
@@ -281,13 +281,14 @@ impl TextFontData {
             println!("rasterize glyph: {x:?} {gr:?}");
 
             let metric = self.internal.bounds(&x).expect("no glyph contained");
+            println!("metric: {metric:?}");
             let mut gen = peridot_vg::SDFGenerator::new(1.0, self.sdf_max_distance_pixels as _);
             self.internal
                 .outline(
                     &x,
                     &peridot_vg::sdf_generator::Transform2D::create_translation(
                         -metric.origin.x + self.sdf_max_distance_pixels as f32,
-                        -metric.origin.y + self.sdf_max_distance_pixels as f32,
+                        -metric.origin.y - self.sdf_max_distance_pixels as f32,
                     ),
                     &mut gen,
                 )
@@ -1217,13 +1218,14 @@ fn layout1(target: &UIElement, boxes: &mut BoxInstanceEmitter, layout_rect: Layo
                         layout_rect.pos.0 + char_offset_x,
                         layout_rect.pos.1 + cd.ascend - cd.height,
                     ),
+                    // TODO: ここでUV化してるけどアトラスのサイズが後で変わる可能性があるかも
                     uv_st: peridot::math::Vector4(
-                        gr.width as f32,
-                        gr.height as f32,
-                        gr.left as f32,
-                        gr.top as f32,
+                        (gr.width - 32 - 32) as f32 / f.glyph_atlas.borrow().width as f32,
+                        (gr.height - 32 - 32) as f32 / f.glyph_atlas.borrow().height as f32,
+                        (gr.left + 32) as f32 / f.glyph_atlas.borrow().width as f32,
+                        (gr.top + 32) as f32 / f.glyph_atlas.borrow().height as f32,
                     ),
-                    col: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+                    col: peridot::math::Vector4(1.0, 1.0, 1.0, 1.0),
                 },
             );
 
@@ -1878,7 +1880,7 @@ struct GlyphAtlas {
 impl GlyphAtlas {
     pub fn new(
         mm: &mut peridot_memory_manager::MemoryManager,
-        g: &peridot::Graphics,
+        g: &mut peridot::Graphics,
         width: u32,
         height: u32,
     ) -> Self {
@@ -1887,7 +1889,7 @@ impl GlyphAtlas {
                 g,
                 br::ImageCreateInfo::new(
                     br::Extent2D { width, height },
-                    br::vk::VK_FORMAT_R32_SFLOAT,
+                    br::vk::VK_FORMAT_R8_UNORM,
                 )
                 .set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT),
             )
@@ -1900,7 +1902,7 @@ impl GlyphAtlas {
                         &tex,
                         br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                         br::vk::VK_IMAGE_VIEW_TYPE_2D,
-                        br::vk::VK_FORMAT_R32_SFLOAT,
+                        br::vk::VK_FORMAT_R8_UNORM,
                     ),
                     None,
                 )
@@ -1908,6 +1910,48 @@ impl GlyphAtlas {
             },
             device: g.device().clone(),
         };
+
+        g.submit_commands(|rec| {
+            rec.pipeline_barrier(
+                br::PipelineStageFlags(0),
+                br::PipelineStageFlags::TRANSFER,
+                0,
+                &[],
+                &[],
+                &[br::ImageMemoryBarrier::new(
+                    &tex,
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                    br::ImageLayout::TransferDestOpt.from_undefined(),
+                )],
+            )
+            .clear_color_image(
+                &tex,
+                br::ImageLayout::TransferDestOpt,
+                &[br::ClearColorValue::from([0.0f32; 4])],
+                &[br::ImageSubresourceRange::new(
+                    br::AspectMask::COLOR,
+                    0..1,
+                    0..1,
+                )],
+            )
+            .pipeline_barrier(
+                br::PipelineStageFlags::TRANSFER,
+                br::PipelineStageFlags::FRAGMENT_SHADER,
+                0,
+                &[],
+                &[],
+                &[br::ImageMemoryBarrier::new(
+                    &tex,
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                    br::ImageLayout::TransferDestOpt.to(br::ImageLayout::ShaderReadOnlyOpt),
+                )
+                .access_mask_transition(
+                    br::AccessFlags::TRANSFER.write,
+                    br::AccessFlags::SHADER.read,
+                )],
+            )
+        })
+        .expect("initialize glyph tex");
 
         Self {
             tex,
@@ -2523,22 +2567,58 @@ impl TwoPassStencilSDFRenderer {
         let stencil_pass = (
             stencil_fill_triangles_render
                 .after_of(buffers.fill_triangle_mesh.ref_pre_configure_for_draw())
+                .after_of(PushConstant::for_vertex(
+                    self.pipeline_layout(),
+                    0,
+                    [
+                        self.active_render_area.extent.width as f32,
+                        self.active_render_area.extent.height as f32,
+                    ],
+                ))
                 .after_of(peridot_command_object::BindGraphicsPipeline(
                     self.triangle_fans_stencil_pipeline(),
                 )),
-            buffers.curve_triangles_mesh.ref_draw(1).after_of(
-                peridot_command_object::BindGraphicsPipeline(
+            buffers
+                .curve_triangles_mesh
+                .ref_draw(1)
+                .after_of(PushConstant::for_vertex(
+                    self.pipeline_layout(),
+                    0,
+                    [
+                        self.active_render_area.extent.width as f32,
+                        self.active_render_area.extent.height as f32,
+                    ],
+                ))
+                .after_of(peridot_command_object::BindGraphicsPipeline(
                     self.curve_triangles_stencil_pipeline(),
-                ),
-            ),
+                )),
         );
         let outline_distance_pass = (
-            buffers.outline_rects_mesh.ref_draw(1).after_of(
-                peridot_command_object::BindGraphicsPipeline(self.outline_distance_pipeline()),
-            ),
-            buffers.invert_fill_rect_mesh.ref_draw(1).after_of(
-                peridot_command_object::BindGraphicsPipeline(self.invert_pipeline()),
-            ),
+            buffers
+                .outline_rects_mesh
+                .ref_draw(1)
+                .after_of(PushConstant::for_vertex(
+                    self.pipeline_layout(),
+                    0,
+                    [
+                        self.active_render_area.extent.width as f32,
+                        self.active_render_area.extent.height as f32,
+                    ],
+                ))
+                .after_of(peridot_command_object::BindGraphicsPipeline(
+                    self.outline_distance_pipeline(),
+                )),
+            buffers
+                .invert_fill_rect_mesh
+                .ref_draw(1)
+                .after_of(PushConstant::for_vertex(
+                    self.pipeline_layout(),
+                    0,
+                    [0.5f32, 0.5f32],
+                ))
+                .after_of(peridot_command_object::BindGraphicsPipeline(
+                    self.invert_pipeline(),
+                )),
         );
 
         (
@@ -2546,7 +2626,6 @@ impl TwoPassStencilSDFRenderer {
                 viewports: vec![self.active_render_area.make_viewport(0.0..1.0)],
                 scissors: vec![self.active_render_area],
             },
-            PushConstant::for_vertex(self.pipeline_layout(), 0, self.active_render_area.extent),
             stencil_pass,
             NextSubpass::WITH_INLINE_COMMANDS,
             outline_distance_pass,
@@ -2756,7 +2835,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             .best_match("system-ui", &peridot_vg::FontProperties::default(), 96.0)
             .expect("DefaultFontProvider::best_match"),
         &mut pmm,
-        e.graphics(),
+        e.graphics_mut(),
         2048,
         32,
     );
@@ -2904,6 +2983,9 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         &[],
     );
 
+    const UI_BASE_WIDTH: f32 = 640.0;
+    const UI_BASE_HEIGHT: f32 = 480.0;
+
     // プレイヤーカード風UI試作
     let user_card_cell_ui = UIElement {
         size: peridot::math::Vector2(UIElementSize::Fill, UIElementSize::FitContent),
@@ -2959,6 +3041,8 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                                     UIElementSize::Fixed(24.0),
                                 ),
                                 debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 1.0),
+                                font: Some(&main_font),
+                                text: "player #111",
                                 ..Default::default()
                             },
                             // level
@@ -2968,11 +3052,11 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                                     UIElementSize::Fixed(20.0),
                                 ),
                                 debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 1.0),
+                                font: Some(&main_font),
+                                text: "Lv.10",
                                 ..Default::default()
                             },
                         ],
-                        font: Some(&main_font),
-                        text: "player #111",
                         ..Default::default()
                     },
                     // separator
@@ -3241,7 +3325,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         &mut boxes,
         LayoutRect {
             pos: peridot::math::Vector2(0.0, 0.0),
-            size: peridot::math::Vector2(1024.0, 768.0),
+            size: peridot::math::Vector2(UI_BASE_WIDTH, UI_BASE_HEIGHT),
         },
     );
 
@@ -3295,7 +3379,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                     pos: peridot::math::Vector2(1.0, 1.0),
                 },
             ],
-            target_pixel_size: peridot::math::Vector2(1024.0, 768.0),
+            target_pixel_size: peridot::math::Vector2(UI_BASE_WIDTH, UI_BASE_HEIGHT),
         })
         .expect("Failed to write init buffer content");
     let mut instance_init_buffer = pmm
@@ -3661,8 +3745,8 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                         update_buffer
                             .write_content_unchecked(BufferUpdateContent {
                                 target_pixel_size: peridot::math::Vector2(
-                                    1024.0,
-                                    1024.0 * ns.1 as f32 / ns.0 as f32,
+                                    UI_BASE_WIDTH,
+                                    UI_BASE_WIDTH * ns.1 as f32 / ns.0 as f32,
                                 ),
                             })
                             .expect("write_content(update)");

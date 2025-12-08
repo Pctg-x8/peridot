@@ -29,14 +29,17 @@ VertexOutput vert(Vertex v) {
     o.pos = float4((v.pos * v.pos_st.xy + v.pos_st.zw) * 2.0 / PeridotCameraParameters::targetPixelSize() - 1.0, 0.0, 1.0);
     o.fragmentInput.uv = v.pos * v.uv_st.xy + v.uv_st.zw;
     o.fragmentInput.col = v.col;
-    o.fragmentInput.col.rgb *= o.fragmentInput.col.a;
 
     return o;
 }
 
 [shader("fragment")]
 float4 frag(FragmentInput input : Varyings) : SV_Target {
-    return PeridotMaterialParameters::mainTex.Sample(input.uv) * input.col;
+    float d = PeridotMaterialParameters::mainTex.Sample(input.uv).r;
+    float a = smoothstep(0.5 - 1.0 / 32.0, 0.5, d);
+    float4 col = float4(1.0, 1.0, 1.0, a) * input.col;
+    col.rgb *= col.a;
+    return col;
 }
     End
 End
