@@ -1,3 +1,6 @@
+Properties
+    mainTex: Texture2D = Use "Texture2D.white"
+End
 
 Pass "Unlit"
     RenderOption NoCulling
@@ -33,11 +36,7 @@ VertexOutput vert(Vertex v) {
 
 [shader("fragment")]
 float4 frag(FragmentInput input : Varyings) : SV_Target {
-    float4 x = input.col;
-    x.x += input.uv.x;
-    x.y += input.uv.y;
-
-    return x;
+    return PeridotMaterialParameters::mainTex.Sample(input.uv) * input.col;
 }
     End
 End

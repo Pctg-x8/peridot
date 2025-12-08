@@ -884,7 +884,7 @@ fn compute_horizontal_alignment_axis_offset(
 fn apply_layout_rects<'e, 's>(
     targets: impl Iterator<Item = &'e UIElement<'s>>,
     layout_rects: impl Iterator<Item = LayoutRect>,
-    boxes: &mut Vec<BoxInstance>,
+    boxes: &mut BoxInstanceEmitter,
 ) where
     's: 'e,
 {
@@ -1138,18 +1138,68 @@ where
     layout_rects
 }
 
-fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: LayoutRect) {
-    if layout_rect.size.0 > 0.0 && layout_rect.size.1 > 0.0 {
-        boxes.push(BoxInstance {
-            pos_st: peridot::math::Vector4(
-                layout_rect.size.0 * target.scale.0,
-                layout_rect.size.1 * target.scale.1,
-                layout_rect.pos.0,
-                layout_rect.pos.1,
-            ),
-            uv_st: peridot::math::Vector4(0.0, 0.0, 0.0, 0.0),
-            col: target.debug_color,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoxGroupTexture {
+    User(usize),
+    GlyphAtlas,
+}
+
+struct BoxGroup {
+    texture: BoxGroupTexture,
+    instances: Vec<BoxInstance>,
+}
+
+struct BoxInstanceEmitter {
+    groups: Vec<BoxGroup>,
+}
+impl BoxInstanceEmitter {
+    pub fn new() -> Self {
+        Self { groups: Vec::new() }
+    }
+
+    pub fn emit(&mut self, tex: BoxGroupTexture, r#box: BoxInstance) -> (usize, usize) {
+        if self.groups.is_empty() {
+            // first emit
+            self.groups.push(BoxGroup {
+                texture: tex,
+                instances: vec![r#box],
+            });
+
+            return (0, 0);
+        }
+
+        let active_group = self.groups.last_mut().unwrap();
+        if active_group.texture == tex {
+            // same render state: batching
+            active_group.instances.push(r#box);
+            let box_index = active_group.instances.len() - 1;
+            return (self.groups.len() - 1, box_index);
+        }
+
+        self.groups.push(BoxGroup {
+            texture: tex,
+            instances: vec![r#box],
         });
+        (self.groups.len() - 1, 0)
+    }
+}
+
+fn layout1(target: &UIElement, boxes: &mut BoxInstanceEmitter, layout_rect: LayoutRect) {
+    if layout_rect.size.0 > 0.0 && layout_rect.size.1 > 0.0 {
+        // TODO: TextureはあとでUIElementから取得/計算できるようにする
+        boxes.emit(
+            BoxGroupTexture::User(0),
+            BoxInstance {
+                pos_st: peridot::math::Vector4(
+                    layout_rect.size.0 * target.scale.0,
+                    layout_rect.size.1 * target.scale.1,
+                    layout_rect.pos.0,
+                    layout_rect.pos.1,
+                ),
+                uv_st: peridot::math::Vector4(0.0, 0.0, 0.0, 0.0),
+                col: target.debug_color,
+            },
+        );
     }
 
     if let Some(ref f) = target.font {
@@ -1158,21 +1208,24 @@ fn layout1(target: &UIElement, boxes: &mut Vec<BoxInstance>, layout_rect: Layout
             let cd = f.request_char(c, 12.0);
             let gr = f.ensure_char_bitmap(c);
 
-            boxes.push(BoxInstance {
-                pos_st: peridot::math::Vector4(
-                    cd.width * target.scale.0,
-                    cd.height * target.scale.1,
-                    layout_rect.pos.0 + char_offset_x,
-                    layout_rect.pos.1 + cd.ascend - cd.height,
-                ),
-                uv_st: peridot::math::Vector4(
-                    gr.width as f32,
-                    gr.height as f32,
-                    gr.left as f32,
-                    gr.top as f32,
-                ),
-                col: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
-            });
+            boxes.emit(
+                BoxGroupTexture::GlyphAtlas,
+                BoxInstance {
+                    pos_st: peridot::math::Vector4(
+                        cd.width * target.scale.0,
+                        cd.height * target.scale.1,
+                        layout_rect.pos.0 + char_offset_x,
+                        layout_rect.pos.1 + cd.ascend - cd.height,
+                    ),
+                    uv_st: peridot::math::Vector4(
+                        gr.width as f32,
+                        gr.height as f32,
+                        gr.left as f32,
+                        gr.top as f32,
+                    ),
+                    col: peridot::math::Vector4(1.0, 1.0, 1.0, 0.5),
+                },
+            );
 
             char_offset_x += cd.advance_x;
         }
@@ -2568,6 +2621,13 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         ]),
     )
     .expect("create descriptor set layout for ub1");
+    let dsl_cis1 = br::DescriptorSetLayoutObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorSetLayoutCreateInfo::new(&[
+            br::DescriptorType::CombinedImageSampler.make_binding(0, 1)
+        ]),
+    )
+    .expect("create descriptor set layout for cis1");
 
     let shader = e
         .load::<peridot_rendering_configuration::CompiledRenderingConfigurationVk>("shaders.ui")
@@ -2575,7 +2635,11 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     let unlit_fill_pipeline_layout = br::PipelineLayoutObject::new(
         e.graphics().device().clone(),
         &br::PipelineLayoutCreateInfo::new(
-            &[dsl_ub1.as_transparent_ref(), dsl_ub1.as_transparent_ref()],
+            &[
+                dsl_ub1.as_transparent_ref(),
+                dsl_ub1.as_transparent_ref(),
+                dsl_cis1.as_transparent_ref(),
+            ],
             &if shader.push_constant_buffer_size_bytes > 0 {
                 vec![br::PushConstantRange::new(
                     br::vk::VK_SHADER_STAGE_ALL,
@@ -2686,6 +2750,93 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     };
     let mut unlit_fill_pipeline = unlit_fill_pipeline.clone_parent();
 
+    let main_font = TextFontData::new(
+        peridot_vg::DefaultFontProvider::new()
+            .expect("DefaultFontProvider::new failed")
+            .best_match("system-ui", &peridot_vg::FontProperties::default(), 96.0)
+            .expect("DefaultFontProvider::best_match"),
+        &mut pmm,
+        e.graphics(),
+        2048,
+        32,
+    );
+
+    let tex_sampler =
+        br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
+            .expect("tex sampler new");
+
+    // builtin tex
+    let white_2d_image = pmm
+        .allocate_device_local_image(
+            e.graphics(),
+            br::ImageCreateInfo::new(
+                br::Extent2D {
+                    width: 1,
+                    height: 1,
+                },
+                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+            )
+            .set_usage(br::ImageUsageFlags::SAMPLED),
+        )
+        .expect("white 2d image create");
+    let white_2d_image_view = LocalImageView {
+        handle: unsafe {
+            br::vkfn_wrapper::create_image_view(
+                e.graphics().device().native_ptr(),
+                &br::ImageViewCreateInfo::new(
+                    &white_2d_image,
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                    br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                    br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+                ),
+                None,
+            )
+            .expect("white 2d image view create")
+        },
+        device: e.graphics().device().clone(),
+    };
+    e.submit_commands(|rec| {
+        rec.pipeline_barrier(
+            br::PipelineStageFlags::HOST,
+            br::PipelineStageFlags::TRANSFER,
+            0,
+            &[],
+            &[],
+            &[br::ImageMemoryBarrier::new(
+                &white_2d_image,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                br::ImageLayout::TransferDestOpt.from_undefined(),
+            )],
+        )
+        .clear_color_image(
+            &white_2d_image,
+            br::ImageLayout::TransferDestOpt,
+            &[br::ClearColorValue::from([1.0f32; 4])],
+            &[br::ImageSubresourceRange::new(
+                br::AspectMask::COLOR,
+                0..1,
+                0..1,
+            )],
+        )
+        .pipeline_barrier(
+            br::PipelineStageFlags::TRANSFER,
+            br::PipelineStageFlags::FRAGMENT_SHADER,
+            0,
+            &[],
+            &[],
+            &[br::ImageMemoryBarrier::new(
+                &white_2d_image,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                br::ImageLayout::TransferDestOpt.to(br::ImageLayout::ShaderReadOnlyOpt),
+            )
+            .access_mask_transition(
+                br::AccessFlags::TRANSFER.write,
+                br::AccessFlags::SHADER.read,
+            )],
+        )
+    })
+    .expect("init white 2d image");
+
     // rendering configuration default resources
     let (prc_uniform_block_data, [prc_camera_parameter_offset, prc_object_parameter_offset]) = pmm
         .allocate_device_local_buffer_with_content_array(
@@ -2706,6 +2857,17 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         prc_descriptor_pool
             .alloc_array(&[dsl_ub1.as_transparent_ref(), dsl_ub1.as_transparent_ref()])
             .expect("prc_descriptor_pool.alloc_array");
+    let mut ui_descriptor_pool = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
+            2,
+            &[br::DescriptorType::CombinedImageSampler.make_size(2)],
+        ),
+    )
+    .expect("ui descriptor pool new");
+    let [ui_descriptor_pool_glyph_tex, ui_descriptor_pool_tex1] = ui_descriptor_pool
+        .alloc_array(&[dsl_cis1.as_transparent_ref(), dsl_cis1.as_transparent_ref()])
+        .expect("ui descriptor alloc");
     e.graphics().device().update_descriptor_sets(
         &[
             prc_camera_parameter_descriptor_set.binding_at(0).write(
@@ -2724,19 +2886,22 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                             + core::mem::size_of::<ObjectParameterUniformBlockData>() as u64,
                 ),
             ),
+            ui_descriptor_pool_glyph_tex.binding_at(0).write(
+                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
+                    &main_font.glyph_atlas.borrow().tex_view,
+                    br::ImageLayout::ShaderReadOnlyOpt,
+                )
+                .with_sampler(&tex_sampler)]),
+            ),
+            ui_descriptor_pool_tex1.binding_at(0).write(
+                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
+                    &white_2d_image_view,
+                    br::ImageLayout::ShaderReadOnlyOpt,
+                )
+                .with_sampler(&tex_sampler)]),
+            ),
         ],
         &[],
-    );
-
-    let main_font = TextFontData::new(
-        peridot_vg::DefaultFontProvider::new()
-            .expect("DefaultFontProvider::new failed")
-            .best_match("system-ui", &peridot_vg::FontProperties::default(), 96.0)
-            .expect("DefaultFontProvider::best_match"),
-        &mut pmm,
-        e.graphics(),
-        2048,
-        32,
     );
 
     // プレイヤーカード風UI試作
@@ -3070,7 +3235,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         ],
         ..Default::default()
     };
-    let mut boxes = Vec::new();
+    let mut boxes = BoxInstanceEmitter::new();
     layout1(
         &ui_tree,
         &mut boxes,
@@ -3082,9 +3247,14 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
 
     main_font.rasterize_dirty_glyphs(e, &mut pmm);
 
-    println!("layout boxes: {}", boxes.len());
+    let total_box_count = boxes
+        .groups
+        .iter()
+        .map(|x| x.instances.len())
+        .sum::<usize>();
+    println!("layout boxes: {total_box_count}");
     // TODO: レイアウトボックスが1024を超えたときの対応（どうしよ）
-    assert!(boxes.len() < 1024, "too many layout boxes!!");
+    assert!(total_box_count < 1024, "too many layout boxes!!");
     let [vertex_buffer, instance_buffer] = pmm
         .allocate_device_local_buffer_array(
             e.graphics(),
@@ -3132,14 +3302,34 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         .allocate_upload_buffer(
             e.graphics(),
             br::BufferCreateInfo::new(
-                core::mem::size_of::<BoxInstance>() * boxes.len(),
+                core::mem::size_of::<BoxInstance>() * total_box_count,
                 br::BufferUsage::TRANSFER_SRC,
             ),
         )
         .expect("Failed to create instance init buffer");
+    struct DrawGroup {
+        tex: BoxGroupTexture,
+        instance_start: usize,
+        instance_count: usize,
+    }
+    let mut draw_group = Vec::new();
     instance_init_buffer
-        .clone_content_from_slice(&boxes)
-        .expect("Failed to write instance init content");
+        .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
+            let mut instance_start = 0;
+            for g in boxes.groups.iter() {
+                p.clone_slice_to(
+                    instance_start * core::mem::size_of::<BoxInstance>(),
+                    &g.instances,
+                );
+                draw_group.push(DrawGroup {
+                    tex: g.texture,
+                    instance_start,
+                    instance_count: g.instances.len(),
+                });
+                instance_start += g.instances.len();
+            }
+        })
+        .expect("init box instances");
     let content_init = e
         .submit_commands_async(|r| {
             r.copy_buffer(
@@ -3156,7 +3346,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 &[br::BufferCopy {
                     srcOffset: 0,
                     dstOffset: 0,
-                    size: (core::mem::size_of::<BoxInstance>() * boxes.len()) as _,
+                    size: (core::mem::size_of::<BoxInstance>() * total_box_count) as _,
                 }],
             )
             .copy_buffer(
@@ -3234,7 +3424,21 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         ],
         &[0, 0],
     )
-    .draw(4, boxes.len() as _, 0, 0)
+    .inject(|rec| {
+        draw_group.iter().fold(rec, |rec, g| {
+            rec.bind_descriptor_sets(
+                br::PipelineBindPoint::Graphics,
+                &unlit_fill_pipeline_layout,
+                2,
+                &[match g.tex {
+                    BoxGroupTexture::GlyphAtlas => ui_descriptor_pool_glyph_tex,
+                    BoxGroupTexture::User(_) => ui_descriptor_pool_tex1,
+                }],
+                &[],
+            )
+            .draw(4, g.instance_count as _, 0, g.instance_start as _)
+        })
+    })
     .end()
     .expect("Failed to finish ui render command recording");
 
@@ -3538,7 +3742,26 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                         ],
                         &[0, 0],
                     )
-                    .draw(4, boxes.len() as _, 0, 0)
+                    .inject(|rec| {
+                        draw_group.iter().fold(rec, |rec, g| {
+                            rec.bind_descriptor_sets(
+                                br::PipelineBindPoint::Graphics,
+                                &unlit_fill_pipeline_layout,
+                                2,
+                                &[match g.tex {
+                                    BoxGroupTexture::GlyphAtlas => ui_descriptor_pool_glyph_tex,
+                                    BoxGroupTexture::User(_) => ui_descriptor_pool_tex1,
+                                }],
+                                &[],
+                            )
+                            .draw(
+                                4,
+                                g.instance_count as _,
+                                0,
+                                g.instance_start as _,
+                            )
+                        })
+                    })
                     .end()
                     .expect("Failed to finish ui render command recording");
 
