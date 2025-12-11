@@ -426,6 +426,18 @@ where
     }
 }
 
+pub struct SetViewportScissors {
+    pub viewports: Vec<br::Viewport>,
+    pub scissors: Vec<br::Rect2D>,
+}
+impl GraphicsCommand for SetViewportScissors {
+    #[inline]
+    fn execute<'r>(&self, cb: bedrock::CmdRecord<'r>) -> bedrock::CmdRecord<'r> {
+        cb.set_viewport(0, &self.viewports)
+            .set_scissor(0, &self.scissors)
+    }
+}
+
 #[repr(transparent)]
 pub struct DescriptorSets(pub Vec<br::DescriptorSet>);
 impl DescriptorSets {

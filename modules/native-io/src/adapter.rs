@@ -150,6 +150,7 @@ impl<'r, R: crate::RandomReadBlobAsync + 'r> futures_io::AsyncSeek
                     "resulting file pointer is out of range!",
                 )
             })?,
+            // TODO: ここ計算ただしくない(なんでこうなった？)のであとで直す ただBlobMetadata側の定義にも手を入れないといけないかも(Futureの具体型がとれない)
             std::io::SeekFrom::End(x) => pref.checked_add_signed(x).ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,

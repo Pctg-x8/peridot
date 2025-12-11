@@ -525,12 +525,16 @@ struct Vars {
             r#"namespace PeridotCameraParameters {
 struct UniformBlock {
     float4x4 viewProjectionMatrix;
+    float2 targetPixelSize;
 }
 [vk::binding(0, 0)]
 ConstantBuffer<UniformBlock> uniformBlock;
 
 static inline float4x4 viewProjectionMatrix() {
     return uniformBlock.viewProjectionMatrix;
+}
+static inline float2 targetPixelSize() {
+    return uniformBlock.targetPixelSize;
 }
 }
 "#,

@@ -33,6 +33,8 @@
         pkgs.pulseaudio
         pkgs.pipewire
         pkgs.vulkan-loader
+        pkgs.freetype
+        pkgs.fontconfig
         # required for some asset processing
         pkgs.shaderc
         # required for workflow generator(also included in githooks)
