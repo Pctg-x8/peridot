@@ -86,6 +86,13 @@ pub enum LayoutAlignment {
     Baseline,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum TextHorizontalAlignment {
+    Start,
+    End,
+    Center,
+}
+
 pub enum GridCellSize {
     Fixed(f32),
     Flexible(f32),
@@ -521,6 +528,7 @@ pub struct UIElement<'s> {
     pub debug_color: peridot::math::Vector4<f32>,
     pub font: Option<&'s TextFontData>,
     pub text: &'s str,
+    pub text_horizontal_alignment: TextHorizontalAlignment,
     pub children: Vec<UIElement<'s>>,
 }
 impl Default for UIElement<'_> {
@@ -540,6 +548,7 @@ impl Default for UIElement<'_> {
             debug_color: peridot::math::Vector4(0.0, 0.0, 0.0, 0.0),
             font: None,
             text: "",
+            text_horizontal_alignment: TextHorizontalAlignment::Start,
             children: Vec::new(),
         }
     }
@@ -1205,31 +1214,51 @@ fn layout1(target: &UIElement, boxes: &mut BoxInstanceEmitter, layout_rect: Layo
 
     if let Some(ref f) = target.font {
         let mut char_offset_x = 0.0;
+        let mut instances = Vec::with_capacity(target.text.len());
         for c in target.text.chars() {
             let cd = f.request_char(c, 12.0);
             let gr = f.ensure_char_bitmap(c);
 
-            boxes.emit(
-                BoxGroupTexture::GlyphAtlas,
-                BoxInstance {
-                    pos_st: peridot::math::Vector4(
-                        cd.width * target.scale.0,
-                        cd.height * target.scale.1,
-                        layout_rect.pos.0 + char_offset_x + cd.left_offset,
-                        layout_rect.pos.1 + cd.ascend + cd.top_offset,
-                    ),
-                    // TODO: ここでUV化してるけどアトラスのサイズが後で変わる可能性があるかも
-                    uv_st: peridot::math::Vector4(
-                        (gr.width - 32 - 32) as f32 / f.glyph_atlas.borrow().width as f32,
-                        (gr.height - 32 - 32) as f32 / f.glyph_atlas.borrow().height as f32,
-                        (gr.left + 32) as f32 / f.glyph_atlas.borrow().width as f32,
-                        (gr.top + 32) as f32 / f.glyph_atlas.borrow().height as f32,
-                    ),
-                    col: peridot::math::Vector4(1.0, 1.0, 1.0, 1.0),
-                },
-            );
+            instances.push(BoxInstance {
+                pos_st: peridot::math::Vector4(
+                    cd.width * target.scale.0,
+                    cd.height * target.scale.1,
+                    layout_rect.pos.0 + char_offset_x + cd.left_offset,
+                    layout_rect.pos.1 + cd.ascend + cd.top_offset,
+                ),
+                // TODO: ここでUV化してるけどアトラスのサイズが後で変わる可能性があるかも
+                uv_st: peridot::math::Vector4(
+                    (gr.width - 32 - 32) as f32 / f.glyph_atlas.borrow().width as f32,
+                    (gr.height - 32 - 32) as f32 / f.glyph_atlas.borrow().height as f32,
+                    (gr.left + 32) as f32 / f.glyph_atlas.borrow().width as f32,
+                    (gr.top + 32) as f32 / f.glyph_atlas.borrow().height as f32,
+                ),
+                col: peridot::math::Vector4(1.0, 1.0, 1.0, 1.0),
+            });
 
             char_offset_x += cd.advance_x;
+        }
+
+        match target.text_horizontal_alignment {
+            TextHorizontalAlignment::Start => {
+                for x in instances {
+                    boxes.emit(BoxGroupTexture::GlyphAtlas, x);
+                }
+            }
+            TextHorizontalAlignment::End => {
+                let shifts = layout_rect.size.0 - char_offset_x;
+                for mut x in instances {
+                    x.pos_st.2 += shifts;
+                    boxes.emit(BoxGroupTexture::GlyphAtlas, x);
+                }
+            }
+            TextHorizontalAlignment::Center => {
+                let shifts = (layout_rect.size.0 - char_offset_x) * 0.5;
+                for mut x in instances {
+                    x.pos_st.2 += shifts;
+                    boxes.emit(BoxGroupTexture::GlyphAtlas, x);
+                }
+            }
         }
     }
 
@@ -3054,6 +3083,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                                 debug_color: peridot::math::Vector4(0.5, 0.0, 0.0, 1.0),
                                 font: Some(&main_font),
                                 text: "Lv.10",
+                                text_horizontal_alignment: TextHorizontalAlignment::End,
                                 ..Default::default()
                             },
                         ],
@@ -3141,6 +3171,8 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                                                 ),
                                                 font: Some(&main_font),
                                                 text: "follow",
+                                                text_horizontal_alignment:
+                                                    TextHorizontalAlignment::Center,
                                                 ..Default::default()
                                             },
                                         ],
