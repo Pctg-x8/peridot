@@ -93,30 +93,8 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         ]),
     )
     .expect("dsl_sb1 new");
-    let dsl_mat = br::DescriptorSetLayoutObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorSetLayoutCreateInfo::new(
-            &shader
-                .descriptor_set_bindings
-                .iter()
-                .enumerate()
-                .map(|(n, t)| match t {
-                    peridot_rendering_configuration::DescriptorTypeVk::CombinedImageSampler => {
-                        br::DescriptorType::CombinedImageSampler.make_binding(n as _, 1)
-                    }
-                    peridot_rendering_configuration::DescriptorTypeVk::UniformBuffer { .. } => {
-                        br::DescriptorType::UniformBuffer.make_binding(n as _, 1)
-                    }
-                    peridot_rendering_configuration::DescriptorTypeVk::StorageBuffer { .. } => {
-                        br::DescriptorType::StorageBuffer.make_binding(n as _, 1)
-                    }
-                })
-                .collect::<Vec<_>>(),
-        ),
-    )
-    .expect("dsl_mat new");
 
-    let (pipeline_layout, mut pipeline);
+    let (dsl_mat, descriptor_sizes, pipeline_layout, mut pipeline);
     match shader.passes["Unlit"] {
         peridot_rendering_configuration::ShadingPassVk::SimpleDeriveBuiltinPass { .. } => {
             unimplemented!("SimpleDeriveBuiltinPass")
@@ -126,11 +104,54 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             ref variants,
         } => {
             let peridot_rendering_configuration::Code {
+                push_constant_buffer_size_bytes,
+                ref descriptor_set_bindings,
                 ref vertex_semantic_to_location,
                 ref vertex_entry_point_name,
                 ref fragment_entry_point_name,
                 ref words,
             } = variants[&peridot_rendering_configuration::VariantKey { instancing: true }];
+
+            dsl_mat = br::DescriptorSetLayoutObject::new(
+                e.graphics().device().clone(),
+                &br::DescriptorSetLayoutCreateInfo::new(
+                    &descriptor_set_bindings
+                        .iter()
+                        .enumerate()
+                        .map(|(n, t)| match t {
+                            peridot_rendering_configuration::DescriptorTypeVk::CombinedImageSampler => {
+                                br::DescriptorType::CombinedImageSampler.make_binding(n as _, 1)
+                            }
+                            peridot_rendering_configuration::DescriptorTypeVk::UniformBuffer { .. } => {
+                                br::DescriptorType::UniformBuffer.make_binding(n as _, 1)
+                            }
+                            peridot_rendering_configuration::DescriptorTypeVk::StorageBuffer { .. } => {
+                                br::DescriptorType::StorageBuffer.make_binding(n as _, 1)
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            )
+            .expect("dsl_mat new");
+            descriptor_sizes = descriptor_set_bindings
+                .iter()
+                .enumerate()
+                .map(|(n, t)| match t {
+                    peridot_rendering_configuration::DescriptorTypeVk::CombinedImageSampler => {
+                        br::DescriptorType::CombinedImageSampler.make_size(1)
+                    }
+                    peridot_rendering_configuration::DescriptorTypeVk::UniformBuffer { .. } => {
+                        br::DescriptorType::UniformBuffer.make_size(1)
+                    }
+                    peridot_rendering_configuration::DescriptorTypeVk::StorageBuffer { .. } => {
+                        br::DescriptorType::StorageBuffer.make_size(1)
+                    }
+                })
+                .chain([
+                    br::DescriptorType::UniformBuffer.make_size(1),
+                    br::DescriptorType::StorageBuffer.make_size(1),
+                ])
+                .collect::<Vec<_>>();
 
             let scissor_rects = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
             let viewports = [scissor_rects[0].make_viewport(0.0..1.0)];
@@ -162,10 +183,10 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                         dsl_sb1.as_transparent_ref(),
                         dsl_mat.as_transparent_ref(),
                     ],
-                    &if shader.push_constant_buffer_size_bytes > 0 {
+                    &if push_constant_buffer_size_bytes > 0 {
                         vec![br::PushConstantRange::new(
                             br::vk::VK_SHADER_STAGE_ALL,
-                            0..shader.push_constant_buffer_size_bytes as _,
+                            0..push_constant_buffer_size_bytes as _,
                         )]
                     } else {
                         vec![]
@@ -460,26 +481,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         e.graphics().device().clone(),
         &br::DescriptorPoolCreateInfo::new(
             3,
-            &shader
-                .descriptor_set_bindings
-                .iter()
-                .enumerate()
-                .map(|(n, t)| match t {
-                    peridot_rendering_configuration::DescriptorTypeVk::CombinedImageSampler => {
-                        br::DescriptorType::CombinedImageSampler.make_size(1)
-                    }
-                    peridot_rendering_configuration::DescriptorTypeVk::UniformBuffer { .. } => {
-                        br::DescriptorType::UniformBuffer.make_size(1)
-                    }
-                    peridot_rendering_configuration::DescriptorTypeVk::StorageBuffer { .. } => {
-                        br::DescriptorType::StorageBuffer.make_size(1)
-                    }
-                })
-                .chain([
-                    br::DescriptorType::UniformBuffer.make_size(1),
-                    br::DescriptorType::StorageBuffer.make_size(1),
-                ])
-                .collect::<Vec<_>>(),
+            &descriptor_sizes,
         ),
     )
     .expect("descriptor pool create");

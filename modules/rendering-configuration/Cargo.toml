@@ -8,6 +8,7 @@ default = []
 with-loader-impl = ["dep:peridot"]
 with-asset-processing = ["dep:peridot-asset-processing", "compilation"]
 compilation = ["dep:slang", "dep:thiserror"]
+debug-dumps = ["dep:spirv-tools"]
 
 [dependencies]
 peridot-serialization-utils = { path = "../serialization-utils" }
@@ -21,6 +22,7 @@ futures-io = { workspace = true }
 futures-util = { workspace = true, features = ["io"] }
 peridot-native-io = { path = "../native-io" }
 pinned-futures-helper.path = "../../base-lib/pinned-futures-helper"
+spirv-tools = { path = "../../thirdparty/spirv-tools", optional = true }
 
 [lints]
 workspace = true

@@ -4,10 +4,6 @@ End
 
 Pass "Unlit"
   RenderOption NoCulling
-  VertexBindings
-    pos: Float4 [POSITION0]
-    uv: Float4 [TEXCOORD0]
-  End
 
   Shader
 struct VertexOutput {
@@ -20,18 +16,22 @@ struct FragmentInput {
 }
 
 [shader("vertex")]
-VertexOutput vertMain(Vertex v) {
+VertexOutput vertMain(
+    [Peridot::VertexInput] float4 pos : POSITION0,
+    [Peridot::VertexInput] float4 uv : TEXCOORD0,
+    Peridot::VertexShaderContext ctx
+) {
     VertexOutput vo;
 
-    vo.pos = mul(PeridotCameraParameters::viewProjectionMatrix(), mul(PeridotObjectParameters::transformMatrix(), v.pos));
-    vo.fragmentInput.uv = v.uv.xy;
+    vo.pos = ctx.objectToClipSpace(pos);
+    vo.fragmentInput.uv = uv.xy;
 
     return vo;
 }
 
 [shader("fragment")]
-float4 fragMain(FragmentInput input : Varyings) : SV_Target {
-    return PeridotMaterialParameters::tex.Sample(input.uv);
+float4 fragMain(FragmentInput input : Varyings, Peridot::FragmentShaderContext ctx) : SV_Target {
+    return ctx.properties.tex.Sample(input.uv);
 }
   End
 End

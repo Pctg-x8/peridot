@@ -50,8 +50,6 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
 
     let mut asset = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::new(),
-        descriptor_set_bindings: Vec::new(),
-        push_constant_buffer_size_bytes: 0,
         passes: HashMap::new(),
     };
     let mut has_failure = false;
@@ -59,7 +57,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
         let tracing_span = tracing::span!(tracing::Level::TRACE, "compile_pass", name = %n);
         let _tracing_span_enter = tracing_span.enter();
 
-        if p.shader_code.is_none() && p.vertex_bindings.is_empty() && p.option_overrides.is_none() {
+        if p.shader_code.is_none() && p.option_overrides.is_none() {
             // simple derive
             let deriving = p
                 .deriving
@@ -88,10 +86,13 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let (prelude, property_mapping, descriptor_set_bindings) =
                 rc.gen_vk_prelude(v.instancing);
             asset.property_mappings = property_mapping;
-            asset.descriptor_set_bindings = descriptor_set_bindings;
+            let mut descriptor_set_bindings = descriptor_set_bindings;
 
-            let (code, semantic_to_location) = p.gen_vk_code(v.instancing);
+            let code = p.gen_vk_code();
             let generated_code = format!("{prelude}\n{code}");
+
+            #[cfg(feature = "debug-dumps")]
+            println!("{generated_code}");
 
             let session = match slang_session.create_session(&slang::SessionDesc {
                 targets: targets.as_ptr(),
@@ -105,6 +106,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     continue;
                 }
             };
+
             let mut diag = core::mem::MaybeUninit::new(None);
             let module = session.load_module_from_source_string(
                 c"main",
@@ -113,7 +115,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 Some(&mut diag),
             );
             if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+                print_slang_diag(&d);
             }
             let Some(module) = module else {
                 tracing::error!("Failed to load generated slang module");
@@ -132,30 +134,22 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     continue;
                 }
             });
-            for e in module.iter_defined_entry_point() {
-                let e = match e {
-                    Ok(x) => x,
-                    Err(e) => {
+            program_components.extend(
+                module.iter_defined_entry_point().filter_map(|e| {
+                    e.inspect_err(|e| {
                         tracing::error!(reason = ?e, "Failed to iterate entry points");
                         has_failure = true;
-                        continue;
-                    }
-                };
-
-                program_components.push(match e.clone_cast() {
-                Ok(x) => x,
-                Err(e) => {
-                    tracing::error!(reason = ?e, "Failed to cast entry point object to IComponentType");
-                    has_failure = true;
-                    continue;
-                }
-            });
-            }
+                    }).ok()?.clone_cast().inspect_err(|e| {
+                        tracing::error!(reason = ?e, "Failed to cast entry point object to IComponentType");
+                        has_failure = true;
+                    }).ok()
+                })
+            );
             let mut diag = core::mem::MaybeUninit::new(None);
             let program =
                 session.create_composite_component_type(&program_components, Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+                print_slang_diag(&d);
             }
             let program = match program {
                 Ok(x) => x,
@@ -169,7 +163,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let mut diag = core::mem::MaybeUninit::new(None);
             let linked = program.link(Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+                print_slang_diag(&d);
             }
             let linked = match linked {
                 Ok(x) => x,
@@ -183,7 +177,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let mut diag = core::mem::MaybeUninit::new(None);
             let code = linked.get_target_code(0, Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+                print_slang_diag(&d);
             }
             let code = match code {
                 Ok(x) => x,
@@ -205,48 +199,53 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 aligned_code.set_len(aligned_code.capacity());
             }
 
+            #[cfg(feature = "debug-dumps")]
+            dump_spv_disasm(&aligned_code);
+
             let refl = program.get_layout(0, None);
-            if let Some(t) = refl.find_type_by_name(c"PeridotMaterialParameters.PerDrawCall") {
+            let push_constant_buffer_size_bytes = if let Some(t) =
+                refl.find_type_by_name(c"Peridot.MaterialParameters.PerDrawCall")
+            {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for uniform block");
-                asset.push_constant_buffer_size_bytes =
-                    tl.size(slang::reflection::ParameterCategory::PushConstantBuffer);
-            }
+
+                tl.size(slang::reflection::ParameterCategory::PushConstantBuffer)
+            } else {
+                0
+            };
             if let Some(t) =
-                refl.find_type_by_name(c"PeridotMaterialParameters.UniformPropertyBlock")
+                refl.find_type_by_name(c"Peridot.MaterialParameters.UniformPropertyBlock")
             {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for uniform property block");
-                asset
-                    .descriptor_set_bindings
-                    .push(DescriptorTypeVk::UniformBuffer {
-                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
-                    });
+
+                descriptor_set_bindings.push(DescriptorTypeVk::UniformBuffer {
+                    size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                });
             }
             if let Some(t) =
-                refl.find_type_by_name(c"PeridotMaterialParameters.InstancedPropertyBlock")
+                refl.find_type_by_name(c"Peridot.MaterialParameters.InstancedPropertyBlock")
             {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for uniform property block");
-                asset
-                    .descriptor_set_bindings
-                    .push(DescriptorTypeVk::StorageBuffer {
-                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
-                    });
+
+                descriptor_set_bindings.push(DescriptorTypeVk::StorageBuffer {
+                    size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                });
             }
-            if let Some(t) = refl.find_type_by_name(c"PeridotMaterialParameters.RealtimeBuffer") {
+            if let Some(t) = refl.find_type_by_name(c"Peridot.MaterialParameters.RealtimeBuffer") {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for realtime buffer");
-                asset
-                    .descriptor_set_bindings
-                    .push(DescriptorTypeVk::UniformBuffer {
-                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
-                    });
+
+                descriptor_set_bindings.push(DescriptorTypeVk::UniformBuffer {
+                    size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                });
             }
+            let mut vertex_semantic_to_location = HashMap::new();
             let mut vertex_entry_point_name = None;
             let mut fragment_entry_point_name = None;
             for ep in refl.iter_entry_point() {
@@ -259,6 +258,95 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     } else {
                         vertex_entry_point_name =
                             Some(ep.name().to_str().expect("invalid entry name").into());
+
+                        println!("vertex inputs");
+                        for x in ep.iter_parameter() {
+                            let is_vertex_input = x
+                                .variable()
+                                .iter_user_attribute()
+                                .any(|a| a.name() == c"Peridot_VertexInput")
+                                || x.r#type()
+                                    .iter_user_attribute()
+                                    .any(|a| a.name() == c"Peridot_VertexInput");
+                            if !is_vertex_input {
+                                continue;
+                            }
+
+                            rec(x, &mut vertex_semantic_to_location, &mut has_failure);
+                            fn rec(
+                                v: &slang::reflection::VariableLayout,
+                                vertex_semantic_to_location: &mut HashMap<
+                                    peridot_semantic_shader::VertexInputSemantic,
+                                    u32,
+                                >,
+                                has_failure: &mut bool,
+                            ) {
+                                let tl = v.type_layout();
+
+                                if tl.kind() == slang::reflection::TypeKind::Struct {
+                                    // process each fields recursively
+                                    for m in tl.iter_field() {
+                                        rec(m, vertex_semantic_to_location, has_failure);
+                                    }
+
+                                    return;
+                                }
+
+                                let Some(semantic_name) = v.semantic_name() else {
+                                    tracing::error!(var_name = ?v.name(), "vertex input variables should have semantic");
+                                    *has_failure = true;
+                                    return;
+                                };
+                                let semantic_name = match semantic_name.to_str() {
+                                    Ok(x) => x,
+                                    Err(e) => {
+                                        tracing::error!(reason = ?e, var_name = ?v.name(), ?semantic_name, "invalid semantic_name bytes");
+                                        *has_failure = true;
+                                        return;
+                                    }
+                                };
+
+                                let semantic = if semantic_name.eq_ignore_ascii_case("position") {
+                                    peridot_semantic_shader::VertexInputSemantic::Position(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("normal") {
+                                    peridot_semantic_shader::VertexInputSemantic::Normal(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("tangent") {
+                                    peridot_semantic_shader::VertexInputSemantic::Tangent(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("binormal") {
+                                    peridot_semantic_shader::VertexInputSemantic::Binormal(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("texcoord") {
+                                    peridot_semantic_shader::VertexInputSemantic::Texcoord(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("color") {
+                                    peridot_semantic_shader::VertexInputSemantic::Color(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("misc") {
+                                    peridot_semantic_shader::VertexInputSemantic::Misc(
+                                        v.semantic_index() as _,
+                                    )
+                                } else {
+                                    tracing::warn!(
+                                        var_name = ?v.name(),
+                                        semantic_name,
+                                        "unsupported semantic name, skipping"
+                                    );
+                                    return;
+                                };
+
+                                vertex_semantic_to_location
+                                    .insert(semantic, v.binding_index() as _);
+                            }
+                        }
                     }
                 } else if stage == slang::ffi::SLANG_STAGE_FRAGMENT {
                     if let Some(ref x) = fragment_entry_point_name {
@@ -282,7 +370,9 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             variants.insert(
                 v,
                 Code {
-                    vertex_semantic_to_location: semantic_to_location,
+                    push_constant_buffer_size_bytes,
+                    descriptor_set_bindings,
+                    vertex_semantic_to_location,
                     vertex_entry_point_name,
                     fragment_entry_point_name,
                     words: aligned_code,
@@ -300,4 +390,41 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
     }
 
     (!has_failure).then_some(asset)
+}
+
+fn print_slang_diag(diag: &(impl slang::IBlob + ?Sized)) {
+    let str = unsafe { core::ffi::CStr::from_ptr(diag.get_buffer_pointer().cast()) };
+    match str.to_str() {
+        Err(x) => {
+            tracing::warn!(target: "libslang diag", to_str_err = ?x, msg = ?str);
+        }
+        Ok(x) => {
+            for l in x.lines() {
+                eprintln!("[libslang] {l}");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "debug-dumps")]
+fn dump_spv_disasm(code: &[u32]) {
+    let st_context = spirv_tools::Context::new(spirv_tools::ffi::SPV_ENV_VULKAN_1_4);
+    let text = st_context
+        .binary_to_text(
+            code,
+            spirv_tools::ffi::SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES,
+            None,
+        )
+        .expect("spvBinaryToText");
+    let cstr = text.as_cstr();
+    match cstr.to_str() {
+        Err(_) => {
+            tracing::warn!(target: "spirv-tools disasm", code = ?cstr);
+        }
+        Ok(x) => {
+            for l in x.lines() {
+                eprintln!("[disasm] {l}");
+            }
+        }
+    }
 }
