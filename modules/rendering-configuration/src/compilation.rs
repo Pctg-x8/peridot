@@ -92,6 +92,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
 
             let (code, semantic_to_location) = p.gen_vk_code(v.instancing);
             let generated_code = format!("{prelude}\n{code}");
+            #[cfg(feature = "debug-dumps")]
             println!("{generated_code}");
 
             let session = match slang_session.create_session(&slang::SessionDesc {
@@ -215,6 +216,30 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     code.get_buffer_size(),
                 );
                 aligned_code.set_len(aligned_code.capacity());
+            }
+
+            #[cfg(feature = "debug-dumps")]
+            {
+                eprintln!("compilation done");
+                let st_context = spirv_tools::Context::new(spirv_tools::ffi::SPV_ENV_VULKAN_1_4);
+                let text = st_context
+                    .binary_to_text(
+                        &aligned_code,
+                        spirv_tools::ffi::SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES,
+                        None,
+                    )
+                    .expect("spvBinaryToText");
+                let cstr = text.as_cstr();
+                match cstr.to_str() {
+                    Err(_) => {
+                        tracing::warn!(target: "spirv-tools disasm", code = ?cstr);
+                    }
+                    Ok(x) => {
+                        for l in x.lines() {
+                            eprintln!("[disasm] {l}");
+                        }
+                    }
+                }
             }
 
             let refl = program.get_layout(0, None);
