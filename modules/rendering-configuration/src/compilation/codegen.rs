@@ -501,76 +501,83 @@ impl RenderingConfiguration {
         }
 
         let mut code = String::new();
+        let mut vsh_context_block = String::new();
+        let mut fsh_context_block = String::new();
 
         // builtin prelude
+        code.push_str("namespace Peridot {\n");
+        vsh_context_block.push_str("struct VertexShaderContext {");
+        fsh_context_block.push_str("struct FragmentShaderContext {");
         if instancing {
-            code.push_str(
-                r#"namespace PeridotInstancing {
-struct Vars {
-    uint id : SV_InstanceID;
-    uint baseIndex : SV_StartInstanceLocation;
+            vsh_context_block.push_str(
+                r#"
+    uint instanceID : SV_InstanceID;
+    uint baseInstanceIndex: SV_StartInstanceLocation;
 
     property uint instanceIndex {
-        inline get { return this.baseIndex + this.id; }
+        inline get { return this.baseInstanceIndex + this.instanceID; }
     }
-}
-}
-            "#,
+"#,
             );
-        } else {
-            code.push_str("#define PERIDOT_INSTANCE_VARS \n");
         }
 
         code.push_str(
-            r#"namespace PeridotCameraParameters {
-struct UniformBlock {
+            r#"
+struct CameraParameters {
     float4x4 viewProjectionMatrix;
 }
 [vk::binding(0, 0)]
-ConstantBuffer<UniformBlock> uniformBlock;
-
-static inline float4x4 viewProjectionMatrix() {
-    return uniformBlock.viewProjectionMatrix;
-}
-}
+ConstantBuffer<CameraParameters> cameraParameters;
 "#,
+        );
+        vsh_context_block.push_str("\n    property CameraParameters cameraParameters { inline get { return Peridot::cameraParameters; } }\n");
+
+        code.push_str(
+            r#"
+struct ObjectParameters {
+    float4x4 transformMatrix;
+}"#,
         );
         if instancing {
             code.push_str(
-                r#"namespace PeridotObjectParameters {
-struct UniformBlock {
-    float4x4 transformMatrix;
-}
+                r#"
 [vk::binding(0, 1)]
-StructuredBuffer<UniformBlock> uniformBlock;
-
-static inline float4x4 transformMatrix(PeridotInstancing::Vars instanceVars) {
-    return uniformBlock[instanceVars.instanceIndex].transformMatrix;
-}
-}
-#define PERIDOT_OBJECT_PARAMETERS_ARGS(v) v.__peridot_instanceVars
+StructuredBuffer<ObjectParameters> objectParameters;
 "#,
             );
+
+            vsh_context_block.push_str("\n    property ObjectParameters objectParameters { inline get { return Peridot::objectParameters[this.instanceIndex]; } }\n");
         } else {
             code.push_str(
-                r#"namespace PeridotObjectParameters {
-struct UniformBlock {
-    float4x4 transformMatrix;
-}
+                r#"
 [vk::binding(0, 1)]
-ConstantBuffer<UniformBlock> uniformBlock;
-
-static inline float4x4 transformMatrix() {
-    return uniformBlock.transformMatrix;
-}
-}
-#define PERIDOT_OBJECT_PARAMETERS_ARGS(v) 
+ConstantBuffer<ObjectParameters> objectParameters;
 "#,
             );
+
+            vsh_context_block.push_str("\n    property ObjectParameters objectParameters { inline get { return Peridot::objectParameters; } }\n");
         }
 
         // material prelude
-        code.push_str("namespace PeridotMaterialParameters {\n");
+        vsh_context_block.push_str(
+            r#"
+    property Properties properties { inline get { return Properties(this); } }
+
+    struct Properties {
+        VertexShaderContext ctx;
+
+"#,
+        );
+        fsh_context_block.push_str(
+            r#"
+    property Properties properties { inline get { return Properties(this); } }
+
+    struct Properties {
+        FragmentShaderContext ctx;
+
+"#,
+        );
+        code.push_str("namespace MaterialParameters {");
         for (n, (name, ty)) in specialized_constants.into_iter().enumerate() {
             code.push_str("[vk::constant_id(");
             code.push_str(&n.to_string());
@@ -607,6 +614,22 @@ static inline float4x4 transformMatrix() {
             code.push_str(&name);
             code.push_str(";\n");
 
+            vsh_context_block.push_str("        property ");
+            print_property_type(ty, &mut vsh_context_block);
+            vsh_context_block.push(' ');
+            vsh_context_block.push_str(&name);
+            vsh_context_block.push_str(" { inline get { return MaterialParameters::");
+            vsh_context_block.push_str(&name);
+            vsh_context_block.push_str("; } }\n");
+
+            fsh_context_block.push_str("        property ");
+            print_property_type(ty, &mut fsh_context_block);
+            fsh_context_block.push(' ');
+            fsh_context_block.push_str(&name);
+            fsh_context_block.push_str(" { inline get { return MaterialParameters::");
+            fsh_context_block.push_str(&name);
+            fsh_context_block.push_str("; } }\n");
+
             descriptor_set_bindings.push(match ty {
                 PropertyType::Texture2D => DescriptorTypeVk::CombinedImageSampler,
                 x => {
@@ -639,6 +662,14 @@ static inline float4x4 transformMatrix() {
                 code.push(' ');
                 code.push_str(&name);
                 code.push_str(";\n");
+
+                vsh_context_block.push_str("\n        property ");
+                print_property_type(ty, &mut vsh_context_block);
+                vsh_context_block.push(' ');
+                vsh_context_block.push_str(&name);
+                vsh_context_block.push_str(" { inline get { return MaterialParameters::instancedProperty[this.ctx.instanceIndex].");
+                vsh_context_block.push_str(&name);
+                vsh_context_block.push_str("; } }\n");
             }
             // set indexはあとで調整(直接うめこみたくはないな......)
             writeln!(code, "}}\n[vk::binding({binding_index}, 2)] StructuredBuffer<InstancedPropertyBlock> instancedProperty;").expect("write failed");
@@ -663,7 +694,19 @@ static inline float4x4 transformMatrix() {
             .expect("write failed");
         }
 
+        vsh_context_block.push_str("    }\n");
+        fsh_context_block.push_str("    }\n");
+
+        // contextual helper
+        vsh_context_block.push_str("\n    inline float4 worldToClipSpace(float4 p) { return mul(this.cameraParameters.viewProjectionMatrix, mul(this.objectParameters.transformMatrix, p)); }\n");
+
+        vsh_context_block.push_str("}\n");
+        fsh_context_block.push_str("}\n");
         code.push_str("}\n");
+        code.push_str(&vsh_context_block);
+        code.push_str(&fsh_context_block);
+        code.push_str("}\n");
+
         (code, property_mapping, descriptor_set_bindings)
     }
 }
@@ -727,9 +770,6 @@ impl PassData {
                 code.push_str(" : ");
                 print_vi_semantic(&vb.semantic, &mut code);
                 code.push_str(";\n");
-            }
-            if for_instancing {
-                code.push_str("    PeridotInstancing::Vars __peridot_instanceVars;\n");
             }
             code.push_str("}\n\n");
         }

@@ -21,19 +21,19 @@ struct FragmentInput {
 }
 
 [shader("vertex")]
-VertexOutput vertMain(Vertex v) {
+VertexOutput vertMain(Vertex v, Peridot::VertexShaderContext ctx) {
     VertexOutput vo;
 
-    vo.pos = mul(PeridotCameraParameters::viewProjectionMatrix(), mul(PeridotObjectParameters::transformMatrix(PERIDOT_OBJECT_PARAMETERS_ARGS(v)), v.pos));
-    vo.fragmentInput.uv = v.uv.xy * PeridotMaterialParameters::instancedProperty[v.__peridot_instanceVars.instanceIndex].maintex_uvst.xy + PeridotMaterialParameters::instancedProperty[v.__peridot_instanceVars.instanceIndex].maintex_uvst.zw;
+    vo.pos = ctx.worldToClipSpace(v.pos);
+    vo.fragmentInput.uv = v.uv.xy * ctx.properties.maintex_uvst.xy + ctx.properties.maintex_uvst.zw;
 
     return vo;
 }
 
 [shader("fragment")]
-float4 fragMain(FragmentInput input : Varyings) : SV_Target {
+float4 fragMain(FragmentInput input : Varyings, Peridot::FragmentShaderContext ctx) : SV_Target {
     // return float4(input.uv, 1.0, 1.0);
-    float4 col = PeridotMaterialParameters::maintex.Sample(input.uv);
+    float4 col = ctx.properties.maintex.Sample(input.uv);
     col.rgb *= col.a;
     return col;
 }

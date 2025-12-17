@@ -92,6 +92,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
 
             let (code, semantic_to_location) = p.gen_vk_code(v.instancing);
             let generated_code = format!("{prelude}\n{code}");
+            println!("{generated_code}");
 
             let session = match slang_session.create_session(&slang::SessionDesc {
                 targets: targets.as_ptr(),
@@ -112,7 +113,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 &CString::new(generated_code).expect("invalid code generated"),
                 Some(&mut diag),
             );
-            let diag = unsafe { diag.assume_init_ref() };
+            let diag = unsafe { diag.assume_init() };
             if let Some(d) = diag {
                 let str = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer().cast()) };
                 match str.to_str() {

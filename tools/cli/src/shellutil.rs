@@ -60,7 +60,8 @@ pub fn sh_mirror(
     }
 
     let mut args = vec![
-        "-auz",
+        "-a",
+        "--delete",
         &source,
         target.to_str().expect("invalid sequence in target path"),
     ];
