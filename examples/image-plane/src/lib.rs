@@ -432,26 +432,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     )
     .expect("Create DescriptorPool");
 
-    let pl = br::PipelineLayoutObject::new(
-        e.graphics().device().clone(),
-        &br::PipelineLayoutCreateInfo::new(
-            &[
-                dsl_ub1.as_transparent_ref(),
-                dsl_ub1.as_transparent_ref(),
-                dsl_rc.as_transparent_ref(),
-            ],
-            &if rc.push_constant_buffer_size_bytes > 0 {
-                vec![br::PushConstantRange::new(
-                    br::vk::VK_SHADER_STAGE_ALL,
-                    0..rc.push_constant_buffer_size_bytes as _,
-                )]
-            } else {
-                vec![]
-            },
-        ),
-    )
-    .expect("Create PipelineLayout");
-    let [gp] = match rc.passes["Unlit"] {
+    let (pl, gp);
+    match rc.passes["Unlit"] {
         prc::ShadingPassVk::SimpleDeriveBuiltinPass { ref name } => {
             todo!("using builtin pass: {name}");
         }
@@ -460,11 +442,33 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             ref variants,
         } => {
             let prc::Code {
+                push_constant_buffer_size_bytes,
                 ref words,
                 ref vertex_entry_point_name,
                 ref fragment_entry_point_name,
                 ref vertex_semantic_to_location,
             } = variants[&prc::VariantKey { instancing: false }];
+
+            pl = br::PipelineLayoutObject::new(
+                e.graphics().device().clone(),
+                &br::PipelineLayoutCreateInfo::new(
+                    &[
+                        dsl_ub1.as_transparent_ref(),
+                        dsl_ub1.as_transparent_ref(),
+                        dsl_rc.as_transparent_ref(),
+                    ],
+                    &if push_constant_buffer_size_bytes > 0 {
+                        vec![br::PushConstantRange::new(
+                            br::vk::VK_SHADER_STAGE_ALL,
+                            0..push_constant_buffer_size_bytes as _,
+                        )]
+                    } else {
+                        vec![]
+                    },
+                ),
+            )
+            .expect("Create PipelineLayout");
+
             let sc = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
             let vp = [sc[0].make_viewport(0.0..1.0)];
 
@@ -488,7 +492,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             }
 
             // TODO: このへんのパラメータもRendering Configurationで指定できるようにする
-            e.graphics()
+            let [gp1] = e
+                .graphics()
                 .device()
                 .new_graphics_pipeline_array(
                     &[br::GraphicsPipelineCreateInfo::new(
@@ -547,7 +552,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
                     None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
                 )
-                .expect("Create GraphicsPipeline")
+                .expect("Create GraphicsPipeline");
+            gp = gp1;
         }
     };
     let gp = gp.clone_parent();

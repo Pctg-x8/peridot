@@ -126,6 +126,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             ref variants,
         } => {
             let peridot_rendering_configuration::Code {
+                push_constant_buffer_size_bytes,
                 ref vertex_semantic_to_location,
                 ref vertex_entry_point_name,
                 ref fragment_entry_point_name,
@@ -162,10 +163,10 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                         dsl_sb1.as_transparent_ref(),
                         dsl_mat.as_transparent_ref(),
                     ],
-                    &if shader.push_constant_buffer_size_bytes > 0 {
+                    &if push_constant_buffer_size_bytes > 0 {
                         vec![br::PushConstantRange::new(
                             br::vk::VK_SHADER_STAGE_ALL,
-                            0..shader.push_constant_buffer_size_bytes as _,
+                            0..push_constant_buffer_size_bytes as _,
                         )]
                     } else {
                         vec![]

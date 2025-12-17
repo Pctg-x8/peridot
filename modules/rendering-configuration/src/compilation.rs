@@ -51,7 +51,6 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
     let mut asset = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::new(),
         descriptor_set_bindings: Vec::new(),
-        push_constant_buffer_size_bytes: 0,
         passes: HashMap::new(),
     };
     let mut has_failure = false;
@@ -205,13 +204,17 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             dump_spv_disasm(&aligned_code);
 
             let refl = program.get_layout(0, None);
-            if let Some(t) = refl.find_type_by_name(c"Peridot.MaterialParameters.PerDrawCall") {
+            let push_constant_buffer_size_bytes = if let Some(t) =
+                refl.find_type_by_name(c"Peridot.MaterialParameters.PerDrawCall")
+            {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for uniform block");
-                asset.push_constant_buffer_size_bytes =
-                    tl.size(slang::reflection::ParameterCategory::PushConstantBuffer);
-            }
+
+                tl.size(slang::reflection::ParameterCategory::PushConstantBuffer)
+            } else {
+                0
+            };
             if let Some(t) =
                 refl.find_type_by_name(c"Peridot.MaterialParameters.UniformPropertyBlock")
             {
@@ -371,6 +374,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             variants.insert(
                 v,
                 Code {
+                    push_constant_buffer_size_bytes,
                     vertex_semantic_to_location,
                     vertex_entry_point_name,
                     fragment_entry_point_name,

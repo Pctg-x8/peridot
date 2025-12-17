@@ -130,7 +130,6 @@ impl Header {
 pub struct PropertyDirectory {
     pub entries: Vec<(String, PropertyType, PropertyMappingVk)>,
     pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
-    pub push_constant_buffer_size_bytes: usize,
 }
 impl PropertyDirectory {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
@@ -145,8 +144,6 @@ impl PropertyDirectory {
         for t in self.descriptor_set_bindings.iter() {
             writes += t.write(sink)?;
         }
-
-        writes += VariableUInt(self.push_constant_buffer_size_bytes as _).write(sink)?;
 
         Ok(writes)
     }
@@ -170,12 +167,9 @@ impl PropertyDirectory {
             descriptor_set_bindings.push(t);
         }
 
-        let push_constant_buffer_size_bytes = VariableUInt::read(source)?.0 as usize;
-
         Ok(Self {
             entries,
             descriptor_set_bindings,
-            push_constant_buffer_size_bytes,
         })
     }
 
@@ -201,13 +195,9 @@ impl PropertyDirectory {
             descriptor_set_bindings.push(t);
         }
 
-        let VariableUInt(push_constant_buffer_size_bytes) =
-            VariableUInt::read_async(source.as_mut()).await?;
-
         Ok(Self {
             entries,
             descriptor_set_bindings,
-            push_constant_buffer_size_bytes: push_constant_buffer_size_bytes as _,
         })
     }
 }
@@ -460,6 +450,7 @@ impl RenderingOptionOverrides {
 }
 
 pub struct Code {
+    pub push_constant_buffer_size_bytes: usize,
     pub vertex_semantic_to_location: Vec<(VertexInputSemantic, u32)>,
     pub vertex_entry_point_name: Option<String>,
     pub fragment_entry_point_name: Option<String>,
@@ -469,6 +460,7 @@ impl Code {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
         let mut writes = 0;
 
+        writes += VariableUInt(self.push_constant_buffer_size_bytes as _).write(sink)?;
         writes += VariableUInt(self.vertex_semantic_to_location.len() as _).write(sink)?;
         for (n, l) in self.vertex_semantic_to_location.iter() {
             writes += n.write(sink)?;
@@ -500,6 +492,7 @@ impl Code {
     }
 
     pub fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
+        let push_constant_buffer_size_bytes = VariableUInt::read(source)?.0 as usize;
         let vertex_semantic_to_location_count = VariableUInt::read(source)?.0 as usize;
         let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
         for _ in 0..vertex_semantic_to_location_count {
@@ -534,6 +527,7 @@ impl Code {
         }
 
         Ok(Self {
+            push_constant_buffer_size_bytes,
             vertex_semantic_to_location,
             vertex_entry_point_name,
             fragment_entry_point_name,
@@ -544,6 +538,8 @@ impl Code {
     pub async fn read_async(
         mut source: Pin<&mut (impl AsyncBufRead + ?Sized)>,
     ) -> std::io::Result<Self> {
+        let push_constant_buffer_size_bytes =
+            VariableUInt::read_async(source.as_mut()).await?.0 as usize;
         let vertex_semantic_to_location_count =
             VariableUInt::read_async(source.as_mut()).await?.0 as usize;
         let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
@@ -579,6 +575,7 @@ impl Code {
         }
 
         Ok(Self {
+            push_constant_buffer_size_bytes,
             vertex_semantic_to_location,
             vertex_entry_point_name,
             fragment_entry_point_name,
