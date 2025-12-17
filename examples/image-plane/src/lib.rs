@@ -372,30 +372,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .load_async("builtin.rendering_configuration.unlit_image")
         .await
         .expect("Loading rendering configuration");
-    let dsl_rc = br::DescriptorSetLayoutObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorSetLayoutCreateInfo::new(
-            &rc.descriptor_set_bindings
-                .iter()
-                .enumerate()
-                .map(|(n, x)| match x {
-                    prc::DescriptorTypeVk::CombinedImageSampler => {
-                        // TODO: immutable sampler or dynamic sampler selection in rendering configuration
-                        br::DescriptorType::CombinedImageSampler
-                            .make_binding(n as _, 1)
-                            .with_immutable_samplers(&single_smp_refs)
-                    }
-                    prc::DescriptorTypeVk::UniformBuffer { .. } => {
-                        br::DescriptorType::UniformBuffer.make_binding(n as _, 1)
-                    }
-                    prc::DescriptorTypeVk::StorageBuffer { .. } => {
-                        br::DescriptorType::StorageBuffer.make_binding(n as _, 1)
-                    }
-                })
-                .collect::<Vec<_>>(),
-        ),
-    )
-    .expect("Create DescriptorSetLayout for Material");
     let dsl_ub1 = br::DescriptorSetLayoutObject::new(
         e.graphics().device().clone(),
         &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::UniformBuffer
@@ -406,33 +382,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let mut descriptor_uniform_counts = 2; // camera+object
     let mut descriptor_sampler_counts = 0;
     let mut descriptor_storage_counts = 0;
-    for x in rc.descriptor_set_bindings.iter() {
-        match x {
-            prc::DescriptorTypeVk::CombinedImageSampler => {
-                descriptor_sampler_counts += 1;
-            }
-            prc::DescriptorTypeVk::UniformBuffer { .. } => {
-                descriptor_uniform_counts += 1;
-            }
-            prc::DescriptorTypeVk::StorageBuffer { .. } => {
-                descriptor_storage_counts += 1;
-            }
-        }
-    }
-    let mut descriptor_pool = br::DescriptorPoolObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorPoolCreateInfo::new(
-            3,
-            &[
-                br::DescriptorType::UniformBuffer.make_size(descriptor_uniform_counts),
-                br::DescriptorType::StorageBuffer.make_size(descriptor_storage_counts),
-                br::DescriptorType::CombinedImageSampler.make_size(descriptor_sampler_counts),
-            ],
-        ),
-    )
-    .expect("Create DescriptorPool");
 
-    let (pl, gp);
+    let (dsl_rc, pl, gp);
     match rc.passes["Unlit"] {
         prc::ShadingPassVk::SimpleDeriveBuiltinPass { ref name } => {
             todo!("using builtin pass: {name}");
@@ -443,11 +394,50 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         } => {
             let prc::Code {
                 push_constant_buffer_size_bytes,
+                ref descriptor_set_bindings,
                 ref words,
                 ref vertex_entry_point_name,
                 ref fragment_entry_point_name,
                 ref vertex_semantic_to_location,
             } = variants[&prc::VariantKey { instancing: false }];
+
+            dsl_rc = br::DescriptorSetLayoutObject::new(
+                e.graphics().device().clone(),
+                &br::DescriptorSetLayoutCreateInfo::new(
+                    &descriptor_set_bindings
+                        .iter()
+                        .enumerate()
+                        .map(|(n, x)| match x {
+                            prc::DescriptorTypeVk::CombinedImageSampler => {
+                                // TODO: immutable sampler or dynamic sampler selection in rendering configuration
+                                br::DescriptorType::CombinedImageSampler
+                                    .make_binding(n as _, 1)
+                                    .with_immutable_samplers(&single_smp_refs)
+                            }
+                            prc::DescriptorTypeVk::UniformBuffer { .. } => {
+                                br::DescriptorType::UniformBuffer.make_binding(n as _, 1)
+                            }
+                            prc::DescriptorTypeVk::StorageBuffer { .. } => {
+                                br::DescriptorType::StorageBuffer.make_binding(n as _, 1)
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+            )
+            .expect("Create DescriptorSetLayout for Material");
+            for x in descriptor_set_bindings.iter() {
+                match x {
+                    prc::DescriptorTypeVk::CombinedImageSampler => {
+                        descriptor_sampler_counts += 1;
+                    }
+                    prc::DescriptorTypeVk::UniformBuffer { .. } => {
+                        descriptor_uniform_counts += 1;
+                    }
+                    prc::DescriptorTypeVk::StorageBuffer { .. } => {
+                        descriptor_storage_counts += 1;
+                    }
+                }
+            }
 
             pl = br::PipelineLayoutObject::new(
                 e.graphics().device().clone(),
@@ -561,6 +551,19 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     e.graphics_device()
         .set_object_name(&gp, c"Main Pipeline")
         .expect("Failed to set pipeline name");
+
+    let mut descriptor_pool = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
+            3,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(descriptor_uniform_counts),
+                br::DescriptorType::StorageBuffer.make_size(descriptor_storage_counts),
+                br::DescriptorType::CombinedImageSampler.make_size(descriptor_sampler_counts),
+            ],
+        ),
+    )
+    .expect("Create DescriptorPool");
 
     pre_configure_awaiter
         .await

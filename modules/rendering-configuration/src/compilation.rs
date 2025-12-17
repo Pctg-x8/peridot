@@ -50,7 +50,6 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
 
     let mut asset = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::new(),
-        descriptor_set_bindings: Vec::new(),
         passes: HashMap::new(),
     };
     let mut has_failure = false;
@@ -87,7 +86,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let (prelude, property_mapping, descriptor_set_bindings) =
                 rc.gen_vk_prelude(v.instancing);
             asset.property_mappings = property_mapping;
-            asset.descriptor_set_bindings = descriptor_set_bindings;
+            let mut descriptor_set_bindings = descriptor_set_bindings;
 
             let code = p.gen_vk_code();
             let generated_code = format!("{prelude}\n{code}");
@@ -221,11 +220,10 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for uniform property block");
-                asset
-                    .descriptor_set_bindings
-                    .push(DescriptorTypeVk::UniformBuffer {
-                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
-                    });
+
+                descriptor_set_bindings.push(DescriptorTypeVk::UniformBuffer {
+                    size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                });
             }
             if let Some(t) =
                 refl.find_type_by_name(c"Peridot.MaterialParameters.InstancedPropertyBlock")
@@ -233,21 +231,19 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for uniform property block");
-                asset
-                    .descriptor_set_bindings
-                    .push(DescriptorTypeVk::StorageBuffer {
-                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
-                    });
+
+                descriptor_set_bindings.push(DescriptorTypeVk::StorageBuffer {
+                    size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                });
             }
             if let Some(t) = refl.find_type_by_name(c"Peridot.MaterialParameters.RealtimeBuffer") {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for realtime buffer");
-                asset
-                    .descriptor_set_bindings
-                    .push(DescriptorTypeVk::UniformBuffer {
-                        size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
-                    });
+
+                descriptor_set_bindings.push(DescriptorTypeVk::UniformBuffer {
+                    size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
+                });
             }
             let mut vertex_semantic_to_location = HashMap::new();
             let mut vertex_entry_point_name = None;
@@ -375,6 +371,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 v,
                 Code {
                     push_constant_buffer_size_bytes,
+                    descriptor_set_bindings,
                     vertex_semantic_to_location,
                     vertex_entry_point_name,
                     fragment_entry_point_name,

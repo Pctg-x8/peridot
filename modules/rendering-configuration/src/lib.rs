@@ -17,7 +17,6 @@ mod file;
 /// converted asset data
 pub struct CompiledRenderingConfigurationVk {
     pub property_mappings: HashMap<String, (PropertyType, PropertyMappingVk)>,
-    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
     pub passes: HashMap<String, ShadingPassVk>,
 }
 
@@ -123,6 +122,7 @@ impl Default for VariantKey {
 
 pub struct Code {
     pub push_constant_buffer_size_bytes: usize,
+    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
     pub vertex_semantic_to_location: HashMap<VertexInputSemantic, u32>,
     pub vertex_entry_point_name: Option<String>,
     pub fragment_entry_point_name: Option<String>,
@@ -270,7 +270,6 @@ pub fn write(
             .into_iter()
             .map(|(n, (t, m))| (n, t, m))
             .collect(),
-        descriptor_set_bindings: compiled.descriptor_set_bindings,
     }
     .write(sink)?;
 
@@ -302,6 +301,7 @@ pub fn write(
                                 file::Code {
                                     push_constant_buffer_size_bytes: v
                                         .push_constant_buffer_size_bytes,
+                                    descriptor_set_bindings: v.descriptor_set_bindings,
                                     vertex_semantic_to_location: v
                                         .vertex_semantic_to_location
                                         .into_iter()
@@ -352,7 +352,6 @@ pub async fn read_async(
 
     let mut result = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::with_capacity(property_directory.entries.len()),
-        descriptor_set_bindings: property_directory.descriptor_set_bindings,
         passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
     };
     for (n, t, m) in property_directory.entries {
@@ -401,6 +400,7 @@ pub async fn read_async(
                                 x.insert(Code {
                                     push_constant_buffer_size_bytes: v
                                         .push_constant_buffer_size_bytes,
+                                    descriptor_set_bindings: v.descriptor_set_bindings,
                                     vertex_semantic_to_location,
                                     vertex_entry_point_name: v.vertex_entry_point_name,
                                     fragment_entry_point_name: v.fragment_entry_point_name,
@@ -440,7 +440,6 @@ pub fn read(
 
     let mut result = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::with_capacity(property_directory.entries.len()),
-        descriptor_set_bindings: property_directory.descriptor_set_bindings,
         passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
     };
     for (n, t, m) in property_directory.entries {
@@ -483,6 +482,7 @@ pub fn read(
                                 x.insert(Code {
                                     push_constant_buffer_size_bytes: v
                                         .push_constant_buffer_size_bytes,
+                                    descriptor_set_bindings: v.descriptor_set_bindings,
                                     vertex_semantic_to_location,
                                     vertex_entry_point_name: v.vertex_entry_point_name,
                                     fragment_entry_point_name: v.fragment_entry_point_name,

@@ -129,7 +129,6 @@ impl Header {
 
 pub struct PropertyDirectory {
     pub entries: Vec<(String, PropertyType, PropertyMappingVk)>,
-    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
 }
 impl PropertyDirectory {
     pub fn write(&self, sink: &mut impl Write) -> std::io::Result<usize> {
@@ -138,11 +137,6 @@ impl PropertyDirectory {
             writes += PascalStr(name).write(sink)?;
             writes += r#type.write(sink)?;
             writes += mapping_vk.write(sink)?;
-        }
-
-        writes += VariableUInt(self.descriptor_set_bindings.len() as _).write(sink)?;
-        for t in self.descriptor_set_bindings.iter() {
-            writes += t.write(sink)?;
         }
 
         Ok(writes)
@@ -159,18 +153,7 @@ impl PropertyDirectory {
             entries.push((name, r#type, mapping_vk));
         }
 
-        let descriptor_set_binding_count = VariableUInt::read(source)?.0 as usize;
-        let mut descriptor_set_bindings = Vec::with_capacity(descriptor_set_binding_count);
-        for _ in 0..descriptor_set_binding_count {
-            let t = DescriptorTypeVk::read(source)?;
-
-            descriptor_set_bindings.push(t);
-        }
-
-        Ok(Self {
-            entries,
-            descriptor_set_bindings,
-        })
+        Ok(Self { entries })
     }
 
     pub async fn read_async(
@@ -186,19 +169,7 @@ impl PropertyDirectory {
             entries.push((name, r#type, mapping_vk));
         }
 
-        let VariableUInt(descriptor_set_binding_count) =
-            VariableUInt::read_async(source.as_mut()).await?;
-        let mut descriptor_set_bindings = Vec::with_capacity(descriptor_set_binding_count as _);
-        for _ in 0..descriptor_set_binding_count {
-            let t = DescriptorTypeVk::read_async(source.as_mut()).await?;
-
-            descriptor_set_bindings.push(t);
-        }
-
-        Ok(Self {
-            entries,
-            descriptor_set_bindings,
-        })
+        Ok(Self { entries })
     }
 }
 
@@ -451,6 +422,7 @@ impl RenderingOptionOverrides {
 
 pub struct Code {
     pub push_constant_buffer_size_bytes: usize,
+    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
     pub vertex_semantic_to_location: Vec<(VertexInputSemantic, u32)>,
     pub vertex_entry_point_name: Option<String>,
     pub fragment_entry_point_name: Option<String>,
@@ -461,6 +433,12 @@ impl Code {
         let mut writes = 0;
 
         writes += VariableUInt(self.push_constant_buffer_size_bytes as _).write(sink)?;
+
+        writes += VariableUInt(self.descriptor_set_bindings.len() as _).write(sink)?;
+        for t in self.descriptor_set_bindings.iter() {
+            writes += t.write(sink)?;
+        }
+
         writes += VariableUInt(self.vertex_semantic_to_location.len() as _).write(sink)?;
         for (n, l) in self.vertex_semantic_to_location.iter() {
             writes += n.write(sink)?;
@@ -493,6 +471,15 @@ impl Code {
 
     pub fn read(source: &mut impl BufRead) -> std::io::Result<Self> {
         let push_constant_buffer_size_bytes = VariableUInt::read(source)?.0 as usize;
+
+        let descriptor_set_binding_count = VariableUInt::read(source)?.0 as usize;
+        let mut descriptor_set_bindings = Vec::with_capacity(descriptor_set_binding_count);
+        for _ in 0..descriptor_set_binding_count {
+            let t = DescriptorTypeVk::read(source)?;
+
+            descriptor_set_bindings.push(t);
+        }
+
         let vertex_semantic_to_location_count = VariableUInt::read(source)?.0 as usize;
         let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
         for _ in 0..vertex_semantic_to_location_count {
@@ -528,6 +515,7 @@ impl Code {
 
         Ok(Self {
             push_constant_buffer_size_bytes,
+            descriptor_set_bindings,
             vertex_semantic_to_location,
             vertex_entry_point_name,
             fragment_entry_point_name,
@@ -540,6 +528,16 @@ impl Code {
     ) -> std::io::Result<Self> {
         let push_constant_buffer_size_bytes =
             VariableUInt::read_async(source.as_mut()).await?.0 as usize;
+
+        let VariableUInt(descriptor_set_binding_count) =
+            VariableUInt::read_async(source.as_mut()).await?;
+        let mut descriptor_set_bindings = Vec::with_capacity(descriptor_set_binding_count as _);
+        for _ in 0..descriptor_set_binding_count {
+            let t = DescriptorTypeVk::read_async(source.as_mut()).await?;
+
+            descriptor_set_bindings.push(t);
+        }
+
         let vertex_semantic_to_location_count =
             VariableUInt::read_async(source.as_mut()).await?.0 as usize;
         let mut vertex_semantic_to_location = Vec::with_capacity(vertex_semantic_to_location_count);
@@ -576,6 +574,7 @@ impl Code {
 
         Ok(Self {
             push_constant_buffer_size_bytes,
+            descriptor_set_bindings,
             vertex_semantic_to_location,
             vertex_entry_point_name,
             fragment_entry_point_name,
