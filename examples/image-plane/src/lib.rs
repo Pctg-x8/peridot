@@ -41,48 +41,58 @@ impl br::VkHandle for LocalImageView {
     }
 }
 
+const NATIVE_IMAGE_FORMAT_FALLBACK_ORDER_RGBA: &[ktx::ffi::ktx_transcode_fmt_e] = &[
+    ktx::ffi::KTX_TTF_ASTC_4x4_RGBA,
+    ktx::ffi::KTX_TTF_ETC2_RGBA,
+    ktx::ffi::KTX_TTF_BC7_RGBA,
+    ktx::ffi::KTX_TTF_BC3_RGBA,
+    ktx::ffi::KTX_TTF_RGBA32,
+];
+fn ktx_format_to_vk(kf: ktx::ffi::ktx_transcode_fmt_e) -> br::Format {
+    match kf {
+        ktx::ffi::KTX_TTF_ASTC_4x4_RGBA => br::vk::VK_FORMAT_ASTC_4x4_UNORM_BLOCK,
+        ktx::ffi::KTX_TTF_ETC2_RGBA => br::vk::VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
+        ktx::ffi::KTX_TTF_BC7_RGBA => br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
+        ktx::ffi::KTX_TTF_BC3_RGBA => br::vk::VK_FORMAT_BC3_UNORM_BLOCK,
+        ktx::ffi::KTX_TTF_RGBA32 => br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+        _ => unimplemented!(),
+    }
+}
+
 pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
-
-    #[cfg(not(target_os = "android"))]
-    #[cfg(not(target_os = "macos"))]
-    let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot::native_io::PlatformNativeFileReaderAsync::open(
-            "../../examples/image-plane/assets/resources.par",
-        )
-        .expect("open resources.par"),
-        true,
-    )
-    .await
-    .expect("load resources.par");
-    #[cfg(not(target_os = "android"))]
-    #[cfg(target_os = "macos")]
-    let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot::native_io::PlatformNativeFileReaderAsync::open(
-            std::env::current_exe()
-                .expect("current_exe")
-                .parent()
-                .expect("no parent")
-                .join("../Resources/assets.par"),
-        )
-        .expect("open resources.par"),
-        true,
-    )
-    .await
-    .expect("load resources.par");
 
     let (mut image_data, bgm): (peridot_image::StdTexture2DAsset, PreloadedPlayableWav) =
         futures_util::try_join!(e.load_async("images.example"), e.load_async("bgm"))
             .expect("asset loading");
 
-    if image_data.0.needs_transcoding() {
-        // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
-        image_data
-            .0
-            .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
-            .expect("failed to transcode to bc7");
-    }
+    assert!(image_data.0.needs_transcoding());
+    let selected_fmt = *NATIVE_IMAGE_FORMAT_FALLBACK_ORDER_RGBA
+        .iter()
+        .find(|f| {
+            let mut props = core::mem::MaybeUninit::uninit();
+
+            let r = unsafe {
+                br::vkfn::get_physical_device_image_format_properties(
+                    e.graphics().adapter_raw(),
+                    ktx_format_to_vk(**f),
+                    br::vk::VK_IMAGE_TYPE_2D,
+                    br::vk::VK_IMAGE_TILING_LINEAR,
+                    br::vk::VK_IMAGE_USAGE_SAMPLED_BIT | br::vk::VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    0,
+                    props.as_mut_ptr(),
+                )
+            };
+
+            !r.is_err()
+        })
+        .expect("no format available?");
+    println!("selected transcode fmt: {selected_fmt}");
+    image_data
+        .0
+        .transcode_basis(selected_fmt, ktx::TranscodeFlags::empty())
+        .expect("failed to transcode to bc7");
     let image_width = image_data.0.base_width();
     let image_height = image_data.0.base_height();
     let offs = image_data
@@ -194,7 +204,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     width: image_width,
                     height: image_height,
                 },
-                br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
+                ktx_format_to_vk(selected_fmt),
             )
             .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
             .init_layout(br::ImageLayout::Preinitialized),
