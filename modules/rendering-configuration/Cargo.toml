@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["debug-dumps"]
+default = []
 with-loader-impl = ["dep:peridot"]
 with-asset-processing = ["dep:peridot-asset-processing", "compilation"]
 compilation = ["dep:slang", "dep:thiserror"]

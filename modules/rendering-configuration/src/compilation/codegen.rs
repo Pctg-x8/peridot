@@ -683,6 +683,7 @@ ConstantBuffer<ObjectParameters> objectParameters;
             binding_index += 1;
         }
 
+        // TODO: instancing: falseのときUniformにバッファをまとめるべきか？
         if !storage_entries.instanced_property_buffer_members.is_empty() {
             code.push_str("struct InstancedPropertyBlock {\n");
             for (name, ty) in storage_entries.instanced_property_buffer_members {
