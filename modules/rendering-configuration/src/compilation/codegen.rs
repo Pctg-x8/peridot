@@ -76,7 +76,6 @@ impl RenderingConfiguration {
                             option_overrides: None,
                             instancing_support: InstancingSupport::None,
                             deriving: Some(org_name.as_str().into()),
-                            vertex_bindings: Vec::new(),
                             shader_code: None,
                         },
                     );
@@ -86,31 +85,12 @@ impl RenderingConfiguration {
                     contents,
                     ..
                 }) => {
-                    let mut vertex_bindings = None;
                     let mut shader_code = None;
                     let mut option_overrides = None::<RenderingOptionOverrides>;
                     let mut instancing_support = None::<InstancingSupport>;
 
                     for c in contents {
                         match c {
-                            syntax::PassBlockContent::VertexBindingsBlock { entries, .. } => {
-                                if vertex_bindings.is_some() {
-                                    panic!("duplicate vertex bindings block");
-                                }
-
-                                vertex_bindings = Some(
-                                    entries
-                                        .into_iter()
-                                        .map(|(name, _, ty, _, semantic_name, _)| {
-                                            PassVertexBindingData {
-                                                name: name.as_str().into(),
-                                                r#type: property_type_from_syntax(ty),
-                                                semantic: parse_vi_semantic(&semantic_name),
-                                            }
-                                        })
-                                        .collect(),
-                                );
-                            }
                             syntax::PassBlockContent::ShaderBlock { content, .. } => {
                                 if shader_code.is_some() {
                                     panic!("duplicate shader block");
@@ -207,7 +187,6 @@ impl RenderingConfiguration {
                             option_overrides,
                             instancing_support: instancing_support.unwrap_or_default(),
                             deriving: None,
-                            vertex_bindings: vertex_bindings.unwrap_or_else(Vec::new),
                             shader_code,
                         },
                     );
@@ -505,9 +484,18 @@ impl RenderingConfiguration {
         let mut fsh_context_block = String::new();
 
         // builtin prelude
-        code.push_str("namespace Peridot {\n");
+
+        code.push_str(
+            r#"[__AttributeUsage(_AttributeTargets.Param)]
+[__AttributeUsage(_AttributeTargets.Struct)]
+struct Peridot_VertexInputAttribute {}
+
+namespace Peridot {
+"#,
+        );
         vsh_context_block.push_str("struct VertexShaderContext {");
         fsh_context_block.push_str("struct FragmentShaderContext {");
+
         if instancing {
             vsh_context_block.push_str(
                 r#"
@@ -734,50 +722,19 @@ pub struct PassData {
     pub option_overrides: Option<RenderingOptionOverrides>,
     pub instancing_support: InstancingSupport,
     pub deriving: Option<String>,
-    pub vertex_bindings: Vec<PassVertexBindingData>,
     pub shader_code: Option<String>,
 }
 impl PassData {
-    pub fn gen_vk_code(&self, for_instancing: bool) -> (String, HashMap<VertexInputSemantic, u32>) {
-        let mut semantic_to_location_map = HashMap::with_capacity(self.vertex_bindings.len());
-
+    pub fn gen_vk_code(&self) -> String {
         let mut code = String::new();
         if let Some(ref d) = self.deriving {
             eprintln!("todo: deriving: {d}");
-        }
-        if !self.vertex_bindings.is_empty() {
-            code.push_str("struct Vertex {\n");
-            for (n, vb) in self.vertex_bindings.iter().enumerate() {
-                match semantic_to_location_map.entry(vb.semantic.clone()) {
-                    std::collections::hash_map::Entry::Vacant(x) => {
-                        x.insert(n as _);
-                    }
-                    std::collections::hash_map::Entry::Occupied(x) => {
-                        panic!(
-                            "conflicting vertex semantic {:?} with location {}",
-                            x.key(),
-                            x.get()
-                        );
-                    }
-                }
-
-                code.push_str("    [vk::location(");
-                code.push_str(&n.to_string());
-                code.push_str(")]\n    ");
-                print_property_type(&vb.r#type, &mut code);
-                code.push(' ');
-                code.push_str(&vb.name);
-                code.push_str(" : ");
-                print_vi_semantic(&vb.semantic, &mut code);
-                code.push_str(";\n");
-            }
-            code.push_str("}\n\n");
         }
         if let Some(ref s) = self.shader_code {
             code.push_str(s);
         }
 
-        (code, semantic_to_location_map)
+        code
     }
 }
 

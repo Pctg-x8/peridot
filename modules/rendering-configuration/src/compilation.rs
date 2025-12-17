@@ -59,7 +59,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
         let tracing_span = tracing::span!(tracing::Level::TRACE, "compile_pass", name = %n);
         let _tracing_span_enter = tracing_span.enter();
 
-        if p.shader_code.is_none() && p.vertex_bindings.is_empty() && p.option_overrides.is_none() {
+        if p.shader_code.is_none() && p.option_overrides.is_none() {
             // simple derive
             let deriving = p
                 .deriving
@@ -90,7 +90,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             asset.property_mappings = property_mapping;
             asset.descriptor_set_bindings = descriptor_set_bindings;
 
-            let (code, semantic_to_location) = p.gen_vk_code(v.instancing);
+            let code = p.gen_vk_code();
             let generated_code = format!("{prelude}\n{code}");
 
             #[cfg(feature = "debug-dumps")]
@@ -246,6 +246,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                         size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
                     });
             }
+            let mut vertex_semantic_to_location = HashMap::new();
             let mut vertex_entry_point_name = None;
             let mut fragment_entry_point_name = None;
             for ep in refl.iter_entry_point() {
@@ -258,6 +259,95 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     } else {
                         vertex_entry_point_name =
                             Some(ep.name().to_str().expect("invalid entry name").into());
+
+                        println!("vertex inputs");
+                        for x in ep.iter_parameter() {
+                            let is_vertex_input = x
+                                .variable()
+                                .iter_user_attribute()
+                                .any(|a| a.name() == c"Peridot_VertexInput")
+                                || x.r#type()
+                                    .iter_user_attribute()
+                                    .any(|a| a.name() == c"Peridot_VertexInput");
+                            if !is_vertex_input {
+                                continue;
+                            }
+
+                            rec(x, &mut vertex_semantic_to_location, &mut has_failure);
+                            fn rec(
+                                v: &slang::reflection::VariableLayout,
+                                vertex_semantic_to_location: &mut HashMap<
+                                    peridot_semantic_shader::VertexInputSemantic,
+                                    u32,
+                                >,
+                                has_failure: &mut bool,
+                            ) {
+                                let tl = v.type_layout();
+
+                                if tl.kind() == slang::reflection::TypeKind::Struct {
+                                    // process each fields recursively
+                                    for m in tl.iter_field() {
+                                        rec(m, vertex_semantic_to_location, has_failure);
+                                    }
+
+                                    return;
+                                }
+
+                                let Some(semantic_name) = v.semantic_name() else {
+                                    tracing::error!(var_name = ?v.name(), "vertex input variables should have semantic");
+                                    *has_failure = true;
+                                    return;
+                                };
+                                let semantic_name = match semantic_name.to_str() {
+                                    Ok(x) => x,
+                                    Err(e) => {
+                                        tracing::error!(reason = ?e, var_name = ?v.name(), ?semantic_name, "invalid semantic_name bytes");
+                                        *has_failure = true;
+                                        return;
+                                    }
+                                };
+
+                                let semantic = if semantic_name.eq_ignore_ascii_case("position") {
+                                    peridot_semantic_shader::VertexInputSemantic::Position(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("normal") {
+                                    peridot_semantic_shader::VertexInputSemantic::Normal(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("tangent") {
+                                    peridot_semantic_shader::VertexInputSemantic::Tangent(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("binormal") {
+                                    peridot_semantic_shader::VertexInputSemantic::Binormal(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("texcoord") {
+                                    peridot_semantic_shader::VertexInputSemantic::Texcoord(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("color") {
+                                    peridot_semantic_shader::VertexInputSemantic::Color(
+                                        v.semantic_index() as _,
+                                    )
+                                } else if semantic_name.eq_ignore_ascii_case("misc") {
+                                    peridot_semantic_shader::VertexInputSemantic::Misc(
+                                        v.semantic_index() as _,
+                                    )
+                                } else {
+                                    tracing::warn!(
+                                        var_name = ?v.name(),
+                                        semantic_name,
+                                        "unsupported semantic name, skipping"
+                                    );
+                                    return;
+                                };
+
+                                vertex_semantic_to_location
+                                    .insert(semantic, v.binding_index() as _);
+                            }
+                        }
                     }
                 } else if stage == slang::ffi::SLANG_STAGE_FRAGMENT {
                     if let Some(ref x) = fragment_entry_point_name {
@@ -281,7 +371,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             variants.insert(
                 v,
                 Code {
-                    vertex_semantic_to_location: semantic_to_location,
+                    vertex_semantic_to_location,
                     vertex_entry_point_name,
                     fragment_entry_point_name,
                     words: aligned_code,

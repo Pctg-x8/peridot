@@ -5,12 +5,14 @@ End
 
 Pass "Unlit"
     RenderOption NoCulling, InstancedOnly
-    VertexBindings
-        pos: Float4 [POSITION0]
-        uv: Float4 [TEXCOORD0]
-    End
 
     Shader
+[Peridot::VertexInput]
+struct Vertex {
+    float4 pos : POSITION0;
+    float2 uv : TEXCOORD0;
+}
+
 struct VertexOutput {
     FragmentInput fragmentInput : Varyings;
     float4 pos : SV_Position;
@@ -33,7 +35,7 @@ VertexOutput vertMain(Vertex v, Peridot::VertexShaderContext ctx) {
 [shader("fragment")]
 float4 fragMain(FragmentInput input : Varyings, Peridot::FragmentShaderContext ctx) : SV_Target {
     // return float4(input.uv, 1.0, 1.0);
-    float4 col = ctx.properties.maintex.Sample(input.uv);
+    var col = ctx.properties.maintex.Sample(input.uv);
     col.rgb *= col.a;
     return col;
 }

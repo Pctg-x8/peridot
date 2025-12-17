@@ -2,8 +2,7 @@ use crate::compilation::tokenizer::{Located, Location};
 
 use super::tokenizer::{
     self, CloseBracket, CloseParen, Colon, Comma, Equal, Identifier, Keyword, KwEnd, KwPass,
-    KwProperties, KwRenderOption, KwShader, KwUse, KwVertexBindings, NumLit, OpenBracket,
-    OpenParen, StrLit, Token,
+    KwProperties, KwRenderOption, KwShader, KwUse, NumLit, OpenBracket, OpenParen, StrLit, Token,
 };
 
 pub struct ParserState<'s> {
@@ -331,18 +330,6 @@ pub enum PassBlockContent<'s> {
         render_option: KwRenderOption,
         entries: Vec<(Identifier<'s>, Option<Comma>)>,
     },
-    VertexBindingsBlock {
-        vertex_bindings: KwVertexBindings,
-        entries: Vec<(
-            Identifier<'s>,
-            Colon,
-            Type<'s>,
-            OpenBracket,
-            Identifier<'s>,
-            CloseBracket,
-        )>,
-        end: KwEnd,
-    },
     ShaderBlock {
         shader: KwShader,
         content: &'s str,
@@ -354,9 +341,6 @@ impl Located for PassBlockContent<'_> {
     fn location(&self) -> &Location {
         match self {
             Self::RenderOptions { render_option, .. } => render_option.location(),
-            Self::VertexBindingsBlock {
-                vertex_bindings, ..
-            } => vertex_bindings.location(),
             Self::ShaderBlock { shader, .. } => shader.location(),
         }
     }
@@ -394,42 +378,6 @@ impl<'s> PassBlockContent<'s> {
                     render_option,
                     entries,
                 })
-            }
-            Token::Keyword(Keyword::VertexBindings(vertex_bindings)) => {
-                let mut entries = Vec::new();
-                loop {
-                    match state.next()? {
-                        Token::Keyword(Keyword::End(end)) => {
-                            break Ok(PassBlockContent::VertexBindingsBlock {
-                                vertex_bindings,
-                                entries,
-                                end,
-                            });
-                        }
-                        Token::Identifier(name) => {
-                            let colon = match state.next()? {
-                                Token::Colon(x) => x,
-                                t => return Err(Error::unexpected_token(":", t)),
-                            };
-                            let ty = Type::parse(state)?;
-                            let semantic_start = match state.next()? {
-                                Token::OpenBracket(x) => x,
-                                t => return Err(Error::unexpected_token("[", t)),
-                            };
-                            let semantic = match state.next()? {
-                                Token::Identifier(x) => x,
-                                t => return Err(Error::unexpected_token("identifier", t)),
-                            };
-                            let semantic_end = match state.next()? {
-                                Token::CloseBracket(x) => x,
-                                t => return Err(Error::unexpected_token("]", t)),
-                            };
-
-                            entries.push((name, colon, ty, semantic_start, semantic, semantic_end));
-                        }
-                        t => return Err(Error::unexpected_token("identifier", t)),
-                    }
-                }
             }
             Token::Keyword(Keyword::Shader(shader)) => {
                 let Some((content, end)) = tokenizer::read_until_next_end(&mut state.tok) else {

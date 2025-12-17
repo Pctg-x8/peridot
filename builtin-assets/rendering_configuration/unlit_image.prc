@@ -4,10 +4,6 @@ End
 
 Pass "Unlit"
   RenderOption NoCulling
-  VertexBindings
-    pos: Float4 [POSITION0]
-    uv: Float4 [TEXCOORD0]
-  End
 
   Shader
 struct VertexOutput {
@@ -20,11 +16,15 @@ struct FragmentInput {
 }
 
 [shader("vertex")]
-VertexOutput vertMain(Vertex v, Peridot::VertexShaderContext ctx) {
+VertexOutput vertMain(
+    [Peridot::VertexInput] float4 pos : POSITION0,
+    [Peridot::VertexInput] float4 uv : TEXCOORD0,
+    Peridot::VertexShaderContext ctx
+) {
     VertexOutput vo;
 
-    vo.pos = ctx.worldToClipSpace(v.pos);
-    vo.fragmentInput.uv = v.uv.xy;
+    vo.pos = ctx.worldToClipSpace(pos);
+    vo.fragmentInput.uv = uv.xy;
 
     return vo;
 }
