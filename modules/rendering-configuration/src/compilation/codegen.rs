@@ -727,7 +727,7 @@ ConstantBuffer<ObjectParameters> objectParameters;
         fsh_context_block.push_str("    }\n");
 
         // contextual helper
-        vsh_context_block.push_str("\n    inline float4 worldToClipSpace(float4 p) { return mul(this.cameraParameters.viewProjectionMatrix, mul(this.objectParameters.transformMatrix, p)); }\n");
+        vsh_context_block.push_str("\n    inline float4 objectToClipSpace(float4 p) { return mul(this.cameraParameters.viewProjectionMatrix, mul(this.objectParameters.transformMatrix, p)); }\n");
 
         vsh_context_block.push_str("}\n");
         fsh_context_block.push_str("}\n");

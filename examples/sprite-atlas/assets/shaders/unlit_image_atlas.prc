@@ -26,7 +26,7 @@ struct FragmentInput {
 VertexOutput vertMain(Vertex v, Peridot::VertexShaderContext ctx) {
     VertexOutput vo;
 
-    vo.pos = ctx.worldToClipSpace(v.pos);
+    vo.pos = ctx.objectToClipSpace(v.pos);
     vo.fragmentInput.uv = v.uv.xy * ctx.properties.maintex_uvst.xy + ctx.properties.maintex_uvst.zw;
 
     return vo;

@@ -23,7 +23,7 @@ VertexOutput vertMain(
 ) {
     VertexOutput vo;
 
-    vo.pos = ctx.worldToClipSpace(pos);
+    vo.pos = ctx.objectToClipSpace(pos);
     vo.fragmentInput.uv = uv.xy;
 
     return vo;
