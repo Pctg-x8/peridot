@@ -112,8 +112,19 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 &CString::new(generated_code).expect("invalid code generated"),
                 Some(&mut diag),
             );
-            if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+            let diag = unsafe { diag.assume_init_ref() };
+            if let Some(d) = diag {
+                let str = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer().cast()) };
+                match str.to_str() {
+                    Err(x) => {
+                        tracing::warn!(target: "libslang diag", to_str_err = ?x, msg = ?str);
+                    }
+                    Ok(x) => {
+                        for l in x.lines() {
+                            eprintln!("[libslang] {l}");
+                        }
+                    }
+                }
             }
             let Some(module) = module else {
                 tracing::error!("Failed to load generated slang module");
