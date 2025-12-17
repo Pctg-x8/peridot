@@ -92,6 +92,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
 
             let (code, semantic_to_location) = p.gen_vk_code(v.instancing);
             let generated_code = format!("{prelude}\n{code}");
+
             #[cfg(feature = "debug-dumps")]
             println!("{generated_code}");
 
@@ -107,6 +108,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     continue;
                 }
             };
+
             let mut diag = core::mem::MaybeUninit::new(None);
             let module = session.load_module_from_source_string(
                 c"main",
@@ -114,19 +116,8 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 &CString::new(generated_code).expect("invalid code generated"),
                 Some(&mut diag),
             );
-            let diag = unsafe { diag.assume_init() };
-            if let Some(d) = diag {
-                let str = unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer().cast()) };
-                match str.to_str() {
-                    Err(x) => {
-                        tracing::warn!(target: "libslang diag", to_str_err = ?x, msg = ?str);
-                    }
-                    Ok(x) => {
-                        for l in x.lines() {
-                            eprintln!("[libslang] {l}");
-                        }
-                    }
-                }
+            if let Some(d) = unsafe { diag.assume_init() } {
+                print_slang_diag(&d);
             }
             let Some(module) = module else {
                 tracing::error!("Failed to load generated slang module");
@@ -145,30 +136,22 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     continue;
                 }
             });
-            for e in module.iter_defined_entry_point() {
-                let e = match e {
-                    Ok(x) => x,
-                    Err(e) => {
+            program_components.extend(
+                module.iter_defined_entry_point().filter_map(|e| {
+                    e.inspect_err(|e| {
                         tracing::error!(reason = ?e, "Failed to iterate entry points");
                         has_failure = true;
-                        continue;
-                    }
-                };
-
-                program_components.push(match e.clone_cast() {
-                Ok(x) => x,
-                Err(e) => {
-                    tracing::error!(reason = ?e, "Failed to cast entry point object to IComponentType");
-                    has_failure = true;
-                    continue;
-                }
-            });
-            }
+                    }).ok()?.clone_cast().inspect_err(|e| {
+                        tracing::error!(reason = ?e, "Failed to cast entry point object to IComponentType");
+                        has_failure = true;
+                    }).ok()
+                })
+            );
             let mut diag = core::mem::MaybeUninit::new(None);
             let program =
                 session.create_composite_component_type(&program_components, Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+                print_slang_diag(&d);
             }
             let program = match program {
                 Ok(x) => x,
@@ -182,7 +165,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let mut diag = core::mem::MaybeUninit::new(None);
             let linked = program.link(Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+                print_slang_diag(&d);
             }
             let linked = match linked {
                 Ok(x) => x,
@@ -196,7 +179,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let mut diag = core::mem::MaybeUninit::new(None);
             let code = linked.get_target_code(0, Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                tracing::warn!(target: "libslang diag", msg = ?unsafe { core::ffi::CStr::from_ptr(d.get_buffer_pointer() as _) });
+                print_slang_diag(&d);
             }
             let code = match code {
                 Ok(x) => x,
@@ -219,31 +202,10 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             }
 
             #[cfg(feature = "debug-dumps")]
-            {
-                eprintln!("compilation done");
-                let st_context = spirv_tools::Context::new(spirv_tools::ffi::SPV_ENV_VULKAN_1_4);
-                let text = st_context
-                    .binary_to_text(
-                        &aligned_code,
-                        spirv_tools::ffi::SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES,
-                        None,
-                    )
-                    .expect("spvBinaryToText");
-                let cstr = text.as_cstr();
-                match cstr.to_str() {
-                    Err(_) => {
-                        tracing::warn!(target: "spirv-tools disasm", code = ?cstr);
-                    }
-                    Ok(x) => {
-                        for l in x.lines() {
-                            eprintln!("[disasm] {l}");
-                        }
-                    }
-                }
-            }
+            dump_spv_disasm(&aligned_code);
 
             let refl = program.get_layout(0, None);
-            if let Some(t) = refl.find_type_by_name(c"PeridotMaterialParameters.PerDrawCall") {
+            if let Some(t) = refl.find_type_by_name(c"Peridot.MaterialParameters.PerDrawCall") {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for uniform block");
@@ -251,7 +213,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     tl.size(slang::reflection::ParameterCategory::PushConstantBuffer);
             }
             if let Some(t) =
-                refl.find_type_by_name(c"PeridotMaterialParameters.UniformPropertyBlock")
+                refl.find_type_by_name(c"Peridot.MaterialParameters.UniformPropertyBlock")
             {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
@@ -263,7 +225,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                     });
             }
             if let Some(t) =
-                refl.find_type_by_name(c"PeridotMaterialParameters.InstancedPropertyBlock")
+                refl.find_type_by_name(c"Peridot.MaterialParameters.InstancedPropertyBlock")
             {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
@@ -274,7 +236,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                         size_bytes: tl.size(slang::reflection::ParameterCategory::Uniform),
                     });
             }
-            if let Some(t) = refl.find_type_by_name(c"PeridotMaterialParameters.RealtimeBuffer") {
+            if let Some(t) = refl.find_type_by_name(c"Peridot.MaterialParameters.RealtimeBuffer") {
                 let tl = refl
                     .type_layout(t, slang::ffi::SLANG_LAYOUT_RULES_DEFAULT)
                     .expect("no type layout for realtime buffer");
@@ -337,4 +299,41 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
     }
 
     (!has_failure).then_some(asset)
+}
+
+fn print_slang_diag(diag: &(impl slang::IBlob + ?Sized)) {
+    let str = unsafe { core::ffi::CStr::from_ptr(diag.get_buffer_pointer().cast()) };
+    match str.to_str() {
+        Err(x) => {
+            tracing::warn!(target: "libslang diag", to_str_err = ?x, msg = ?str);
+        }
+        Ok(x) => {
+            for l in x.lines() {
+                eprintln!("[libslang] {l}");
+            }
+        }
+    }
+}
+
+#[cfg(feature = "debug-dumps")]
+fn dump_spv_disasm(code: &[u32]) {
+    let st_context = spirv_tools::Context::new(spirv_tools::ffi::SPV_ENV_VULKAN_1_4);
+    let text = st_context
+        .binary_to_text(
+            code,
+            spirv_tools::ffi::SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES,
+            None,
+        )
+        .expect("spvBinaryToText");
+    let cstr = text.as_cstr();
+    match cstr.to_str() {
+        Err(_) => {
+            tracing::warn!(target: "spirv-tools disasm", code = ?cstr);
+        }
+        Ok(x) => {
+            for l in x.lines() {
+                eprintln!("[disasm] {l}");
+            }
+        }
+    }
 }

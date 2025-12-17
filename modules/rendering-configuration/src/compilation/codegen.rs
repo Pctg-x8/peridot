@@ -577,7 +577,7 @@ ConstantBuffer<ObjectParameters> objectParameters;
 
 "#,
         );
-        code.push_str("namespace MaterialParameters {");
+        code.push_str("namespace MaterialParameters {\n");
         for (n, (name, ty)) in specialized_constants.into_iter().enumerate() {
             code.push_str("[vk::constant_id(");
             code.push_str(&n.to_string());
