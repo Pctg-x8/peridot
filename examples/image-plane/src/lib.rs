@@ -89,6 +89,53 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         })
         .expect("no format available?");
     println!("selected transcode fmt: {selected_fmt}");
+    let pdfd = unsafe {
+        (*core::mem::transmute::<_, &core::cell::UnsafeCell<ktx::ffi::ktxTexture2>>(
+            core::ops::Deref::deref(&image_data.0),
+        )
+        .get())
+        .pDfd
+    };
+    if !pdfd.is_null() {
+        let total_size = unsafe { core::ptr::read(pdfd) };
+        println!("pdfd total size: {total_size}");
+        let descriptor_type_vendor_id = unsafe { core::ptr::read(pdfd.add(1)) };
+        let descriptor_block_size_version_number = unsafe { core::ptr::read(pdfd.add(2)) };
+        let vendor_id = descriptor_type_vendor_id & 0x0001ffff;
+        let descriptor_type = (descriptor_type_vendor_id >> 17) & 0x00007fff;
+        let version_number = descriptor_block_size_version_number & 0x0000ffff;
+        let descriptor_block_size = (descriptor_block_size_version_number >> 16) & 0x0000ffff;
+        println!(
+            "first block: {vendor_id} {descriptor_type} {version_number} {descriptor_block_size}"
+        );
+        // khronos basic data format descriptor block
+        assert_eq!(vendor_id, 0);
+        assert_eq!(descriptor_type, 0);
+        assert_eq!(version_number, 2);
+        let [flags, transfer_function, color_primaries, color_model] =
+            u32::to_be_bytes(unsafe { core::ptr::read(pdfd.add(3)) });
+        let texel_block_dimensions = u32::to_le_bytes(unsafe { core::ptr::read(pdfd.add(4)) });
+        let bytes_plane_0_3 = u32::to_le_bytes(unsafe { core::ptr::read(pdfd.add(5)) });
+        let bytes_plane_4_7 = u32::to_le_bytes(unsafe { core::ptr::read(pdfd.add(6)) });
+        dbg!((flags, transfer_function, color_primaries, color_model));
+        dbg!(texel_block_dimensions);
+        dbg!(bytes_plane_0_3);
+        dbg!(bytes_plane_4_7);
+        // uastc
+        assert_eq!(color_model, 166);
+        let [bit_offset_low, bit_offset_high, bit_length, fsel_channel_type] =
+            u32::to_le_bytes(unsafe { core::ptr::read(pdfd.add(7)) });
+        let bit_offset = bit_offset_low as u16 | (bit_offset_high as u16) << 8;
+        let sample_positions = u32::to_le_bytes(unsafe { core::ptr::read(pdfd.add(8)) });
+        let sample_lower = unsafe { core::ptr::read(pdfd.add(9)) };
+        let sample_upper = unsafe { core::ptr::read(pdfd.add(10)) };
+        dbg!((bit_offset, bit_length, fsel_channel_type));
+        dbg!(sample_positions);
+        dbg!(sample_lower);
+        dbg!(sample_upper);
+    } else {
+        println!("pdfd is null");
+    }
     image_data
         .0
         .transcode_basis(selected_fmt, ktx::TranscodeFlags::empty())
