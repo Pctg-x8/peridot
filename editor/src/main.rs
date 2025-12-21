@@ -1,23 +1,27 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, Device, Fence, FenceMut, Instance,
-    PhysicalDevice, QueueMut, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut,
+    self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject
 };
 use core::pin::Pin;
-use windows::{
-    Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
-        Graphics::Gdi::HBRUSH,
-        System::LibraryLoader::GetModuleHandleW,
-        UI::WindowsAndMessaging::{
-            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
-            GetMessageW, GetWindowLongPtrW, HCURSOR, IDI_APPLICATION, LoadIconW, PostQuitMessage,
-            RegisterClassExW, SHOW_WINDOW_CMD, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow,
-            WINDOW_LONG_PTR_INDEX, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
-            WS_OVERLAPPEDWINDOW,
-        },
+use std::{cell::UnsafeCell, collections::HashMap};
+use windows::Win32::{
+    Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+    Graphics::{
+        Direct2D::Common::{D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE, D2D1_FILL_MODE_WINDING, ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl}, DirectWrite::{
+            DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWriteCreateFactory, IDWriteFactory,
+            IDWritePixelSnapping_Impl, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
+        }, Gdi::HBRUSH
     },
-    core::{BOOL, PCWSTR, w},
+    System::LibraryLoader::GetModuleHandleW,
+    UI::WindowsAndMessaging::{
+        CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
+        GetMessageW, GetWindowLongPtrW, HCURSOR, IDI_APPLICATION, LoadIconW, PostQuitMessage,
+        RegisterClassExW, SHOW_WINDOW_CMD, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow,
+        WINDOW_LONG_PTR_INDEX, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
+        WS_OVERLAPPEDWINDOW,
+    },
 };
+use windows_core::*;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |data| core::task::RawWaker::new(data, &APP_WAKER_VTABLE),
@@ -116,11 +120,29 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .ok()
     {
         for x in xs {
-            tracing::info!(name = ?x.layerName.as_cstr(), version.impl = x.implementationVersion, version.spec = %br::Version::from_raw(x.specVersion), "vulkan instance layer");
+            tracing::info!(
+                name = ?x.layerName.as_cstr(),
+                version.impl = x.implementationVersion,
+                version.spec = %br::Version::from_raw(x.specVersion),
+                "vulkan instance layer"
+            );
 
-            if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| br::instance_extension_properties_cstr_alloc(Some(ln)).inspect_err(|e| tracing::error!(reason = ?e, "Failed to enumerate vulkan instance extensions for layer")).ok()) {
+            if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| {
+                br::instance_extension_properties_cstr_alloc(Some(ln))
+                    .inspect_err(|e| {
+                        tracing::error!(
+                            reason = ?e,
+                            "Failed to enumerate vulkan instance extensions for layer"
+                        )
+                    })
+                    .ok()
+            }) {
                 for y in ys {
-                    tracing::info!(name = ?y.extensionName.as_cstr(), version = y.specVersion, "vulkan instance extension on layer");
+                    tracing::info!(
+                        name = ?y.extensionName.as_cstr(),
+                        version = y.specVersion,
+                        "vulkan instance extension on layer"
+                    );
                 }
             }
         }
@@ -165,16 +187,36 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .ok()
     {
         for x in xs {
-            tracing::info!(name = ?x.layerName.as_cstr(), version.impl = x.implementationVersion, version.spec = %br::Version::from_raw(x.specVersion), "vulkan device layer");
+            tracing::info!(
+                name = ?x.layerName.as_cstr(),
+                version.impl = x.implementationVersion,
+                version.spec = %br::Version::from_raw(x.specVersion),
+                "vulkan device layer"
+            );
 
-            if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| vk_adapter.enumerate_extension_properties_cstr_alloc(Some(ln)).inspect_err(|e| tracing::error!(reason = ?e, "Failed to enumerate vulkan instance extensions for layer")).ok()) {
+            if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| {
+                vk_adapter
+                    .enumerate_extension_properties_cstr_alloc(Some(ln))
+                    .inspect_err(|e| {
+                        tracing::error!(
+                            reason = ?e,
+                            "Failed to enumerate vulkan instance extensions for layer"
+                        )
+                    })
+                    .ok()
+            }) {
                 for y in ys {
-                    tracing::info!(name = ?y.extensionName.as_cstr(), version = y.specVersion, "vulkan device extension on layer");
+                    tracing::info!(
+                        name = ?y.extensionName.as_cstr(),
+                        version = y.specVersion,
+                        "vulkan device extension on layer"
+                    );
                 }
             }
         }
     }
 
+    let vk_adapter_memory_properties = vk_adapter.memory_properties();
     let vk_adapter_queue_family_properties = vk_adapter.queue_family_properties_alloc();
     let graphics_queue_family_index = vk_adapter_queue_family_properties
         .find_matching_index(br::QueueFlags::GRAPHICS)
@@ -365,6 +407,115 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             })
                             .collect::<Vec<_>>();
 
+                        let mut glyph_atlas = GlyphAtlas::new(&vk_device, &vk_adapter_memory_properties);
+
+                        let dwfactory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory") };
+                        let ui_text_format = unsafe { dwfactory.CreateTextFormat(w!("system-ui"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, w!("ja-JP")).expect("CreateTextFormat ui") };
+
+                        let title_layout = unsafe { dwfactory.CreateTextLayout(&"Peridot Marble Editor".encode_utf16().collect::<Vec<_>>(), &ui_text_format, f32::MAX, f32::MAX).expect("CreateTextLayout title") };
+                        let mut box_instances = Vec::new();
+                        let mut new_figures = Vec::new();
+                        let renderer = IDWriteTextRenderer::from(AtlasTextRenderer { box_instances: &mut box_instances, atlas: &mut glyph_atlas, new_figures: &mut new_figures });
+                        unsafe { title_layout.Draw(None, &renderer, 0.0, 0.0).expect("title_layout.Draw"); }
+
+                        let vertex_offset = 0;
+                        let instance_data_offset = vertex_offset + core::mem::size_of::<[[f32; 4]; 4]>();
+                        let total_size = instance_data_offset + core::mem::size_of::<BoxInstance>() * box_instances.len();
+                        let mut draw_buffer = br::BufferObject::new(&vk_device, &br::BufferCreateInfo::new(total_size, br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::TRANSFER_DEST)).expect("draw_buffer create");
+                        let draw_buffer_memory_requirements = draw_buffer.requirements();
+                        let draw_buffer_memory = br::DeviceMemoryObject::new(&vk_device, &br::MemoryAllocateInfo::new(draw_buffer_memory_requirements.size, vk_adapter_memory_properties.find_device_local_index(draw_buffer_memory_requirements.memoryTypeBits).expect("no suitable memory"))).expect("draw_buffer memalloc");
+                        draw_buffer.bind(&draw_buffer_memory, 0).expect("draw_buffer bind memory");
+
+                        struct DrawBufferInitContent {
+                            pos01: [[f32; 4]; 4],
+                            instance_data: [BoxInstance; 0]
+                        }
+                        let init_size = core::mem::offset_of!(DrawBufferInitContent, instance_data) + core::mem::size_of::<BoxInstance>() * box_instances.len();
+                        let mut init_draw_buffer = br::BufferObject::new(&vk_device, &br::BufferCreateInfo::new(init_size, br::BufferUsage::TRANSFER_SRC)).expect("init_draw_buffer create");
+                        let init_draw_buffer_memory_requirements = init_draw_buffer.requirements();
+                        let init_draw_buffer_memory_index = vk_adapter_memory_properties.find_host_visible_index(init_draw_buffer_memory_requirements.memoryTypeBits).expect("no suitable memory");
+                        let mut init_draw_buffer_memory = br::DeviceMemoryObject::new(&vk_device, &br::MemoryAllocateInfo::new(init_draw_buffer_memory_requirements.size, init_draw_buffer_memory_index)).expect("init_draw_buffer memalloc");
+                        init_draw_buffer.bind(&init_draw_buffer_memory, 0).expect("init_draw_buffer bind memory");
+                        let p = init_draw_buffer_memory.map(0..init_size).expect("init_draw_buffer_memory map");
+                        unsafe {
+                            let content = p.ptr().cast::<DrawBufferInitContent>();
+                            (*content).pos01[0] = [0.0, 0.0, 0.0, 1.0];
+                            (*content).pos01[1] = [1.0, 0.0, 0.0, 1.0];
+                            (*content).pos01[2] = [0.0, 1.0, 0.0, 1.0];
+                            (*content).pos01[3] = [1.0, 1.0, 0.0, 1.0];
+                            core::ptr::copy_nonoverlapping(box_instances.as_ptr(), (*content).instance_data.as_mut_ptr(), box_instances.len());
+                        }
+                        drop(p);
+                        if !vk_adapter_memory_properties.is_coherent(init_draw_buffer_memory_index) {
+                            unsafe {
+                                vk_device.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(&init_draw_buffer_memory, 0..init_size as u64)]).expect("flush_mapped_memory_ranges");
+                            }
+                        }
+                        unsafe { init_draw_buffer_memory.unmap(); }
+
+                        let mut init_cp = br::CommandPoolObject::new(&vk_device, &br::CommandPoolCreateInfo::new(graphics_queue_family_index)).expect("init command pool create");
+                        let mut init_cb = br::CommandBufferObject::alloc(&vk_device, &br::CommandBufferAllocateInfo::new(&mut init_cp, 1, br::CommandBufferLevel::Primary)).expect("init command buffer alloc");
+                        unsafe { init_cb[0].begin(&br::CommandBufferBeginInfo::new()).expect("begin init cb") }
+                        .copy_buffer(&init_draw_buffer, &draw_buffer, &[
+                            br::BufferCopy::copy_data::<[[f32; 4]; 4]>(core::mem::offset_of!(DrawBufferInitContent, pos01) as _, 0),
+                            br::BufferCopy {
+                                srcOffset: core::mem::offset_of!(DrawBufferInitContent, instance_data) as _,
+                                dstOffset: instance_data_offset as _,
+                                size: (core::mem::size_of::<BoxInstance>() * box_instances.len()) as _
+                            }
+                        ])
+                        .pipeline_barrier(br::PipelineStageFlags::TRANSFER, br::PipelineStageFlags::VERTEX_INPUT, 0, &[
+                            br::vk::VkMemoryBarrier {
+                                sType: br::vk::VkMemoryBarrier::TYPE,
+                                pNext: core::ptr::null(),
+                                srcAccessMask: br::AccessFlags::TRANSFER.write,
+                                dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ
+                            }
+                        ], &[], &[])
+                            .end().expect("error in init cb");
+                        unsafe { render_queue.submit_raw(&[br::SubmitInfo::new(&[], &[], &[init_cb[0].as_transparent_ref()], &[])], None).expect("submit init"); }
+                        render_queue.wait().expect("wait init commands");
+
+                        let shader_binary1 = std::fs::read("./resources/test.spv").expect("no shader");
+                        let mut shader_binary = Vec::with_capacity(shader_binary1.len() >> 2);
+                        unsafe { core::ptr::copy_nonoverlapping(shader_binary1.as_ptr(), shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(), shader_binary1.len()); }
+                        unsafe { shader_binary.set_len(shader_binary1.len() >> 2); }
+                        let shader_module = br::ShaderModuleObject::new(&vk_device, &br::ShaderModuleCreateInfo::new(&shader_binary)).expect("shader module create");
+                        let pipeline_layout = br::PipelineLayoutObject::new(&vk_device, &br::PipelineLayoutCreateInfo::new(
+                            &[], &[br::PushConstantRange::new(br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0..core::mem::size_of::<[f32; 2]>() as u32)]
+                        )).expect("pipeline layout create");
+                        let [mut pipeline] = vk_device.new_graphics_pipeline_array(&[
+                            br::GraphicsPipelineCreateInfo::new(&pipeline_layout, vk_render_pass.subpass(0), &[
+                                shader_module.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                                shader_module.on_stage(br::ShaderStage::Fragment, c"fragMain")
+                            ], &br::PipelineVertexInputStateCreateInfo::new(&[
+                                br::VertexInputBindingDescription::per_vertex_typed::<[f32; 4]>(0),
+                                br::VertexInputBindingDescription::per_instance_typed::<BoxInstance>(1)
+                            ], &[
+                                br::VertexInputAttributeDescription {
+                                    location: 0,
+                                    binding: 0,
+                                    offset: 0,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT
+                                },
+                                br::VertexInputAttributeDescription {
+                                    location: 1,
+                                    binding: 1,
+                                    offset: core::mem::offset_of!(BoxInstance, posst) as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT
+                                },
+                                br::VertexInputAttributeDescription {
+                                    location: 2,
+                                    binding: 1,
+                                    offset: core::mem::offset_of!(BoxInstance, uvst) as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT
+                                }
+                            ]), &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleStrip),
+                        &br::PipelineViewportStateCreateInfo::new(&[surface_ext.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)], &[surface_ext.into_rect(br::Offset2D::ZERO)]),
+                    &br::PipelineRasterizationStateCreateInfo::new(br::PolygonMode::Fill, br::CullModeFlags::NONE, br::FrontFace::CounterClockwise),
+                &br::PipelineColorBlendStateCreateInfo::new(&[br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED])).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                        ], None::<&br::PipelineCacheObject::<&br::DeviceObject<&br::InstanceObject>>>).expect("pipeline create");
+
                         let mut render_cp = br::CommandPoolObject::new(
                             &vk_device,
                             &br::CommandPoolCreateInfo::new(graphics_queue_family_index),
@@ -393,6 +544,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 ),
                                 br::SubpassContents::Inline,
                             )
+                            .bind_pipeline(br::PipelineBindPoint::Graphics, &pipeline)
+                            .push_constant_slice(&pipeline_layout, br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0, &[surface_ext.width as f32, surface_ext.height as f32])
+                            .bind_vertex_buffer_array(0, &[draw_buffer.as_transparent_ref(), draw_buffer.as_transparent_ref()], &[vertex_offset as _, instance_data_offset as _])
+                            .draw(4, box_instances.len() as _, 0, 0)
                             .end_render_pass()
                             .end()
                             .expect("command buffer end");
@@ -507,6 +662,39 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                         .expect("framebuffer create")
                                     })
                                     .collect::<Vec<_>>();
+                                
+                        let [pipeline1] = vk_device.new_graphics_pipeline_array(&[
+                            br::GraphicsPipelineCreateInfo::new(&pipeline_layout, vk_render_pass.subpass(0), &[
+                                shader_module.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                                shader_module.on_stage(br::ShaderStage::Fragment, c"fragMain")
+                            ], &br::PipelineVertexInputStateCreateInfo::new(&[
+                                br::VertexInputBindingDescription::per_vertex_typed::<[f32; 4]>(0),
+                                br::VertexInputBindingDescription::per_instance_typed::<BoxInstance>(1)
+                            ], &[
+                                br::VertexInputAttributeDescription {
+                                    location: 0,
+                                    binding: 0,
+                                    offset: 0,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT
+                                },
+                                br::VertexInputAttributeDescription {
+                                    location: 1,
+                                    binding: 1,
+                                    offset: core::mem::offset_of!(BoxInstance, posst) as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT
+                                },
+                                br::VertexInputAttributeDescription {
+                                    location: 2,
+                                    binding: 1,
+                                    offset: core::mem::offset_of!(BoxInstance, uvst) as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT
+                                }
+                            ]), &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleStrip),
+                        &br::PipelineViewportStateCreateInfo::new(&[surface_ext.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)], &[surface_ext.into_rect(br::Offset2D::ZERO)]),
+                    &br::PipelineRasterizationStateCreateInfo::new(br::PolygonMode::Fill, br::CullModeFlags::NONE, br::FrontFace::CounterClockwise),
+                &br::PipelineColorBlendStateCreateInfo::new(&[br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED])).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                        ], None::<&br::PipelineCacheObject::<&br::DeviceObject<&br::InstanceObject>>>).expect("pipeline create");
+                                pipeline = pipeline1;
 
                                 for (cb, fb) in
                                     render_commands.iter_mut().zip(vk_framebuffers.iter())
@@ -524,6 +712,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                         ),
                                         br::SubpassContents::Inline,
                                     )
+                            .bind_pipeline(br::PipelineBindPoint::Graphics, &pipeline)
+                            .push_constant_slice(&pipeline_layout, br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0, &[surface_ext.width as f32, surface_ext.height as f32])
+                            .bind_vertex_buffer_array(0, &[draw_buffer.as_transparent_ref(), draw_buffer.as_transparent_ref()], &[vertex_offset as _, instance_data_offset as _])
+                            .draw(4, box_instances.len() as _, 0, 0)
                                     .end_render_pass()
                                     .end()
                                     .expect("command buffer end");
@@ -586,6 +778,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
                         unsafe {
                             vk_device.wait().expect("device wait");
+                            glyph_atlas.drop(&vk_device);
                         }
                     }
                 })
@@ -618,6 +811,455 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             render_thread.join().expect("render_thread join");
         }
     });
+}
+
+struct BoxInstance {
+    posst: [f32; 4],
+    uvst: [f32; 4],
+}
+
+#[derive(Debug, Clone)]
+pub struct GlyphRect {
+    pub left: u32,
+    pub top: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+struct Skyline {
+    pub y: u32,
+    pub width: u32,
+}
+
+struct GlyphAtlasSpaceManager {
+    // skyline method
+    max: br::Extent2D,
+    skylines: Vec<Skyline>
+}
+impl GlyphAtlasSpaceManager {
+    pub fn new(max: br::Extent2D) -> Self {
+        Self {
+            skylines: vec![Skyline { y: 0, width: max.width }],
+            max,
+        }
+    }
+
+    pub fn acquire(&mut self, width: u32, height: u32) -> Option<GlyphRect> {
+        let mut fit_left_top = None;
+        let mut left = 0;
+        let mut n = 0;
+        while n < self.skylines.len() && left + width <= self.max.width {
+            let skyline = &self.skylines[n];
+            let skyline_height = self.max.height - skyline.y;
+            if skyline_height >= height && fit_left_top.is_none_or(|(_, t, _)| skyline.y < t) {
+                let mut y = skyline.y;
+
+                // potentially overlapping skylines at right
+                let mut l1 = left + skyline.width;
+                let mut m = n + 1;
+                while m < self.skylines.len() && l1 <= left + width {
+                    let skyline2 = &self.skylines[m];
+
+                    y = y.max(skyline2.y);
+                    l1 += skyline2.width;
+                    m += 1;
+                }
+
+                // recompute whether it fits
+                let skyline_height = self.max.height - y;
+                if skyline_height >= height && fit_left_top.is_none_or(|(_, t, _)| y < t) {
+                    fit_left_top = Some((left, y, n));
+                }
+            }
+
+            left += skyline.width;
+            n += 1;
+        }
+
+        let Some((left, top, left_skyline_point)) = fit_left_top else {
+            // no available rects
+            return None;
+        };
+
+        // update skyline
+        let mut left_w = width;
+        let mut skyline_point_index = left_skyline_point;
+        while left_w > 0 {
+            let skyline = &self.skylines[skyline_point_index];
+
+            if skyline.width > left_w {
+                // needs splitting(and finishes at this step)
+                if skyline_point_index > 0
+                    && self.skylines[skyline_point_index - 1].y == top + height
+                {
+                    // fuse with previous
+                    self.skylines[skyline_point_index - 1].width += left_w;
+                    self.skylines[skyline_point_index].width -= left_w;
+                } else {
+                    let org_skyline_y = skyline.y;
+                    let right_skyline_width = skyline.width - left_w;
+                    self.skylines[skyline_point_index] = Skyline {
+                        y: top + height,
+                        width: left_w,
+                    };
+                    self.skylines.insert(
+                        skyline_point_index + 1,
+                        Skyline {
+                            y: org_skyline_y,
+                            width: right_skyline_width,
+                        },
+                    );
+                }
+
+                break;
+            }
+
+            let sw = skyline.width;
+            if skyline_point_index > 0 && self.skylines[skyline_point_index - 1].y == top + height {
+                // fuse with previous
+                self.skylines[skyline_point_index - 1].width += sw;
+                self.skylines.remove(skyline_point_index);
+                skyline_point_index -= 1;
+            } else {
+                // just move this skyline
+                self.skylines[left_skyline_point].y = top + height;
+            }
+
+            left_w -= sw.min(left_w);
+            skyline_point_index += 1;
+        }
+
+        Some(GlyphRect {
+            left,
+            top,
+            width,
+            height,
+        })
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct SafeF32(f32);
+impl Eq for SafeF32 {
+}
+impl Ord for SafeF32 {
+    #[inline(always)]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        unsafe { self.0.partial_cmp(&other.0).unwrap_unchecked() }
+    }
+}
+impl core::hash::Hash for SafeF32 {
+    #[inline(always)]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        f32::to_ne_bytes(self.0).hash(state)
+    }
+}
+impl SafeF32 {
+    pub const fn new(v: f32) -> Option<Self> {
+        if v.is_nan() {
+             None
+        } else {
+            Some(Self(v))
+        }
+    }
+
+    pub const unsafe fn new_unchecked(v: f32) -> Self {
+        Self(v)
+    }
+
+    pub const fn value(&self) -> f32 {
+        self.0
+    }
+}
+
+struct GlyphAtlas {
+    res: br::vk::VkImage,
+    mem: br::vk::VkDeviceMemory,
+    view: br::vk::VkImageView,
+    acquired_rects: HashMap<(usize, SafeF32, u16), GlyphRect>,
+    space_mgr: GlyphAtlasSpaceManager,
+}
+impl GlyphAtlas {
+    pub unsafe fn drop(&mut self, device: &(impl br::VkHandle<Handle = br::vk::VkDevice> + ?Sized)) {
+        unsafe { 
+            br::vkfn_wrapper::destroy_image_view(device.native_ptr(), self.view, None);
+            br::vkfn_wrapper::destroy_image(device.native_ptr(), self.res, None);
+            br::vkfn_wrapper::free_memory(device.native_ptr(), self.mem, None);
+        }
+    }
+
+    pub fn new(device: &(impl br::Device<ConcreteInstance: br::InstanceDebugUtilsExtension> + ?Sized), adapter_memory_props: &br::MemoryProperties,) -> Self {
+        let size = br::Extent2D::spread1(4096);
+
+        let mut res = br::ImageObject::new(device, &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_SRC)).expect("res create");
+        let memory_requirements = res.requirements();
+        let mem = br::DeviceMemoryObject::new(device, &br::MemoryAllocateInfo::new(memory_requirements.size, adapter_memory_props.find_device_local_index(memory_requirements.memoryTypeBits).expect("no suitable memory"))).expect("res malloc");
+        res.bind(&mem, 0).expect("res mem bind");
+        let view = br::ImageViewBuilder::new(res, br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)).create().expect("res view create");
+
+        view.image().set_name(Some(c"Glyph Atlas")).expect("res set name");
+        mem.set_name(Some(c"Glyph Atlas [Backing]")).expect("mem set name");
+        view.set_name(Some(c"Glyph Atlas [View]")).expect("view set name");
+
+        let (view, res) = view.unmanage();
+        let (res, _, _, _, _) = res.unmanage();
+        let (mem, _) = mem.unmanage();
+        Self {
+            res,
+            mem,
+            view,
+            acquired_rects: HashMap::new(),
+            space_mgr: GlyphAtlasSpaceManager::new(size)
+        }
+    }
+
+    pub fn acquire(&mut self, key: (usize, SafeF32, u16), width: u32, height: u32) -> (GlyphRect, bool) {
+        match self.acquired_rects.entry(key) {
+            std::collections::hash_map::Entry::Vacant(x) => {
+                (x.insert(self.space_mgr.acquire(width, height).expect("no space left")).clone(), true)
+            }
+            std::collections::hash_map::Entry::Occupied(x) => {
+                (x.get().clone(), false)
+            }
+        }
+    }
+}
+
+#[implement(IDWriteTextRenderer)]
+pub struct AtlasTextRenderer {
+    box_instances: *mut Vec<BoxInstance>,
+    atlas: *mut GlyphAtlas,
+    new_figures: *mut Vec<GlyphFigure>
+}
+impl IDWritePixelSnapping_Impl for AtlasTextRenderer_Impl {
+    fn GetCurrentTransform(
+        &self,
+        clientdrawingcontext: *const core::ffi::c_void,
+        transform: *mut windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX,
+    ) -> windows_core::Result<()> {
+        unsafe {
+            *transform = windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX {
+                m11: 1.0,
+                m12: 0.0,
+                m21: 0.0,
+                m22: 1.0,
+                dx: 0.0,
+                dy: 0.0,
+            };
+        }
+
+        Ok(())
+    }
+
+    fn GetPixelsPerDip(
+        &self,
+        clientdrawingcontext: *const core::ffi::c_void,
+    ) -> windows_core::Result<f32> {
+        Ok(100.0)
+    }
+
+    fn IsPixelSnappingDisabled(
+        &self,
+        clientdrawingcontext: *const core::ffi::c_void,
+    ) -> windows_core::Result<windows_core::BOOL> {
+        Ok(BOOL(1))
+    }
+}
+impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
+    fn DrawGlyphRun(
+        &self,
+        clientdrawingcontext: *const core::ffi::c_void,
+        mut baselineoriginx: f32,
+        baselineoriginy: f32,
+        measuringmode: windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE,
+        glyphrun: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN,
+        glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
+        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+    ) -> windows_core::Result<()> {
+        let dip_to_pixels_scaling = 168.0f32 / 72.0;
+
+        let glyphrun = unsafe { &*glyphrun };
+        println!(
+            "DrawGlyphRun {baselineoriginx} {baselineoriginy} {measuringmode:?} {:?}",
+            glyphrun.fontFace
+        );
+        let font_face = glyphrun.fontFace.as_ref().expect("no font face");
+        let mut font_metrics = core::mem::MaybeUninit::uninit();
+        unsafe { font_face.GetMetrics(font_metrics.as_mut_ptr()) };
+        let font_metrics = unsafe { font_metrics.assume_init_ref() };
+        let design_unit = font_metrics.designUnitsPerEm;
+        let mut glyph_metrics: Vec<DWRITE_GLYPH_METRICS> =
+            Vec::with_capacity(glyphrun.glyphCount as _);
+        unsafe {
+            font_face
+                .GetDesignGlyphMetrics(
+                    glyphrun.glyphIndices,
+                    glyphrun.glyphCount,
+                    glyph_metrics.spare_capacity_mut().as_mut_ptr() as _,
+                    glyphrun.isSideways.as_bool(),
+                )
+                .expect("GetDesignGlyphMetrics");
+            glyph_metrics.set_len(glyphrun.glyphCount as _);
+        }
+        for n in 0..glyphrun.glyphCount as usize {
+            let glyph_width = (glyph_metrics[n].advanceWidth as i32
+                - glyph_metrics[n].leftSideBearing
+                - glyph_metrics[n].rightSideBearing) as f32
+                * glyphrun.fontEmSize * dip_to_pixels_scaling
+                / design_unit as f32;
+            let glyph_height = (glyph_metrics[n].advanceHeight as i32
+                - glyph_metrics[n].topSideBearing
+                - glyph_metrics[n].bottomSideBearing) as f32
+                * glyphrun.fontEmSize * dip_to_pixels_scaling
+                / design_unit as f32;
+
+            let (r, is_new) = unsafe { (*self.atlas).acquire((0, SafeF32::new_unchecked(glyphrun.fontEmSize), *glyphrun.glyphIndices.add(n)), glyph_width.ceil() as _, glyph_height.ceil() as _) };
+            println!(
+                "DrawGlyphRun.Glyph {} {} {:?} {:?} {glyph_width} {glyph_height} {r:?} {is_new}",
+                unsafe { *glyphrun.glyphAdvances.add(n) },
+                unsafe { *glyphrun.glyphIndices.add(n) },
+                unsafe { *glyphrun.glyphOffsets.add(n) },
+                glyph_metrics[n],
+            );
+
+            unsafe {
+                (*self.box_instances).push(BoxInstance {
+                    posst: [glyph_width, glyph_height, baselineoriginx, baselineoriginy],
+                    uvst: [1.0, 1.0, 0.0, 0.0],
+                });
+            }
+            if is_new {
+                // render font here
+                let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
+                    translate: windows_numerics::Vector2 {
+                        X: r.left as _,
+                        Y: r.top as _,
+                    },
+                    figures: self.new_figures
+                });
+                unsafe { font_face.GetGlyphRunOutline(glyphrun.fontEmSize, glyphrun.glyphIndices.add(n), None, None, 1, glyphrun.isSideways.as_bool(), false, &sink).expect("GetGlyphRunOutline"); }
+            }
+
+            baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) } * dip_to_pixels_scaling;
+        }
+
+        Ok(())
+    }
+
+    fn DrawInlineObject(
+        &self,
+        clientdrawingcontext: *const core::ffi::c_void,
+        originx: f32,
+        originy: f32,
+        inlineobject: windows_core::Ref<windows::Win32::Graphics::DirectWrite::IDWriteInlineObject>,
+        issideways: windows_core::BOOL,
+        isrighttoleft: windows_core::BOOL,
+        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+    ) -> windows_core::Result<()> {
+        unimplemented!();
+    }
+
+    fn DrawStrikethrough(
+        &self,
+        clientdrawingcontext: *const core::ffi::c_void,
+        baselineoriginx: f32,
+        baselineoriginy: f32,
+        strikethrough: *const windows::Win32::Graphics::DirectWrite::DWRITE_STRIKETHROUGH,
+        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+    ) -> windows_core::Result<()> {
+        unimplemented!();
+    }
+
+    fn DrawUnderline(
+        &self,
+        clientdrawingcontext: *const core::ffi::c_void,
+        baselineoriginx: f32,
+        baselineoriginy: f32,
+        underline: *const windows::Win32::Graphics::DirectWrite::DWRITE_UNDERLINE,
+        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+    ) -> windows_core::Result<()> {
+        unimplemented!();
+    }
+}
+
+struct GlyphFigure {
+    pub start_point: windows_numerics::Vector2,
+    pub filltri_points: Vec<[f32; 2]>,
+    pub filltri_indices: Vec<u16>,
+}
+
+#[implement(ID2D1SimplifiedGeometrySink)]
+struct GlyphOutlineSink {
+    translate: windows_numerics::Vector2,
+    figures: *mut Vec<GlyphFigure>
+}
+impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
+    fn BeginFigure(&self, startpoint: &windows_numerics::Vector2, figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN) {
+        assert_eq!(figurebegin, D2D1_FIGURE_BEGIN_FILLED, "not filled figure");
+
+        unsafe { (*self.figures).push(GlyphFigure {
+            start_point: *startpoint,
+            filltri_points: vec![[startpoint.X + self.translate.X, startpoint.Y + self.translate.Y]],
+            filltri_indices: vec![]
+        }); }
+    }
+
+    fn EndFigure(&self, figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END) {
+        if figureend == D2D1_FIGURE_END_CLOSED {
+            self.Close().expect("Close failed");
+        }
+    }
+
+    fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
+        let fig = unsafe { (*self.figures).last_mut().expect("no figure started?") };
+
+        for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
+            let filltri_point1 = fig.filltri_points.len() - 1;
+            fig.filltri_points.push([p.X + self.translate.X, p.Y + self.translate.Y]);
+            fig.filltri_indices.extend([0, filltri_point1 as u16, fig.filltri_points.len() as u16 - 1]);
+        }
+    }
+
+    fn AddBeziers(&self, beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT, bezierscount: u32) {
+        let fig = unsafe { (*self.figures).last_mut().expect("no figure started?") };
+
+        for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
+            let from_p = fig.filltri_points.last().expect("no points emitted");
+            lyon_geom::CubicBezierSegment {
+                from: lyon_geom::point(from_p[0], from_p[1]),
+                ctrl1: lyon_geom::point(p.point1.X + self.translate.X, p.point1.Y + self.translate.Y),
+                ctrl2: lyon_geom::point(p.point2.X + self.translate.X, p.point2.Y + self.translate.Y),
+                to: lyon_geom::point(p.point3.X + self.translate.X, p.point3.Y + self.translate.Y)
+            }.for_each_quadratic_bezier(1.0, &mut |q| {
+                // TODO: curve
+                let filltri_point1 = fig.filltri_points.len() - 1;
+                fig.filltri_points.push([q.to.x, q.to.y]);
+                fig.filltri_indices.extend([0, filltri_point1 as u16, fig.filltri_points.len() as u16 - 1]);
+            });
+        }
+    }
+
+    fn Close(&self) -> windows_core::Result<()> {
+        let fig = unsafe { (*self.figures).last_mut().expect("no figure started?") };
+
+        // line to start
+        let filltri_point1 = fig.filltri_points.len() - 1;
+        fig.filltri_points.push([fig.start_point.X + self.translate.X, fig.start_point.Y + self.translate.Y]);
+        fig.filltri_indices.extend([0, filltri_point1 as u16, fig.filltri_points.len() as u16 - 1]);
+        
+        Ok(())
+    }
+
+    fn SetFillMode(&self, fillmode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE) {
+        if fillmode != D2D1_FILL_MODE_WINDING {
+            tracing::warn!("not winding fill mode specified");
+        }
+    }
+
+    fn SetSegmentFlags(&self, vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT) {
+        unimplemented!("SetSegmentFlags {vertexflags:?}")
+    }
 }
 
 struct LocalImageView<'d, 'i> {
