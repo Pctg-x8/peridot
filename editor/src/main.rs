@@ -418,6 +418,18 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         let renderer = IDWriteTextRenderer::from(AtlasTextRenderer { box_instances: &mut box_instances, atlas: &mut glyph_atlas, new_figures: &mut new_figures });
                         unsafe { title_layout.Draw(None, &renderer, 0.0, 0.0).expect("title_layout.Draw"); }
 
+                        let fill_shader_binary1 = std::fs::read("./resources/vg-fill.spv").expect("vg-fill load");
+                        let mut fill_shader_binary = Vec::with_capacity(fill_shader_binary1.len() >> 2);
+                        unsafe { core::ptr::copy_nonoverlapping(fill_shader_binary1.as_ptr(), fill_shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(), fill_shader_binary1.len()); }
+                        unsafe { fill_shader_binary.set_len(fill_shader_binary1.len() >> 2); }
+                        let fill_shader_module = br::ShaderModuleObject::new(&vk_device, &br::ShaderModuleCreateInfo::new(&fill_shader_binary)).expect("fill_shader module create");
+
+                        let curve_shader_binary1 = std::fs::read("./resources/vg-curve.spv").expect("vg-curve load");
+                        let mut curve_shader_binary = Vec::with_capacity(curve_shader_binary1.len() >> 2);
+                        unsafe { core::ptr::copy_nonoverlapping(curve_shader_binary1.as_ptr(), curve_shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(), curve_shader_binary1.len()); }
+                        unsafe { curve_shader_binary.set_len(curve_shader_binary1.len() >> 2); }
+                        let curve_shader_module = br::ShaderModuleObject::new(&vk_device, &br::ShaderModuleCreateInfo::new(&curve_shader_binary)).expect("curve_shader module create");
+
                         let vertex_offset = 0;
                         let instance_data_offset = vertex_offset + core::mem::size_of::<[[f32; 4]; 4]>();
                         let total_size = instance_data_offset + core::mem::size_of::<BoxInstance>() * box_instances.len();
