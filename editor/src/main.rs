@@ -1,11 +1,11 @@
 use bedrock::{
-    self as br, CommandBufferMut, Device, Fence, FenceMut, Instance, PhysicalDevice, QueueMut,
-    Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut,
+    self as br, CommandBufferMut, CommandPoolMut, Device, Fence, FenceMut, Instance,
+    PhysicalDevice, QueueMut, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut,
 };
 use core::pin::Pin;
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::Gdi::HBRUSH,
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
@@ -251,19 +251,19 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         let surface_formats = vk_adapter
                             .surface_formats_alloc(&vk_surface)
                             .expect("surface_formats");
-                        let surface_ext = if surface_caps.currentExtent.width == 0xffffffff
+                        let mut surface_ext = if surface_caps.currentExtent.width == 0xffffffff
                             || surface_caps.currentExtent.height == 0xffffffff
                         {
-                            let rc = w.client_rect();
+                            let (cw, ch) = w.client_size();
 
                             br::Extent2D {
                                 width: if surface_caps.currentExtent.width == 0xffffffff {
-                                    (rc.right - rc.left) as _
+                                    cw
                                 } else {
                                     surface_caps.currentExtent.width
                                 },
                                 height: if surface_caps.currentExtent.height == 0xffffffff {
-                                    (rc.bottom - rc.top) as _
+                                    ch
                                 } else {
                                     surface_caps.currentExtent.height
                                 },
@@ -296,7 +296,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .composite_alpha(br::CompositeAlphaFlags::OPAQUE.bits())
                         .create(&vk_device)
                         .expect("swapchain create");
-                        let backbuffer_image_views = vk_swapchain
+                        let mut backbuffer_image_views = vk_swapchain
                             .images_alloc()
                             .expect("backbuffer images")
                             .into_iter()
@@ -349,7 +349,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             ),
                         )
                         .expect("render pass create");
-                        let vk_framebuffers = backbuffer_image_views
+                        let mut vk_framebuffers = backbuffer_image_views
                             .iter()
                             .map(|bb| {
                                 br::FramebufferObject::new(
@@ -398,30 +398,157 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             .expect("command buffer end");
                         }
 
-                        let mut backbuffer_ready_semaphore =
-                            br::SemaphoreObject::new(&vk_device, &br::SemaphoreCreateInfo::new())
-                                .expect("backbuffer_ready_Semaphore create");
-                        let mut rendering_timeline_semaphore =
-                            br::SemaphoreObject::new(&vk_device, &br::SemaphoreCreateInfo::new())
-                                .expect("rendering_timeline_semaphore create");
-                        let mut last_render_completion_fence =
+                        let present_ready_semaphores = (0..vk_framebuffers.len())
+                            .map(|_| {
+                                br::SemaphoreObject::new(
+                                    &vk_device,
+                                    &br::SemaphoreCreateInfo::new(),
+                                )
+                                .expect("rendering_timeline_semaphore create")
+                            })
+                            .collect::<Vec<_>>();
+                        let mut backbuffer_ready_fence =
                             br::FenceObject::new(&vk_device, &br::FenceCreateInfo::new(0))
                                 .expect("last render completion fence create");
-                        let mut rendering_timeline_counter = 0u64;
+                        let mut swapchain_invalidated = false;
 
-                        while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
-                            let backbuffer_index = vk_swapchain
-                                .acquire_next(
-                                    None,
-                                    br::CompletionHandlerMut::Host(
-                                        last_render_completion_fence.as_transparent_ref_mut(),
-                                    ),
+                        'lp: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                            if swapchain_invalidated {
+                                let x = std::time::Instant::now();
+                                render_queue.wait().expect("waiting pending queue works");
+                                tracing::trace!(elapsed = ?x.elapsed(), "queue waiting time during resize");
+
+                                unsafe {
+                                    render_cp
+                                        .reset(br::CommandPoolResetFlags::EMPTY)
+                                        .expect("reset render cp");
+                                }
+                                drop(vk_framebuffers);
+                                drop(backbuffer_image_views);
+
+                                let surface_caps = vk_adapter
+                                    .surface_capabilities(&vk_surface)
+                                    .expect("surface_capabilities");
+                                surface_ext = if surface_caps.currentExtent.width == 0xffffffff
+                                    || surface_caps.currentExtent.height == 0xffffffff
+                                {
+                                    let (cw, ch) = w.client_size();
+
+                                    br::Extent2D {
+                                        width: if surface_caps.currentExtent.width == 0xffffffff
+                                        {
+                                            cw
+                                        } else {
+                                            surface_caps.currentExtent.width
+                                        },
+                                        height: if surface_caps.currentExtent.height
+                                            == 0xffffffff
+                                        {
+                                            ch
+                                        } else {
+                                            surface_caps.currentExtent.height
+                                        },
+                                    }
+                                } else {
+                                    surface_caps.currentExtent
+                                };
+
+                                vk_swapchain = br::SwapchainBuilder::new(
+                                    &vk_surface,
+                                    surface_caps.minImageCount.max(2),
+                                    surface_format,
+                                    surface_ext,
+                                    br::ImageUsageFlags::COLOR_ATTACHMENT,
                                 )
-                                .expect("acquire next");
-                            last_render_completion_fence
+                                .present_mode(surface_present_mode)
+                                .pre_transform(br::SurfaceTransformFlags::IDENTITY.bits())
+                                .composite_alpha(br::CompositeAlphaFlags::OPAQUE.bits())
+                                .enable_clip()
+                                .old_swapchain(&vk_swapchain)
+                                .create(&vk_device)
+                                .expect("swapchain create");
+                                backbuffer_image_views = vk_swapchain
+                                    .images_alloc()
+                                    .expect("backbuffer images")
+                                    .into_iter()
+                                    .map(|b| LocalImageView {
+                                        handle: unsafe {
+                                            br::vkfn_wrapper::create_image_view(
+                                                vk_device.native_ptr(),
+                                                &br::ImageViewCreateInfo::new(
+                                                    &b,
+                                                    br::ImageSubresourceRange::new(
+                                                        br::AspectMask::COLOR,
+                                                        0..1,
+                                                        0..1,
+                                                    ),
+                                                    br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                                                    surface_format.format,
+                                                ),
+                                                None,
+                                            )
+                                            .expect("backbuffer image view create")
+                                        },
+                                        device: &vk_device,
+                                    })
+                                    .collect::<Vec<_>>();
+                                vk_framebuffers = backbuffer_image_views
+                                    .iter()
+                                    .map(|bb| {
+                                        br::FramebufferObject::new(
+                                            &vk_device,
+                                            &br::FramebufferCreateInfo::new(
+                                                &vk_render_pass,
+                                                &[bb.as_transparent_ref()],
+                                                surface_ext.width,
+                                                surface_ext.height,
+                                            ),
+                                        )
+                                        .expect("framebuffer create")
+                                    })
+                                    .collect::<Vec<_>>();
+
+                                for (cb, fb) in
+                                    render_commands.iter_mut().zip(vk_framebuffers.iter())
+                                {
+                                    unsafe {
+                                        cb.begin(&br::CommandBufferBeginInfo::new())
+                                            .expect("command buffer begin")
+                                    }
+                                    .begin_render_pass(
+                                        &br::RenderPassBeginInfo::new(
+                                            &vk_render_pass,
+                                            fb,
+                                            surface_ext.into_rect(br::Offset2D::ZERO),
+                                            &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 1.0])],
+                                        ),
+                                        br::SubpassContents::Inline,
+                                    )
+                                    .end_render_pass()
+                                    .end()
+                                    .expect("command buffer end");
+                                }
+
+                                swapchain_invalidated =false;
+                            }
+
+                            let backbuffer_index = match vk_swapchain.acquire_next(
+                                None,
+                                br::CompletionHandlerMut::Host(
+                                    backbuffer_ready_fence.as_transparent_ref_mut(),
+                                ),
+                            ) {
+                                Ok(x) => x,
+                                Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                                    swapchain_invalidated = true;
+                                    continue 'lp;
+                                }
+                                Err(e) => Err(e).expect("acquire next"),
+                            };
+                            backbuffer_ready_fence
                                 .wait()
                                 .expect("last render completion fence wait");
-                            last_render_completion_fence
+                            backbuffer_ready_fence
                                 .reset()
                                 .expect("last render completion fence reset");
 
@@ -433,7 +560,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                             &[],
                                             &[render_commands[backbuffer_index as usize]
                                                 .as_transparent_ref()],
-                                            &[rendering_timeline_semaphore.as_transparent_ref()],
+                                            &[present_ready_semaphores[backbuffer_index as usize]
+                                                .as_transparent_ref()],
                                         )],
                                         None,
                                     )
@@ -441,13 +569,17 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             };
                             let mut results = [br::vk::VK_SUCCESS];
                             match render_queue.present(&br::PresentInfo::new(
-                                &[rendering_timeline_semaphore.as_transparent_ref()],
+                                &[present_ready_semaphores[backbuffer_index as usize]
+                                    .as_transparent_ref()],
                                 &[vk_swapchain.as_transparent_ref()],
                                 &[backbuffer_index],
                                 &mut results,
                             )) {
                                 Ok(_) => (),
-                                Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (),
+                                Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                                    swapchain_invalidated = true;
+                                    continue 'lp;
+                                }
                                 Err(e) => Err::<(), _>(e).expect("queue present"),
                             }
                         }
@@ -513,12 +645,13 @@ unsafe impl Sync for Win32Window {}
 unsafe impl Send for Win32Window {}
 impl Win32Window {
     #[inline(always)]
-    pub fn client_rect(&self) -> RECT {
+    pub fn client_size(&self) -> (u32, u32) {
         let mut rect = core::mem::MaybeUninit::uninit();
         unsafe {
             GetClientRect(self.0, rect.as_mut_ptr()).expect("GetClientRect");
         }
-        unsafe { rect.assume_init() }
+        let rect = unsafe { rect.assume_init_ref() };
+        (rect.right as _, rect.bottom as _)
     }
 
     #[inline(always)]
