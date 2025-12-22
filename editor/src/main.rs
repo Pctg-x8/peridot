@@ -2,11 +2,11 @@ use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut, Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject
 };
 use core::pin::Pin;
-use std::{cell::UnsafeCell, collections::HashMap};
+use std::{ collections::HashMap};
 use windows::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
     Graphics::{
-        Direct2D::Common::{D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE, D2D1_FILL_MODE_WINDING, ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl}, DirectWrite::{
+        Direct2D::Common::{D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,  D2D1_FILL_MODE_WINDING, ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl}, DirectWrite::{
             DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWriteCreateFactory, IDWriteFactory,
             IDWritePixelSnapping_Impl, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
@@ -650,35 +650,32 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         let mut cp = br::CommandPoolObject::new(&vk_device, &br::CommandPoolCreateInfo::new(graphics_queue_family_index)).expect("cp init");
                         let mut cb = br::CommandBufferObject::alloc(&vk_device, &br::CommandBufferAllocateInfo::new(&mut cp, 1, br::CommandBufferLevel::Primary)).expect("alloc cb");
                         unsafe { cb[0].begin(&br::CommandBufferBeginInfo::new()).expect("cb begin") }
-                            .pipeline_barrier(
-                                br::PipelineStageFlags(0),
-                                br::PipelineStageFlags::TRANSFER,
-                                0,
+                            .pipeline_barrier_2(&br::DependencyInfo::new(
                                 &[],
                                 &[],
                                 &[
-                                    br::ImageMemoryBarrier::new(&glyph_atlas.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1), br::ImageLayout::TransferDestOpt.from_undefined()),
+                                    br::ImageMemoryBarrier2::new(&glyph_atlas.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1))
+                                        .of_execution(br::PipelineStageFlags2(0), br::PipelineStageFlags2::COPY)
+                                        .transferring_layout(br::ImageLayout::Undefined, br::ImageLayout::TransferDestOpt),
                                 ]
-                            )
+                            ))
                             .copy_buffer(&vector_draw_init_buffer, &vector_draw_buffer, &[
                                 br::BufferCopy::mirror(0, vector_draw_buffer_total_size as _)
                             ])
                             .clear_color_image(&glyph_atlas.image(), br::ImageLayout::TransferDestOpt, &[br::ClearColorValue::from([0.0; 4])], &[br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)])
-                            .pipeline_barrier(
-                                br::PipelineStageFlags::TRANSFER,
-                                br::PipelineStageFlags::VERTEX_INPUT | br::PipelineStageFlags::FRAGMENT_SHADER,
-                                0,
-                                &[br::vk::VkMemoryBarrier {
-                                    sType: br::vk::VkMemoryBarrier::TYPE,
-                                    pNext: core::ptr::null(),
-                                    srcAccessMask: br::AccessFlags::TRANSFER.write,
-                                    dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::INDEX_READ
-                                }],
+                            .pipeline_barrier_2(&br::DependencyInfo::new(
+                                &[
+                                    br::MemoryBarrier2::new()
+                                        .from(br::PipelineStageFlags2::COPY, br::AccessFlags2::TRANSFER.write)
+                                        .to(br::PipelineStageFlags2::VERTEX_INPUT, br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::INDEX_READ)
+                                ],
                                 &[],
                                 &[
-                                    br::ImageMemoryBarrier::new(&glyph_atlas.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1), br::ImageLayout::TransferDestOpt.to(br::ImageLayout::ShaderReadOnlyOpt)),
+                                    br::ImageMemoryBarrier2::new(&glyph_atlas.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1))
+                                        .of_execution(br::PipelineStageFlags2::COPY, br::PipelineStageFlags2::FRAGMENT_SHADER)
+                                        .transferring_layout(br::ImageLayout::TransferDestOpt, br::ImageLayout::ShaderReadOnlyOpt),
                                 ]
-                            )
+                            ))
                             .begin_render_pass(&br::RenderPassBeginInfo::new(
                                 &vector_render_pass,
                                 &vector_framebuffer,
@@ -746,14 +743,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 size: (core::mem::size_of::<BoxInstance>() * box_instances.len()) as _
                             }
                         ])
-                        .pipeline_barrier(br::PipelineStageFlags::TRANSFER, br::PipelineStageFlags::VERTEX_INPUT, 0, &[
-                            br::vk::VkMemoryBarrier {
-                                sType: br::vk::VkMemoryBarrier::TYPE,
-                                pNext: core::ptr::null(),
-                                srcAccessMask: br::AccessFlags::TRANSFER.write,
-                                dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ
-                            }
-                        ], &[], &[])
+                        .pipeline_barrier_2(&br::DependencyInfo::new(&[
+                            br::MemoryBarrier2::new()
+                                .from(br::PipelineStageFlags2::COPY, br::AccessFlags2::TRANSFER.write)
+                                .to(br::PipelineStageFlags2::VERTEX_INPUT, br::AccessFlags2::VERTEX_ATTRIBUTE_READ)
+                        ], &[], &[]))
                             .end().expect("error in init cb");
                         unsafe { render_queue.submit_raw(&[br::SubmitInfo::new(&[], &[], &[init_cb[0].as_transparent_ref()], &[])], None).expect("submit init"); }
                         render_queue.wait().expect("wait init commands");
