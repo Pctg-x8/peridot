@@ -1,5 +1,5 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject
+    self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut, Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject
 };
 use core::pin::Pin;
 use std::{cell::UnsafeCell, collections::HashMap};
@@ -410,25 +410,295 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         let mut glyph_atlas = GlyphAtlas::new(&vk_device, &vk_adapter_memory_properties);
 
                         let dwfactory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory") };
-                        let ui_text_format = unsafe { dwfactory.CreateTextFormat(w!("system-ui"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, w!("ja-JP")).expect("CreateTextFormat ui") };
+                        let ui_text_format = unsafe { dwfactory.CreateTextFormat(w!("system-ui"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 10.0, w!("ja-JP")).expect("CreateTextFormat ui") };
 
                         let title_layout = unsafe { dwfactory.CreateTextLayout(&"Peridot Marble Editor".encode_utf16().collect::<Vec<_>>(), &ui_text_format, f32::MAX, f32::MAX).expect("CreateTextLayout title") };
                         let mut box_instances = Vec::new();
-                        let mut new_figures = Vec::new();
-                        let renderer = IDWriteTextRenderer::from(AtlasTextRenderer { box_instances: &mut box_instances, atlas: &mut glyph_atlas, new_figures: &mut new_figures });
+                        let mut new_filltri_points = Vec::new();
+                        let mut new_filltri_indices = Vec::new();
+                        let mut new_curve_triangles = Vec::new();
+                        let renderer = IDWriteTextRenderer::from(AtlasTextRenderer {
+                            box_instances: &mut box_instances,
+                            atlas: &mut glyph_atlas,
+                            new_filltri_points: &mut new_filltri_points,
+                            new_filltri_indices: &mut new_filltri_indices,
+                            new_curve_triangles: &mut new_curve_triangles,
+                        });
                         unsafe { title_layout.Draw(None, &renderer, 0.0, 0.0).expect("title_layout.Draw"); }
 
+                        #[derive(br::SpecializationConstants)]
+                        struct FillShaderVertexConstants {
+                            #[constant_id = 0]
+                            target_texture_width: f32,
+                            #[constant_id = 1]
+                            target_texture_height: f32
+                        }
                         let fill_shader_binary1 = std::fs::read("./resources/vg-fill.spv").expect("vg-fill load");
                         let mut fill_shader_binary = Vec::with_capacity(fill_shader_binary1.len() >> 2);
                         unsafe { core::ptr::copy_nonoverlapping(fill_shader_binary1.as_ptr(), fill_shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(), fill_shader_binary1.len()); }
                         unsafe { fill_shader_binary.set_len(fill_shader_binary1.len() >> 2); }
                         let fill_shader_module = br::ShaderModuleObject::new(&vk_device, &br::ShaderModuleCreateInfo::new(&fill_shader_binary)).expect("fill_shader module create");
 
+                        #[derive(br::SpecializationConstants)]
+                        struct CurveShaderVertexConstants {
+                            #[constant_id = 0]
+                            target_texture_width: f32,
+                            #[constant_id = 1]
+                            target_texture_height: f32
+                        }
                         let curve_shader_binary1 = std::fs::read("./resources/vg-curve.spv").expect("vg-curve load");
                         let mut curve_shader_binary = Vec::with_capacity(curve_shader_binary1.len() >> 2);
                         unsafe { core::ptr::copy_nonoverlapping(curve_shader_binary1.as_ptr(), curve_shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(), curve_shader_binary1.len()); }
                         unsafe { curve_shader_binary.set_len(curve_shader_binary1.len() >> 2); }
                         let curve_shader_module = br::ShaderModuleObject::new(&vk_device, &br::ShaderModuleCreateInfo::new(&curve_shader_binary)).expect("curve_shader module create");
+
+                        let vec_tri_fill_shader_binary1 = std::fs::read("./resources/vec-tri-fill.spv").expect("vec-tri-fill load");
+                        let mut vec_tri_fill_shader_binary = Vec::with_capacity(vec_tri_fill_shader_binary1.len() >> 2);
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(vec_tri_fill_shader_binary1.as_ptr(), vec_tri_fill_shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(), vec_tri_fill_shader_binary1.len());
+                            vec_tri_fill_shader_binary.set_len(vec_tri_fill_shader_binary1.len() >> 2);
+                        }
+                        let vec_tri_fill_shader_module = br::ShaderModuleObject::new(&vk_device, &br::ShaderModuleCreateInfo::new(&vec_tri_fill_shader_binary)).expect("vec_tri_fill_shader module create");
+
+                        let vector_render_pass = br::RenderPassObject::new(&vk_device, &br::RenderPassCreateInfo2::new(
+                            &[
+                                br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8_UNORM)
+                                    .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)
+                                    .layout_transition(br::ImageLayout::ShaderReadOnlyOpt, br::ImageLayout::ShaderReadOnlyOpt),
+                                br::AttachmentDescription2::new(br::vk::VK_FORMAT_S8_UINT)
+                                    .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
+                                    .layout_transition(br::ImageLayout::Undefined, br::ImageLayout::DepthStencilReadOnlyOpt)
+                                    .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
+                                br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8_UNORM)
+                                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                                    .layout_transition(br::ImageLayout::Undefined, br::ImageLayout::ColorAttachmentOpt)
+                                    .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
+                            ],
+                            &[
+                                br::SubpassDescription2::new()
+                                    .depth_stencil(&br::AttachmentReference2::depth_stencil_attachment_opt(1)),
+                                br::SubpassDescription2::new()
+                                    .depth_stencil(&br::AttachmentReference2::depth_stencil_readonly_opt(1))
+                                    .colors(&[br::AttachmentReference2::color_attachment_opt(2)])
+                                    .color_resolves(&[br::AttachmentReference2::color_attachment_opt(0)])
+                            ],
+                            &[
+                                br::SubpassDependency2::new(br::SubpassIndex::Internal(0), br::SubpassIndex::Internal(1))
+                                    .by_region()
+                                    .of_memory(br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write, br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.read)
+                                    .of_execution(br::PipelineStageFlags::LATE_FRAGMENT_TESTS, br::PipelineStageFlags::EARLY_FRAGMENT_TESTS),
+                                br::SubpassDependency2::new(br::SubpassIndex::Internal(1), br::SubpassIndex::External)
+                                    .by_region()
+                                    .of_memory(br::AccessFlags::COLOR_ATTACHMENT.write, br::AccessFlags::SHADER.read)
+                                    .of_execution(br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT, br::PipelineStageFlags::FRAGMENT_SHADER)
+                            ]
+                        )).expect("vector render pass create");
+
+                        let pipeline_layout = br::PipelineLayoutObject::new(&vk_device, &br::PipelineLayoutCreateInfo::new(&[], &[])).expect("vector pipeline layout create");
+                        let [triangle_fans_pipeline, curve_pipeline, colorize_pipeline] = vk_device.new_graphics_pipeline_array(&[
+                            br::GraphicsPipelineCreateInfo::new(
+                                &pipeline_layout,
+                                vector_render_pass.subpass(0),
+                                &[
+                                    fill_shader_module.on_stage(br::ShaderStage::Vertex, c"vertMain")
+                                        .with_specialization_info(&br::SpecializationInfo::new(&FillShaderVertexConstants {
+                                            target_texture_width: glyph_atlas.space_mgr.max.width as _,
+                                            target_texture_height: glyph_atlas.space_mgr.max.height as _
+                                        })),
+                                    fill_shader_module.on_stage(br::ShaderStage::Fragment, c"fragMain")
+                                ],
+                                &br::PipelineVertexInputStateCreateInfo::new(
+                                    &[br::VertexInputBindingDescription::per_vertex_typed::<[f32; 2]>(0)],
+                                    &[br::VertexInputAttributeDescription {
+                                        location: 0,
+                                        binding: 0,
+                                        offset: 0,
+                                        format: br::vk::VK_FORMAT_R32G32_SFLOAT
+                                    }]
+                                ),
+                                &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleList),
+                                &br::PipelineViewportStateCreateInfo::new(
+                                    &[glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                                    &[glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO)]
+                                ),
+                                &br::PipelineRasterizationStateCreateInfo::new(
+                                    br::PolygonMode::Fill, br::CullModeFlags::NONE, br::FrontFace::CounterClockwise
+                                ),
+                                &br::PipelineColorBlendStateCreateInfo::new(
+                                    &[br::vk::VkPipelineColorBlendAttachmentState::NOBLEND]
+                                )
+                            ).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new().rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _))
+                            .set_depth_stencil_state(
+                                &br::PipelineDepthStencilStateCreateInfo::new()
+                                    .stencil_test(true)
+                                    .stencil_state_front(br::vk::VkStencilOpState::always_forall(br::StencilOp::Invert).write_mask(0x01))
+                                    .stencil_state_back(br::vk::VkStencilOpState::always_forall(br::StencilOp::Invert).write_mask(0x01))
+                            ),
+                            br::GraphicsPipelineCreateInfo::new(
+                                &pipeline_layout,
+                                vector_render_pass.subpass(0),
+                                &[
+                                    curve_shader_module.on_stage(br::ShaderStage::Vertex, c"vertMain")
+                                        .with_specialization_info(&br::SpecializationInfo::new(&CurveShaderVertexConstants {
+                                            target_texture_width: glyph_atlas.space_mgr.max.width as _,
+                                            target_texture_height: glyph_atlas.space_mgr.max.height as _
+                                        })),
+                                    curve_shader_module.on_stage(br::ShaderStage::Fragment, c"fragMain")
+                                ],
+                                &br::PipelineVertexInputStateCreateInfo::new(
+                                    &[br::VertexInputBindingDescription::per_vertex_typed::<[f32; 4]>(0)],
+                                    &[
+                                        br::VertexInputAttributeDescription {
+                                            location: 0,
+                                            binding: 0,
+                                            offset: 0,
+                                            format: br::vk::VK_FORMAT_R32G32_SFLOAT
+                                        },
+                                        br::VertexInputAttributeDescription {
+                                            location: 1,
+                                            binding: 0,
+                                            offset: core::mem::size_of::<[f32; 2]>() as _,
+                                            format: br::vk::VK_FORMAT_R32G32_SFLOAT
+                                        }
+                                    ]
+                                ),
+                                &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleList),
+                                &br::PipelineViewportStateCreateInfo::new(
+                                    &[glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                                    &[glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO)]
+                                ),
+                                &br::PipelineRasterizationStateCreateInfo::new(
+                                    br::PolygonMode::Fill, br::CullModeFlags::NONE, br::FrontFace::CounterClockwise
+                                ),
+                                &br::PipelineColorBlendStateCreateInfo::new(
+                                    &[br::vk::VkPipelineColorBlendAttachmentState::NOBLEND]
+                                )
+                            ).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new().rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _))
+                            .set_depth_stencil_state(
+                                &br::PipelineDepthStencilStateCreateInfo::new()
+                                    .stencil_test(true)
+                                    .stencil_state_front(br::StencilOpState::always_forall(br::StencilOp::Invert).write_mask(0x01))
+                                    .stencil_state_back(br::StencilOpState::always_forall(br::StencilOp::Invert).write_mask(0x01))
+                            ),
+                            br::GraphicsPipelineCreateInfo::new(
+                                &pipeline_layout,
+                                vector_render_pass.subpass(1),
+                                &[
+                                    vec_tri_fill_shader_module.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                                    vec_tri_fill_shader_module.on_stage(br::ShaderStage::Fragment, c"fragMain")
+                                ],
+                                &br::PipelineVertexInputStateCreateInfo::new(&[], &[]),
+                                &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleList),
+                                &br::PipelineViewportStateCreateInfo::new(
+                                    &[glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                                    &[glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO)]
+                                ),
+                                &br::PipelineRasterizationStateCreateInfo::new(
+                                    br::PolygonMode::Fill, br::CullModeFlags::NONE, br::FrontFace::CounterClockwise
+                                ),
+                                &br::PipelineColorBlendStateCreateInfo::new(
+                                    &[br::vk::VkPipelineColorBlendAttachmentState::NOBLEND]
+                                )
+                            ).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new().rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _))
+                            .set_depth_stencil_state(
+                                &br::PipelineDepthStencilStateCreateInfo::new()
+                                    .stencil_test(true)
+                                    .stencil_state_front(br::StencilOpState::NOP.set_compare(br::CompareOp::Equal, 0x01, 0x01))
+                                    .stencil_state_back(br::StencilOpState::NOP.set_compare(br::CompareOp::Equal, 0x01, 0x01))
+                            )
+                        ], None::<&br::PipelineCacheObject<&br::DeviceObject<&br::InstanceObject>>>).expect("create vector rasterize pipelines");
+
+                        let filltri_points_offset = 0;
+                        let filltri_indices_offset = filltri_points_offset + core::mem::size_of_val(&new_filltri_points[..]);
+                        let curve_triangles_offset = (filltri_indices_offset + core::mem::size_of_val(&new_filltri_indices[..]) + (core::mem::size_of::<[f32; 4]>() - 1)) & !(core::mem::size_of::<[f32; 4]>() - 1);
+                        let vector_draw_buffer_total_size = curve_triangles_offset + core::mem::size_of_val(&new_curve_triangles[..]);
+                        let mut vector_draw_buffer = br::BufferObject::new(&vk_device, &br::BufferCreateInfo::new(vector_draw_buffer_total_size, br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::INDEX_BUFFER | br::BufferUsage::TRANSFER_DEST)).expect("vector_draw_buffer create");
+                        let vector_draw_buffer_memreq = vector_draw_buffer.requirements();
+                        let vector_draw_buffer_memory = br::DeviceMemoryObject::new(&vk_device, &br::MemoryAllocateInfo::new(vector_draw_buffer_memreq.size, vk_adapter_memory_properties.find_device_local_index(vector_draw_buffer_memreq.memoryTypeBits).expect("no suitable memory"))).expect("vector_draw_buffer malloc");
+                        vector_draw_buffer.bind(&vector_draw_buffer_memory, 0).expect("vector_draw_buffer bind");
+
+                        let mut vector_draw_init_buffer = br::BufferObject::new(&vk_device, &br::BufferCreateInfo::new(vector_draw_buffer_total_size, br::BufferUsage::TRANSFER_SRC)).expect("vector_draw_init_buffer create");
+                        let vector_draw_init_buffer_memreq = vector_draw_init_buffer.requirements();
+                        let vector_draw_init_buffer_memindex = vk_adapter_memory_properties.find_host_visible_index(vector_draw_init_buffer_memreq.memoryTypeBits).expect("no suitable memory");
+                        let mut vector_draw_init_buffer_memory = br::DeviceMemoryObject::new(&vk_device, &br::MemoryAllocateInfo::new(vector_draw_init_buffer_memreq.size, vector_draw_init_buffer_memindex)).expect("vector_draw_init_buffer malloc");
+                        vector_draw_init_buffer.bind(&vector_draw_init_buffer_memory, 0).expect("vector_draw_init_buffer bind");
+                        let p = vector_draw_init_buffer_memory.map(0..vector_draw_buffer_total_size).expect("vector_draw_init_buffer_memory map");
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(new_filltri_points.as_ptr(), p.ptr().byte_add(filltri_points_offset).cast(), new_filltri_points.len());
+                            core::ptr::copy_nonoverlapping(new_filltri_indices.as_ptr(), p.ptr().byte_add(filltri_indices_offset).cast(), new_filltri_indices.len());
+                            core::ptr::copy_nonoverlapping(new_curve_triangles.as_ptr(), p.ptr().byte_add(curve_triangles_offset).cast(), new_curve_triangles.len());
+                        }
+                        if !vk_adapter_memory_properties.is_coherent(vector_draw_init_buffer_memindex) {
+                            unsafe {
+                                vk_device.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(&vector_draw_init_buffer_memory, 0..vector_draw_buffer_total_size as u64)]).expect("flush_mapped_memory_ranges");
+                            }
+                        }
+                        unsafe { vector_draw_init_buffer_memory.unmap(); }
+
+                        let mut vector_color_ms_buffer = br::ImageObject::new(&vk_device, &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, br::vk::VK_FORMAT_R8_UNORM).set_usage(br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::TRANSIENT_ATTACHMENT).sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL)).expect("vector color_ms buffer create");
+                        let vector_color_ms_buffer_memreq = vector_color_ms_buffer.requirements();
+                        let vector_color_ms_buffer_mem = br::DeviceMemoryObject::new(&vk_device, &br::MemoryAllocateInfo::new(vector_color_ms_buffer_memreq.size, vk_adapter_memory_properties.find_lazily_allocated_device_local_index(vector_color_ms_buffer_memreq.memoryTypeBits).or_else(|| vk_adapter_memory_properties.find_device_local_index(vector_color_ms_buffer_memreq.memoryTypeBits)).expect("no suitable memory"))).expect("vector color_ms buffer malloc");
+                        vector_color_ms_buffer.bind(&vector_color_ms_buffer_mem, 0).expect("vector color_ms buffer bind");
+                        let vector_color_ms_buffer = br::ImageViewBuilder::new(vector_color_ms_buffer, br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)).create().expect("vector color_ms buffer imageview create");
+                        let mut vector_stencil_buffer = br::ImageObject::new(&vk_device, &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, br::vk::VK_FORMAT_S8_UINT).set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | br::ImageUsageFlags::TRANSIENT_ATTACHMENT).sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL)).expect("vector stencil buffer create");
+                        let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
+                        let vector_stencil_buffer_mem = br::DeviceMemoryObject::new(&vk_device, &br::MemoryAllocateInfo::new(vector_stencil_buffer_memreq.size, vk_adapter_memory_properties.find_lazily_allocated_device_local_index(vector_stencil_buffer_memreq.memoryTypeBits).or_else(|| vk_adapter_memory_properties.find_device_local_index(vector_stencil_buffer_memreq.memoryTypeBits)).expect("no suitable memory"))).expect("vector stencil buffer malloc");
+                        vector_stencil_buffer.bind(&vector_stencil_buffer_mem, 0).expect("vector stencil buffer bind");
+                        let vector_stencil_buffer = br::ImageViewBuilder::new(vector_stencil_buffer, br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1)).create().expect("vector stencil buffer imageview create");
+                        let vector_framebuffer = br::FramebufferObject::new(&vk_device, &br::FramebufferCreateInfo::new(&vector_render_pass, &[glyph_atlas.view(), vector_stencil_buffer.as_transparent_ref(), vector_color_ms_buffer.as_transparent_ref()], glyph_atlas.space_mgr.max.width, glyph_atlas.space_mgr.max.height)).expect("vector framebuffer create");
+
+                        let mut cp = br::CommandPoolObject::new(&vk_device, &br::CommandPoolCreateInfo::new(graphics_queue_family_index)).expect("cp init");
+                        let mut cb = br::CommandBufferObject::alloc(&vk_device, &br::CommandBufferAllocateInfo::new(&mut cp, 1, br::CommandBufferLevel::Primary)).expect("alloc cb");
+                        unsafe { cb[0].begin(&br::CommandBufferBeginInfo::new()).expect("cb begin") }
+                            .pipeline_barrier(
+                                br::PipelineStageFlags(0),
+                                br::PipelineStageFlags::TRANSFER,
+                                0,
+                                &[],
+                                &[],
+                                &[
+                                    br::ImageMemoryBarrier::new(&glyph_atlas.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1), br::ImageLayout::TransferDestOpt.from_undefined()),
+                                ]
+                            )
+                            .copy_buffer(&vector_draw_init_buffer, &vector_draw_buffer, &[
+                                br::BufferCopy::mirror(0, vector_draw_buffer_total_size as _)
+                            ])
+                            .clear_color_image(&glyph_atlas.image(), br::ImageLayout::TransferDestOpt, &[br::ClearColorValue::from([0.0; 4])], &[br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)])
+                            .pipeline_barrier(
+                                br::PipelineStageFlags::TRANSFER,
+                                br::PipelineStageFlags::VERTEX_INPUT | br::PipelineStageFlags::FRAGMENT_SHADER,
+                                0,
+                                &[br::vk::VkMemoryBarrier {
+                                    sType: br::vk::VkMemoryBarrier::TYPE,
+                                    pNext: core::ptr::null(),
+                                    srcAccessMask: br::AccessFlags::TRANSFER.write,
+                                    dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::INDEX_READ
+                                }],
+                                &[],
+                                &[
+                                    br::ImageMemoryBarrier::new(&glyph_atlas.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1), br::ImageLayout::TransferDestOpt.to(br::ImageLayout::ShaderReadOnlyOpt)),
+                                ]
+                            )
+                            .begin_render_pass(&br::RenderPassBeginInfo::new(
+                                &vector_render_pass,
+                                &vector_framebuffer,
+                                glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO),
+                                &[br::ClearValue::color_f32([0.0; 4]), br::ClearValue::depth_stencil(1.0, 0), br::ClearValue::color_f32([0.0; 4])]
+                            ), br::SubpassContents::Inline)
+                            .bind_pipeline(br::PipelineBindPoint::Graphics, &triangle_fans_pipeline)
+                            .bind_vertex_buffer_array(0, &[vector_draw_buffer.as_transparent_ref()], &[filltri_points_offset as _])
+                            .bind_index_buffer(&vector_draw_buffer, filltri_indices_offset, br::IndexType::U16)
+                            .draw_indexed(new_filltri_indices.len() as _, 1, 0, 0, 0)
+                            .bind_pipeline(br::PipelineBindPoint::Graphics, &curve_pipeline)
+                            .bind_vertex_buffer_array(0, &[vector_draw_buffer.as_transparent_ref()], &[curve_triangles_offset as _])
+                            .draw(new_curve_triangles.len() as _, 1, 0, 0)
+                            .next_subpass(br::SubpassContents::Inline)
+                            .bind_pipeline(br::PipelineBindPoint::Graphics, &colorize_pipeline)
+                            .draw(3, 1, 0, 0)
+                            .end_render_pass()
+                        .end().expect("cb end");
+                        unsafe { render_queue.submit_raw(&[br::SubmitInfo::new(&[], &[], &[cb[0].as_transparent_ref()], &[])], None).expect("vector render submit"); }
+                        render_queue.wait().expect("vector render wait");
 
                         let vertex_offset = 0;
                         let instance_data_offset = vertex_offset + core::mem::size_of::<[[f32; 4]; 4]>();
@@ -488,13 +758,17 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         unsafe { render_queue.submit_raw(&[br::SubmitInfo::new(&[], &[], &[init_cb[0].as_transparent_ref()], &[])], None).expect("submit init"); }
                         render_queue.wait().expect("wait init commands");
 
+                        let dsl_test = br::DescriptorSetLayoutObject::new(&vk_device, &br::DescriptorSetLayoutCreateInfo::new(
+                            &[br::DescriptorType::CombinedImageSampler.make_binding(0, 1)]
+                        )).expect("dsl_test create");
+
                         let shader_binary1 = std::fs::read("./resources/test.spv").expect("no shader");
                         let mut shader_binary = Vec::with_capacity(shader_binary1.len() >> 2);
                         unsafe { core::ptr::copy_nonoverlapping(shader_binary1.as_ptr(), shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(), shader_binary1.len()); }
                         unsafe { shader_binary.set_len(shader_binary1.len() >> 2); }
                         let shader_module = br::ShaderModuleObject::new(&vk_device, &br::ShaderModuleCreateInfo::new(&shader_binary)).expect("shader module create");
                         let pipeline_layout = br::PipelineLayoutObject::new(&vk_device, &br::PipelineLayoutCreateInfo::new(
-                            &[], &[br::PushConstantRange::new(br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0..core::mem::size_of::<[f32; 2]>() as u32)]
+                            &[dsl_test.as_transparent_ref()], &[br::PushConstantRange::new(br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0..core::mem::size_of::<[f32; 2]>() as u32)]
                         )).expect("pipeline layout create");
                         let [mut pipeline] = vk_device.new_graphics_pipeline_array(&[
                             br::GraphicsPipelineCreateInfo::new(&pipeline_layout, vk_render_pass.subpass(0), &[
@@ -528,6 +802,13 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 &br::PipelineColorBlendStateCreateInfo::new(&[br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED])).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
                         ], None::<&br::PipelineCacheObject::<&br::DeviceObject<&br::InstanceObject>>>).expect("pipeline create");
 
+                        let smp = br::SamplerObject::new(&vk_device, &br::SamplerCreateInfo::new()).expect("smp create");
+                        let mut dp = br::DescriptorPoolObject::new(&vk_device, &br::DescriptorPoolCreateInfo::new(1, &[br::DescriptorType::CombinedImageSampler.make_size(1)])).expect("dp create");
+                        let [ds_test] = dp.alloc_array(&[dsl_test.as_transparent_ref()]).expect("dp alloc");
+                        vk_device.update_descriptor_sets(&[
+                            ds_test.binding_at(0).write(br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(&glyph_atlas.view(), br::ImageLayout::ShaderReadOnlyOpt).with_sampler(&smp)]))
+                        ], &[]);
+
                         let mut render_cp = br::CommandPoolObject::new(
                             &vk_device,
                             &br::CommandPoolCreateInfo::new(graphics_queue_family_index),
@@ -558,6 +839,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             )
                             .bind_pipeline(br::PipelineBindPoint::Graphics, &pipeline)
                             .push_constant_slice(&pipeline_layout, br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0, &[surface_ext.width as f32, surface_ext.height as f32])
+                            .bind_descriptor_sets(br::PipelineBindPoint::Graphics, &pipeline_layout, 0, &[ds_test], &[])
                             .bind_vertex_buffer_array(0, &[draw_buffer.as_transparent_ref(), draw_buffer.as_transparent_ref()], &[vertex_offset as _, instance_data_offset as _])
                             .draw(4, box_instances.len() as _, 0, 0)
                             .end_render_pass()
@@ -584,6 +866,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 let x = std::time::Instant::now();
                                 render_queue.wait().expect("waiting pending queue works");
                                 tracing::trace!(elapsed = ?x.elapsed(), "queue waiting time during resize");
+
+                                if shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                                    // already shut down
+                                    break 'lp;
+                                }
 
                                 unsafe {
                                     render_cp
@@ -726,6 +1013,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                     )
                             .bind_pipeline(br::PipelineBindPoint::Graphics, &pipeline)
                             .push_constant_slice(&pipeline_layout, br::vk::VK_SHADER_STAGE_VERTEX_BIT, 0, &[surface_ext.width as f32, surface_ext.height as f32])
+                            .bind_descriptor_sets(br::PipelineBindPoint::Graphics, &pipeline_layout, 0, &[ds_test], &[])
                             .bind_vertex_buffer_array(0, &[draw_buffer.as_transparent_ref(), draw_buffer.as_transparent_ref()], &[vertex_offset as _, instance_data_offset as _])
                             .draw(4, box_instances.len() as _, 0, 0)
                                     .end_render_pass()
@@ -849,6 +1137,8 @@ struct GlyphAtlasSpaceManager {
     skylines: Vec<Skyline>
 }
 impl GlyphAtlasSpaceManager {
+    const SPACING: u32 = 1;
+
     pub fn new(max: br::Extent2D) -> Self {
         Self {
             skylines: vec![Skyline { y: 0, width: max.width }],
@@ -857,19 +1147,22 @@ impl GlyphAtlasSpaceManager {
     }
 
     pub fn acquire(&mut self, width: u32, height: u32) -> Option<GlyphRect> {
+        let cons_width = width + Self::SPACING;
+        let cons_height = height + Self::SPACING;
+
         let mut fit_left_top = None;
         let mut left = 0;
         let mut n = 0;
-        while n < self.skylines.len() && left + width <= self.max.width {
+        while n < self.skylines.len() && left + cons_width <= self.max.width {
             let skyline = &self.skylines[n];
             let skyline_height = self.max.height - skyline.y;
-            if skyline_height >= height && fit_left_top.is_none_or(|(_, t, _)| skyline.y < t) {
+            if skyline_height >= cons_height && fit_left_top.is_none_or(|(_, t, _)| skyline.y < t) {
                 let mut y = skyline.y;
 
                 // potentially overlapping skylines at right
                 let mut l1 = left + skyline.width;
                 let mut m = n + 1;
-                while m < self.skylines.len() && l1 <= left + width {
+                while m < self.skylines.len() && l1 <= left + cons_width {
                     let skyline2 = &self.skylines[m];
 
                     y = y.max(skyline2.y);
@@ -879,7 +1172,7 @@ impl GlyphAtlasSpaceManager {
 
                 // recompute whether it fits
                 let skyline_height = self.max.height - y;
-                if skyline_height >= height && fit_left_top.is_none_or(|(_, t, _)| y < t) {
+                if skyline_height >= cons_height && fit_left_top.is_none_or(|(_, t, _)| y < t) {
                     fit_left_top = Some((left, y, n));
                 }
             }
@@ -894,7 +1187,7 @@ impl GlyphAtlasSpaceManager {
         };
 
         // update skyline
-        let mut left_w = width;
+        let mut left_w = cons_width;
         let mut skyline_point_index = left_skyline_point;
         while left_w > 0 {
             let skyline = &self.skylines[skyline_point_index];
@@ -902,7 +1195,7 @@ impl GlyphAtlasSpaceManager {
             if skyline.width > left_w {
                 // needs splitting(and finishes at this step)
                 if skyline_point_index > 0
-                    && self.skylines[skyline_point_index - 1].y == top + height
+                    && self.skylines[skyline_point_index - 1].y == top + cons_height
                 {
                     // fuse with previous
                     self.skylines[skyline_point_index - 1].width += left_w;
@@ -911,7 +1204,7 @@ impl GlyphAtlasSpaceManager {
                     let org_skyline_y = skyline.y;
                     let right_skyline_width = skyline.width - left_w;
                     self.skylines[skyline_point_index] = Skyline {
-                        y: top + height,
+                        y: top + cons_height,
                         width: left_w,
                     };
                     self.skylines.insert(
@@ -927,14 +1220,14 @@ impl GlyphAtlasSpaceManager {
             }
 
             let sw = skyline.width;
-            if skyline_point_index > 0 && self.skylines[skyline_point_index - 1].y == top + height {
+            if skyline_point_index > 0 && self.skylines[skyline_point_index - 1].y == top + cons_height {
                 // fuse with previous
                 self.skylines[skyline_point_index - 1].width += sw;
                 self.skylines.remove(skyline_point_index);
                 skyline_point_index -= 1;
             } else {
                 // just move this skyline
-                self.skylines[left_skyline_point].y = top + height;
+                self.skylines[left_skyline_point].y = top + cons_height;
             }
 
             left_w -= sw.min(left_w);
@@ -993,6 +1286,8 @@ struct GlyphAtlas {
     space_mgr: GlyphAtlasSpaceManager,
 }
 impl GlyphAtlas {
+    const MULTISAMPLE_LEVEL: u32 = 8;
+
     pub unsafe fn drop(&mut self, device: &(impl br::VkHandle<Handle = br::vk::VkDevice> + ?Sized)) {
         unsafe { 
             br::vkfn_wrapper::destroy_image_view(device.native_ptr(), self.view, None);
@@ -1004,7 +1299,7 @@ impl GlyphAtlas {
     pub fn new(device: &(impl br::Device<ConcreteInstance: br::InstanceDebugUtilsExtension> + ?Sized), adapter_memory_props: &br::MemoryProperties,) -> Self {
         let size = br::Extent2D::spread1(4096);
 
-        let mut res = br::ImageObject::new(device, &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_SRC)).expect("res create");
+        let mut res = br::ImageObject::new(device, &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::TRANSFER_DEST)).expect("res create");
         let memory_requirements = res.requirements();
         let mem = br::DeviceMemoryObject::new(device, &br::MemoryAllocateInfo::new(memory_requirements.size, adapter_memory_props.find_device_local_index(memory_requirements.memoryTypeBits).expect("no suitable memory"))).expect("res malloc");
         res.bind(&mem, 0).expect("res mem bind");
@@ -1036,13 +1331,25 @@ impl GlyphAtlas {
             }
         }
     }
+
+    #[inline(always)]
+    pub const fn image<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImage> {
+        unsafe { br::VkHandleRef::dangling(self.res) }
+    }
+
+    #[inline(always)]
+    pub const fn view<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImageView> {
+        unsafe { br::VkHandleRef::dangling(self.view) }
+    }
 }
 
 #[implement(IDWriteTextRenderer)]
 pub struct AtlasTextRenderer {
     box_instances: *mut Vec<BoxInstance>,
     atlas: *mut GlyphAtlas,
-    new_figures: *mut Vec<GlyphFigure>
+    new_filltri_points: *mut Vec<[f32; 2]>,
+    new_filltri_indices: *mut Vec<u16>,
+    new_curve_triangles: *mut Vec<[f32; 4]>,
 }
 impl IDWritePixelSnapping_Impl for AtlasTextRenderer_Impl {
     fn GetCurrentTransform(
@@ -1068,7 +1375,7 @@ impl IDWritePixelSnapping_Impl for AtlasTextRenderer_Impl {
         &self,
         clientdrawingcontext: *const core::ffi::c_void,
     ) -> windows_core::Result<f32> {
-        Ok(100.0)
+        Ok(1.0)
     }
 
     fn IsPixelSnappingDisabled(
@@ -1137,23 +1444,34 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
 
             unsafe {
                 (*self.box_instances).push(BoxInstance {
-                    posst: [glyph_width, glyph_height, baselineoriginx, baselineoriginy],
-                    uvst: [1.0, 1.0, 0.0, 0.0],
+                    posst: [
+                        glyph_width,
+                        glyph_height,
+                        (baselineoriginx + glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize / design_unit as f32) * dip_to_pixels_scaling,
+                        (baselineoriginy - (glyph_metrics[n].verticalOriginY as f32 - glyph_metrics[n].topSideBearing as f32) * glyphrun.fontEmSize / design_unit as f32) * dip_to_pixels_scaling
+                    ],
+                    uvst: [r.width as f32 / (*self.atlas).space_mgr.max.width as f32, r.height as f32 / (*self.atlas).space_mgr.max.height as f32, r.left as f32 / (*self.atlas).space_mgr.max.width as f32, r.top as f32 / (*self.atlas).space_mgr.max.height as f32],
                 });
             }
             if is_new {
                 // render font here
+                let mut current_figure_state = None;
                 let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
                     translate: windows_numerics::Vector2 {
-                        X: r.left as _,
-                        Y: r.top as _,
+                        X: r.left as f32 - (glyph_metrics[n].leftSideBearing as f32) * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
+                        Y: r.top as f32 - (glyph_metrics[n].advanceHeight as f32 - glyph_metrics[n].topSideBearing as f32 - glyph_metrics[n].bottomSideBearing as f32) * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
                     },
-                    figures: self.new_figures
+                    dip_to_pixels_scale: dip_to_pixels_scaling,
+                    current_figure_state: &mut current_figure_state,
+                    filltri_points: self.new_filltri_points,
+                    filltri_indices: self.new_filltri_indices,
+                    curve_triangles: self.new_curve_triangles,
                 });
                 unsafe { font_face.GetGlyphRunOutline(glyphrun.fontEmSize, glyphrun.glyphIndices.add(n), None, None, 1, glyphrun.isSideways.as_bool(), false, &sink).expect("GetGlyphRunOutline"); }
+                assert!(current_figure_state.is_none());
             }
 
-            baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) } * dip_to_pixels_scaling;
+            baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) };
         }
 
         Ok(())
@@ -1195,70 +1513,87 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
     }
 }
 
-struct GlyphFigure {
-    pub start_point: windows_numerics::Vector2,
-    pub filltri_points: Vec<[f32; 2]>,
-    pub filltri_indices: Vec<u16>,
-}
-
 #[implement(ID2D1SimplifiedGeometrySink)]
 struct GlyphOutlineSink {
     translate: windows_numerics::Vector2,
-    figures: *mut Vec<GlyphFigure>
+    dip_to_pixels_scale: f32,
+    current_figure_state: *mut Option<(windows_numerics::Vector2, u16)>,
+    filltri_points: *mut Vec<[f32; 2]>,
+    filltri_indices: *mut Vec<u16>,
+    curve_triangles: *mut Vec<[f32; 4]>
 }
 impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
     fn BeginFigure(&self, startpoint: &windows_numerics::Vector2, figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN) {
         assert_eq!(figurebegin, D2D1_FIGURE_BEGIN_FILLED, "not filled figure");
 
-        unsafe { (*self.figures).push(GlyphFigure {
-            start_point: *startpoint,
-            filltri_points: vec![[startpoint.X + self.translate.X, startpoint.Y + self.translate.Y]],
-            filltri_indices: vec![]
-        }); }
+        unsafe {
+            (*self.current_figure_state) = Some((*startpoint, (*self.filltri_points).len() as _));
+            (*self.filltri_points).push([startpoint.X * self.dip_to_pixels_scale + self.translate.X, -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y]);
+        }
     }
 
     fn EndFigure(&self, figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END) {
+        let (start_point, filltri_index0) = unsafe { (*self.current_figure_state).take().expect("no figure started?") };
+
         if figureend == D2D1_FIGURE_END_CLOSED {
-            self.Close().expect("Close failed");
+            // line to start
+            unsafe {
+                let filltri_point1 = (*self.filltri_points).len() - 1;
+                (*self.filltri_points).push([start_point.X * self.dip_to_pixels_scale + self.translate.X, -start_point.Y * self.dip_to_pixels_scale + self.translate.Y]);
+                (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+            }
         }
     }
 
     fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
-        let fig = unsafe { (*self.figures).last_mut().expect("no figure started?") };
+        let &(_, filltri_index0) = unsafe { (*self.current_figure_state).as_ref().expect("no figure started?") };
 
         for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
-            let filltri_point1 = fig.filltri_points.len() - 1;
-            fig.filltri_points.push([p.X + self.translate.X, p.Y + self.translate.Y]);
-            fig.filltri_indices.extend([0, filltri_point1 as u16, fig.filltri_points.len() as u16 - 1]);
+            unsafe {
+                let filltri_point1 = (*self.filltri_points).len() - 1;
+                (*self.filltri_points).push([p.X * self.dip_to_pixels_scale + self.translate.X, -p.Y * self.dip_to_pixels_scale + self.translate.Y]);
+                (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+            }
         }
     }
 
     fn AddBeziers(&self, beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT, bezierscount: u32) {
-        let fig = unsafe { (*self.figures).last_mut().expect("no figure started?") };
+        let &(_, filltri_index0) = unsafe { (*self.current_figure_state).as_ref().expect("no figure started?") };
 
         for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
-            let from_p = fig.filltri_points.last().expect("no points emitted");
-            lyon_geom::CubicBezierSegment {
+            let from_p = unsafe { (*self.filltri_points).last().expect("no points emitted") };
+            let bez = lyon_geom::CubicBezierSegment {
                 from: lyon_geom::point(from_p[0], from_p[1]),
-                ctrl1: lyon_geom::point(p.point1.X + self.translate.X, p.point1.Y + self.translate.Y),
-                ctrl2: lyon_geom::point(p.point2.X + self.translate.X, p.point2.Y + self.translate.Y),
-                to: lyon_geom::point(p.point3.X + self.translate.X, p.point3.Y + self.translate.Y)
-            }.for_each_quadratic_bezier(1.0, &mut |q| {
-                // TODO: curve
-                let filltri_point1 = fig.filltri_points.len() - 1;
-                fig.filltri_points.push([q.to.x, q.to.y]);
-                fig.filltri_indices.extend([0, filltri_point1 as u16, fig.filltri_points.len() as u16 - 1]);
+                ctrl1: lyon_geom::point(p.point1.X * self.dip_to_pixels_scale + self.translate.X, -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y),
+                ctrl2: lyon_geom::point(p.point2.X * self.dip_to_pixels_scale + self.translate.X, -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y),
+                to: lyon_geom::point(p.point3.X * self.dip_to_pixels_scale + self.translate.X, -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y)
+            };
+
+            bez.for_each_quadratic_bezier(0.1, &mut |q| {
+                unsafe {
+                    let filltri_point1 = (*self.filltri_points).len() - 1;
+                    (*self.filltri_points).push([q.to.x, q.to.y]);
+                    (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+
+                    (*self.curve_triangles).extend([
+                        [q.from.x, q.from.y, 0.0, 0.0],
+                        [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
+                        [q.to.x, q.to.y, 1.0, 1.0]
+                    ]);
+                }
             });
         }
     }
 
     fn Close(&self) -> windows_core::Result<()> {
-        let fig = unsafe { (*self.figures).last_mut().expect("no figure started?") };
+        let &(ref start_point, filltri_index0) = unsafe { (*self.current_figure_state).as_ref().expect("no figure started?") };
 
         // line to start
-        let filltri_point1 = fig.filltri_points.len() - 1;
-        fig.filltri_points.push([fig.start_point.X + self.translate.X, fig.start_point.Y + self.translate.Y]);
-        fig.filltri_indices.extend([0, filltri_point1 as u16, fig.filltri_points.len() as u16 - 1]);
+        unsafe {
+            let filltri_point1 = (*self.filltri_points).len() - 1;
+            (*self.filltri_points).push([start_point.X * self.dip_to_pixels_scale + self.translate.X, start_point.Y * self.dip_to_pixels_scale + self.translate.Y]);
+            (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+        }
         
         Ok(())
     }

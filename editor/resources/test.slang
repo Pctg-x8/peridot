@@ -44,9 +44,6 @@ VertexOutput vertMain(Vertex v)
 [shader("fragment")]
 float4 fragMain(FragmentInput input: Varyings) : SV_Target
 {
-    return float4(1.0, 1.0, 1.0, 1.0);
-
-    var col = tex.Sample(input.uv);
-    col.rgb *= col.a;
-    return col;
+    let r = tex.Sample(input.uv).r;
+    return float4(r, r, r, r);
 }
