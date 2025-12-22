@@ -410,9 +410,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         let mut glyph_atlas = GlyphAtlas::new(&vk_device, &vk_adapter_memory_properties);
 
                         let dwfactory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory") };
-                        let ui_text_format = unsafe { dwfactory.CreateTextFormat(w!("system-ui"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 10.0, w!("ja-JP")).expect("CreateTextFormat ui") };
+                        let ui_text_format = unsafe { dwfactory.CreateTextFormat(w!("Inter Display"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, w!("ja-JP")).expect("CreateTextFormat ui") };
 
-                        let title_layout = unsafe { dwfactory.CreateTextLayout(&"Peridot Marble Editor".encode_utf16().collect::<Vec<_>>(), &ui_text_format, f32::MAX, f32::MAX).expect("CreateTextLayout title") };
+                        let title_layout = unsafe { dwfactory.CreateTextLayout(&"Peridot Marble Editor - New Project".encode_utf16().collect::<Vec<_>>(), &ui_text_format, f32::MAX, f32::MAX).expect("CreateTextLayout title") };
                         let mut box_instances = Vec::new();
                         let mut new_filltri_points = Vec::new();
                         let mut new_filltri_indices = Vec::new();
@@ -1375,14 +1375,14 @@ impl IDWritePixelSnapping_Impl for AtlasTextRenderer_Impl {
         &self,
         clientdrawingcontext: *const core::ffi::c_void,
     ) -> windows_core::Result<f32> {
-        Ok(1.0)
+        Ok(168.0 / 96.0)
     }
 
     fn IsPixelSnappingDisabled(
         &self,
         clientdrawingcontext: *const core::ffi::c_void,
     ) -> windows_core::Result<windows_core::BOOL> {
-        Ok(BOOL(1))
+        Ok(BOOL(0))
     }
 }
 impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
@@ -1396,7 +1396,7 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
         glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
         clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
     ) -> windows_core::Result<()> {
-        let dip_to_pixels_scaling = 168.0f32 / 72.0;
+        let dip_to_pixels_scaling = 168.0f32 / 96.0;
 
         let glyphrun = unsafe { &*glyphrun };
         println!(
@@ -1458,8 +1458,8 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
                 let mut current_figure_state = None;
                 let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
                     translate: windows_numerics::Vector2 {
-                        X: r.left as f32 - (glyph_metrics[n].leftSideBearing as f32) * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
-                        Y: r.top as f32 - (glyph_metrics[n].advanceHeight as f32 - glyph_metrics[n].topSideBearing as f32 - glyph_metrics[n].bottomSideBearing as f32) * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
+                        X: r.left as f32 - glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
+                        Y: r.top as f32 - (glyph_metrics[n].verticalOriginY as f32 - glyph_metrics[n].topSideBearing as f32) * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
                     },
                     dip_to_pixels_scale: dip_to_pixels_scaling,
                     current_figure_state: &mut current_figure_state,
