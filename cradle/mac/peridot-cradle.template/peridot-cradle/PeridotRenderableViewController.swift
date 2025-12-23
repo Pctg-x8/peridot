@@ -9,6 +9,7 @@
 import Foundation
 import Cocoa
 import Carbon
+import AVFAudio
 
 final class CurrentKeyboardLayoutCodeConverter {
     static let MAX_CHAR_LENGTH: Int = 4
@@ -186,6 +187,35 @@ final class PeridotRenderableViewController : NSViewController {
     }
     override func viewDidAppear() {
         super.viewDidAppear()
+        
+        let audioEngine = AVAudioEngine()
+        let format = audioEngine.outputNode.outputFormat(forBus: 0)
+        NSLog("audio format: \(format)")
+        var currentGlobalSample = 0
+        let sourceNode = AVAudioSourceNode(format: format) {
+            (isSilence, timestamp, frameCount, outputData) -> OSStatus in
+            
+                for n in 0..<frameCount {
+                    for b in 0..<outputData.pointee.mNumberBuffers {
+                        outputData
+                            .pointer(to: \AudioBufferList.mBuffers)![Int(b)]
+                            .mData!
+                            .assumingMemoryBound(to: Float.self)[Int(n)] =
+                        0.1 * sin(2.0 * Float.pi * Float(currentGlobalSample) * 440.0 / 48000.0)
+                    }
+                    
+                    currentGlobalSample += 1
+                }
+                
+                isSilence.pointee = false
+                return noErr
+        }
+        
+        audioEngine.attach(sourceNode)
+        audioEngine.connect(sourceNode, to: audioEngine.outputNode, format: format)
+        
+        try! audioEngine.start()
+        
         NSLog("BeginTimer")
         self.workDispatcher?.resume()
         if let d = self.dplink {

@@ -1,4 +1,6 @@
-use super::{Boolean, CFAllocatorRef, CFComparisonResult, CFIndex, CFTypeID};
+use crate::raw::Boolean;
+
+use super::{CFAllocatorRef, CFComparisonResult, CFIndex, CFTypeID};
 use core::ffi::*;
 
 #[repr(C)]

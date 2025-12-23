@@ -7,6 +7,7 @@
 //
 
 import Cocoa
+import AVFAudio
 
 @NSApplicationMain
 final class AppDelegate : NSObject, NSApplicationDelegate {

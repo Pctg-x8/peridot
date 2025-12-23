@@ -11,7 +11,6 @@ pub struct _malloc_zone_t(
     core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
 );
 
-pub type Boolean = c_uchar;
 pub type UniChar = u16;
 
 #[cfg(target_pointer_width = "64")]
@@ -168,6 +167,8 @@ unsafe extern "C" {
 }
 
 mod data;
+use crate::raw::Boolean;
+
 pub use self::data::*;
 
 mod number;

@@ -1,4 +1,6 @@
-use super::{Boolean, CFAllocatorRef, CFIndex, CFRange, CFStringRef, CFTypeID};
+use crate::raw::Boolean;
+
+use super::{CFAllocatorRef, CFIndex, CFRange, CFStringRef, CFTypeID};
 use core::ffi::*;
 
 pub type CFArrayRetainCallBack =

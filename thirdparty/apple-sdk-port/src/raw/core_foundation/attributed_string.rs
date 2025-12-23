@@ -1,6 +1,8 @@
+use crate::raw::Boolean;
+
 use super::{
-    Boolean, CFAllocatorRef, CFDictionaryRef, CFIndex, CFMutableStringRef, CFRange, CFStringRef,
-    CFTypeID, CFTypeRef,
+    CFAllocatorRef, CFDictionaryRef, CFIndex, CFMutableStringRef, CFRange, CFStringRef, CFTypeID,
+    CFTypeRef,
 };
 
 #[repr(C)]

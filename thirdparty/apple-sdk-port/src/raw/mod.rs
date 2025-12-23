@@ -1,3 +1,6 @@
+pub mod mactypes;
+pub use self::mactypes::*;
+
 pub mod core_foundation;
 pub use self::core_foundation::*;
 

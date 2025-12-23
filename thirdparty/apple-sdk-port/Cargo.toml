@@ -5,5 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+cargo-clippy = [] # disable warning inside objc crate
 
 [dependencies]
+objc = "0.2"

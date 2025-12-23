@@ -7,6 +7,7 @@ pub(crate) struct FFIOpaqueStruct(
     core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
 );
 
+pub mod objc;
 pub mod raw;
 
 pub mod foundation;
@@ -81,6 +82,11 @@ impl<T: MutableObject> core::ops::DerefMut for Owned<T> {
     }
 }
 impl<T: Object> Owned<T> {
+    #[inline(always)]
+    pub const unsafe fn from_ptr_unchecked(ptr: *mut T) -> Option<Self> {
+        Some(Self(unsafe { core::ptr::NonNull::new_unchecked(ptr) }))
+    }
+
     #[inline(always)]
     pub const unsafe fn from_ptr(ptr: *mut T) -> Option<Self> {
         match core::ptr::NonNull::new(ptr) {
