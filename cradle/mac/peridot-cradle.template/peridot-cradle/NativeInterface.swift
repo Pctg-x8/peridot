@@ -1,11 +1,3 @@
-//
-//  NativeInterface.swift
-//  peridot-cradle
-//
-//  Created by S.Percentage on 2018/12/07.
-//  Copyright © 2018 S.Percentage. All rights reserved.
-//
-
 import Foundation
 import Cocoa
 
@@ -13,7 +5,10 @@ struct NativeGameDriver {
     private let callbacks: UnsafeMutablePointer<GameDriverCallbacks>
     private let contextPtr: UnsafeMutableRawPointer
     
-    init(callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
+    init(
+        callbacks: UnsafeMutablePointer<GameDriverCallbacks>,
+        contextPtr: UnsafeMutableRawPointer
+    ) {
         self.callbacks = callbacks
         self.contextPtr = contextPtr
     }
@@ -75,7 +70,10 @@ func nsapp_reply_should_terminate() {
 
 @_cdecl("nsbundle_path_for_resource")
 func nsbundle_path_for_resource(path: NSString, ext: NSString) -> UnsafeMutableRawPointer? {
-    guard let path = Bundle.main.path(forResource: path as String, ofType: ext as String) else { return nil }
+    guard let path = Bundle.main.path(forResource: path as String, ofType: ext as String) else {
+        return nil
+    }
+    
     return Unmanaged.passRetained(path as NSString).toOpaque()
 }
 
@@ -103,14 +101,19 @@ func obtain_mouse_pointer_position(
 }
 
 @_cdecl("give_game_driver_callbacks")
-func give_game_driver_callbacks(initializationContext: UnsafeMutableRawPointer, callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
-    unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self).setGameDriverCallbacks(callbacks, contextPtr: contextPtr)
+func give_game_driver_callbacks(
+    initializationContext: UnsafeMutableRawPointer,
+    callbacks: UnsafeMutablePointer<GameDriverCallbacks>,
+    contextPtr: UnsafeMutableRawPointer
+) {
+    unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self)
+        .nativeGameDriver = NativeGameDriver(callbacks: callbacks, contextPtr: contextPtr)
 }
 
 @_cdecl("schedule_usercode_task_polling")
 func scheduleUsercodeTaskPolling(initializationContext: UnsafeMutableRawPointer) {
     DispatchQueue.main.async {
-        let viewController = unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self)
-        viewController.nativeGameDriver?.pollUsercodeTask()
+        unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self)
+            .nativeGameDriver?.pollUsercodeTask()
     }
 }

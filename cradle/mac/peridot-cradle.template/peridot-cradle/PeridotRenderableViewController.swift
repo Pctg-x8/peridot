@@ -1,11 +1,3 @@
-//
-//  PeridotRenderableViewController.swift
-//  peridot-cradle-mac: Controls native engine
-//
-//  Created by S.Percentage on 2018/12/01.
-//  Copyright © 2018 S.Percentage. All rights reserved.
-//
-
 import Foundation
 import Cocoa
 import Carbon
@@ -47,11 +39,11 @@ final class CurrentKeyboardLayoutCodeConverter {
 }
 
 final class PeridotRenderableViewController : NSViewController {
-    var dplink: CVDisplayLink? = nil
-    var workDispatcher: DispatchSourceUserDataAdd? = nil
-    var clientMousePoint = CGPoint(x: 0, y: 0)
+    private var dplink: CVDisplayLink? = nil
+    private var workDispatcher: DispatchSourceUserDataAdd? = nil
+    private var clientMousePoint = CGPoint(x: 0, y: 0)
     
-    private(set) var nativeGameDriver: NativeGameDriver? = nil
+    var nativeGameDriver: NativeGameDriver? = nil
     
     func initDispatchers() {
         func onUpdateDisplay(_ _: CVDisplayLink,
@@ -64,9 +56,12 @@ final class PeridotRenderableViewController : NSViewController {
             self_.workDispatcher!.add(data: 1)
             return kCVReturnSuccess
         }
-        let workDispatcher = DispatchSource.makeUserDataAddSource(queue: DispatchQueue.main)
-        workDispatcher.setEventHandler(handler: { [weak self] in self?.nativeGameDriver?.update() })
-        self.workDispatcher = workDispatcher
+        
+        self.workDispatcher = DispatchSource.makeUserDataAddSource(queue: DispatchQueue.main)
+        self.workDispatcher!.setEventHandler { [weak self] in
+            self?.nativeGameDriver?.update()
+        }
+        
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
         CVDisplayLinkSetOutputCallback(self.dplink!, onUpdateDisplay,
                                        unsafeBitCast(self, to: UnsafeMutableRawPointer.self))
@@ -201,7 +196,7 @@ final class PeridotRenderableViewController : NSViewController {
                             .pointer(to: \AudioBufferList.mBuffers)![Int(b)]
                             .mData!
                             .assumingMemoryBound(to: Float.self)[Int(n)] =
-                        0.1 * sin(2.0 * Float.pi * Float(currentGlobalSample) * 440.0 / 48000.0)
+                        0.1 * sin(2.0 * Float.pi * Float(currentGlobalSample) * 440.0 / Float(format.sampleRate))
                     }
                     
                     currentGlobalSample += 1
@@ -216,25 +211,18 @@ final class PeridotRenderableViewController : NSViewController {
         
         try! audioEngine.start()
         
-        NSLog("BeginTimer")
-        self.workDispatcher?.resume()
-        if let d = self.dplink {
-            CVDisplayLinkStart(d)
-        }
+        NSLog("Begin Display Timer")
+        self.workDispatcher!.resume()
+        CVDisplayLinkStart(self.dplink!)
     }
+    
     override func viewWillDisappear() {
         super.viewWillDisappear()
         NSLog("ViewWillDisappear")
-        if let d = self.dplink {
-            NSLog("Stopping Timer")
-            let rv = CVDisplayLinkStop(d)
-            NSLog("Stopped Timer with %d", rv)
-        }
-        self.workDispatcher?.cancel()
-    }
-    
-    func setGameDriverCallbacks(_ callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
-        self.nativeGameDriver = NativeGameDriver(callbacks: callbacks, contextPtr: contextPtr)
+        
+        let rv = CVDisplayLinkStop(self.dplink!)
+        NSLog("Stopped Display Timer with \(rv)")
+        self.workDispatcher!.cancel()
     }
     
     func resizeNative(_ size: NSSize) {
