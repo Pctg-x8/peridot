@@ -1,8 +1,6 @@
-use appkit::{CocoaObject, NSString};
 use audio::NativeAudioEngine;
 use libc::c_void;
 use log::*;
-use objc::{msg_send, sel, sel_impl};
 
 use bedrock as br;
 use br::{InstanceChild, PhysicalDevice, SurfaceCreateInfo, VkHandle};
@@ -19,12 +17,12 @@ mod audio;
 struct NativeLogStream;
 impl std::io::Write for &'_ NativeLogStream {
     fn write(&mut self, buf: &[u8]) -> IOResult<usize> {
+        let fmt = unsafe { core::str::from_utf8_unchecked(buf) };
         unsafe {
-            let mut fmt =
-                NSString::from_str(core::str::from_utf8_unchecked(buf)).expect("NSString");
-            NSLog(&mut *fmt);
-            Ok(buf.len())
+            nslog_utf8(fmt.as_ptr(), fmt.len());
         }
+
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> IOResult<()> {
@@ -43,11 +41,9 @@ struct NSLogger;
 impl log::Log for NSLogger {
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
+            let fmt = format!("[{}] {}", record.level(), record.args());
             unsafe {
-                let mut fmt =
-                    NSString::from_str(&format!("[{}] {}", record.level(), record.args()))
-                        .expect("NSString");
-                NSLog(&mut *fmt);
+                nslog_utf8(fmt.as_ptr(), fmt.len());
             }
         }
     }
@@ -58,8 +54,7 @@ impl log::Log for NSLogger {
 }
 static LOGGER: NSLogger = NSLogger;
 unsafe extern "C" {
-    #[allow(improper_ctypes)]
-    unsafe fn NSLog(format: *mut NSString, ...);
+    unsafe fn nslog_utf8(bytes: *const u8, length: usize);
 }
 
 use std::io::prelude::{Read, Seek};
@@ -108,23 +103,47 @@ impl<R: Read + Seek> Seek for ReaderView<R> {
     }
 }
 pub struct PlatformAssetLoader {
-    par_path: CocoaObject<NSString>,
+    par_path: String,
     par: peridot_archive::Archive,
     par_async: Option<peridot_archive::ArchiveAsync>,
 }
 impl PlatformAssetLoader {
     fn new() -> Self {
-        let mut pathbase = NSString::from_str("assets").expect("NSString for pathbase");
-        let mut pathext = NSString::from_str("par").expect("NSString for ext");
-        let par_path: CocoaObject<NSString> = unsafe {
-            CocoaObject::from_retained_id(nsbundle_path_for_resource(&mut *pathbase, &mut *pathext))
-                .expect("No Primary Asset")
+        const PAR_PATH: &str = "assets";
+        const PAR_EXT: &str = "par";
+
+        let mut par_path_short = [0u8; 256];
+        let mut par_path_len = par_path_short.len();
+        let par_path = if unsafe {
+            nsbundle_path_for_resource(
+                PAR_PATH.as_ptr(),
+                PAR_PATH.len(),
+                PAR_EXT.as_ptr(),
+                PAR_EXT.len(),
+                par_path_short.as_mut_ptr(),
+                &mut par_path_len,
+            )
+        } {
+            unsafe { String::from_utf8_unchecked(par_path_short[..par_path_len].into()) }
+        } else {
+            let mut buf = Vec::with_capacity(par_path_len);
+            unsafe {
+                nsbundle_path_for_resource(
+                    PAR_PATH.as_ptr(),
+                    PAR_PATH.len(),
+                    PAR_EXT.as_ptr(),
+                    PAR_EXT.len(),
+                    buf.spare_capacity_mut().as_mut_ptr().cast(),
+                    &mut par_path_len,
+                );
+            }
+            unsafe { String::from_utf8_unchecked(buf) }
         };
-        println!("par_path: {}", par_path.to_str());
+        println!("par_path: {par_path}");
 
         PlatformAssetLoader {
             par: peridot_archive::Archive::new(
-                peridot::native_io::PlatformNativeFileReader::open(&par_path.to_str())
+                peridot::native_io::PlatformNativeFileReader::open(&par_path)
                     .expect("Failed to open primary asset"),
                 false,
             )
@@ -153,7 +172,7 @@ impl PlatformAssetLoader {
     async fn post_init(&mut self) {
         self.par_async = Some(
             peridot_archive::ArchiveAsync::new(
-                peridot::native_io::PlatformNativeFileReaderAsync::open(&self.par_path.to_str())
+                peridot::native_io::PlatformNativeFileReaderAsync::open(&self.par_path)
                     .expect("Failed to open primary asset"),
                 false,
             )
@@ -231,13 +250,6 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     }
 }
 
-fn acquire_layer_size(layer: *mut c_void) -> peridot::math::Vector2<u32> {
-    let cr: appkit::CGRect =
-        unsafe { msg_send![layer as *mut objc::runtime::Object, contentsRect] };
-
-    peridot::math::Vector2(cr.size.width as _, cr.size.height as _)
-}
-
 struct Surface {
     gfx_device: peridot::VulkanGfx,
     handle: br::vk::VkSurfaceKHR,
@@ -285,9 +297,21 @@ impl Presenter {
             panic!("Vulkan Rendering is not supported by this adapter.");
         }
 
+        let mut width = core::mem::MaybeUninit::uninit();
+        let mut height = core::mem::MaybeUninit::uninit();
+        unsafe {
+            acquire_layer_size(layer_ptr, width.as_mut_ptr(), height.as_mut_ptr());
+        }
+
         Presenter {
             layer_ptr,
-            sc: peridot::IntegratedSwapchain::new(g, obj, acquire_layer_size(layer_ptr)),
+            sc: peridot::IntegratedSwapchain::new(
+                g,
+                obj,
+                peridot::math::Vector2(unsafe { width.assume_init() }, unsafe {
+                    height.assume_init()
+                }),
+            ),
         }
     }
 }
@@ -350,7 +374,13 @@ impl peridot::PlatformPresenter for Presenter {
     }
 
     fn current_geometry_extent(&self) -> peridot::math::Vector2<u32> {
-        acquire_layer_size(self.layer_ptr)
+        let mut w = core::mem::MaybeUninit::uninit();
+        let mut h = core::mem::MaybeUninit::uninit();
+        unsafe {
+            acquire_layer_size(self.layer_ptr, w.as_mut_ptr(), h.as_mut_ptr());
+        }
+
+        peridot::math::Vector2(unsafe { w.assume_init() }, unsafe { h.assume_init() })
     }
 }
 pub struct NativeLink {
@@ -438,8 +468,8 @@ fn launch_f<'f, F>(
     );
     let nih = Box::new(NativeInputHandler::new(v));
     engine.input().set_nativelink(nih);
-    let mut nae = NativeAudioEngine::init();
-    nae.start(engine.audio_mixer().clone());
+    // let mut nae = NativeAudioEngine::init();
+    // nae.start(engine.audio_mixer().clone());
     engine.post_init();
     let input = engine.input().clone();
 
@@ -638,12 +668,22 @@ pub struct GameDriverCallbacks {
 }
 
 unsafe extern "C" {
+    unsafe fn acquire_layer_size(
+        layer_ptr: *const core::ffi::c_void,
+        width: *mut u32,
+        height: *mut u32,
+    );
+
     unsafe fn nsapp_reply_should_terminate();
     #[allow(improper_ctypes)]
     unsafe fn nsbundle_path_for_resource(
-        name: *mut NSString,
-        oftype: *mut NSString,
-    ) -> *mut objc::runtime::Object;
+        path: *const u8,
+        path_length: usize,
+        ext: *const u8,
+        ext_lenght: usize,
+        out_path: *mut u8,
+        out_path_length: *mut usize,
+    ) -> bool;
     unsafe fn nsscreen_backing_scale_factor() -> f32;
     unsafe fn obtain_mouse_pointer_position(rt_view: *mut libc::c_void, x: *mut f32, y: *mut f32);
 
@@ -679,10 +719,12 @@ pub extern "C" fn launch_game(
 }
 
 #[no_mangle]
-pub extern "C" fn captionbar_text() -> *mut c_void {
-    NSString::from_str(userlib::APP_TITLE)
-        .expect("CaptionbarText NSString Allocation")
-        .into_id() as *mut _
+pub extern "C" fn captionbar_text(length: *mut usize) -> *const core::ffi::c_char {
+    unsafe {
+        *length = userlib::APP_TITLE.len();
+    }
+
+    userlib::APP_TITLE.as_ptr().cast()
 }
 
 struct NativeInputHandler {

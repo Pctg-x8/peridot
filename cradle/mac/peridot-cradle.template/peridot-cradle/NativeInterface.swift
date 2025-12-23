@@ -58,9 +58,34 @@ struct NativeGameDriver {
     }
 }
 
-func captionbarText() -> NSString? {
-    let p = captionbar_text()
-    return p.map { x in Unmanaged<NSString>.fromOpaque(x).takeUnretainedValue() }
+@_cdecl("nslog_utf8")
+func nslogUtf8(ptr: UnsafePointer<UInt8>, len: size_t) {
+    NSLog(String(bytes: UnsafeBufferPointer(start: ptr, count: len), encoding: .utf8)!)
+}
+
+func captionbarText() -> String? {
+    var len = 0
+    let p = withUnsafeMutablePointer(to: &len) { ptr in captionbar_text(ptr) }
+    
+    return String(
+        bytes: UnsafeBufferPointer(
+            start: unsafeBitCast(p, to: UnsafePointer<UInt8>.self),
+            count: len
+        ),
+        encoding: .utf8
+    )
+}
+
+@_cdecl("acquire_layer_size")
+func acquireLayerSize(
+    layer: UnsafeRawPointer,
+    width: UnsafeMutablePointer<UInt32>,
+    height: UnsafeMutablePointer<UInt32>,
+) {
+    let rect = unsafeBitCast(layer, to: CALayer.self).contentsRect
+    
+    width.pointee = UInt32(rect.size.width)
+    height.pointee = UInt32(rect.size.height)
 }
 
 @_cdecl("nsapp_reply_should_terminate")
@@ -69,12 +94,38 @@ func nsapp_reply_should_terminate() {
 }
 
 @_cdecl("nsbundle_path_for_resource")
-func nsbundle_path_for_resource(path: NSString, ext: NSString) -> UnsafeMutableRawPointer? {
-    guard let path = Bundle.main.path(forResource: path as String, ofType: ext as String) else {
-        return nil
+func nsbundle_path_for_resource(
+    path: UnsafePointer<UInt8>,
+    pathLength: size_t,
+    ext: UnsafePointer<UInt8>,
+    extLength: size_t,
+    outPath: UnsafeMutablePointer<UInt8>,
+    outPathLength: UnsafeMutablePointer<size_t>
+) -> Bool {
+    guard let path = Bundle.main.path(
+        forResource: String(
+            bytes: UnsafeBufferPointer(start: path, count: pathLength),
+            encoding: .utf8
+        ),
+        ofType: String(
+            bytes: UnsafeBufferPointer(start: ext, count: extLength),
+            encoding: .utf8
+        )
+    ) else {
+        outPathLength.pointee = 0
+        return true
     }
     
-    return Unmanaged.passRetained(path as NSString).toOpaque()
+    let pathData = Data(path.utf8)
+    if outPathLength.pointee < pathData.count {
+        // insufficient storage
+        outPathLength.pointee = pathData.count
+        return false
+    } else {
+        pathData.copyBytes(to: outPath, count: pathData.count)
+        outPathLength.pointee = pathData.count
+        return true
+    }
 }
 
 @_cdecl("nsscreen_backing_scale_factor")

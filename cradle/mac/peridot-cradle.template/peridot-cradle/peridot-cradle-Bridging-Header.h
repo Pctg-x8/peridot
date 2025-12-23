@@ -36,7 +36,7 @@ const uint8_t KEYMOD_COMMAND = 4;
 const uint8_t KEYMOD_CAPSLOCK = 5;
 
 void launch_game(void* initializationContext, void* viewptr);
-void* captionbar_text();
+const char* captionbar_text(size_t* length);
 
 #ifdef __cplusplus
 }
