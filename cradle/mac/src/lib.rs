@@ -1,6 +1,5 @@
 use audio::NativeAudioEngine;
 use libc::c_void;
-use log::*;
 
 use bedrock as br;
 use br::{InstanceChild, PhysicalDevice, SurfaceCreateInfo, VkHandle};
@@ -37,22 +36,6 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for NativeLogStream {
     }
 }
 
-struct NSLogger;
-impl log::Log for NSLogger {
-    fn log(&self, record: &log::Record) {
-        if self.enabled(record.metadata()) {
-            let fmt = format!("[{}] {}", record.level(), record.args());
-            unsafe {
-                nslog_utf8(fmt.as_ptr(), fmt.len());
-            }
-        }
-    }
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
-    }
-    fn flush(&self) {}
-}
-static LOGGER: NSLogger = NSLogger;
 unsafe extern "C" {
     unsafe fn nslog_utf8(bytes: *const u8, length: usize);
 }
@@ -150,15 +133,15 @@ impl PlatformAssetLoader {
             .map_err(|e| match e {
                 peridot::archive::ArchiveReadError::IO(e) => e,
                 peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
-                    error!("PrimaryArchive integrity check failed!");
+                    tracing::error!("PrimaryArchive integrity check failed!");
                     IOError::other("PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::SignatureMismatch => {
-                    error!("PrimaryArchive signature mismatch!");
+                    tracing::error!("PrimaryArchive signature mismatch!");
                     IOError::other("PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
-                    error!("lz4 decompress error: {:?}", e);
+                    tracing::error!("lz4 decompress error: {:?}", e);
                     IOError::other("PrimaryArchive read error")
                 }
                 _ => IOError::other("PrimaryArchive read error"),
@@ -180,15 +163,15 @@ impl PlatformAssetLoader {
             .map_err(|e| match e {
                 peridot::archive::ArchiveReadError::IO(e) => e,
                 peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
-                    error!("PrimaryArchive integrity check failed!");
+                    tracing::error!("PrimaryArchive integrity check failed!");
                     IOError::other("PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::SignatureMismatch => {
-                    error!("PrimaryArchive signature mismatch!");
+                    tracing::error!("PrimaryArchive signature mismatch!");
                     IOError::other("PrimaryArchive read error")
                 }
                 peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
-                    error!("lz4 decompress error: {:?}", e);
+                    tracing::error!("lz4 decompress error: {:?}", e);
                     IOError::other("PrimaryArchive read error")
                 }
                 _ => IOError::other("PrimaryArchive read error"),
@@ -701,9 +684,6 @@ pub extern "C" fn launch_game(
     initialization_context: *mut core::ffi::c_void,
     v: *mut core::ffi::c_void,
 ) {
-    log::set_logger(&LOGGER).expect("Failed to set logger");
-    log::set_max_level(log::LevelFilter::Trace);
-
     let subscriber = Registry::default().with(
         tracing_subscriber::fmt::layer()
             .pretty()
