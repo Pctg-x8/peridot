@@ -2,7 +2,7 @@ use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut, Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject
 };
 use core::pin::Pin;
-use std::{ collections::HashMap};
+use std::{ collections::HashMap, path::Path};
 use windows::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
     Graphics::{
@@ -22,6 +22,14 @@ use windows::Win32::{
     },
 };
 use windows_core::*;
+
+use crate::helper_types::SafeF32;
+
+mod mathext;
+mod helper_types;
+mod graphics;
+mod atlas;
+mod composite;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |data| core::task::RawWaker::new(data, &APP_WAKER_VTABLE),
@@ -1237,40 +1245,6 @@ impl GlyphAtlasSpaceManager {
     }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
-pub struct SafeF32(f32);
-impl Eq for SafeF32 {
-}
-impl Ord for SafeF32 {
-    #[inline(always)]
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        unsafe { self.0.partial_cmp(&other.0).unwrap_unchecked() }
-    }
-}
-impl core::hash::Hash for SafeF32 {
-    #[inline(always)]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        f32::to_ne_bytes(self.0).hash(state)
-    }
-}
-impl SafeF32 {
-    pub const fn new(v: f32) -> Option<Self> {
-        if v.is_nan() {
-             None
-        } else {
-            Some(Self(v))
-        }
-    }
-
-    pub const unsafe fn new_unchecked(v: f32) -> Self {
-        Self(v)
-    }
-
-    pub const fn value(&self) -> f32 {
-        self.0
-    }
-}
 
 struct GlyphAtlas {
     res: br::vk::VkImage,

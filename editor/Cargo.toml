@@ -11,6 +11,7 @@ win32 = ["bedrock/VK_KHR_win32_surface"]
 [dependencies]
 bedrock = { workspace = true, features = [
     "Implements",
+    "DynamicLoaded",
     "VK_KHR_surface",
     "VK_KHR_swapchain",
     "VK_EXT_debug_utils",
