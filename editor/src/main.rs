@@ -44,6 +44,9 @@ mod graphics;
 mod helper_types;
 mod mathext;
 
+#[cfg(feature = "freetype")]
+mod freetype;
+
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |data| core::task::RawWaker::new(data, &APP_WAKER_VTABLE),
     |_| {},
@@ -68,6 +71,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     mut app: Pin<&mut AppFuture>,
     mut event_store: Pin<&mut Option<Event>>,
 ) {
+    #[cfg(feature = "freetype")]
+    let ft = freetype::Library::init().expect("freetype::Library::init");
+
     let _ = app
         .as_mut()
         .poll(&mut core::task::Context::from_waker(&unsafe {
@@ -587,34 +593,29 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             use peridot_tp_harfbuzz::ffi::{hb_buffer_add_utf8, hb_buffer_create, hb_buffer_get_glyph_infos, hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_ft_font_create_referenced, hb_shape};
 
                             let dpi = 168;
-                            let mut lib = core::mem::MaybeUninit::uninit();
-                            freetype2::FT_Init_FreeType(lib.as_mut_ptr());
-                            let library = lib.assume_init();
-                            let mut face = core::mem::MaybeUninit::uninit();
-                            freetype2::FT_New_Face(library, font_file_path.as_ptr(), face_index as _, face.as_mut_ptr());
-                            let face = face.assume_init();
-                            freetype2::FT_Set_Char_Size(face, 0, (12.0 * 64.0) as _, 0, dpi);
+                            let mut face = freetype::Face::new(&ft, &font_file_path, face_index as _).expect("face.new");
+                            face.set_char_size(12.0, dpi).expect("face.set_char_size");
                             let hb_buffer = hb_buffer_create();
                             hb_buffer_add_utf8(hb_buffer, c"Peridot Marble Editor - New Project".as_ptr(), -1, 0, -1);
                             hb_buffer_guess_segment_properties(hb_buffer);
-                            let hb_font = hb_ft_font_create_referenced(face);
+                            let hb_font = hb_ft_font_create_referenced(face.as_native());
                             hb_shape(hb_font, hb_buffer, core::ptr::null(), 0);
                             let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
                             let glyph_infos = hb_buffer_get_glyph_infos(hb_buffer, glyph_infos_len.as_mut_ptr());
                             let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
                             let glyph_positions = hb_buffer_get_glyph_positions(hb_buffer, glyph_positions_len.as_mut_ptr());
                             assert_eq!(glyph_infos_len.assume_init(), glyph_positions_len.assume_init());
+                            let baseline_y = 12.0 * (dpi as f64 / 96.0) * face.ascender_real_per_em();
                             let mut left_cursor = 0;
                             for n in 0..glyph_positions_len.assume_init() {
                                 let glyph_info = &*glyph_infos.add(n as usize);
                                 let glyph_position = &*glyph_positions.add(n as usize);
 
-                                freetype2::FT_Load_Glyph(face, glyph_info.codepoint, freetype2::FT_LOAD_DEFAULT);
-                                println!("{glyph_info:?} {glyph_position:?} {:?} {}", (*(*face).glyph).metrics, glyph_position.x_advance as f32 / 64.0);
-                                let metrics = &(*(*face).glyph).metrics;
+                                let glyph = face.load_glyph(glyph_info.codepoint, freetype2::FT_LOAD_DEFAULT).expect("face.load_glyph");
+                                let metrics = &glyph.0.metrics;
                                 let glyph_width = metrics.width as f32 / 64.0;
                                 let glyph_height = metrics.height as f32 / 64.0;
-                                let outline = &mut (*(*face).glyph).outline;
+                                println!("{glyph_info:?} {glyph_position:?} {metrics:?} {}", glyph_position.x_advance as f32 / 64.0);
 
                                 let (r, is_new) = glyph_atlas.acquire((0, SafeF32::new_unchecked(12.0), glyph_info.codepoint as _), glyph_width.ceil() as _, glyph_height.ceil() as _);
 
@@ -623,7 +624,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                         metrics.width as f32 / 64.0,
                                         metrics.height as f32 / 64.0,
                                         (left_cursor as i64 + glyph_position.x_offset as i64 + metrics.horiBearingX) as f32 / 64.0,
-                                        12.0 * (dpi as f32 / 96.0) * (*face).ascender as f32 / (*face).units_per_em as f32 - metrics.horiBearingY as f32 / 64.0
+                                        baseline_y as f32 - metrics.horiBearingY as f32 / 64.0
                                     ],
                                     uvst: [
                                         r.width as f32 / glyph_atlas.space_mgr.max.width as f32,
@@ -634,105 +635,15 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 });
 
                                 if is_new {
-                                    struct OutlineContext<'x> {
-                                        translate_x: f32,
-                                        translate_y: f32,
-                                        current_figure_state: &'x mut Option<(freetype2::FT_Vector, freetype2::FT_Vector, u16)>,
-                                        new_filltri_points: &'x mut Vec<[f32; 2]>,
-                                        new_filltri_indices: &'x mut Vec<u16>,
-                                        new_curve_triangles: &'x mut Vec<[f32; 4]>
-                                    }
-
-                                    extern "system" fn move_to(to: *const freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
-                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
-                                        let to = unsafe { &*to };
-                                        println!("move_to {} {}", to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y);
-
-                                        *ctx.current_figure_state = Some((*to, *to, ctx.new_filltri_points.len() as _));
-                                        ctx.new_filltri_points.push([to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y]);
-                                        0
-                                    }
-
-                                    extern "system" fn line_to(to: *const freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
-                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
-                                        let to = unsafe { &*to };
-                                        println!("line_to {} {}", to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y);
-
-                                        let &mut Some((_, ref mut current_point, filltri_index0)) = ctx.current_figure_state else {
-                                            panic!("no figure started?");
-                                        };
-                                        let filltri_index1 = ctx.new_filltri_points.len() - 1;
-                                        ctx.new_filltri_points.push([to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y]);
-                                        ctx.new_filltri_indices.extend([filltri_index0, filltri_index1 as u16, ctx.new_filltri_points.len() as u16 - 1]);
-                                        *current_point = *to;
-                                        0
-                                    }
-
-                                    extern "system" fn conic_to(control: *const freetype2::FT_Vector, to: *const freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
-                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
-                                        let control = unsafe { &*control };
-                                        let to = unsafe { &*to };
-                                        println!("conic_to {} {} {} {}", control.x as f32 / 64.0 + ctx.translate_x, control.y as f32 / 64.0 + ctx.translate_y, to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y);
-
-                                        let &mut Some((_, ref mut current_point, filltri_index0)) = ctx.current_figure_state else {
-                                            panic!("no figure started?");
-                                        };
-                                        let filltri_index1 = ctx.new_filltri_points.len()-  1;
-                                        ctx.new_filltri_points.push([to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y]);
-                                        ctx.new_filltri_indices.extend([filltri_index0, filltri_index1 as u16, ctx.new_filltri_points.len() as u16 - 1]);
-                                        ctx.new_curve_triangles.extend([
-                                            [current_point.x as f32 / 64.0 + ctx.translate_x, current_point.y as f32 / 64.0 + ctx.translate_y, 0.0, 0.0],
-                                            [control.x as f32 / 64.0 + ctx.translate_x, control.y as f32 / 64.0 + ctx.translate_y, 0.5, 0.0],
-                                            [to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y, 1.0, 1.0]
-                                        ]);
-                                        *current_point = *to;
-                                        0
-                                    }
-
-                                    extern "system" fn cubic_to(control1: *const freetype2::FT_Vector, control2: *const freetype2::FT_Vector, to:*const  freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
-                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
-                                        let control1 = unsafe { &*control1 };
-                                        let control2 = unsafe { &*control2 };
-                                        let to = unsafe { &*to };
-                                        println!("cubic_to {} {} {} {} {} {}", control1.x as f32 / 64.0, control1.y as f32 / 64.0, control2.x as f32 / 64.0, control2.y as f32 / 64.0, to.x as f32 / 64.0, to.y as f32 / 64.0);
-
-                                        let &mut Some((_, ref mut current_point, filltri_index0)) = ctx.current_figure_state else {
-                                            panic!("no figure started?");
-                                        };
-                                        lyon_geom::CubicBezierSegment {
-                                            from: lyon_geom::point(current_point.x as f32 / 64.0 + ctx.translate_x, current_point.y as f32 / 64.0 + ctx.translate_y),
-                                            ctrl1: lyon_geom::point(control1.x as f32 / 64.0 + ctx.translate_x, control1.y as f32 / 64.0 + ctx.translate_y),
-                                            ctrl2: lyon_geom::point(control2.x as f32 / 64.0 + ctx.translate_x, control2.y as f32 / 64.0 + ctx.translate_y),
-                                            to: lyon_geom::point(to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y),
-                                        }.for_each_quadratic_bezier(0.1, &mut |q| {
-                                            let filltri_index1 = ctx.new_filltri_points.len()-  1;
-                                            ctx.new_filltri_points.push([q.to.x, q.to.y]);
-                                            ctx.new_filltri_indices.extend([filltri_index0, filltri_index1 as u16, ctx.new_filltri_points.len() as u16 - 1]);
-                                            ctx.new_curve_triangles.extend([
-                                                [q.from.x, q.from.y, 0.0, 0.0],
-                                                [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
-                                                [q.to.x, q.to.y, 1.0, 1.0]
-                                            ]
-                                        )});
-                                        *current_point = *to;
-                                        0
-                                    }
-
-                                    freetype2::outline::FT_Outline_Decompose(outline, &freetype2::FT_Outline_Funcs {
-                                        move_to,
-                                        line_to,
-                                        conic_to,
-                                        cubic_to,
-                                        shift: 0,
-                                        delta: 0,
-                                    }, &mut OutlineContext {
+                                    let mut ctx = OutlineContext {
                                         translate_x: r.left as f32 - metrics.horiBearingX as f32 / 64.0,
                                         translate_y: r.top as f32 - metrics.horiBearingY as f32 / 64.0,
                                         current_figure_state: &mut None,
                                         new_filltri_points: &mut new_filltri_points,
                                         new_filltri_indices: &mut new_filltri_indices,
                                         new_curve_triangles: &mut new_curve_triangles,
-                                    } as *mut _ as _);
+                                    };
+                                    glyph.outline_mut().decompose(&mut ctx, 0, 0).expect("glyph.outline.decompose");
                                 }
 
                                 left_cursor += glyph_position.x_advance;
@@ -2066,6 +1977,160 @@ impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
         vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
     ) {
         unimplemented!("SetSegmentFlags {vertexflags:?}")
+    }
+}
+
+#[cfg(feature = "freetype")]
+struct OutlineContext<'x> {
+    translate_x: f32,
+    translate_y: f32,
+    current_figure_state: &'x mut Option<(freetype2::FT_Vector, freetype2::FT_Vector, u16)>,
+    new_filltri_points: &'x mut Vec<[f32; 2]>,
+    new_filltri_indices: &'x mut Vec<u16>,
+    new_curve_triangles: &'x mut Vec<[f32; 4]>,
+}
+#[cfg(feature = "freetype")]
+impl OutlineContext<'_> {
+    fn add_quadratic(&mut self, q: &lyon_geom::QuadraticBezierSegment<f32>) {
+        let &mut Some((_, _, filltri_index0)) = self.current_figure_state else {
+            panic!("no figure started?");
+        };
+        let filltri_index1 = self.new_filltri_points.len() - 1;
+        self.new_filltri_points.push([q.to.x, q.to.y]);
+        self.new_filltri_indices.extend([
+            filltri_index0,
+            filltri_index1 as u16,
+            self.new_filltri_points.len() as u16 - 1,
+        ]);
+        self.new_curve_triangles.extend([
+            [q.from.x, q.from.y, 0.0, 0.0],
+            [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
+            [q.to.x, q.to.y, 1.0, 1.0],
+        ]);
+    }
+}
+#[cfg(feature = "freetype")]
+impl freetype::OutlineFuncs for OutlineContext<'_> {
+    fn move_to(&mut self, to: &freetype2::FT_Vector) -> Result<(), freetype2::FT_Error> {
+        println!(
+            "move_to {} {}",
+            to.x as f32 / 64.0 + self.translate_x,
+            to.y as f32 / 64.0 + self.translate_y
+        );
+
+        *self.current_figure_state = Some((*to, *to, self.new_filltri_points.len() as _));
+        self.new_filltri_points.push([
+            to.x as f32 / 64.0 + self.translate_x,
+            to.y as f32 / 64.0 + self.translate_y,
+        ]);
+
+        Ok(())
+    }
+
+    fn line_to(&mut self, to: &freetype2::FT_Vector) -> Result<(), freetype2::FT_Error> {
+        println!(
+            "line_to {} {}",
+            to.x as f32 / 64.0 + self.translate_x,
+            to.y as f32 / 64.0 + self.translate_y
+        );
+
+        let &mut Some((_, ref mut current_point, filltri_index0)) = self.current_figure_state
+        else {
+            panic!("no figure started?");
+        };
+        let filltri_index1 = self.new_filltri_points.len() - 1;
+        self.new_filltri_points.push([
+            to.x as f32 / 64.0 + self.translate_x,
+            to.y as f32 / 64.0 + self.translate_y,
+        ]);
+        self.new_filltri_indices.extend([
+            filltri_index0,
+            filltri_index1 as u16,
+            self.new_filltri_points.len() as u16 - 1,
+        ]);
+        *current_point = *to;
+
+        Ok(())
+    }
+
+    fn conic_to(
+        &mut self,
+        control: &freetype2::FT_Vector,
+        to: &freetype2::FT_Vector,
+    ) -> Result<(), freetype2::FT_Error> {
+        println!(
+            "conic_to {} {} {} {}",
+            control.x as f32 / 64.0 + self.translate_x,
+            control.y as f32 / 64.0 + self.translate_y,
+            to.x as f32 / 64.0 + self.translate_x,
+            to.y as f32 / 64.0 + self.translate_y
+        );
+
+        let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
+        else {
+            panic!("no figure started?");
+        };
+        self.add_quadratic(&lyon_geom::QuadraticBezierSegment {
+            from: lyon_geom::point(
+                current_point.x as f32 / 64.0 + self.translate_x,
+                current_point.y as f32 / 64.0 + self.translate_y,
+            ),
+            ctrl: lyon_geom::point(
+                control.x as f32 / 64.0 + self.translate_x,
+                control.y as f32 / 64.0 + self.translate_y,
+            ),
+            to: lyon_geom::point(
+                to.x as f32 / 64.0 + self.translate_x,
+                to.y as f32 / 64.0 + self.translate_y,
+            ),
+        });
+        *self.current_figure_state = Some((start_point, *to, filltri_index0));
+
+        Ok(())
+    }
+
+    fn cubic_to(
+        &mut self,
+        control1: &freetype2::FT_Vector,
+        control2: &freetype2::FT_Vector,
+        to: &freetype2::FT_Vector,
+    ) -> Result<(), freetype2::FT_Error> {
+        println!(
+            "cubic_to {} {} {} {} {} {}",
+            control1.x as f32 / 64.0,
+            control1.y as f32 / 64.0,
+            control2.x as f32 / 64.0,
+            control2.y as f32 / 64.0,
+            to.x as f32 / 64.0,
+            to.y as f32 / 64.0
+        );
+
+        let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
+        else {
+            panic!("no figure started?");
+        };
+        lyon_geom::CubicBezierSegment {
+            from: lyon_geom::point(
+                current_point.x as f32 / 64.0 + self.translate_x,
+                current_point.y as f32 / 64.0 + self.translate_y,
+            ),
+            ctrl1: lyon_geom::point(
+                control1.x as f32 / 64.0 + self.translate_x,
+                control1.y as f32 / 64.0 + self.translate_y,
+            ),
+            ctrl2: lyon_geom::point(
+                control2.x as f32 / 64.0 + self.translate_x,
+                control2.y as f32 / 64.0 + self.translate_y,
+            ),
+            to: lyon_geom::point(
+                to.x as f32 / 64.0 + self.translate_x,
+                to.y as f32 / 64.0 + self.translate_y,
+            ),
+        }
+        .for_each_quadratic_bezier(0.1, &mut |q| self.add_quadratic(q));
+        *self.current_figure_state = Some((start_point, *to, filltri_index0));
+
+        Ok(())
     }
 }
 
