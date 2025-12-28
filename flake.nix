@@ -33,6 +33,9 @@
         pkgs.pulseaudio
         pkgs.pipewire
         pkgs.vulkan-loader
+        pkgs.fontconfig
+        pkgs.freetype
+        pkgs.harfbuzz
         # required for some asset processing
         pkgs.shaderc
         # required for workflow generator(also included in githooks)
@@ -46,7 +49,7 @@
       shellSetCommonEnvVars = ''
         export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
         # set library search paths for thirdparty
-        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/source-repo/build
+        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/source-repo/build:${pkgs.vulkan-loader.outPath}/lib
         # peridot specific env vars for development
         export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
         export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle

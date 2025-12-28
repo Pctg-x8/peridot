@@ -1,16 +1,28 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut, Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject
+    self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut,
+    Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass,
+    ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject,
 };
 use core::pin::Pin;
-use std::{ collections::HashMap, path::Path};
+#[cfg(feature = "fontconfig")]
+use fontconfig::FcConfig;
+#[cfg(feature = "wayland")]
+use peridot_tp_wayland as wl;
+use std::collections::HashMap;
+#[cfg(windows)]
 use windows::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
     Graphics::{
-        Direct2D::Common::{D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED,  D2D1_FILL_MODE_WINDING, ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl}, DirectWrite::{
+        Direct2D::Common::{
+            D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_WINDING,
+            ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl,
+        },
+        DirectWrite::{
             DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWriteCreateFactory, IDWriteFactory,
             IDWritePixelSnapping_Impl, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
-        }, Gdi::HBRUSH
+        },
+        Gdi::HBRUSH,
     },
     System::LibraryLoader::GetModuleHandleW,
     UI::WindowsAndMessaging::{
@@ -21,15 +33,16 @@ use windows::Win32::{
         WS_OVERLAPPEDWINDOW,
     },
 };
+#[cfg(windows)]
 use windows_core::*;
 
 use crate::helper_types::SafeF32;
 
-mod mathext;
-mod helper_types;
-mod graphics;
 mod atlas;
-mod composite;
+// mod composite;
+mod graphics;
+mod helper_types;
+mod mathext;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |data| core::task::RawWaker::new(data, &APP_WAKER_VTABLE),
@@ -61,7 +74,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             core::task::Waker::new(&(), &APP_WAKER_VTABLE)
         }));
 
+    #[cfg(windows)]
     let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
+    #[cfg(windows)]
     let atom = unsafe {
         RegisterClassExW(&WNDCLASSEXW {
             cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
@@ -78,10 +93,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             hIconSm: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
         })
     };
+    #[cfg(windows)]
     if atom == 0 {
         Err::<(), _>(std::io::Error::last_os_error()).expect("RegisterClassExW");
     }
 
+    #[cfg(windows)]
     let w = unsafe {
         CreateWindowExW(
             WS_EX_APPWINDOW,
@@ -99,8 +116,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         )
         .expect("CreateWindowExW")
     };
+    #[cfg(windows)]
     let mut w = Win32Window(w);
 
+    #[cfg(windows)]
     unsafe {
         w.set_long_ptr(
             WINDOW_LONG_PTR_INDEX(0),
@@ -111,6 +130,73 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             event_store.as_mut().get_mut() as *mut _ as _,
         );
     }
+
+    #[cfg(feature = "wayland")]
+    let wl_display = wl::Display::connect().expect("wl_display connect");
+    #[cfg(feature = "wayland")]
+    let mut wl_registry = wl_display.get_registry().expect("wl_registry get");
+    #[cfg(feature = "wayland")]
+    struct RegistryListener {
+        compositor: Option<wl::Owned<wl::Compositor>>,
+        xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
+    }
+    #[cfg(feature = "wayland")]
+    impl wl::RegistryListener for RegistryListener {
+        fn global(
+            &mut self,
+            registry: &mut peridot_tp_wayland::Registry,
+            name: u32,
+            interface: &core::ffi::CStr,
+            version: u32,
+        ) {
+            tracing::info!(name, ?interface, version, "wl interface");
+
+            if interface == c"wl_compositor" {
+                self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
+            } else if interface == c"xdg_wm_base" {
+                self.xdg_wm_base = Some(registry.bind(name, version).expect("bind xdg_wm_base"));
+            }
+        }
+
+        fn global_remove(&mut self, _registry: &mut peridot_tp_wayland::Registry, name: u32) {
+            tracing::info!(name, "wl interface remove");
+        }
+    }
+    #[cfg(feature = "wayland")]
+    let mut rl = RegistryListener {
+        compositor: None,
+        xdg_wm_base: None,
+    };
+    #[cfg(feature = "wayland")]
+    wl_registry
+        .set_listener(&mut rl)
+        .into_result()
+        .expect("wl_registry set_listener");
+    #[cfg(feature = "wayland")]
+    wl_display.roundtrip().expect("wl_display roundtrip");
+    #[cfg(feature = "wayland")]
+    drop(wl_registry);
+    #[cfg(feature = "wayland")]
+    let mut wl_compositor = rl.compositor.expect("no compositor");
+    #[cfg(feature = "wayland")]
+    let mut xdg_wm_base = rl.xdg_wm_base.expect("no xdg-shell");
+
+    #[cfg(feature = "wayland")]
+    let mut wl_global_msg = WaylandGlobalMessaging;
+    #[cfg(feature = "wayland")]
+    xdg_wm_base
+        .set_listener(&mut wl_global_msg)
+        .into_result()
+        .expect("xdg_wm_base set_listener");
+
+    #[cfg(feature = "wayland")]
+    let mut wl_surface = wl_compositor.create_surface().expect("wl_surface create");
+    #[cfg(feature = "wayland")]
+    let mut wl_xdg_surface = xdg_wm_base
+        .get_xdg_surface(&wl_surface)
+        .expect("xdg_surface create");
+    #[cfg(feature = "wayland")]
+    let mut wl_xdg_toplevel = wl_xdg_surface.get_toplevel().expect("xdg_toplevel create");
 
     if let Some(xs) = br::instance_extension_properties_cstr_alloc(None)
         .inspect_err(
@@ -159,6 +245,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let mut instance_extensions = vec![c"VK_KHR_surface".into(), c"VK_EXT_debug_utils".into()];
     #[cfg(windows)]
     instance_extensions.push(c"VK_KHR_win32_surface".into());
+    #[cfg(feature = "wayland")]
+    instance_extensions.push(c"VK_KHR_wayland_surface".into());
     let vk_instance = br::InstanceObject::new(&br::InstanceCreateInfo::new(
         &br::ApplicationInfo::new(
             c"Peridot Marble Editor",
@@ -259,9 +347,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     )
     .expect("vk_device create");
 
+    #[cfg(windows)]
     if !vk_adapter.win32_presentation_support(graphics_queue_family_index) {
         panic!("win32 presentation not supported on graphics queue");
     }
+    #[cfg(windows)]
     let vk_surface = unsafe {
         br::SurfaceObject::new(
             &vk_adapter,
@@ -272,6 +362,26 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         )
         .expect("vk_surface create")
     };
+
+    #[cfg(feature = "wayland")]
+    if unsafe {
+        !vk_adapter
+            .wayland_presentation_support(graphics_queue_family_index, wl_display.as_raw().cast())
+    } {
+        panic!("wayland presentation not supported on graphics queue");
+    }
+    #[cfg(feature = "wayland")]
+    let vk_surface = unsafe {
+        br::SurfaceObject::new(
+            &vk_adapter,
+            &br::WaylandSurfaceCreateInfo::new(
+                wl_display.as_raw().cast(),
+                wl_surface.as_raw().cast(),
+            ),
+        )
+        .expect("vk_surface create")
+    };
+
     if !vk_adapter
         .surface_support(graphics_queue_family_index, &vk_surface)
         .expect("surface_support")
@@ -279,7 +389,17 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         panic!("surface not supported on graphics queue");
     }
 
+    let mut w = WaylandWindow {
+        surface: wl_surface,
+        xdg_surface: wl_xdg_surface,
+        xdg_toplevel: wl_xdg_toplevel,
+        state: Box::new(WaylandWindowState {}),
+    };
+    w.initialize();
+    wl_display.roundtrip().expect("roundtrip");
+
     std::thread::scope({
+        #[cfg(windows)]
         let w = &w;
         move |thread_scope| {
             let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -417,14 +537,218 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
                         let mut glyph_atlas = GlyphAtlas::new(&vk_device, &vk_adapter_memory_properties);
 
+                        #[cfg(windows)]
                         let dwfactory: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory") };
+                        #[cfg(windows)]
                         let ui_text_format = unsafe { dwfactory.CreateTextFormat(w!("Inter Display"), None, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, 12.0, w!("ja-JP")).expect("CreateTextFormat ui") };
 
-                        let title_layout = unsafe { dwfactory.CreateTextLayout(&"Peridot Marble Editor - New Project".encode_utf16().collect::<Vec<_>>(), &ui_text_format, f32::MAX, f32::MAX).expect("CreateTextLayout title") };
+                        #[cfg(feature = "fontconfig")]
+                        let (font_file_path, face_index) = unsafe {
+                            fontconfig::FcInit();
+                            let pat = fontconfig::FcPatternCreate();
+                            fontconfig::FcPatternAddString(pat, fontconfig::FC_FAMILY.as_ptr(), c"Inter Display".as_ptr().cast());
+                            fontconfig::FcPatternAddInteger(pat, fontconfig::FC_WEIGHT.as_ptr(), fontconfig::FC_WEIGHT_REGULAR);
+                            fontconfig::FcPatternAddDouble(pat, fontconfig::FC_SIZE.as_ptr(), 12.0);
+                            fontconfig::FcConfigSubstitute(fontconfig::FcConfigGetCurrent(), pat, fontconfig::FcMatchPattern);
+                            fontconfig::FcDefaultSubstitute(pat);
+                            let mut sort_result = core::mem::MaybeUninit::uninit();
+                            let fonts = fontconfig::FcFontSort(fontconfig::FcConfigGetCurrent(), pat, true as _, core::ptr::null_mut(), sort_result.as_mut_ptr());
+                            let sort_result = sort_result.assume_init();
+                            if sort_result != fontconfig::FcResultMatch {
+                                eprintln!("fontconfig::FcFontSort failed: {sort_result}");
+                            }
+                            // for n in 0..(*fonts).nfont {
+                            //     let f = *(*fonts).fonts.add(n as usize);
+                            //     fontconfig::FcPatternPrint(f);
+                            // }
+
+                            let mut file = core::mem::MaybeUninit::uninit();
+                            let r = fontconfig::FcPatternGetString(*(*fonts).fonts, fontconfig::FC_FILE.as_ptr(), 0, file.as_mut_ptr());
+                            if r != fontconfig::FcResultMatch {
+                                panic!("get file failed: {r}");
+                            }
+                            let file = file.assume_init();
+                            let mut index = core::mem::MaybeUninit::uninit();
+                            let r = fontconfig::FcPatternGetInteger(*(*fonts).fonts, fontconfig::FC_INDEX.as_ptr(), 0, index.as_mut_ptr());
+                            if r != fontconfig::FcResultMatch {
+                                panic!("get index failed: {r}");
+                            }
+                            let index = index.assume_init();
+                            (core::ffi::CStr::from_ptr(file.cast()).to_owned(), index)
+                        };
+
                         let mut box_instances = Vec::new();
-                        let mut new_filltri_points = Vec::new();
-                        let mut new_filltri_indices = Vec::new();
-                        let mut new_curve_triangles = Vec::new();
+                        let mut new_filltri_points: Vec<[f32; 2]> = Vec::new();
+                        let mut new_filltri_indices: Vec<u16> = Vec::new();
+                        let mut new_curve_triangles: Vec<[f32; 4]> = Vec::new();
+
+                        #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
+                        unsafe {
+                            use peridot_tp_harfbuzz::ffi::{hb_buffer_add_utf8, hb_buffer_create, hb_buffer_get_glyph_infos, hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_ft_font_create_referenced, hb_shape};
+
+                            let dpi = 168;
+                            let mut lib = core::mem::MaybeUninit::uninit();
+                            freetype2::FT_Init_FreeType(lib.as_mut_ptr());
+                            let library = lib.assume_init();
+                            let mut face = core::mem::MaybeUninit::uninit();
+                            freetype2::FT_New_Face(library, font_file_path.as_ptr(), face_index as _, face.as_mut_ptr());
+                            let face = face.assume_init();
+                            freetype2::FT_Set_Char_Size(face, 0, (12.0 * 64.0) as _, 0, dpi);
+                            let hb_buffer = hb_buffer_create();
+                            hb_buffer_add_utf8(hb_buffer, c"Peridot Marble Editor - New Project".as_ptr(), -1, 0, -1);
+                            hb_buffer_guess_segment_properties(hb_buffer);
+                            let hb_font = hb_ft_font_create_referenced(face);
+                            hb_shape(hb_font, hb_buffer, core::ptr::null(), 0);
+                            let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+                            let glyph_infos = hb_buffer_get_glyph_infos(hb_buffer, glyph_infos_len.as_mut_ptr());
+                            let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                            let glyph_positions = hb_buffer_get_glyph_positions(hb_buffer, glyph_positions_len.as_mut_ptr());
+                            assert_eq!(glyph_infos_len.assume_init(), glyph_positions_len.assume_init());
+                            let mut left_cursor = 0;
+                            for n in 0..glyph_positions_len.assume_init() {
+                                let glyph_info = &*glyph_infos.add(n as usize);
+                                let glyph_position = &*glyph_positions.add(n as usize);
+
+                                freetype2::FT_Load_Glyph(face, glyph_info.codepoint, freetype2::FT_LOAD_DEFAULT);
+                                println!("{glyph_info:?} {glyph_position:?} {:?} {}", (*(*face).glyph).metrics, glyph_position.x_advance as f32 / 64.0);
+                                let metrics = &(*(*face).glyph).metrics;
+                                let glyph_width = metrics.width as f32 / 64.0;
+                                let glyph_height = metrics.height as f32 / 64.0;
+                                let outline = &mut (*(*face).glyph).outline;
+
+                                let (r, is_new) = glyph_atlas.acquire((0, SafeF32::new_unchecked(12.0), glyph_info.codepoint as _), glyph_width.ceil() as _, glyph_height.ceil() as _);
+
+                                box_instances.push(BoxInstance {
+                                    posst: [
+                                        metrics.width as f32 / 64.0,
+                                        metrics.height as f32 / 64.0,
+                                        (left_cursor as i64 + glyph_position.x_offset as i64 + metrics.horiBearingX) as f32 / 64.0,
+                                        12.0 * (dpi as f32 / 96.0) * (*face).ascender as f32 / (*face).units_per_em as f32 - metrics.horiBearingY as f32 / 64.0
+                                    ],
+                                    uvst: [
+                                        r.width as f32 / glyph_atlas.space_mgr.max.width as f32,
+                                        r.height as f32 / glyph_atlas.space_mgr.max.height as f32,
+                                        r.left as f32 / glyph_atlas.space_mgr.max.width as f32,
+                                        r.top as f32 / glyph_atlas.space_mgr.max.height as f32,
+                                    ]
+                                });
+
+                                if is_new {
+                                    struct OutlineContext<'x> {
+                                        translate_x: f32,
+                                        translate_y: f32,
+                                        current_figure_state: &'x mut Option<(freetype2::FT_Vector, freetype2::FT_Vector, u16)>,
+                                        new_filltri_points: &'x mut Vec<[f32; 2]>,
+                                        new_filltri_indices: &'x mut Vec<u16>,
+                                        new_curve_triangles: &'x mut Vec<[f32; 4]>
+                                    }
+
+                                    extern "system" fn move_to(to: *const freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
+                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
+                                        let to = unsafe { &*to };
+                                        println!("move_to {} {}", to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y);
+
+                                        *ctx.current_figure_state = Some((*to, *to, ctx.new_filltri_points.len() as _));
+                                        ctx.new_filltri_points.push([to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y]);
+                                        0
+                                    }
+
+                                    extern "system" fn line_to(to: *const freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
+                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
+                                        let to = unsafe { &*to };
+                                        println!("line_to {} {}", to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y);
+
+                                        let &mut Some((_, ref mut current_point, filltri_index0)) = ctx.current_figure_state else {
+                                            panic!("no figure started?");
+                                        };
+                                        let filltri_index1 = ctx.new_filltri_points.len() - 1;
+                                        ctx.new_filltri_points.push([to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y]);
+                                        ctx.new_filltri_indices.extend([filltri_index0, filltri_index1 as u16, ctx.new_filltri_points.len() as u16 - 1]);
+                                        *current_point = *to;
+                                        0
+                                    }
+
+                                    extern "system" fn conic_to(control: *const freetype2::FT_Vector, to: *const freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
+                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
+                                        let control = unsafe { &*control };
+                                        let to = unsafe { &*to };
+                                        println!("conic_to {} {} {} {}", control.x as f32 / 64.0 + ctx.translate_x, control.y as f32 / 64.0 + ctx.translate_y, to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y);
+
+                                        let &mut Some((_, ref mut current_point, filltri_index0)) = ctx.current_figure_state else {
+                                            panic!("no figure started?");
+                                        };
+                                        let filltri_index1 = ctx.new_filltri_points.len()-  1;
+                                        ctx.new_filltri_points.push([to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y]);
+                                        ctx.new_filltri_indices.extend([filltri_index0, filltri_index1 as u16, ctx.new_filltri_points.len() as u16 - 1]);
+                                        ctx.new_curve_triangles.extend([
+                                            [current_point.x as f32 / 64.0 + ctx.translate_x, current_point.y as f32 / 64.0 + ctx.translate_y, 0.0, 0.0],
+                                            [control.x as f32 / 64.0 + ctx.translate_x, control.y as f32 / 64.0 + ctx.translate_y, 0.5, 0.0],
+                                            [to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y, 1.0, 1.0]
+                                        ]);
+                                        *current_point = *to;
+                                        0
+                                    }
+
+                                    extern "system" fn cubic_to(control1: *const freetype2::FT_Vector, control2: *const freetype2::FT_Vector, to:*const  freetype2::FT_Vector, user_data: *mut core::ffi::c_void) -> i32 {
+                                        let ctx = unsafe { &mut *user_data.cast::<OutlineContext>() };
+                                        let control1 = unsafe { &*control1 };
+                                        let control2 = unsafe { &*control2 };
+                                        let to = unsafe { &*to };
+                                        println!("cubic_to {} {} {} {} {} {}", control1.x as f32 / 64.0, control1.y as f32 / 64.0, control2.x as f32 / 64.0, control2.y as f32 / 64.0, to.x as f32 / 64.0, to.y as f32 / 64.0);
+
+                                        let &mut Some((_, ref mut current_point, filltri_index0)) = ctx.current_figure_state else {
+                                            panic!("no figure started?");
+                                        };
+                                        lyon_geom::CubicBezierSegment {
+                                            from: lyon_geom::point(current_point.x as f32 / 64.0 + ctx.translate_x, current_point.y as f32 / 64.0 + ctx.translate_y),
+                                            ctrl1: lyon_geom::point(control1.x as f32 / 64.0 + ctx.translate_x, control1.y as f32 / 64.0 + ctx.translate_y),
+                                            ctrl2: lyon_geom::point(control2.x as f32 / 64.0 + ctx.translate_x, control2.y as f32 / 64.0 + ctx.translate_y),
+                                            to: lyon_geom::point(to.x as f32 / 64.0 + ctx.translate_x, to.y as f32 / 64.0 + ctx.translate_y),
+                                        }.for_each_quadratic_bezier(0.1, &mut |q| {
+                                            let filltri_index1 = ctx.new_filltri_points.len()-  1;
+                                            ctx.new_filltri_points.push([q.to.x, q.to.y]);
+                                            ctx.new_filltri_indices.extend([filltri_index0, filltri_index1 as u16, ctx.new_filltri_points.len() as u16 - 1]);
+                                            ctx.new_curve_triangles.extend([
+                                                [q.from.x, q.from.y, 0.0, 0.0],
+                                                [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
+                                                [q.to.x, q.to.y, 1.0, 1.0]
+                                            ]
+                                        )});
+                                        *current_point = *to;
+                                        0
+                                    }
+
+                                    freetype2::outline::FT_Outline_Decompose(outline, &freetype2::FT_Outline_Funcs {
+                                        move_to,
+                                        line_to,
+                                        conic_to,
+                                        cubic_to,
+                                        shift: 0,
+                                        delta: 0,
+                                    }, &mut OutlineContext {
+                                        translate_x: r.left as f32 - metrics.horiBearingX as f32 / 64.0,
+                                        translate_y: r.top as f32 - metrics.horiBearingY as f32 / 64.0,
+                                        current_figure_state: &mut None,
+                                        new_filltri_points: &mut new_filltri_points,
+                                        new_filltri_indices: &mut new_filltri_indices,
+                                        new_curve_triangles: &mut new_curve_triangles,
+                                    } as *mut _ as _);
+                                }
+
+                                left_cursor += glyph_position.x_advance;
+                            }
+                        }
+
+                        // debug print glyph_atlas
+                        // box_instances.clear();
+                        // box_instances.push(BoxInstance {
+                        //     posst: [4096.0, 4096.0, 0.0, 0.0],
+                        //     uvst: [1.0, 1.0, 0.0, 0.0]
+                        // });
+
+                        #[cfg(windows)]
+                        let title_layout = unsafe { dwfactory.CreateTextLayout(&"Peridot Marble Editor - New Project".encode_utf16().collect::<Vec<_>>(), &ui_text_format, f32::MAX, f32::MAX).expect("CreateTextLayout title") };
+                        #[cfg(windows)]
                         let renderer = IDWriteTextRenderer::from(AtlasTextRenderer {
                             box_instances: &mut box_instances,
                             atlas: &mut glyph_atlas,
@@ -432,6 +756,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             new_filltri_indices: &mut new_filltri_indices,
                             new_curve_triangles: &mut new_curve_triangles,
                         });
+                        #[cfg(windows)]
                         unsafe { title_layout.Draw(None, &renderer, 0.0, 0.0).expect("title_layout.Draw"); }
 
                         #[derive(br::SpecializationConstants)]
@@ -963,7 +1288,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                         .expect("framebuffer create")
                                     })
                                     .collect::<Vec<_>>();
-                                
+
                         let [pipeline1] = vk_device.new_graphics_pipeline_array(&[
                             br::GraphicsPipelineCreateInfo::new(&pipeline_layout, vk_render_pass.subpass(0), &[
                                 shader_module.on_stage(br::ShaderStage::Vertex, c"vertMain"),
@@ -1086,9 +1411,17 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 })
                 .expect("render_thread spawn");
 
+            #[cfg(feature = "wayland")]
+            'app: loop {
+                wl_display.roundtrip().expect("wayland roundtrip");
+            }
+
+            #[cfg(windows)]
             w.show(SW_SHOWNORMAL);
 
+            #[cfg(windows)]
             let mut msg = core::mem::MaybeUninit::uninit();
+            #[cfg(windows)]
             'app: loop {
                 match unsafe { GetMessageW(msg.as_mut_ptr(), None, 0, 0) } {
                     BOOL(0) => break 'app,
@@ -1136,14 +1469,17 @@ struct Skyline {
 struct GlyphAtlasSpaceManager {
     // skyline method
     max: br::Extent2D,
-    skylines: Vec<Skyline>
+    skylines: Vec<Skyline>,
 }
 impl GlyphAtlasSpaceManager {
     const SPACING: u32 = 1;
 
     pub fn new(max: br::Extent2D) -> Self {
         Self {
-            skylines: vec![Skyline { y: 0, width: max.width }],
+            skylines: vec![Skyline {
+                y: 0,
+                width: max.width,
+            }],
             max,
         }
     }
@@ -1222,7 +1558,9 @@ impl GlyphAtlasSpaceManager {
             }
 
             let sw = skyline.width;
-            if skyline_point_index > 0 && self.skylines[skyline_point_index - 1].y == top + cons_height {
+            if skyline_point_index > 0
+                && self.skylines[skyline_point_index - 1].y == top + cons_height
+            {
                 // fuse with previous
                 self.skylines[skyline_point_index - 1].width += sw;
                 self.skylines.remove(skyline_point_index);
@@ -1245,7 +1583,6 @@ impl GlyphAtlasSpaceManager {
     }
 }
 
-
 struct GlyphAtlas {
     res: br::vk::VkImage,
     mem: br::vk::VkDeviceMemory,
@@ -1256,26 +1593,58 @@ struct GlyphAtlas {
 impl GlyphAtlas {
     const MULTISAMPLE_LEVEL: u32 = 8;
 
-    pub unsafe fn drop(&mut self, device: &(impl br::VkHandle<Handle = br::vk::VkDevice> + ?Sized)) {
-        unsafe { 
+    pub unsafe fn drop(
+        &mut self,
+        device: &(impl br::VkHandle<Handle = br::vk::VkDevice> + ?Sized),
+    ) {
+        unsafe {
             br::vkfn_wrapper::destroy_image_view(device.native_ptr(), self.view, None);
             br::vkfn_wrapper::destroy_image(device.native_ptr(), self.res, None);
             br::vkfn_wrapper::free_memory(device.native_ptr(), self.mem, None);
         }
     }
 
-    pub fn new(device: &(impl br::Device<ConcreteInstance: br::InstanceDebugUtilsExtension> + ?Sized), adapter_memory_props: &br::MemoryProperties,) -> Self {
+    pub fn new(
+        device: &(impl br::Device<ConcreteInstance: br::InstanceDebugUtilsExtension> + ?Sized),
+        adapter_memory_props: &br::MemoryProperties,
+    ) -> Self {
         let size = br::Extent2D::spread1(4096);
 
-        let mut res = br::ImageObject::new(device, &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::TRANSFER_DEST)).expect("res create");
+        let mut res = br::ImageObject::new(
+            device,
+            &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).set_usage(
+                br::ImageUsageFlags::SAMPLED
+                    | br::ImageUsageFlags::COLOR_ATTACHMENT
+                    | br::ImageUsageFlags::TRANSFER_DEST,
+            ),
+        )
+        .expect("res create");
         let memory_requirements = res.requirements();
-        let mem = br::DeviceMemoryObject::new(device, &br::MemoryAllocateInfo::new(memory_requirements.size, adapter_memory_props.find_device_local_index(memory_requirements.memoryTypeBits).expect("no suitable memory"))).expect("res malloc");
+        let mem = br::DeviceMemoryObject::new(
+            device,
+            &br::MemoryAllocateInfo::new(
+                memory_requirements.size,
+                adapter_memory_props
+                    .find_device_local_index(memory_requirements.memoryTypeBits)
+                    .expect("no suitable memory"),
+            ),
+        )
+        .expect("res malloc");
         res.bind(&mem, 0).expect("res mem bind");
-        let view = br::ImageViewBuilder::new(res, br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)).create().expect("res view create");
+        let view = br::ImageViewBuilder::new(
+            res,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .expect("res view create");
 
-        view.image().set_name(Some(c"Glyph Atlas")).expect("res set name");
-        mem.set_name(Some(c"Glyph Atlas [Backing]")).expect("mem set name");
-        view.set_name(Some(c"Glyph Atlas [View]")).expect("view set name");
+        view.image()
+            .set_name(Some(c"Glyph Atlas"))
+            .expect("res set name");
+        mem.set_name(Some(c"Glyph Atlas [Backing]"))
+            .expect("mem set name");
+        view.set_name(Some(c"Glyph Atlas [View]"))
+            .expect("view set name");
 
         let (view, res) = view.unmanage();
         let (res, _, _, _, _) = res.unmanage();
@@ -1285,18 +1654,27 @@ impl GlyphAtlas {
             mem,
             view,
             acquired_rects: HashMap::new(),
-            space_mgr: GlyphAtlasSpaceManager::new(size)
+            space_mgr: GlyphAtlasSpaceManager::new(size),
         }
     }
 
-    pub fn acquire(&mut self, key: (usize, SafeF32, u16), width: u32, height: u32) -> (GlyphRect, bool) {
+    pub fn acquire(
+        &mut self,
+        key: (usize, SafeF32, u16),
+        width: u32,
+        height: u32,
+    ) -> (GlyphRect, bool) {
         match self.acquired_rects.entry(key) {
-            std::collections::hash_map::Entry::Vacant(x) => {
-                (x.insert(self.space_mgr.acquire(width, height).expect("no space left")).clone(), true)
-            }
-            std::collections::hash_map::Entry::Occupied(x) => {
-                (x.get().clone(), false)
-            }
+            std::collections::hash_map::Entry::Vacant(x) => (
+                x.insert(
+                    self.space_mgr
+                        .acquire(width, height)
+                        .expect("no space left"),
+                )
+                .clone(),
+                true,
+            ),
+            std::collections::hash_map::Entry::Occupied(x) => (x.get().clone(), false),
         }
     }
 
@@ -1311,6 +1689,7 @@ impl GlyphAtlas {
     }
 }
 
+#[cfg(windows)]
 #[implement(IDWriteTextRenderer)]
 pub struct AtlasTextRenderer {
     box_instances: *mut Vec<BoxInstance>,
@@ -1319,6 +1698,7 @@ pub struct AtlasTextRenderer {
     new_filltri_indices: *mut Vec<u16>,
     new_curve_triangles: *mut Vec<[f32; 4]>,
 }
+#[cfg(windows)]
 impl IDWritePixelSnapping_Impl for AtlasTextRenderer_Impl {
     fn GetCurrentTransform(
         &self,
@@ -1353,6 +1733,7 @@ impl IDWritePixelSnapping_Impl for AtlasTextRenderer_Impl {
         Ok(BOOL(0))
     }
 }
+#[cfg(windows)]
 impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
     fn DrawGlyphRun(
         &self,
@@ -1393,15 +1774,27 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
             let glyph_width = (glyph_metrics[n].advanceWidth as i32
                 - glyph_metrics[n].leftSideBearing
                 - glyph_metrics[n].rightSideBearing) as f32
-                * glyphrun.fontEmSize * dip_to_pixels_scaling
+                * glyphrun.fontEmSize
+                * dip_to_pixels_scaling
                 / design_unit as f32;
             let glyph_height = (glyph_metrics[n].advanceHeight as i32
                 - glyph_metrics[n].topSideBearing
                 - glyph_metrics[n].bottomSideBearing) as f32
-                * glyphrun.fontEmSize * dip_to_pixels_scaling
+                * glyphrun.fontEmSize
+                * dip_to_pixels_scaling
                 / design_unit as f32;
 
-            let (r, is_new) = unsafe { (*self.atlas).acquire((0, SafeF32::new_unchecked(glyphrun.fontEmSize), *glyphrun.glyphIndices.add(n)), glyph_width.ceil() as _, glyph_height.ceil() as _) };
+            let (r, is_new) = unsafe {
+                (*self.atlas).acquire(
+                    (
+                        0,
+                        SafeF32::new_unchecked(glyphrun.fontEmSize),
+                        *glyphrun.glyphIndices.add(n),
+                    ),
+                    glyph_width.ceil() as _,
+                    glyph_height.ceil() as _,
+                )
+            };
             println!(
                 "DrawGlyphRun.Glyph {} {} {:?} {:?} {glyph_width} {glyph_height} {r:?} {is_new}",
                 unsafe { *glyphrun.glyphAdvances.add(n) },
@@ -1415,10 +1808,23 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
                     posst: [
                         glyph_width,
                         glyph_height,
-                        (baselineoriginx + glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize / design_unit as f32) * dip_to_pixels_scaling,
-                        (baselineoriginy - (glyph_metrics[n].verticalOriginY as f32 - glyph_metrics[n].topSideBearing as f32) * glyphrun.fontEmSize / design_unit as f32) * dip_to_pixels_scaling
+                        (baselineoriginx
+                            + glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize
+                                / design_unit as f32)
+                            * dip_to_pixels_scaling,
+                        (baselineoriginy
+                            - (glyph_metrics[n].verticalOriginY as f32
+                                - glyph_metrics[n].topSideBearing as f32)
+                                * glyphrun.fontEmSize
+                                / design_unit as f32)
+                            * dip_to_pixels_scaling,
                     ],
-                    uvst: [r.width as f32 / (*self.atlas).space_mgr.max.width as f32, r.height as f32 / (*self.atlas).space_mgr.max.height as f32, r.left as f32 / (*self.atlas).space_mgr.max.width as f32, r.top as f32 / (*self.atlas).space_mgr.max.height as f32],
+                    uvst: [
+                        r.width as f32 / (*self.atlas).space_mgr.max.width as f32,
+                        r.height as f32 / (*self.atlas).space_mgr.max.height as f32,
+                        r.left as f32 / (*self.atlas).space_mgr.max.width as f32,
+                        r.top as f32 / (*self.atlas).space_mgr.max.height as f32,
+                    ],
                 });
             }
             if is_new {
@@ -1426,8 +1832,17 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
                 let mut current_figure_state = None;
                 let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
                     translate: windows_numerics::Vector2 {
-                        X: r.left as f32 - glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
-                        Y: r.top as f32 - (glyph_metrics[n].verticalOriginY as f32 - glyph_metrics[n].topSideBearing as f32) * glyphrun.fontEmSize * dip_to_pixels_scaling / design_unit as f32,
+                        X: r.left as f32
+                            - glyph_metrics[n].leftSideBearing as f32
+                                * glyphrun.fontEmSize
+                                * dip_to_pixels_scaling
+                                / design_unit as f32,
+                        Y: r.top as f32
+                            - (glyph_metrics[n].verticalOriginY as f32
+                                - glyph_metrics[n].topSideBearing as f32)
+                                * glyphrun.fontEmSize
+                                * dip_to_pixels_scaling
+                                / design_unit as f32,
                     },
                     dip_to_pixels_scale: dip_to_pixels_scaling,
                     current_figure_state: &mut current_figure_state,
@@ -1435,7 +1850,20 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
                     filltri_indices: self.new_filltri_indices,
                     curve_triangles: self.new_curve_triangles,
                 });
-                unsafe { font_face.GetGlyphRunOutline(glyphrun.fontEmSize, glyphrun.glyphIndices.add(n), None, None, 1, glyphrun.isSideways.as_bool(), false, &sink).expect("GetGlyphRunOutline"); }
+                unsafe {
+                    font_face
+                        .GetGlyphRunOutline(
+                            glyphrun.fontEmSize,
+                            glyphrun.glyphIndices.add(n),
+                            None,
+                            None,
+                            1,
+                            glyphrun.isSideways.as_bool(),
+                            false,
+                            &sink,
+                        )
+                        .expect("GetGlyphRunOutline");
+                }
                 assert!(current_figure_state.is_none());
             }
 
@@ -1481,6 +1909,7 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
     }
 }
 
+#[cfg(windows)]
 #[implement(ID2D1SimplifiedGeometrySink)]
 struct GlyphOutlineSink {
     translate: windows_numerics::Vector2,
@@ -1488,81 +1917,141 @@ struct GlyphOutlineSink {
     current_figure_state: *mut Option<(windows_numerics::Vector2, u16)>,
     filltri_points: *mut Vec<[f32; 2]>,
     filltri_indices: *mut Vec<u16>,
-    curve_triangles: *mut Vec<[f32; 4]>
+    curve_triangles: *mut Vec<[f32; 4]>,
 }
+#[cfg(windows)]
 impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
-    fn BeginFigure(&self, startpoint: &windows_numerics::Vector2, figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN) {
+    fn BeginFigure(
+        &self,
+        startpoint: &windows_numerics::Vector2,
+        figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
+    ) {
         assert_eq!(figurebegin, D2D1_FIGURE_BEGIN_FILLED, "not filled figure");
 
         unsafe {
             (*self.current_figure_state) = Some((*startpoint, (*self.filltri_points).len() as _));
-            (*self.filltri_points).push([startpoint.X * self.dip_to_pixels_scale + self.translate.X, -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y]);
+            (*self.filltri_points).push([
+                startpoint.X * self.dip_to_pixels_scale + self.translate.X,
+                -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y,
+            ]);
         }
     }
 
     fn EndFigure(&self, figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END) {
-        let (start_point, filltri_index0) = unsafe { (*self.current_figure_state).take().expect("no figure started?") };
+        let (start_point, filltri_index0) = unsafe {
+            (*self.current_figure_state)
+                .take()
+                .expect("no figure started?")
+        };
 
         if figureend == D2D1_FIGURE_END_CLOSED {
             // line to start
             unsafe {
                 let filltri_point1 = (*self.filltri_points).len() - 1;
-                (*self.filltri_points).push([start_point.X * self.dip_to_pixels_scale + self.translate.X, -start_point.Y * self.dip_to_pixels_scale + self.translate.Y]);
-                (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+                (*self.filltri_points).push([
+                    start_point.X * self.dip_to_pixels_scale + self.translate.X,
+                    -start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
+                ]);
+                (*self.filltri_indices).extend([
+                    filltri_index0,
+                    filltri_point1 as u16,
+                    (*self.filltri_points).len() as u16 - 1,
+                ]);
             }
         }
     }
 
     fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
-        let &(_, filltri_index0) = unsafe { (*self.current_figure_state).as_ref().expect("no figure started?") };
+        let &(_, filltri_index0) = unsafe {
+            (*self.current_figure_state)
+                .as_ref()
+                .expect("no figure started?")
+        };
 
         for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
             unsafe {
                 let filltri_point1 = (*self.filltri_points).len() - 1;
-                (*self.filltri_points).push([p.X * self.dip_to_pixels_scale + self.translate.X, -p.Y * self.dip_to_pixels_scale + self.translate.Y]);
-                (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+                (*self.filltri_points).push([
+                    p.X * self.dip_to_pixels_scale + self.translate.X,
+                    -p.Y * self.dip_to_pixels_scale + self.translate.Y,
+                ]);
+                (*self.filltri_indices).extend([
+                    filltri_index0,
+                    filltri_point1 as u16,
+                    (*self.filltri_points).len() as u16 - 1,
+                ]);
             }
         }
     }
 
-    fn AddBeziers(&self, beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT, bezierscount: u32) {
-        let &(_, filltri_index0) = unsafe { (*self.current_figure_state).as_ref().expect("no figure started?") };
+    fn AddBeziers(
+        &self,
+        beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
+        bezierscount: u32,
+    ) {
+        let &(_, filltri_index0) = unsafe {
+            (*self.current_figure_state)
+                .as_ref()
+                .expect("no figure started?")
+        };
 
         for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
             let from_p = unsafe { (*self.filltri_points).last().expect("no points emitted") };
             let bez = lyon_geom::CubicBezierSegment {
                 from: lyon_geom::point(from_p[0], from_p[1]),
-                ctrl1: lyon_geom::point(p.point1.X * self.dip_to_pixels_scale + self.translate.X, -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y),
-                ctrl2: lyon_geom::point(p.point2.X * self.dip_to_pixels_scale + self.translate.X, -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y),
-                to: lyon_geom::point(p.point3.X * self.dip_to_pixels_scale + self.translate.X, -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y)
+                ctrl1: lyon_geom::point(
+                    p.point1.X * self.dip_to_pixels_scale + self.translate.X,
+                    -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y,
+                ),
+                ctrl2: lyon_geom::point(
+                    p.point2.X * self.dip_to_pixels_scale + self.translate.X,
+                    -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y,
+                ),
+                to: lyon_geom::point(
+                    p.point3.X * self.dip_to_pixels_scale + self.translate.X,
+                    -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y,
+                ),
             };
 
-            bez.for_each_quadratic_bezier(0.1, &mut |q| {
-                unsafe {
-                    let filltri_point1 = (*self.filltri_points).len() - 1;
-                    (*self.filltri_points).push([q.to.x, q.to.y]);
-                    (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+            bez.for_each_quadratic_bezier(0.1, &mut |q| unsafe {
+                let filltri_point1 = (*self.filltri_points).len() - 1;
+                (*self.filltri_points).push([q.to.x, q.to.y]);
+                (*self.filltri_indices).extend([
+                    filltri_index0,
+                    filltri_point1 as u16,
+                    (*self.filltri_points).len() as u16 - 1,
+                ]);
 
-                    (*self.curve_triangles).extend([
-                        [q.from.x, q.from.y, 0.0, 0.0],
-                        [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
-                        [q.to.x, q.to.y, 1.0, 1.0]
-                    ]);
-                }
+                (*self.curve_triangles).extend([
+                    [q.from.x, q.from.y, 0.0, 0.0],
+                    [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
+                    [q.to.x, q.to.y, 1.0, 1.0],
+                ]);
             });
         }
     }
 
     fn Close(&self) -> windows_core::Result<()> {
-        let &(ref start_point, filltri_index0) = unsafe { (*self.current_figure_state).as_ref().expect("no figure started?") };
+        let &(ref start_point, filltri_index0) = unsafe {
+            (*self.current_figure_state)
+                .as_ref()
+                .expect("no figure started?")
+        };
 
         // line to start
         unsafe {
             let filltri_point1 = (*self.filltri_points).len() - 1;
-            (*self.filltri_points).push([start_point.X * self.dip_to_pixels_scale + self.translate.X, start_point.Y * self.dip_to_pixels_scale + self.translate.Y]);
-            (*self.filltri_indices).extend([filltri_index0, filltri_point1 as u16, (*self.filltri_points).len() as u16 - 1]);
+            (*self.filltri_points).push([
+                start_point.X * self.dip_to_pixels_scale + self.translate.X,
+                start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
+            ]);
+            (*self.filltri_indices).extend([
+                filltri_index0,
+                filltri_point1 as u16,
+                (*self.filltri_points).len() as u16 - 1,
+            ]);
         }
-        
+
         Ok(())
     }
 
@@ -1572,7 +2061,10 @@ impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
         }
     }
 
-    fn SetSegmentFlags(&self, vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT) {
+    fn SetSegmentFlags(
+        &self,
+        vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
+    ) {
         unimplemented!("SetSegmentFlags {vertexflags:?}")
     }
 }
@@ -1596,10 +2088,14 @@ impl br::VkHandle for LocalImageView<'_, '_> {
     }
 }
 
+#[cfg(windows)]
 #[repr(transparent)]
 pub struct Win32Window(HWND);
+#[cfg(windows)]
 unsafe impl Sync for Win32Window {}
+#[cfg(windows)]
 unsafe impl Send for Win32Window {}
+#[cfg(windows)]
 impl Win32Window {
     #[inline(always)]
     pub fn client_size(&self) -> (u32, u32) {
@@ -1619,6 +2115,113 @@ impl Win32Window {
     #[inline(always)]
     pub unsafe fn set_long_ptr(&mut self, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
         unsafe { SetWindowLongPtrW(self.0, index, value) }
+    }
+}
+
+#[cfg(feature = "wayland")]
+struct WaylandGlobalMessaging;
+#[cfg(feature = "wayland")]
+impl wl::XdgWmBaseEventListener for WaylandGlobalMessaging {
+    #[inline(always)]
+    fn ping(&mut self, sender: &mut peridot_tp_wayland::XdgWmBase, serial: u32) {
+        sender.pong(serial).expect("xdg_wm_base pong");
+    }
+}
+
+#[cfg(feature = "wayland")]
+pub struct WaylandWindow {
+    surface: wl::Owned<wl::Surface>,
+    xdg_surface: wl::Owned<wl::XdgSurface>,
+    xdg_toplevel: wl::Owned<wl::XdgToplevel>,
+    state: Box<WaylandWindowState>,
+}
+unsafe impl Sync for WaylandWindow {}
+unsafe impl Send for WaylandWindow {}
+impl WaylandWindow {
+    pub fn initialize(&mut self) {
+        self.surface
+            .set_listener(&mut *self.state.as_mut())
+            .into_result()
+            .expect("wl_surface set listener");
+        self.xdg_surface
+            .set_listener(&mut *self.state.as_mut())
+            .into_result()
+            .expect("xdg_surface set listener");
+        self.xdg_toplevel
+            .set_listener(&mut *self.state.as_mut())
+            .into_result()
+            .expect("xdg_toplevel set listener");
+    }
+
+    pub fn client_size(&self) -> (u32, u32) {
+        (640, 480)
+    }
+}
+
+#[cfg(feature = "wayland")]
+struct WaylandWindowState {}
+impl wl::SurfaceEventListener for WaylandWindowState {
+    #[tracing::instrument(skip(self, surface, output))]
+    fn enter(
+        &mut self,
+        surface: &mut peridot_tp_wayland::Surface,
+        output: &mut peridot_tp_wayland::Output,
+    ) {
+    }
+
+    #[tracing::instrument(skip(self, surface, output))]
+    fn leave(
+        &mut self,
+        surface: &mut peridot_tp_wayland::Surface,
+        output: &mut peridot_tp_wayland::Output,
+    ) {
+    }
+
+    #[tracing::instrument(skip(self, surface))]
+    fn preferred_buffer_scale(&mut self, surface: &mut peridot_tp_wayland::Surface, factor: i32) {
+        tracing::debug!("perferred buffer scale");
+        surface
+            .set_buffer_scale(factor)
+            .expect("wl_surface set_buffer_scale");
+    }
+
+    #[tracing::instrument(skip(self, surface))]
+    fn preferred_buffer_transform(
+        &mut self,
+        surface: &mut peridot_tp_wayland::Surface,
+        transform: u32,
+    ) {
+        tracing::debug!("preferred buffer transform");
+    }
+}
+impl wl::XdgSurfaceEventListener for WaylandWindowState {
+    fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {}
+}
+impl wl::XdgToplevelEventListener for WaylandWindowState {
+    fn close(&mut self, sender: &mut peridot_tp_wayland::XdgToplevel) {}
+
+    fn configure(
+        &mut self,
+        sender: &mut peridot_tp_wayland::XdgToplevel,
+        width: i32,
+        height: i32,
+        states: &mut peridot_tp_wayland::ffi::Array,
+    ) {
+    }
+
+    fn configure_bounds(
+        &mut self,
+        sender: &mut peridot_tp_wayland::XdgToplevel,
+        width: i32,
+        height: i32,
+    ) {
+    }
+
+    fn wm_capabilities(
+        &mut self,
+        sender: &mut peridot_tp_wayland::XdgToplevel,
+        capabilities: &mut peridot_tp_wayland::ffi::Array,
+    ) {
     }
 }
 
@@ -1664,6 +2267,7 @@ async fn run(event_queue: EventQueue) {
     tracing::info!("app finish");
 }
 
+#[cfg(windows)]
 extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     hwnd: HWND,
     msg: u32,

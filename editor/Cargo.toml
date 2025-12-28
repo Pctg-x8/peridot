@@ -1,12 +1,17 @@
 [package]
 name = "peridot-marble-editor"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 build = "build.rs"
 
 [features]
 default = []
 win32 = ["bedrock/VK_KHR_win32_surface"]
+linux-default = ["wayland", "freetype", "fontconfig", "harfbuzz"]
+wayland = ["dep:peridot-tp-wayland", "bedrock/VK_KHR_wayland_surface"]
+freetype = ["dep:freetype2"]
+fontconfig = ["dep:fontconfig"]
+harfbuzz = ["dep:peridot-tp-harfbuzz"]
 
 [dependencies]
 bedrock = { workspace = true, features = [
@@ -20,6 +25,9 @@ bedrock = { workspace = true, features = [
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lyon_geom = "1.0"
+freetype2 = { git = "https://github.com/Pctg-x8/ft2-rs", optional = true }
+fontconfig = { git = "https://github.com/Pctg-x8/fc-rs", optional = true }
+peridot-tp-harfbuzz = { path = "../thirdparty/harfbuzz", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
@@ -34,6 +42,11 @@ features = [
 [target.'cfg(windows)'.dependencies]
 windows-core = "*"
 windows-numerics = "*"
+
+[dependencies.peridot-tp-wayland]
+path = "../thirdparty/wayland"
+optional = true
+features = ["xdg-shell"]
 
 [build-dependencies]
 winres = "0.1"

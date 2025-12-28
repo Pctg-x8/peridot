@@ -1,0 +1,7 @@
+[package]
+name = "peridot-tp-harfbuzz"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+freetype2 = { git = "https://github.com/Pctg-x8/ft2-rs" }

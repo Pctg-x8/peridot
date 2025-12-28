@@ -1,4 +1,4 @@
-use bedrock as br;
+use bedrock::{self as br, ResolverInterface, VkRawHandle};
 
 pub const VI_STATE_EMPTY: &br::PipelineVertexInputStateCreateInfo =
     &br::PipelineVertexInputStateCreateInfo::new(&[], &[]);
@@ -50,10 +50,8 @@ impl VulkanDevice {
         device_extensions: &[&core::ffi::CStr],
     ) -> Self {
         Self {
-            fp_create_render_pass2: unsafe { br::vk::PFN_vkCreateRenderPass2KHR::get(native) },
-            fp_debug_utils_set_object_name: unsafe {
-                br::vk::PFN_vkSetDebugUtilsObjectNameEXT::get(native)
-            },
+            fp_create_render_pass2: unsafe { native.load_function_unconstrainted() },
+            fp_debug_utils_set_object_name: unsafe { native.load_function_unconstrainted() },
             native,
         }
     }
@@ -64,25 +62,34 @@ impl VulkanDevice {
     ) -> br::Result<br::RenderPassObject<&Self>> {
         let mut h = core::mem::MaybeUninit::uninit();
         unsafe {
-            (self.fp_create_render_pass2.0)(self.native, &info, core::ptr::null(), h.as_mut_ptr())
-                .into_result()?;
+            (self.fp_create_render_pass2.0)(
+                self.native,
+                core::mem::transmute(&info),
+                core::ptr::null(),
+                h.as_mut_ptr(),
+            )
+            .into_result()?;
         }
 
         Ok(unsafe { br::RenderPassObject::manage(h.assume_init(), self) })
     }
 
-    pub fn dbg_set_name<H: br::VkObject + ?Sized>(&self, obj: &H, name: &core::ffi::CStr) {
+    pub fn dbg_set_name<H: br::VkObject<Handle: br::VkRawHandle> + ?Sized>(
+        &self,
+        obj: &H,
+        name: &core::ffi::CStr,
+    ) {
         let r = unsafe {
             (self.fp_debug_utils_set_object_name.0)(
                 self.native,
-                &br::DebugUtilsObjectNameInfo::new(obj, Some(name)),
+                core::mem::transmute(&br::DebugUtilsObjectNameInfo::new(obj, Some(name))),
             )
             .into_result()
         };
         if let Err(r) = r {
             tracing::warn!(
                 reason = ?r,
-                obj.id = obj.native_ptr(),
+                obj.id = obj.native_ptr().raw_handle_value(),
                 obj.type = H::TYPE,
                 ?name,
                 "Failed to set vulkan object name(for debugging)"
