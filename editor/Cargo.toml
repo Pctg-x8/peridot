@@ -46,7 +46,11 @@ windows-numerics = "*"
 [dependencies.peridot-tp-wayland]
 path = "../thirdparty/wayland"
 optional = true
-features = ["xdg-shell"]
+features = ["tracing", "xdg-shell"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-eventfd = { path = "../platform/linux/eventfd" }
+linux-epoll = { path = "../platform/linux/epoll" }
 
 [build-dependencies]
 winres = "0.1"
