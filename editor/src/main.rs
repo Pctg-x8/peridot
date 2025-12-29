@@ -155,7 +155,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             interface: &core::ffi::CStr,
             version: u32,
         ) {
-            tracing::info!(name, ?interface, version, "wl interface");
+            tracing::info!(target: "wl::diag", name, ?interface, version, "wl interface");
 
             if interface == c"wl_compositor" {
                 self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
@@ -165,7 +165,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         }
 
         fn global_remove(&mut self, _registry: &mut peridot_tp_wayland::Registry, name: u32) {
-            tracing::info!(name, "wl interface remove");
+            tracing::info!(target: "wl::diag", name, "wl interface remove");
         }
     }
     #[cfg(feature = "wayland")]
@@ -183,7 +183,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     drop(wl_registry);
     #[cfg(feature = "wayland")]
-    let mut wl_compositor = rl.compositor.expect("no compositor");
+    let wl_compositor = rl.compositor.expect("no compositor");
     #[cfg(feature = "wayland")]
     let mut xdg_wm_base = rl.xdg_wm_base.expect("no xdg-shell");
 
@@ -196,13 +196,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("xdg_wm_base set_listener");
 
     #[cfg(feature = "wayland")]
-    let mut wl_surface = wl_compositor.create_surface().expect("wl_surface create");
+    let wl_surface = wl_compositor.create_surface().expect("wl_surface create");
     #[cfg(feature = "wayland")]
-    let mut wl_xdg_surface = xdg_wm_base
+    let wl_xdg_surface = xdg_wm_base
         .get_xdg_surface(&wl_surface)
         .expect("xdg_surface create");
     #[cfg(feature = "wayland")]
-    let mut wl_xdg_toplevel = wl_xdg_surface.get_toplevel().expect("xdg_toplevel create");
+    let wl_xdg_toplevel = wl_xdg_surface.get_toplevel().expect("xdg_toplevel create");
+
+    let mut w = WaylandWindow {
+        surface: wl_surface,
+        xdg_surface: wl_xdg_surface,
+        xdg_toplevel: wl_xdg_toplevel,
+        state: Box::new(WaylandWindowState {}),
+    };
+    w.initialize();
+    wl_display.roundtrip().expect("roundtrip");
 
     if let Some(xs) = br::instance_extension_properties_cstr_alloc(None)
         .inspect_err(
@@ -211,7 +220,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .ok()
     {
         for x in xs {
-            tracing::info!(name = ?x.extensionName.as_cstr(), version = x.specVersion, "vulkan instance extension");
+            tracing::info!(
+                target: "vk::diag::instance",
+                name = ?x.extensionName.as_cstr(),
+                version = x.specVersion,
+                "vulkan instance extension"
+            );
         }
     }
 
@@ -221,6 +235,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     {
         for x in xs {
             tracing::info!(
+                target: "vk::diag::instance",
                 name = ?x.layerName.as_cstr(),
                 version.impl = x.implementationVersion,
                 version.spec = %br::Version::from_raw(x.specVersion),
@@ -239,6 +254,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             }) {
                 for y in ys {
                     tracing::info!(
+                        target: "vk::diag::instance",
                         name = ?y.extensionName.as_cstr(),
                         version = y.specVersion,
                         "vulkan instance extension on layer"
@@ -279,7 +295,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .ok()
     {
         for x in xs {
-            tracing::info!(name = ?x.extensionName.as_cstr(), version = x.specVersion, "vulkan device extension");
+            tracing::info!(
+                target: "vk::diag::device",
+                name = ?x.extensionName.as_cstr(),
+                version = x.specVersion,
+                "vulkan device extension"
+            );
         }
     }
 
@@ -290,6 +311,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     {
         for x in xs {
             tracing::info!(
+                target: "vk::diag::device",
                 name = ?x.layerName.as_cstr(),
                 version.impl = x.implementationVersion,
                 version.spec = %br::Version::from_raw(x.specVersion),
@@ -309,6 +331,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             }) {
                 for y in ys {
                     tracing::info!(
+                        target: "vk::diag::device",
                         name = ?y.extensionName.as_cstr(),
                         version = y.specVersion,
                         "vulkan device extension on layer"
@@ -382,7 +405,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             &vk_adapter,
             &br::WaylandSurfaceCreateInfo::new(
                 wl_display.as_raw().cast(),
-                wl_surface.as_raw().cast(),
+                w.surface.as_raw().cast(),
             ),
         )
         .expect("vk_surface create")
@@ -394,15 +417,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     {
         panic!("surface not supported on graphics queue");
     }
-
-    let mut w = WaylandWindow {
-        surface: wl_surface,
-        xdg_surface: wl_xdg_surface,
-        xdg_toplevel: wl_xdg_toplevel,
-        state: Box::new(WaylandWindowState {}),
-    };
-    w.initialize();
-    wl_display.roundtrip().expect("roundtrip");
 
     std::thread::scope({
         #[cfg(windows)]
@@ -615,7 +629,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 let metrics = &glyph.0.metrics;
                                 let glyph_width = metrics.width as f32 / 64.0;
                                 let glyph_height = metrics.height as f32 / 64.0;
-                                println!("{glyph_info:?} {glyph_position:?} {metrics:?} {}", glyph_position.x_advance as f32 / 64.0);
+                                // println!("{glyph_info:?} {glyph_position:?} {metrics:?} {}", glyph_position.x_advance as f32 / 64.0);
 
                                 let (r, is_new) = glyph_atlas.acquire((0, SafeF32::new_unchecked(12.0), glyph_info.codepoint as _), glyph_width.ceil() as _, glyph_height.ceil() as _);
 
@@ -2012,12 +2026,6 @@ impl OutlineContext<'_> {
 #[cfg(feature = "freetype")]
 impl freetype::OutlineFuncs for OutlineContext<'_> {
     fn move_to(&mut self, to: &freetype2::FT_Vector) -> Result<(), freetype2::FT_Error> {
-        println!(
-            "move_to {} {}",
-            to.x as f32 / 64.0 + self.translate_x,
-            to.y as f32 / 64.0 + self.translate_y
-        );
-
         *self.current_figure_state = Some((*to, *to, self.new_filltri_points.len() as _));
         self.new_filltri_points.push([
             to.x as f32 / 64.0 + self.translate_x,
@@ -2028,12 +2036,6 @@ impl freetype::OutlineFuncs for OutlineContext<'_> {
     }
 
     fn line_to(&mut self, to: &freetype2::FT_Vector) -> Result<(), freetype2::FT_Error> {
-        println!(
-            "line_to {} {}",
-            to.x as f32 / 64.0 + self.translate_x,
-            to.y as f32 / 64.0 + self.translate_y
-        );
-
         let &mut Some((_, ref mut current_point, filltri_index0)) = self.current_figure_state
         else {
             panic!("no figure started?");
@@ -2058,14 +2060,6 @@ impl freetype::OutlineFuncs for OutlineContext<'_> {
         control: &freetype2::FT_Vector,
         to: &freetype2::FT_Vector,
     ) -> Result<(), freetype2::FT_Error> {
-        println!(
-            "conic_to {} {} {} {}",
-            control.x as f32 / 64.0 + self.translate_x,
-            control.y as f32 / 64.0 + self.translate_y,
-            to.x as f32 / 64.0 + self.translate_x,
-            to.y as f32 / 64.0 + self.translate_y
-        );
-
         let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
         else {
             panic!("no figure started?");
@@ -2095,16 +2089,6 @@ impl freetype::OutlineFuncs for OutlineContext<'_> {
         control2: &freetype2::FT_Vector,
         to: &freetype2::FT_Vector,
     ) -> Result<(), freetype2::FT_Error> {
-        println!(
-            "cubic_to {} {} {} {} {} {}",
-            control1.x as f32 / 64.0,
-            control1.y as f32 / 64.0,
-            control2.x as f32 / 64.0,
-            control2.y as f32 / 64.0,
-            to.x as f32 / 64.0,
-            to.y as f32 / 64.0
-        );
-
         let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
         else {
             panic!("no figure started?");
