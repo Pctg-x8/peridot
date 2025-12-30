@@ -242,6 +242,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
+    #[cfg(target_os = "macos")]
+    let mut w = MacWindow::new();
+    #[cfg(target_os = "macos")]
+    w.make_primary_window();
+
     match br::instance_version() {
         Ok(v) => tracing::info!(version = %v, "Vulkan"),
         Err(e) => tracing::error!(reason = ?e, "Failed to get vulkan version"),
@@ -454,7 +459,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let vk_surface = unsafe {
         br::SurfaceObject::new(
             &vk_adapter,
-            &br::MetalSurfaceCreateInfo::new(get_main_metal_layer()),
+            &br::MetalSurfaceCreateInfo::new(w.metal_layer()),
         )
         .expect("vk_surface.create")
     };
@@ -486,8 +491,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 let mut surface_ext = if surface_caps.currentExtent.width == 0xffffffff
                     || surface_caps.currentExtent.height == 0xffffffff
                 {
-                    // let (cw, ch) = w.client_size();
-                    let (cw, ch) = unimplemented!();
+                    #[cfg(not(target_os = "macos"))]
+                    let (cw, ch) = w.client_size();
+                    #[cfg(target_os = "macos")]
+                    let (cw, ch) = *w.state.active_rt_size.lock().expect("poisoned");
 
                     br::Extent2D {
                         width: if surface_caps.currentExtent.width == 0xffffffff {
@@ -2107,6 +2114,19 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     {
                         swapchain_invalidated = true;
                     }
+                    #[cfg(target_os = "macos")]
+                    if w.state
+                        .swapchain_externally_invalidation_signal
+                        .compare_exchange_weak(
+                            true,
+                            false,
+                            std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                        )
+                        == Ok(true)
+                    {
+                        swapchain_invalidated = true;
+                    }
 
                     if swapchain_invalidated {
                         let x = std::time::Instant::now();
@@ -2132,8 +2152,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         surface_ext = if surface_caps.currentExtent.width == 0xffffffff
                             || surface_caps.currentExtent.height == 0xffffffff
                         {
-                            // let (cw, ch) = w.client_size();
-                            let (cw, ch) = unimplemented!();
+                            #[cfg(not(target_os = "macos"))]
+                            let (cw, ch) = w.client_size();
+                            #[cfg(target_os = "macos")]
+                            let (cw, ch) = *w.state.active_rt_size.lock().expect("poisoned");
 
                             br::Extent2D {
                                 width: if surface_caps.currentExtent.width == 0xffffffff {
@@ -3494,10 +3516,96 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
 }
 
 #[cfg(target_os = "macos")]
+pub struct MacWindow {
+    native_ptr: *mut core::ffi::c_void,
+    state: Pin<Box<MacWindowState>>,
+}
+#[cfg(target_os = "macos")]
+impl Drop for MacWindow {
+    fn drop(&mut self) {
+        unsafe {
+            ni_unset_window_callbacks(self.native_ptr);
+            ni_release_window(self.native_ptr);
+        }
+    }
+}
+#[cfg(target_os = "macos")]
+impl MacWindow {
+    pub fn new() -> Self {
+        let native_ptr = unsafe { ni_create_window() };
+        let mut state = Box::pin(MacWindowState {
+            swapchain_externally_invalidation_signal: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
+            active_rt_size: std::sync::Mutex::new((960, 540)),
+        });
+        let callbacks: &'static WindowLinkCallbacks = &WindowLinkCallbacks {
+            on_resize: MacWindowState::on_resize,
+        };
+        unsafe {
+            ni_set_window_callbacks(
+                native_ptr,
+                callbacks,
+                state.as_mut().get_mut() as *mut _ as _,
+            );
+        }
+
+        Self { native_ptr, state }
+    }
+
+    #[inline(always)]
+    pub fn make_primary_window(&mut self) {
+        unsafe {
+            ni_make_primary_window(self.native_ptr);
+        }
+    }
+
+    #[inline(always)]
+    pub fn metal_layer(&self) -> *mut core::ffi::c_void {
+        unsafe { ni_get_metal_layer(self.native_ptr) }
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MacWindowState {
+    swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    active_rt_size: std::sync::Mutex<(u32, u32)>,
+}
+#[cfg(target_os = "macos")]
+impl MacWindowState {
+    extern "C" fn on_resize(caller_context: *mut core::ffi::c_void, width: u32, height: u32) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        let mut active_rt_size_locked = this.active_rt_size.lock().expect("poisoned");
+        if width != active_rt_size_locked.0 || height != active_rt_size_locked.1 {
+            *active_rt_size_locked = (width, height);
+            this.swapchain_externally_invalidation_signal
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+pub struct WindowLinkCallbacks {
+    pub on_resize: extern "C" fn(caller_context: *mut core::ffi::c_void, width: u32, height: u32),
+}
+
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
-    fn get_main_metal_layer() -> *mut core::ffi::c_void;
     fn nsapp_run();
 
-    fn manual_capture_begin();
+    fn ni_create_window() -> *mut core::ffi::c_void;
+    fn ni_release_window(window_link: *mut core::ffi::c_void);
+    fn ni_make_primary_window(window_link: *mut core::ffi::c_void);
+    fn ni_set_window_callbacks(
+        window_link: *mut core::ffi::c_void,
+        callbacks: *const WindowLinkCallbacks,
+        caller_context: *mut core::ffi::c_void,
+    );
+    fn ni_unset_window_callbacks(window_link: *mut core::ffi::c_void);
+    fn ni_get_metal_layer(window_link: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+
+    fn manual_capture_begin(window_link: *mut core::ffi::c_void);
     fn manual_capture_end();
 }
