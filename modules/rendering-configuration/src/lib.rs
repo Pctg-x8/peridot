@@ -17,8 +17,6 @@ mod file;
 /// converted asset data
 pub struct CompiledRenderingConfigurationVk {
     pub property_mappings: HashMap<String, (PropertyType, PropertyMappingVk)>,
-    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
-    pub push_constant_buffer_size_bytes: usize,
     pub passes: HashMap<String, ShadingPassVk>,
 }
 
@@ -79,6 +77,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
         out_path: &Path,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let content =
@@ -106,15 +105,42 @@ pub enum ShadingPassVk {
     },
     Custom {
         option_overrides: RenderingOptionOverrides,
-        vertex_semantic_to_location: HashMap<VertexInputSemantic, u32>,
-        vertex_entry_point_name: Option<String>,
-        fragment_entry_point_name: Option<String>,
-        code: Vec<u32>,
+        variants: HashMap<VariantKey, Code>,
     },
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct VariantKey {
+    pub instancing: bool,
+}
+impl Default for VariantKey {
+    #[inline(always)]
+    fn default() -> Self {
+        Self { instancing: false }
+    }
+}
+
+pub struct Code {
+    pub push_constant_buffer_size_bytes: usize,
+    pub descriptor_set_bindings: Vec<DescriptorTypeVk>,
+    pub vertex_semantic_to_location: HashMap<VertexInputSemantic, u32>,
+    pub vertex_entry_point_name: Option<String>,
+    pub fragment_entry_point_name: Option<String>,
+    pub words: Vec<u32>,
 }
 
 #[derive(Debug)]
 pub enum PropertyMappingVk {
+    Direct(PropertyDestinationVk),
+    Splitted(Vec<PropertyDestinationVk>),
+    Texture2D {
+        object: PropertyDestinationVk,
+        uvst: VectorPropertyMappingVk,
+    },
+}
+
+#[derive(Debug)]
+pub enum VectorPropertyMappingVk {
     Direct(PropertyDestinationVk),
     Splitted(Vec<PropertyDestinationVk>),
 }
@@ -124,12 +150,15 @@ pub enum PropertyDestinationVk {
     SpecConstant(usize),
     PushConstantBlock(usize),
     DescriptorSet(usize),
+    DescriptorSetUniformBuffer(usize),
     RealtimeBuffer(usize),
+    InstanceBuffer(usize),
 }
 
 #[derive(Debug)]
 pub enum DescriptorTypeVk {
     UniformBuffer { size_bytes: usize },
+    StorageBuffer { size_bytes: usize },
     CombinedImageSampler,
 }
 
@@ -189,6 +218,19 @@ impl Default for FrontFace {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum InstancingSupport {
+    None,
+    Allowed,
+    Only,
+}
+impl Default for InstancingSupport {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum PropertyType {
     Texture2D,
@@ -198,6 +240,18 @@ pub enum PropertyType {
     Float,
     Float2,
     Float4,
+}
+
+#[cfg(feature = "with-loader-impl")]
+#[repr(C)]
+pub struct UniformCameraParameters {
+    pub view_projection_matrix: peridot::math::Matrix4F32,
+}
+
+#[cfg(feature = "with-loader-impl")]
+#[repr(C)]
+pub struct UniformObjectParameters {
+    pub transform_matrix: peridot::math::Matrix4F32,
 }
 
 pub fn write(
@@ -216,8 +270,6 @@ pub fn write(
             .into_iter()
             .map(|(n, (t, m))| (n, t, m))
             .collect(),
-        descriptor_set_bindings: compiled.descriptor_set_bindings,
-        push_constant_buffer_size_bytes: compiled.push_constant_buffer_size_bytes,
     }
     .write(sink)?;
 
@@ -234,20 +286,33 @@ pub fn write(
             }
             ShadingPassVk::Custom {
                 option_overrides,
-                vertex_semantic_to_location,
-                vertex_entry_point_name,
-                fragment_entry_point_name,
-                code,
+                variants,
             } => {
                 shading_pass_directory
                     .entries
                     .push((n, file::ShadingPassDirectoryEntry::Located(writes as _)));
                 writes += file::ShadingPassVk {
                     option_overrides,
-                    vertex_semantic_to_location: vertex_semantic_to_location.into_iter().collect(),
-                    vertex_entry_point_name,
-                    fragment_entry_point_name,
-                    code,
+                    variants: variants
+                        .into_iter()
+                        .map(|(k, v)| {
+                            (
+                                k,
+                                file::Code {
+                                    push_constant_buffer_size_bytes: v
+                                        .push_constant_buffer_size_bytes,
+                                    descriptor_set_bindings: v.descriptor_set_bindings,
+                                    vertex_semantic_to_location: v
+                                        .vertex_semantic_to_location
+                                        .into_iter()
+                                        .collect(),
+                                    vertex_entry_point_name: v.vertex_entry_point_name,
+                                    fragment_entry_point_name: v.fragment_entry_point_name,
+                                    words: v.words,
+                                },
+                            )
+                        })
+                        .collect(),
                 }
                 .write(sink)?;
             }
@@ -287,8 +352,6 @@ pub async fn read_async(
 
     let mut result = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::with_capacity(property_directory.entries.len()),
-        descriptor_set_bindings: property_directory.descriptor_set_bindings,
-        push_constant_buffer_size_bytes: property_directory.push_constant_buffer_size_bytes,
         passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
     };
     for (n, t, m) in property_directory.entries {
@@ -317,25 +380,42 @@ pub async fn read_async(
                     ))
                     .await?;
 
-                    let mut vertex_semantic_to_location =
-                        HashMap::with_capacity(pass_data.vertex_semantic_to_location.len());
-                    for (n, l) in pass_data.vertex_semantic_to_location {
-                        match vertex_semantic_to_location.entry(n) {
+                    let mut variants = HashMap::with_capacity(pass_data.variants.len());
+                    for (k, v) in pass_data.variants {
+                        let mut vertex_semantic_to_location =
+                            HashMap::with_capacity(v.vertex_semantic_to_location.len());
+                        for (n, l) in v.vertex_semantic_to_location {
+                            match vertex_semantic_to_location.entry(n) {
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert(l);
+                                }
+                                std::collections::hash_map::Entry::Occupied(x) => {
+                                    panic!("conflicting vertex semantic: {:?}", x.key());
+                                }
+                            }
+                        }
+
+                        match variants.entry(k) {
                             std::collections::hash_map::Entry::Vacant(x) => {
-                                x.insert(l);
+                                x.insert(Code {
+                                    push_constant_buffer_size_bytes: v
+                                        .push_constant_buffer_size_bytes,
+                                    descriptor_set_bindings: v.descriptor_set_bindings,
+                                    vertex_semantic_to_location,
+                                    vertex_entry_point_name: v.vertex_entry_point_name,
+                                    fragment_entry_point_name: v.fragment_entry_point_name,
+                                    words: v.words,
+                                });
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
-                                panic!("conflicting vertex semantic: {:?}", x.key());
+                                panic!("conflicting variant: {:?}", x.key());
                             }
                         }
                     }
 
                     x.insert(ShadingPassVk::Custom {
                         option_overrides: pass_data.option_overrides,
-                        vertex_semantic_to_location,
-                        vertex_entry_point_name: pass_data.vertex_entry_point_name,
-                        fragment_entry_point_name: pass_data.fragment_entry_point_name,
-                        code: pass_data.code,
+                        variants,
                     });
                 }
             },
@@ -360,8 +440,6 @@ pub fn read(
 
     let mut result = CompiledRenderingConfigurationVk {
         property_mappings: HashMap::with_capacity(property_directory.entries.len()),
-        descriptor_set_bindings: property_directory.descriptor_set_bindings,
-        push_constant_buffer_size_bytes: property_directory.push_constant_buffer_size_bytes,
         passes: HashMap::with_capacity(shading_pass_directory.entries.len()),
     };
     for (n, t, m) in property_directory.entries {
@@ -384,25 +462,42 @@ pub fn read(
                     source.seek(SeekFrom::Start(loc))?;
                     let pass_data = file::ShadingPassVk::read(source)?;
 
-                    let mut vertex_semantic_to_location =
-                        HashMap::with_capacity(pass_data.vertex_semantic_to_location.len());
-                    for (n, l) in pass_data.vertex_semantic_to_location {
-                        match vertex_semantic_to_location.entry(n) {
+                    let mut variants = HashMap::with_capacity(pass_data.variants.len());
+                    for (k, v) in pass_data.variants {
+                        let mut vertex_semantic_to_location =
+                            HashMap::with_capacity(v.vertex_semantic_to_location.len());
+                        for (n, l) in v.vertex_semantic_to_location {
+                            match vertex_semantic_to_location.entry(n) {
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert(l);
+                                }
+                                std::collections::hash_map::Entry::Occupied(x) => {
+                                    panic!("conflicting vertex semantic: {:?}", x.key());
+                                }
+                            }
+                        }
+
+                        match variants.entry(k) {
                             std::collections::hash_map::Entry::Vacant(x) => {
-                                x.insert(l);
+                                x.insert(Code {
+                                    push_constant_buffer_size_bytes: v
+                                        .push_constant_buffer_size_bytes,
+                                    descriptor_set_bindings: v.descriptor_set_bindings,
+                                    vertex_semantic_to_location,
+                                    vertex_entry_point_name: v.vertex_entry_point_name,
+                                    fragment_entry_point_name: v.fragment_entry_point_name,
+                                    words: v.words,
+                                });
                             }
                             std::collections::hash_map::Entry::Occupied(x) => {
-                                panic!("conflicting vertex semantic: {:?}", x.key());
+                                panic!("conflicting variant: {:?}", x.key());
                             }
                         }
                     }
 
                     x.insert(ShadingPassVk::Custom {
                         option_overrides: pass_data.option_overrides,
-                        vertex_semantic_to_location,
-                        vertex_entry_point_name: pass_data.vertex_entry_point_name,
-                        fragment_entry_point_name: pass_data.fragment_entry_point_name,
-                        code: pass_data.code,
+                        variants,
                     });
                 }
             },

@@ -196,6 +196,7 @@ cdepsEnvVars variant =
   GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1"
     . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
     . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" slangLibPath
+    . GHA.env "PERIDOT_BUILD_TP_SPIRV_TOOLS_SKIP_CMAKE" "1"
   where
     -- CIではDebugでビルドしてるのでそれを指定（ただしWindows以外ではなぜかRelease以下に生成される）
     slangLibPath = case variant of

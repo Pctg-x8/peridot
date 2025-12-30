@@ -18,6 +18,7 @@ pub struct AppListPass {
 pub struct AppExtractSpv {
     input: PathBuf,
     pass_name: String,
+    variant_instanced: bool,
     output: PathBuf,
 }
 
@@ -53,9 +54,11 @@ fn extract_spv(args: AppExtractSpv) {
         prc::ShadingPassVk::SimpleDeriveBuiltinPass { name } => {
             panic!("cannot extract spv from SimpleDeriveBuiltinPass: {name}");
         }
-        prc::ShadingPassVk::Custom { code, .. } => {
+        prc::ShadingPassVk::Custom { variants, .. } => {
+            let v = &variants[&prc::VariantKey { instancing: args.variant_instanced }];
+
             std::fs::write(&args.output, unsafe {
-                core::slice::from_raw_parts(code.as_ptr() as *const u8, code.len() << 2)
+                core::slice::from_raw_parts(v.words.as_ptr() as *const u8, v.words.len() << 2)
             })
             .expect("failed to write file");
         }

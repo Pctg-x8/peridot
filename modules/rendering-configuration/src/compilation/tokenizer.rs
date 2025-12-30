@@ -92,16 +92,6 @@ impl Located for KwShader {
 
 #[derive(Debug, Clone)]
 #[repr(transparent)]
-pub struct KwVertexBindings(Location);
-impl Located for KwVertexBindings {
-    #[inline(always)]
-    fn location(&self) -> &Location {
-        &self.0
-    }
-}
-
-#[derive(Debug, Clone)]
-#[repr(transparent)]
 pub struct KwRenderOption(Location);
 impl Located for KwRenderOption {
     #[inline(always)]
@@ -222,7 +212,6 @@ pub enum Keyword {
     Pass(KwPass),
     Use(KwUse),
     Shader(KwShader),
-    VertexBindings(KwVertexBindings),
     RenderOption(KwRenderOption),
 }
 impl Located for Keyword {
@@ -234,7 +223,6 @@ impl Located for Keyword {
             Self::Pass(KwPass(l)) => l,
             Self::Use(KwUse(l)) => l,
             Self::Shader(KwShader(l)) => l,
-            Self::VertexBindings(KwVertexBindings(l)) => l,
             Self::RenderOption(KwRenderOption(l)) => l,
         }
     }
@@ -491,9 +479,6 @@ pub fn next_token<'s>(ctx: &mut Context<'s>) -> Option<Token<'s>> {
         "Pass" => Token::Keyword(Keyword::Pass(KwPass(ctx.loc.clone()))),
         "Use" => Token::Keyword(Keyword::Use(KwUse(ctx.loc.clone()))),
         "Shader" => Token::Keyword(Keyword::Shader(KwShader(ctx.loc.clone()))),
-        "VertexBindings" => {
-            Token::Keyword(Keyword::VertexBindings(KwVertexBindings(ctx.loc.clone())))
-        }
         "RenderOption" => Token::Keyword(Keyword::RenderOption(KwRenderOption(ctx.loc.clone()))),
         t => Token::Identifier(Identifier(t, ctx.loc.clone())),
     };

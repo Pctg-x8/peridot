@@ -1,22 +1,21 @@
 use core::{future::Future, pin::Pin};
 use input::PointerPositionProvider;
+use linux_epoll::{Epoll, EpollEventBits};
+use linux_eventfd::{EventFD, EventFDFlags};
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
 use presenter::PresenterProvider;
 use sound_backend::SoundBackend;
+use std::os::fd::AsRawFd;
 use std::{ffi::CStr, path::PathBuf, sync::Arc};
-use std::{fs::File, os::fd::AsRawFd};
 use std::{io::Result as IOResult, os::fd::RawFd};
 use tracing_subscriber::{prelude::__tracing_subscriber_SubscriberExt, util::SubscriberInitExt};
 
 mod sound_backend;
 
 use crate::presenter::{wayland::Wayland, BorrowFd, EventProcessor, WindowBackend};
-mod epoll;
 mod input;
-mod kernel_input;
 mod presenter;
-mod udev;
 mod userlib;
 
 pub struct PlatformAssetLoader {
@@ -110,8 +109,16 @@ impl<PP: PresenterProvider> peridot::NativeLinker for NativeLink<PP> {
 
 static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |ptr| core::task::RawWaker::new(ptr, &USERCODE_WAKER_VTABLE),
-    |_| {},
-    |_| {},
+    |ptr| unsafe {
+        if let Err(e) = (*ptr.cast::<EventFD>()).inc(1) {
+            tracing::warn!(reason = ?e, "usercode wake failed");
+        }
+    },
+    |ptr| unsafe {
+        if let Err(e) = (*ptr.cast::<EventFD>()).inc(1) {
+            tracing::warn!(reason = ?e, "usercode wake failed");
+        }
+    },
     |_| {},
 );
 
@@ -123,12 +130,14 @@ pub struct GameDriver<MainF> {
     frame_timing_sender: async_std::channel::Sender<()>,
     event_queue: Pin<Box<peridot::EventQueue>>,
     usercode: Pin<Box<MainF>>,
+    usercode_event: Pin<Box<EventFD>>,
     // self-referential struct
     _pinned: core::marker::PhantomPinned,
 }
 impl<MainF: Future> GameDriver<MainF> {
     fn new<PP>(
         pp: SharedMutableRef<PP>,
+        epoll: &Epoll,
         usercode_launcher: impl FnOnce(
             peridot::Engine<'static, NativeLink<SharedMutableRef<PP>>>,
         ) -> MainF,
@@ -160,8 +169,9 @@ impl<MainF: Future> GameDriver<MainF> {
             .set_nativelink(Box::new(input::InputNativeLink::new(pp)));
         engine.post_init();
         let _snd: Box<dyn SoundBackend> =
-            if sound_backend::pipewire::NativeAudioEngine::is_available() {
+            if let Some(init) = sound_backend::pipewire::NativeAudioEngine::try_init() {
                 Box::new(sound_backend::pipewire::NativeAudioEngine::new(
+                    init,
                     engine.audio_mixer(),
                 ))
             } else {
@@ -174,6 +184,15 @@ impl<MainF: Future> GameDriver<MainF> {
         let engine_input = engine.input().clone();
         let engine_audio = engine.audio_mixer().clone();
         let usercode = Box::pin(usercode_launcher(engine));
+        let usercode_event =
+            Box::pin(EventFD::new(0, EventFDFlags::NONBLOCK).expect("EventFD::new"));
+        if let Err(e) = epoll.add(
+            usercode_event.as_ref().get_ref(),
+            EpollEventBits::IN,
+            USERCODE_FUTURE_WAKE_EVENT_ID,
+        ) {
+            tracing::warn!(reason = ?e, "ep.add usercode_event failed");
+        }
 
         Self {
             engine_input,
@@ -183,14 +202,19 @@ impl<MainF: Future> GameDriver<MainF> {
             frame_timing_sender,
             event_queue,
             usercode,
+            usercode_event,
             _pinned: core::marker::PhantomPinned,
         }
     }
 
     /// returns true if usercode coroutine has done
     pub fn step(&mut self) -> bool {
-        let usercode_waker =
-            unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) };
+        let usercode_waker = unsafe {
+            core::task::Waker::new(
+                self.usercode_event.as_ref().get_ref() as *const _ as _,
+                &USERCODE_WAKER_VTABLE,
+            )
+        };
 
         self.usercode
             .as_mut()
@@ -200,64 +224,75 @@ impl<MainF: Future> GameDriver<MainF> {
 }
 
 pub struct EpollTemporaryAddFd<'e> {
-    instance: &'e epoll::Epoll,
+    instance: &'e Epoll,
     fd: RawFd,
 }
 impl<'e> EpollTemporaryAddFd<'e> {
     pub fn add(
-        instance: &'e epoll::Epoll,
-        fd: RawFd,
-        events: u32,
+        instance: &'e Epoll,
+        fd: &(impl AsRawFd + ?Sized),
+        events: EpollEventBits,
         extras: u64,
     ) -> std::io::Result<Self> {
-        instance.add_fd(fd, events, extras)?;
-        Ok(Self { instance, fd })
+        instance.add(fd, events, extras)?;
+        Ok(Self {
+            instance,
+            fd: fd.as_raw_fd(),
+        })
     }
 }
 impl Drop for EpollTemporaryAddFd<'_> {
     fn drop(&mut self) {
         self.instance
-            .remove_fd(self.fd)
+            .del(&self.fd)
             .expect("Failed to remove fd from epoll instance");
     }
 }
+
+const UDEV_MONITOR_EVENT_ID: u64 = 2;
+const UDEV_DEVICE_EVENT_ID_START: u64 = 3;
+const FIXED_EVENT_COUNT: usize = 3;
+const WINDOW_BACKEND_EVENT_ID: u64 = 0;
+const USERCODE_FUTURE_WAKE_EVENT_ID: u64 = 1;
 
 fn run_with_window_backend<W>(window_backend: SharedMutableRef<W>)
 where
     W: WindowBackend + EventProcessor + PointerPositionProvider + Send + Sync + 'static,
     SharedMutableRef<W>: PresenterProvider,
 {
-    let mut gd = GameDriver::new(window_backend.clone(), |mut engine| async move {
+    let ep = Epoll::new(0).expect("Failed to create epoll interface");
+    let mut input = input::InputSystem::new(&ep, UDEV_MONITOR_EVENT_ID, UDEV_DEVICE_EVENT_ID_START);
+
+    let mut gd = GameDriver::new(window_backend.clone(), &ep, |mut engine| async move {
         userlib::game_main(&mut engine).await;
     });
 
-    let ep = epoll::Epoll::new().expect("Failed to create epoll interface");
-    let mut input = input::InputSystem::new(&ep, 1, 2);
-
     window_backend.borrow_mut().show();
     gd.engine_audio.write().start();
-    let mut events = Vec::new();
-    let mut last_drawn_geometry = window_backend.borrow().geometry();
-    while !window_backend.borrow().has_close_requested() {
-        // step usercode before wait
-        gd.step();
 
-        if events.len() != 2 + input.managed_devices_count() {
-            // resize
-            events.resize(2 + input.managed_devices_count(), unsafe {
-                std::mem::MaybeUninit::zeroed().assume_init()
-            });
+    // initial uesrcode step
+    gd.step();
+
+    let mut events = Vec::with_capacity(8);
+    let mut last_drawn_geometry = window_backend.borrow().geometry();
+    'app: while !window_backend.borrow().has_close_requested() {
+        if events.capacity() > (FIXED_EVENT_COUNT + input.managed_devices_count() * 2).max(8) {
+            // reduce memory consumption
+            events = Vec::with_capacity((FIXED_EVENT_COUNT + input.managed_devices_count()).max(8));
+        } else {
+            // resize capacity
+            events.reserve(FIXED_EVENT_COUNT + input.managed_devices_count());
         }
 
         let window_backend_readiness_guard = window_backend.borrow_mut().readiness_guard();
         let window_backend_temporary_epoll = EpollTemporaryAddFd::add(
             &ep,
-            window_backend_readiness_guard.borrow_fd().as_raw_fd(),
-            libc::EPOLLIN as _,
-            0,
+            &window_backend_readiness_guard.borrow_fd(),
+            EpollEventBits::IN,
+            WINDOW_BACKEND_EVENT_ID,
         );
 
-        let count = match ep.wait(&mut events, Some(1)) {
+        let count = match ep.wait(events.spare_capacity_mut(), Some(1)) {
             Ok(x) => x,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => 0,
             Err(e) => {
@@ -282,26 +317,43 @@ where
             continue;
         }
 
-        let mut rg = Some(window_backend_readiness_guard);
-        for e in &events[..count as usize] {
-            if e.u64 == 0 {
-                window_backend
-                    .borrow_mut()
-                    .process_all_events(rg.take().expect("window events signaled twice"));
-            } else if e.u64 == 1 {
+        let mut has_window_events = false;
+        let mut has_usercode_wakes = false;
+        for e in unsafe { core::slice::from_raw_parts(events.as_ptr(), count as _) } {
+            if e.value() == WINDOW_BACKEND_EVENT_ID {
+                has_window_events = true;
+            } else if e.value() == USERCODE_FUTURE_WAKE_EVENT_ID {
+                has_usercode_wakes = true;
+            } else if e.value() == UDEV_MONITOR_EVENT_ID {
                 input.process_monitor_event(&ep);
             } else {
                 let mut input_lock = gd.engine_input.state_write_lock();
                 input.process_device_event(
                     &mut input_lock.make_event_receiver(),
-                    e.u64,
+                    e.value(),
                     &*window_backend.borrow(),
                 );
             }
         }
-        if rg.is_some() {
+
+        if has_window_events {
+            window_backend
+                .borrow_mut()
+                .process_all_events(window_backend_readiness_guard);
+        } else {
             // no window server events processed
+            // Note: これ先にキャンセルしてあげないとVulkan WSI関係の呼び出しでとまる
             window_backend.borrow_mut().cancel_read();
+        }
+
+        if has_usercode_wakes {
+            if let Err(e) = gd.usercode_event.take() {
+                tracing::warn!(reason = ?e, "usercode_event.take failed");
+            }
+
+            if gd.step() {
+                break 'app;
+            }
         }
     }
 
@@ -313,16 +365,14 @@ where
 }
 
 fn main() {
-    let fmt = tracing_subscriber::fmt::layer().pretty();
-    let env_filter = tracing_subscriber::filter::EnvFilter::from_default_env();
     tracing_subscriber::registry()
-        .with(fmt)
-        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().pretty())
+        .with(tracing_subscriber::filter::EnvFilter::from_default_env())
         .init();
 
     let io_reactor_thread = peridot::native_io::linux::IoReactorThread::spawn();
 
-    if let Ok(backend_name) = std::env::var("PERIDOT_PREFERRED_WINDOW_BACKEND") {
+    if let Some(backend_name) = std::env::var_os("PERIDOT_PREFERRED_WINDOW_BACKEND") {
         if backend_name == "wayland" {
             run_with_window_backend(make_shared_mutable_ref(
                 Wayland::try_init().expect("Failed to initialize wayland backend"),
@@ -337,10 +387,7 @@ fn main() {
             return;
         }
 
-        tracing::warn!(
-            { backend = backend_name },
-            "unknown backend specified, ignoring"
-        );
+        tracing::warn!(backend = ?backend_name, "unknown backend specified, ignoring");
     }
 
     if let Some(x) = Wayland::try_init() {

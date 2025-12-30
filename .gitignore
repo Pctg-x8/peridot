@@ -17,3 +17,4 @@ built/
 
 ## hidden locals
 local/
+.local/

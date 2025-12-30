@@ -440,11 +440,11 @@ pub struct ktxStream {
 #[derive(Clone, Copy)]
 pub union ktxStreamData {
     /// a stdio FILE pointer for a `ktxFileStream`.
-    file: *mut core::ffi::c_void, /* FILE */
+    pub file: *mut core::ffi::c_void, /* FILE */
     /// a pointer to a [`ktxMem`] struct for a `ktxMemStream`.
-    mem: *mut ktxMem,
+    pub mem: *mut ktxMem,
     /// pointer to a struct for custom streams.
-    custom_ptr: ktxStreamDataCustomPtr,
+    pub custom_ptr: ktxStreamDataCustomPtr,
 }
 impl core::fmt::Debug for ktxStreamData {
     #[inline(always)]
