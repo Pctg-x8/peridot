@@ -7,7 +7,7 @@ build = "build.rs"
 [features]
 default = []
 win32 = ["bedrock/VK_KHR_win32_surface"]
-mac = ["bedrock/VK_EXT_metal_surface"]
+mac = ["bedrock/VK_EXT_metal_surface", "bedrock/VK_KHR_portability_enumeration"]
 linux-default = ["wayland", "freetype", "fontconfig", "harfbuzz"]
 wayland = ["dep:peridot-tp-wayland", "bedrock/VK_KHR_wayland_surface"]
 freetype = ["dep:freetype2"]
@@ -52,6 +52,9 @@ features = ["tracing", "xdg-shell"]
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-eventfd = { path = "../../platform/linux/eventfd" }
 linux-epoll = { path = "../../platform/linux/epoll" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
 
 [build-dependencies]
 winres = "0.1"

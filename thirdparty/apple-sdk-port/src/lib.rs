@@ -83,8 +83,8 @@ impl<T: MutableObject> core::ops::DerefMut for Owned<T> {
 }
 impl<T: Object> Owned<T> {
     #[inline(always)]
-    pub const unsafe fn from_ptr_unchecked(ptr: *mut T) -> Option<Self> {
-        Some(Self(unsafe { core::ptr::NonNull::new_unchecked(ptr) }))
+    pub const unsafe fn from_ptr_unchecked(ptr: *mut T) -> Self {
+        Self(unsafe { core::ptr::NonNull::new_unchecked(ptr) })
     }
 
     #[inline(always)]

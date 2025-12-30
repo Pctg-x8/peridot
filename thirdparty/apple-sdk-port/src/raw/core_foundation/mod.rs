@@ -52,7 +52,7 @@ pub const kCFNotFound: CFIndex = -1;
 #[repr(C)]
 pub struct CFRange {
     pub location: CFIndex,
-    pub lenth: CFIndex,
+    pub length: CFIndex,
 }
 
 #[repr(C)]

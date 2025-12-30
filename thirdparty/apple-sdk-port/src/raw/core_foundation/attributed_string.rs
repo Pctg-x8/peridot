@@ -113,4 +113,6 @@ unsafe extern "C" {
         bidi_levels: *mut u8,
         base_directions: *mut u8,
     ) -> bool;
+
+    pub static NSFontAttributeName: CFStringRef;
 }

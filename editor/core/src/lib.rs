@@ -61,8 +61,14 @@ static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable
 );
 
 pub fn launch() {
+    #[cfg(not(target_os = "macos"))]
     tracing_subscriber::fmt()
         .pretty()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+    #[cfg(target_os = "macos")]
+    tracing_subscriber::fmt()
+        .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
@@ -236,6 +242,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
+    match br::instance_version() {
+        Ok(v) => tracing::info!(version = %v, "Vulkan"),
+        Err(e) => tracing::error!(reason = ?e, "Failed to get vulkan version"),
+    }
+
     if let Some(xs) = br::instance_extension_properties_cstr_alloc(None)
         .inspect_err(
             |e| tracing::error!(reason = ?e, "Failed to enumerate vulkan instance extensions"),
@@ -292,18 +303,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     instance_extensions.push(c"VK_KHR_win32_surface".into());
     #[cfg(feature = "wayland")]
     instance_extensions.push(c"VK_KHR_wayland_surface".into());
-    let vk_instance = br::InstanceObject::new(&br::InstanceCreateInfo::new(
-        &br::ApplicationInfo::new(
-            c"Peridot Marble Editor",
-            br::Version::new(0, 0, 0, 1),
-            c"InHouse",
-            br::Version::new(0, 0, 0, 1),
-        )
-        .api_version(br::Version::new(0, 1, 4, 0)),
-        &[],
-        &instance_extensions,
-    ))
-    .expect("vkInstance create");
+    #[cfg(target_os = "macos")]
+    instance_extensions.push(c"VK_EXT_metal_surface".into());
+    #[cfg(target_os = "macos")]
+    instance_extensions.push(c"VK_KHR_portability_enumeration".into());
+
+    let app_info = br::ApplicationInfo::new(
+        c"Peridot Marble Editor",
+        br::Version::new(0, 0, 0, 1),
+        c"InHouse",
+        br::Version::new(0, 0, 0, 1),
+    )
+    .api_version(br::Version::new(0, 1, 4, 0));
+    let inst_info = br::InstanceCreateInfo::new(&app_info, &[], &instance_extensions);
+    #[cfg(target_os = "macos")]
+    let inst_info = inst_info.flags(br::InstanceCreateFlags::ENUMERATE_PORTABILITY);
+    let vk_instance = br::InstanceObject::new(&inst_info).expect("vkInstance create");
     let vk_adapter = vk_instance
         .iter_physical_devices()
         .expect("iter_physical_devices")
@@ -380,6 +395,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             &[
                 c"VK_KHR_swapchain".into(),
                 c"VK_KHR_timeline_semaphore".into(),
+                c"VK_KHR_synchronization2".into(),
             ],
         )
         .with_next(
@@ -434,12 +450,21 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("vk_surface create")
     };
 
-    // if !vk_adapter
-    //     .surface_support(graphics_queue_family_index, &vk_surface)
-    //     .expect("surface_support")
-    // {
-    //     panic!("surface not supported on graphics queue");
-    // }
+    #[cfg(target_os = "macos")]
+    let vk_surface = unsafe {
+        br::SurfaceObject::new(
+            &vk_adapter,
+            &br::MetalSurfaceCreateInfo::new(get_main_metal_layer()),
+        )
+        .expect("vk_surface.create")
+    };
+
+    if !vk_adapter
+        .surface_support(graphics_queue_family_index, &vk_surface)
+        .expect("surface_support")
+    {
+        panic!("surface not supported on graphics queue");
+    }
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -449,7 +474,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 tracing::info!("Starting RenderThread...");
                 let mut render_queue = vk_device.queue(graphics_queue_family_index, 0);
 
-                /*
                 let present_modes = vk_adapter
                     .surface_present_modes_alloc(&vk_surface)
                     .expect("surface_present_modes");
@@ -462,7 +486,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 let mut surface_ext = if surface_caps.currentExtent.width == 0xffffffff
                     || surface_caps.currentExtent.height == 0xffffffff
                 {
-                    let (cw, ch) = w.client_size();
+                    // let (cw, ch) = w.client_size();
+                    let (cw, ch) = unimplemented!();
 
                     br::Extent2D {
                         width: if surface_caps.currentExtent.width == 0xffffffff {
@@ -574,25 +599,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     .collect::<Vec<_>>();
 
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device, &vk_adapter_memory_properties);
-
-                #[cfg(windows)]
-                let dwfactory: IDWriteFactory = unsafe {
-                    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory")
-                };
-                #[cfg(windows)]
-                let ui_text_format = unsafe {
-                    dwfactory
-                        .CreateTextFormat(
-                            w!("Inter Display"),
-                            None,
-                            DWRITE_FONT_WEIGHT_NORMAL,
-                            DWRITE_FONT_STYLE_NORMAL,
-                            DWRITE_FONT_STRETCH_NORMAL,
-                            12.0,
-                            w!("ja-JP"),
-                        )
-                        .expect("CreateTextFormat ui")
-                };
 
                 #[cfg(feature = "fontconfig")]
                 let (font_file_path, face_index) = unsafe {
@@ -752,13 +758,291 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     }
                 }
 
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    let font = apple_sdk_port::text::Font::new_ui(
+                        apple_sdk_port::text::UIFontType::System,
+                        12.0,
+                        None,
+                    );
+
+                    let mut str_attr = apple_sdk_port::foundation::MutableDictionary::<
+                        _,
+                        dyn apple_sdk_port::Object,
+                    >::new_generic_key_value(None, 1)
+                    .expect("str_attr.create");
+                    str_attr.set(
+                        apple_sdk_port::foundation::AttributedStringKey::font(),
+                        &*font,
+                    );
+                    let str = apple_sdk_port::foundation::AttributedString::new(
+                        None,
+                        &apple_sdk_port::foundation::String::from_str_no_copy(
+                            None,
+                            "Peridot Marble Editor - New Project",
+                        ),
+                        &*str_attr,
+                    )
+                    .expect("AttributedString.create");
+                    let framesetter =
+                        apple_sdk_port::text::Framesetter::from_attributed_string(&str)
+                            .expect("Framesetter.create");
+                    let frame = framesetter
+                        .create_frame(
+                            apple_sdk_port::foundation::Range {
+                                location: 0,
+                                length: 0,
+                            },
+                            &apple_sdk_port::graphics::Path::new_rect(
+                                apple_sdk_port::raw::CGRect {
+                                    origin: apple_sdk_port::raw::CGPoint { x: 0.0, y: 0.0 },
+                                    size: apple_sdk_port::raw::CGSize {
+                                        width: f64::MAX,
+                                        height: f64::MAX,
+                                    },
+                                },
+                                None,
+                            ),
+                            &apple_sdk_port::foundation::Dictionary::new_raw(
+                                None,
+                                core::ptr::null_mut(),
+                                core::ptr::null_mut(),
+                                0,
+                                &apple_sdk_port::raw::kCFTypeDictionaryKeyCallBacks,
+                                &apple_sdk_port::raw::kCFTypeDictionaryValueCallBacks,
+                            )
+                            .expect("Dictionary.create"),
+                        )
+                        .expect("Frame.create");
+                    let lines = frame.lines();
+                    tracing::debug!(line_count = lines.len(), "frameset lines");
+                    let font_ascent = font.ascent();
+                    for n in 0..lines.len() {
+                        let runs = lines[n].glyph_runs();
+                        tracing::debug!(count = runs.len(), "glyph runs");
+                        for m in 0..runs.len() {
+                            let glyph_count = runs[m].glyph_count();
+                            tracing::debug!(count = glyph_count, "run");
+                            let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
+                            font.bounding_rects_for_glyphs(
+                                apple_sdk_port::text::FontOrientation::Horizontal,
+                                core::slice::from_raw_parts(runs[m].glyphs_ptr(), glyph_count as _),
+                                glyph_bounding_rects.spare_capacity_mut(),
+                            );
+                            glyph_bounding_rects.set_len(glyph_count as _);
+                            for g in 0..glyph_count {
+                                let glyph = *runs[m].glyphs_ptr().add(g as usize);
+                                let pos = &*runs[m].positions().add(g as usize);
+                                let bounding_rect = &glyph_bounding_rects[g as usize];
+                                tracing::debug!(glyph, ?pos, ?bounding_rect, "glyph");
+
+                                if bounding_rect.size.width == 0.0
+                                    && bounding_rect.size.height == 0.0
+                                {
+                                    // empty shape(whitespace)
+                                    continue;
+                                }
+
+                                let (r, is_new) = glyph_atlas.acquire(
+                                    (0, SafeF32::new_unchecked(12.0), glyph),
+                                    (bounding_rect.size.width * 2.0).ceil() as _,
+                                    (bounding_rect.size.height * 2.0).ceil() as _,
+                                );
+                                box_instances.push(BoxInstance {
+                                    posst: [
+                                        r.width as f32,
+                                        r.height as f32,
+                                        ((pos.x + bounding_rect.origin.x) * 2.0) as f32,
+                                        ((pos.y + font_ascent
+                                            - (bounding_rect.size.height + bounding_rect.origin.y))
+                                            * 2.0) as f32,
+                                    ],
+                                    uvst: [
+                                        r.width as f32 / glyph_atlas.space_mgr.max.width as f32,
+                                        r.height as f32 / glyph_atlas.space_mgr.max.height as f32,
+                                        r.left as f32 / glyph_atlas.space_mgr.max.width as f32,
+                                        r.top as f32 / glyph_atlas.space_mgr.max.height as f32,
+                                    ],
+                                });
+
+                                if is_new {
+                                    let path = font
+                                        .create_path_for_glyph(glyph, None)
+                                        .expect("font.create_path_for_glyph");
+                                    let mut current_figure = None;
+                                    let mut pen_pos = (0.0, 0.0);
+                                    let offset_x =
+                                        r.left as f32 - (bounding_rect.origin.x * 2.0) as f32;
+                                    let offset_y = r.top as f32
+                                        - ((bounding_rect.size.height + bounding_rect.origin.y)
+                                            * 2.0) as f32;
+                                    path.apply(|e| match e.r#type {
+                                        apple_sdk_port::raw::kCGPathElementMoveToPoint => {
+                                            current_figure = Some((
+                                                (*e.points).clone(),
+                                                new_filltri_points.len(),
+                                            ));
+                                            pen_pos = ((*e.points).x, (*e.points).y);
+                                            new_filltri_points.push([
+                                                (*e.points).x as f32 * 2.0 + offset_x,
+                                                (*e.points).y as f32 * 2.0 + offset_y,
+                                            ]);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
+                                            let Some((_, filltri_index0)) = current_figure else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 = new_filltri_points.len() - 1;
+                                            new_filltri_points.push([
+                                                (*e.points).x as f32 * 2.0 + offset_x,
+                                                (*e.points).y as f32 * 2.0 + offset_y,
+                                            ]);
+                                            new_filltri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                new_filltri_points.len() as u16 - 1,
+                                            ]);
+                                            pen_pos = ((*e.points).x, (*e.points).y);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
+                                            let points = core::slice::from_raw_parts(e.points, 2);
+                                            let Some((_, filltri_index0)) = current_figure else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 = new_filltri_points.len() - 1;
+                                            new_filltri_points.push([
+                                                points[1].x as f32 * 2.0 + offset_x,
+                                                points[1].y as f32 * 2.0 + offset_y,
+                                            ]);
+                                            new_filltri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                new_filltri_points.len() as u16 - 1,
+                                            ]);
+                                            new_curve_triangles.extend([
+                                                [
+                                                    pen_pos.0 as f32 * 2.0 + offset_x,
+                                                    pen_pos.1 as f32 * 2.0 + offset_y,
+                                                    0.0,
+                                                    0.0,
+                                                ],
+                                                [
+                                                    points[0].x as f32 * 2.0 + offset_x,
+                                                    points[0].y as f32 * 2.0 + offset_y,
+                                                    0.5,
+                                                    0.0,
+                                                ],
+                                                [
+                                                    points[1].x as f32 * 2.0 + offset_x,
+                                                    points[1].y as f32 * 2.0 + offset_y,
+                                                    1.0,
+                                                    1.0,
+                                                ],
+                                            ]);
+                                            pen_pos = (points[1].x, points[1].y);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
+                                            let points = core::slice::from_raw_parts(e.points, 3);
+                                            lyon_geom::CubicBezierSegment {
+                                                from: lyon_geom::point(pen_pos.0, pen_pos.1),
+                                                ctrl1: lyon_geom::point(points[0].x, points[0].y),
+                                                ctrl2: lyon_geom::point(points[1].x, points[1].y),
+                                                to: lyon_geom::point(points[2].x, points[2].y),
+                                            }
+                                            .for_each_quadratic_bezier(0.1, &mut |q| {
+                                                let Some((_, filltri_index0)) = current_figure
+                                                else {
+                                                    panic!("no figure started?");
+                                                };
+
+                                                let filltri_index1 = new_filltri_points.len() - 1;
+                                                new_filltri_points.push([
+                                                    q.to.x as f32 * 2.0 + offset_x,
+                                                    q.to.y as f32 * 2.0 + offset_y,
+                                                ]);
+                                                new_filltri_indices.extend([
+                                                    filltri_index0 as u16,
+                                                    filltri_index1 as u16,
+                                                    new_filltri_points.len() as u16 - 1,
+                                                ]);
+                                                new_curve_triangles.extend([
+                                                    [
+                                                        pen_pos.0 as f32 * 2.0 + offset_x,
+                                                        pen_pos.1 as f32 * 2.0 + offset_y,
+                                                        0.0,
+                                                        0.0,
+                                                    ],
+                                                    [
+                                                        q.ctrl.x as f32 * 2.0 + offset_x,
+                                                        q.ctrl.y as f32 * 2.0 + offset_y,
+                                                        0.5,
+                                                        0.0,
+                                                    ],
+                                                    [
+                                                        q.to.x as f32 * 2.0 + offset_x,
+                                                        q.to.y as f32 * 2.0 + offset_y,
+                                                        1.0,
+                                                        1.0,
+                                                    ],
+                                                ]);
+                                                pen_pos = (q.to.x, q.to.y);
+                                            })
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementCloseSubpath => {
+                                            // line to start point
+                                            let Some((start_point, filltri_index0)) =
+                                                current_figure.take()
+                                            else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 = new_filltri_points.len() - 1;
+                                            new_filltri_points.push([
+                                                start_point.x as f32 * 2.0 + offset_x,
+                                                start_point.y as f32 * 2.0 + offset_y,
+                                            ]);
+                                            new_filltri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                new_filltri_points.len() as u16 - 1,
+                                            ]);
+                                            pen_pos = (start_point.x, start_point.y);
+                                        }
+                                        _ => unreachable!(),
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // debug print glyph_atlas
                 // box_instances.clear();
                 // box_instances.push(BoxInstance {
                 //     posst: [4096.0, 4096.0, 0.0, 0.0],
-                //     uvst: [1.0, 1.0, 0.0, 0.0]
+                //     uvst: [1.0, 1.0, 0.0, 0.0],
                 // });
 
+                #[cfg(windows)]
+                let dwfactory: IDWriteFactory = unsafe {
+                    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory")
+                };
+                #[cfg(windows)]
+                let ui_text_format = unsafe {
+                    dwfactory
+                        .CreateTextFormat(
+                            w!("Inter Display"),
+                            None,
+                            DWRITE_FONT_WEIGHT_NORMAL,
+                            DWRITE_FONT_STYLE_NORMAL,
+                            DWRITE_FONT_STRETCH_NORMAL,
+                            12.0,
+                            w!("ja-JP"),
+                        )
+                        .expect("CreateTextFormat ui")
+                };
                 #[cfg(windows)]
                 let title_layout = unsafe {
                     dwfactory
@@ -795,7 +1079,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     target_texture_height: f32,
                 }
                 let fill_shader_binary1 =
-                    std::fs::read("./resources/vg-fill.spv").expect("vg-fill load");
+                    std::fs::read("../core/resources/vg-fill.spv").expect("vg-fill load");
                 let mut fill_shader_binary = Vec::with_capacity(fill_shader_binary1.len() >> 2);
                 unsafe {
                     core::ptr::copy_nonoverlapping(
@@ -824,7 +1108,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     target_texture_height: f32,
                 }
                 let curve_shader_binary1 =
-                    std::fs::read("./resources/vg-curve.spv").expect("vg-curve load");
+                    std::fs::read("../core/resources/vg-curve.spv").expect("vg-curve load");
                 let mut curve_shader_binary = Vec::with_capacity(curve_shader_binary1.len() >> 2);
                 unsafe {
                     core::ptr::copy_nonoverlapping(
@@ -846,7 +1130,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 .expect("curve_shader module create");
 
                 let vec_tri_fill_shader_binary1 =
-                    std::fs::read("./resources/vec-tri-fill.spv").expect("vec-tri-fill load");
+                    std::fs::read("../core/resources/vec-tri-fill.spv").expect("vec-tri-fill load");
                 let mut vec_tri_fill_shader_binary =
                     Vec::with_capacity(vec_tri_fill_shader_binary1.len() >> 2);
                 unsafe {
@@ -1149,6 +1433,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     )
                     .expect("create vector rasterize pipelines");
 
+                // unsafe {
+                //     manual_capture_begin();
+                // }
                 let filltri_points_offset = 0;
                 let filltri_indices_offset =
                     filltri_points_offset + core::mem::size_of_val(&new_filltri_points[..]);
@@ -1246,10 +1533,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         glyph_atlas.space_mgr.max,
                         br::vk::VK_FORMAT_R8_UNORM,
                     )
-                    .set_usage(
-                        br::ImageUsageFlags::COLOR_ATTACHMENT
-                            | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
-                    )
+                    .set_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
                     .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
                 )
                 .expect("vector color_ms buffer create");
@@ -1283,10 +1567,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 let mut vector_stencil_buffer = br::ImageObject::new(
                     &vk_device,
                     &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, br::vk::VK_FORMAT_S8_UINT)
-                        .set_usage(
-                            br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-                                | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
-                        )
+                        .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                         .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
                 )
                 .expect("vector stencil buffer create");
@@ -1351,19 +1632,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .begin(&br::CommandBufferBeginInfo::new())
                         .expect("cb begin")
                 }
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[],
-                    &[],
-                    &[br::ImageMemoryBarrier2::new(
-                        &glyph_atlas.image(),
-                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                    )
-                    .of_execution(br::PipelineStageFlags2(0), br::PipelineStageFlags2::COPY)
-                    .transferring_layout(
-                        br::ImageLayout::Undefined,
-                        br::ImageLayout::TransferDestOpt,
-                    )],
-                ))
+                .pipeline_barrier_2_khr(
+                    &vk_device,
+                    &br::DependencyInfo::new(
+                        &[],
+                        &[],
+                        &[br::ImageMemoryBarrier2::new(
+                            &glyph_atlas.image(),
+                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                        )
+                        .of_execution(br::PipelineStageFlags2(0), br::PipelineStageFlags2::COPY)
+                        .transferring_layout(
+                            br::ImageLayout::Undefined,
+                            br::ImageLayout::TransferDestOpt,
+                        )],
+                    ),
+                )
                 .copy_buffer(
                     &vector_draw_init_buffer,
                     &vector_draw_buffer,
@@ -1382,30 +1666,34 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         0..1,
                     )],
                 )
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[br::MemoryBarrier2::new()
-                        .from(
-                            br::PipelineStageFlags2::COPY,
-                            br::AccessFlags2::TRANSFER.write,
+                .pipeline_barrier_2_khr(
+                    &vk_device,
+                    &br::DependencyInfo::new(
+                        &[br::MemoryBarrier2::new()
+                            .from(
+                                br::PipelineStageFlags2::COPY,
+                                br::AccessFlags2::TRANSFER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::VERTEX_INPUT,
+                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ
+                                    | br::AccessFlags2::INDEX_READ,
+                            )],
+                        &[],
+                        &[br::ImageMemoryBarrier2::new(
+                            &glyph_atlas.image(),
+                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                         )
-                        .to(
-                            br::PipelineStageFlags2::VERTEX_INPUT,
-                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ | br::AccessFlags2::INDEX_READ,
+                        .of_execution(
+                            br::PipelineStageFlags2::COPY,
+                            br::PipelineStageFlags2::FRAGMENT_SHADER,
+                        )
+                        .transferring_layout(
+                            br::ImageLayout::TransferDestOpt,
+                            br::ImageLayout::ShaderReadOnlyOpt,
                         )],
-                    &[],
-                    &[br::ImageMemoryBarrier2::new(
-                        &glyph_atlas.image(),
-                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                    )
-                    .of_execution(
-                        br::PipelineStageFlags2::COPY,
-                        br::PipelineStageFlags2::FRAGMENT_SHADER,
-                    )
-                    .transferring_layout(
-                        br::ImageLayout::TransferDestOpt,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )],
-                ))
+                    ),
+                )
                 .begin_render_pass(
                     &br::RenderPassBeginInfo::new(
                         &vector_render_pass,
@@ -1577,19 +1865,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         },
                     ],
                 )
-                .pipeline_barrier_2(&br::DependencyInfo::new(
-                    &[br::MemoryBarrier2::new()
-                        .from(
-                            br::PipelineStageFlags2::COPY,
-                            br::AccessFlags2::TRANSFER.write,
-                        )
-                        .to(
-                            br::PipelineStageFlags2::VERTEX_INPUT,
-                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
-                        )],
-                    &[],
-                    &[],
-                ))
+                .pipeline_barrier_2_khr(
+                    &vk_device,
+                    &br::DependencyInfo::new(
+                        &[br::MemoryBarrier2::new()
+                            .from(
+                                br::PipelineStageFlags2::COPY,
+                                br::AccessFlags2::TRANSFER.write,
+                            )
+                            .to(
+                                br::PipelineStageFlags2::VERTEX_INPUT,
+                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+                            )],
+                        &[],
+                        &[],
+                    ),
+                )
                 .end()
                 .expect("error in init cb");
                 unsafe {
@@ -1606,6 +1897,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .expect("submit init");
                 }
                 render_queue.wait().expect("wait init commands");
+                // unsafe {
+                //     manual_capture_end();
+                // }
 
                 let dsl_test = br::DescriptorSetLayoutObject::new(
                     &vk_device,
@@ -1615,7 +1909,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 )
                 .expect("dsl_test create");
 
-                let shader_binary1 = std::fs::read("./resources/test.spv").expect("no shader");
+                let shader_binary1 =
+                    std::fs::read("../core/resources/test.spv").expect("no shader");
                 let mut shader_binary = Vec::with_capacity(shader_binary1.len() >> 2);
                 unsafe {
                     core::ptr::copy_nonoverlapping(
@@ -2086,7 +2381,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 unsafe {
                     vk_device.wait().expect("device wait");
                     glyph_atlas.drop(&vk_device);
-                }*/
+                }
                 tracing::info!("RenderThread terminated");
             })
             .expect("render_thread spawn");
@@ -2162,6 +2457,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     DispatchMessageW(msg);
                 },
             }
+        }
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            nsapp_run();
         }
 
         *event_store = Some(Event::Quit);
@@ -2331,7 +2631,7 @@ struct GlyphAtlas {
     space_mgr: GlyphAtlasSpaceManager,
 }
 impl GlyphAtlas {
-    const MULTISAMPLE_LEVEL: u32 = 8;
+    const MULTISAMPLE_LEVEL: u32 = 4;
 
     pub unsafe fn drop(
         &mut self,
@@ -3191,4 +3491,13 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     }
 
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn get_main_metal_layer() -> *mut core::ffi::c_void;
+    fn nsapp_run();
+
+    fn manual_capture_begin();
+    fn manual_capture_end();
 }

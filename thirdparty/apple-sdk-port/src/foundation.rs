@@ -651,7 +651,7 @@ impl String {
     pub unsafe fn from_str_no_copy<'a>(
         allocator: Option<&Allocator>,
         r#str: &'a str,
-    ) -> Option<Owned<Self>> {
+    ) -> Owned<Self> {
         unsafe {
             Self::from_bytes_no_copy(allocator, r#str.as_bytes(), StringEncoding::UTF8, false)
         }
@@ -696,9 +696,9 @@ impl String {
         bytes: &[u8],
         encoding: StringEncoding,
         is_external_representation: bool,
-    ) -> Option<Owned<Self>> {
+    ) -> Owned<Self> {
         unsafe {
-            Owned::from_ptr(CFStringCreateWithBytesNoCopy(
+            Owned::from_ptr_unchecked(CFStringCreateWithBytesNoCopy(
                 allocator.map_or(kCFAllocatorDefault, |x| &x.0),
                 bytes.as_ptr(),
                 bytes.len() as _,
@@ -746,5 +746,38 @@ impl String {
                 used_buf_len.as_mut_ptr(),
             )
         }
+    }
+}
+
+#[repr(transparent)]
+pub struct AttributedString(__CFAttributedString);
+impl Object for AttributedString {
+    #[inline(always)]
+    fn as_typeref(&self) -> CFTypeRef {
+        &self.0 as *const _ as _
+    }
+}
+impl AttributedString {
+    #[inline(always)]
+    pub fn new(
+        allocator: Option<&Allocator>,
+        str: &String,
+        attributes: &Dictionary<String, dyn Object>,
+    ) -> Option<Owned<Self>> {
+        unsafe {
+            Owned::from_ptr(CFAttributedStringCreate(
+                allocator.map_or(kCFAllocatorDefault, |x| &x.0),
+                &str.0,
+                &attributes.0,
+            ) as *mut Self)
+        }
+    }
+}
+
+pub struct AttributedStringKey;
+impl AttributedStringKey {
+    #[inline(always)]
+    pub const fn font<'a>() -> &'a String {
+        unsafe { &*crate::raw::core_foundation::NSFontAttributeName.cast::<String>() }
     }
 }
