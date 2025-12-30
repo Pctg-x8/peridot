@@ -86,11 +86,11 @@ impl Font for DirectWriteFont {
             ),
         ))
     }
-    fn outline(
+    fn outline<B: PathBuilder>(
         &self,
         glyph: &Self::GlyphID,
         transform: &euclid::Transform2D<f32>,
-        builder: &mut impl PathBuilder,
+        builder: &mut B,
     ) -> Result<(), GlyphLoadingError> {
         let sink = ID2D1SimplifiedGeometrySink::from(PathEventReceiver::new(transform.clone()));
 

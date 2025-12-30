@@ -1,14 +1,7 @@
-//
-//  PeridotRenderableViewController.swift
-//  peridot-cradle-mac: Controls native engine
-//
-//  Created by S.Percentage on 2018/12/01.
-//  Copyright © 2018 S.Percentage. All rights reserved.
-//
-
 import Foundation
 import Cocoa
 import Carbon
+import AVFAudio
 
 final class CurrentKeyboardLayoutCodeConverter {
     static let MAX_CHAR_LENGTH: Int = 4
@@ -46,11 +39,13 @@ final class CurrentKeyboardLayoutCodeConverter {
 }
 
 final class PeridotRenderableViewController : NSViewController {
-    var dplink: CVDisplayLink? = nil
-    var workDispatcher: DispatchSourceUserDataAdd? = nil
-    var clientMousePoint = CGPoint(x: 0, y: 0)
+    private var dplink: CVDisplayLink? = nil
+    private var workDispatcher: DispatchSourceUserDataAdd? = nil
+    private var clientMousePoint = CGPoint(x: 0, y: 0)
+    private let audioEngine = AVAudioEngine()
+    private var audioSourceNode: AVAudioSourceNode? = nil
     
-    private(set) var nativeGameDriver: NativeGameDriver? = nil
+    var nativeGameDriver: NativeGameDriver? = nil
     
     func initDispatchers() {
         func onUpdateDisplay(_ _: CVDisplayLink,
@@ -63,9 +58,12 @@ final class PeridotRenderableViewController : NSViewController {
             self_.workDispatcher!.add(data: 1)
             return kCVReturnSuccess
         }
-        let workDispatcher = DispatchSource.makeUserDataAddSource(queue: DispatchQueue.main)
-        workDispatcher.setEventHandler(handler: { [weak self] in self?.nativeGameDriver?.update() })
-        self.workDispatcher = workDispatcher
+        
+        self.workDispatcher = DispatchSource.makeUserDataAddSource(queue: DispatchQueue.main)
+        self.workDispatcher!.setEventHandler { [weak self] in
+            self?.nativeGameDriver?.update()
+        }
+        
         CVDisplayLinkCreateWithActiveCGDisplays(&self.dplink)
         CVDisplayLinkSetOutputCallback(self.dplink!, onUpdateDisplay,
                                        unsafeBitCast(self, to: UnsafeMutableRawPointer.self))
@@ -74,8 +72,7 @@ final class PeridotRenderableViewController : NSViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        launch_game(unsafeBitCast(self, to: UnsafeMutableRawPointer.self), unsafeBitCast(self.view.layer! as! CAMetalLayer, to: UnsafeMutableRawPointer.self))
-        self.view.window?.title = captionbarText()! as String
+        
         initDispatchers()
         
         if let p = self.view.window?.mouseLocationOutsideOfEventStream {
@@ -183,31 +180,73 @@ final class PeridotRenderableViewController : NSViewController {
         }
         
         (self.view as! PeridotRenderableView).viewController = self
+        launchGame(viewController: self)
     }
     override func viewDidAppear() {
         super.viewDidAppear()
-        NSLog("BeginTimer")
-        self.workDispatcher?.resume()
-        if let d = self.dplink {
-            CVDisplayLinkStart(d)
-        }
+        
+        self.view.window!.title = captionbarText()! as String
+        
+        NSLog("Begin Display Timer")
+        self.workDispatcher!.resume()
+        CVDisplayLinkStart(self.dplink!)
     }
+    
     override func viewWillDisappear() {
         super.viewWillDisappear()
         NSLog("ViewWillDisappear")
-        if let d = self.dplink {
-            NSLog("Stopping Timer")
-            let rv = CVDisplayLinkStop(d)
-            NSLog("Stopped Timer with %d", rv)
-        }
-        self.workDispatcher?.cancel()
+        
+        self.nativeGameDriver!.terminate(viewController: self)
+        self.nativeGameDriver = nil
+        
+        let rv = CVDisplayLinkStop(self.dplink!)
+        NSLog("Stopped Display Timer with \(rv)")
+        self.workDispatcher!.cancel()
     }
     
-    func setGameDriverCallbacks(_ callbacks: UnsafeMutablePointer<GameDriverCallbacks>, contextPtr: UnsafeMutableRawPointer) {
-        self.nativeGameDriver = NativeGameDriver(callbacks: callbacks, contextPtr: contextPtr)
+    func audioFormat() -> AVAudioFormat {
+        return AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 44100.0,
+            channels: 2,
+            interleaved: true
+        )!
+    }
+    
+    func bindAudioRenderStream(
+        format: AVAudioFormat,
+        _ renderCallback: @escaping AVAudioSourceNodeRenderBlock
+    ) throws {
+        if let existing = self.audioSourceNode {
+            throw AudioError.alreadyBound
+        }
+        
+        let sourceNode = AVAudioSourceNode(format: format, renderBlock: renderCallback)
+        self.audioEngine.attach(sourceNode)
+        self.audioEngine.connect(sourceNode, to: audioEngine.outputNode, format: format)
+        self.audioSourceNode = sourceNode
+    }
+    
+    func unbindAudioRenderStream() {
+        guard let sourceNode = self.audioSourceNode else { return }
+        self.audioEngine.disconnectNodeOutput(sourceNode)
+        self.audioEngine.detach(sourceNode)
+        self.audioSourceNode = nil
+    }
+    
+    func startAudio() throws {
+        try self.audioEngine.start()
+    }
+    
+    func stopAudio() {
+        self.audioEngine.stop()
     }
     
     func resizeNative(_ size: NSSize) {
         self.nativeGameDriver?.resize(size)
     }
+}
+
+enum AudioError : Error {
+    case alreadyBound
 }

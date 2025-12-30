@@ -50,11 +50,11 @@ impl Font for FreetypeFont {
             euclid::size2(m.width as f32 / 64.0, m.height as f32 / 64.0),
         ))
     }
-    fn outline(
+    fn outline<B: PathBuilder>(
         &self,
         glyph: &Self::GlyphID,
         transform: &euclid::Transform2D<f32>,
-        builder: &mut impl PathBuilder,
+        builder: &mut B,
     ) -> Result<(), GlyphLoadingError> {
         self.0.get_mut(glyph.0).load_glyph(glyph.1)?;
         self.0
