@@ -65,6 +65,7 @@ jobs:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
       PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
       PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SPIRV_TOOLS_SKIP_CMAKE: '1'
     name: "Cradle(Android)"
     needs:
       - check-baselayer

@@ -44,13 +44,12 @@ impl AudioEngineContext {
             }
         }
         unsafe {
-            crate::setup_audio(
+            crate::native_interface::launch_audio(
                 swift_context,
                 this as *mut _ as _,
                 format_callback,
                 render_callback,
             );
-            crate::start_audio(swift_context);
         }
         this.mixer.write().start();
     }

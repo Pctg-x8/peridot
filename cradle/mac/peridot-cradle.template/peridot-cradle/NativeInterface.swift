@@ -62,6 +62,13 @@ struct NativeGameDriver {
     }
 }
 
+func launchGame(viewController: PeridotRenderableViewController) {
+    launch_game(
+        unsafeBitCast(viewController, to: UnsafeMutableRawPointer.self),
+        unsafeBitCast(viewController.view.layer! as! CAMetalLayer, to: UnsafeMutableRawPointer.self)
+    )
+}
+
 @_cdecl("nslog_utf8")
 func nslogUtf8(ptr: UnsafePointer<UInt8>, len: size_t) {
     NSLog(String(bytes: UnsafeBufferPointer(start: ptr, count: len), encoding: .utf8)!)
@@ -80,7 +87,7 @@ func captionbarText() -> String? {
     )
 }
 
-@_cdecl("acquire_layer_size")
+@_cdecl("ni_acquire_layer_size")
 func acquireLayerSize(
     layer: UnsafeRawPointer,
     width: UnsafeMutablePointer<UInt32>,
@@ -93,12 +100,12 @@ func acquireLayerSize(
 }
 
 @_cdecl("nsapp_reply_should_terminate")
-func nsapp_reply_should_terminate() {
+func nsAppReplyShouldTerminate() {
     NSApplication.shared.reply(toApplicationShouldTerminate: true)
 }
 
 @_cdecl("nsbundle_path_for_resource")
-func nsbundle_path_for_resource(
+func nsBundlePathForResource(
     path: UnsafePointer<UInt8>,
     pathLength: size_t,
     ext: UnsafePointer<UInt8>,
@@ -133,55 +140,58 @@ func nsbundle_path_for_resource(
 }
 
 @_cdecl("nsscreen_backing_scale_factor")
-func nsscreen_backing_scale_factor() -> Float32 {
-    guard let mainScreen = NSScreen.main else { return 0.0 }
-    return Float32(mainScreen.backingScaleFactor)
+func nsScreenBackingScaleFactor() -> Float32 {
+    return Float32(NSScreen.main?.backingScaleFactor ?? 1.0)
 }
 
-@_cdecl("obtain_mouse_pointer_position")
-func obtain_mouse_pointer_position(
-    viewptr: UnsafeMutableRawPointer,
+@_cdecl("ni_obtain_mouse_pointer_position")
+func obtainMousePointerPosition(
+    viewptr: UnsafeRawPointer,
     x: UnsafeMutablePointer<Float32>,
     y: UnsafeMutablePointer<Float32>
-) {
+) -> Bool {
     let v = unsafeBitCast(viewptr, to: PeridotRenderableView.self)
     if let p = v.window?.mouseLocationOutsideOfEventStream {
         let h = v.frame.height
         var pl = v.convert(p, from: nil)
         // Note: MacBook Pro 16inch 2019だとなぜかpの時点で5.0だけずれてる
         pl.y += 5.0
-        x.pointee = Float32(pl.x) * nsscreen_backing_scale_factor()
-        y.pointee = Float32(h - pl.y) * nsscreen_backing_scale_factor()
+        x.pointee = Float32(pl.x) * nsScreenBackingScaleFactor()
+        y.pointee = Float32(h - pl.y) * nsScreenBackingScaleFactor()
+        
+        return true
     }
+    
+    return false
 }
 
 @_cdecl("give_game_driver_callbacks")
-func give_game_driver_callbacks(
-    initializationContext: UnsafeMutableRawPointer,
+func giveGameDriverCallbacks(
+    swiftContext: UnsafeMutableRawPointer,
     callbacks: UnsafeMutablePointer<GameDriverCallbacks>,
     contextPtr: UnsafeMutableRawPointer
 ) {
-    unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self)
+    unsafeBitCast(swiftContext, to: PeridotRenderableViewController.self)
         .nativeGameDriver = NativeGameDriver(callbacks: callbacks, contextPtr: contextPtr)
 }
 
 @_cdecl("schedule_usercode_task_polling")
-func scheduleUsercodeTaskPolling(initializationContext: UnsafeMutableRawPointer) {
+func scheduleUsercodeTaskPolling(swiftContext: UnsafeMutableRawPointer) {
     DispatchQueue.main.async {
-        unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self)
+        unsafeBitCast(swiftContext, to: PeridotRenderableViewController.self)
             .nativeGameDriver?.pollUsercodeTask()
     }
 }
 
-@_cdecl("setup_audio")
-func setupAudio(
-    initializationContext: UnsafeMutableRawPointer,
+@_cdecl("launch_audio")
+func launchAudio(
+    swiftContext: UnsafeMutableRawPointer,
     callbackContext: UnsafeMutableRawPointer?,
     formatCallback: AudioFormatCallback,
     renderCallback: AudioRenderCallback
 ) {
     let viewController = unsafeBitCast(
-        initializationContext,
+        swiftContext,
         to: PeridotRenderableViewController.self
     )
     
@@ -197,11 +207,7 @@ func setupAudio(
             ) != 0 ? true : false;
             return noErr
     }
-}
-
-@_cdecl("start_audio")
-func startAudio(initializationContext: UnsafeMutableRawPointer) {
-    unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self).startAudio()
+    try! viewController.startAudio()
 }
 
 @_cdecl("teardown_audio")

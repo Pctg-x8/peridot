@@ -72,8 +72,7 @@ final class PeridotRenderableViewController : NSViewController {
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        launch_game(unsafeBitCast(self, to: UnsafeMutableRawPointer.self), unsafeBitCast(self.view.layer! as! CAMetalLayer, to: UnsafeMutableRawPointer.self))
-        self.view.window?.title = captionbarText()! as String
+        
         initDispatchers()
         
         if let p = self.view.window?.mouseLocationOutsideOfEventStream {
@@ -181,9 +180,12 @@ final class PeridotRenderableViewController : NSViewController {
         }
         
         (self.view as! PeridotRenderableView).viewController = self
+        launchGame(viewController: self)
     }
     override func viewDidAppear() {
         super.viewDidAppear()
+        
+        self.view.window!.title = captionbarText()! as String
         
         NSLog("Begin Display Timer")
         self.workDispatcher!.resume()
@@ -232,8 +234,8 @@ final class PeridotRenderableViewController : NSViewController {
         self.audioSourceNode = nil
     }
     
-    func startAudio() {
-        try! self.audioEngine.start()
+    func startAudio() throws {
+        try self.audioEngine.start()
     }
     
     func stopAudio() {

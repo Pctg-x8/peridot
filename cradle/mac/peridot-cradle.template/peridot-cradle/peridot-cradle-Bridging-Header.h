@@ -16,7 +16,7 @@ extern "C" {
 #endif
 
 typedef struct {
-    void (*terminate)(void* context_ptr, void* terminateContext);
+    void (*terminate)(void* context_ptr, void* swift_context);
     void (*update)(void* context_ptr);
     void (*resize)(void* context_ptr, uint32_t w, uint32_t h);
     void (*handle_character_keydown)(void* context_ptr, uint8_t character);
@@ -35,7 +35,7 @@ const uint8_t KEYMOD_CONTROL = 3;
 const uint8_t KEYMOD_COMMAND = 4;
 const uint8_t KEYMOD_CAPSLOCK = 5;
 
-void launch_game(void* initializationContext, void* viewptr);
+void launch_game(void* swift_context, void* viewptr);
 const char* captionbar_text(size_t* length);
 
 typedef void (*AudioFormatCallback)(void* context, uint32_t channels, double sample_rate);
