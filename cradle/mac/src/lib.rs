@@ -1,4 +1,3 @@
-use audio::NativeAudioEngine;
 use libc::c_void;
 
 use bedrock as br;
@@ -181,6 +180,8 @@ impl PlatformAssetLoader {
     }
 }
 use peridot::archive as par;
+
+use crate::audio::AudioEngineContext;
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type AssetBlob<'a> =
         peridot_archive::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
@@ -451,8 +452,8 @@ fn launch_f<'f, F>(
     );
     let nih = Box::new(NativeInputHandler::new(v));
     engine.input().set_nativelink(nih);
-    // let mut nae = NativeAudioEngine::init();
-    // nae.start(engine.audio_mixer().clone());
+    let mut audio_engine = Box::pin(AudioEngineContext::new(engine.audio_mixer().clone()));
+    audio_engine.as_mut().connect(initialization_context);
     engine.post_init();
     let input = engine.input().clone();
 
@@ -466,8 +467,13 @@ fn launch_f<'f, F>(
         usercode_waker: core::task::Waker,
         state: Box<AppInternalState>,
         input: peridot::InputProcess,
+        #[allow(dead_code)]
+        audio_engine: Pin<Box<AudioEngineContext>>,
     }
-    extern "C" fn game_driver_terminate<F: core::future::Future>(ctx: *mut core::ffi::c_void) {
+    extern "C" fn game_driver_terminate<F: core::future::Future>(
+        ctx: *mut core::ffi::c_void,
+        swift_context: *mut core::ffi::c_void,
+    ) {
         let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
 
         ctx.state.event_queue.enqueue(peridot::Event::Shutdown);
@@ -482,6 +488,9 @@ fn launch_f<'f, F>(
             }
         }
 
+        unsafe {
+            teardown_audio(swift_context);
+        }
         drop(unsafe { Box::from_raw(ctx) });
 
         unsafe {
@@ -620,6 +629,7 @@ fn launch_f<'f, F>(
         usercode_waker,
         state: unsafe { Box::from_raw(state_ptr) },
         input,
+        audio_engine,
     }));
     unsafe { give_game_driver_callbacks(initialization_context, cbs, context_ptr as _) }
 
@@ -637,7 +647,7 @@ const KEYMOD_CAPSLOCK: u8 = 5;
 
 #[repr(C)]
 pub struct GameDriverCallbacks {
-    terminate: extern "C" fn(*mut core::ffi::c_void),
+    terminate: extern "C" fn(*mut core::ffi::c_void, *mut core::ffi::c_void),
     update: extern "C" fn(*mut core::ffi::c_void),
     resize: extern "C" fn(*mut core::ffi::c_void, w: u32, h: u32),
     handle_character_keydown: extern "C" fn(*mut core::ffi::c_void, character: u8),
@@ -649,6 +659,14 @@ pub struct GameDriverCallbacks {
     report_mouse_move_abs: extern "C" fn(*mut core::ffi::c_void, x: f32, y: f32),
     poll_usercode_task: extern "C" fn(*mut core::ffi::c_void),
 }
+
+type AudioFormatCallback =
+    extern "C" fn(context: *mut core::ffi::c_void, channels: u32, sample_rate: core::ffi::c_double);
+type AudioRenderCallback = extern "C" fn(
+    context: *mut core::ffi::c_void,
+    frame_count: u32,
+    audio_buffer: *mut core::ffi::c_void, /* AudioBufferList */
+) -> u8;
 
 unsafe extern "C" {
     unsafe fn acquire_layer_size(
@@ -677,6 +695,15 @@ unsafe extern "C" {
     );
 
     fn schedule_usercode_task_polling(initialization_context: *mut core::ffi::c_void);
+
+    fn setup_audio(
+        initialization_context: *mut core::ffi::c_void,
+        callback_context: *mut core::ffi::c_void,
+        format_callback: AudioFormatCallback,
+        render_callback: AudioRenderCallback,
+    );
+    fn start_audio(initialization_context: *mut core::ffi::c_void);
+    fn teardown_audio(initialization_context: *mut core::ffi::c_void);
 }
 
 #[no_mangle]

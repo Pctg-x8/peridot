@@ -42,6 +42,8 @@ final class PeridotRenderableViewController : NSViewController {
     private var dplink: CVDisplayLink? = nil
     private var workDispatcher: DispatchSourceUserDataAdd? = nil
     private var clientMousePoint = CGPoint(x: 0, y: 0)
+    private let audioEngine = AVAudioEngine()
+    private var audioSourceNode: AVAudioSourceNode? = nil
     
     var nativeGameDriver: NativeGameDriver? = nil
     
@@ -183,34 +185,6 @@ final class PeridotRenderableViewController : NSViewController {
     override func viewDidAppear() {
         super.viewDidAppear()
         
-        let audioEngine = AVAudioEngine()
-        let format = audioEngine.outputNode.outputFormat(forBus: 0)
-        NSLog("audio format: \(format)")
-        var currentGlobalSample = 0
-        let sourceNode = AVAudioSourceNode(format: format) {
-            (isSilence, timestamp, frameCount, outputData) -> OSStatus in
-            
-                for n in 0..<frameCount {
-                    for b in 0..<outputData.pointee.mNumberBuffers {
-                        outputData
-                            .pointer(to: \AudioBufferList.mBuffers)![Int(b)]
-                            .mData!
-                            .assumingMemoryBound(to: Float.self)[Int(n)] =
-                        0.1 * sin(2.0 * Float.pi * Float(currentGlobalSample) * 440.0 / Float(format.sampleRate))
-                    }
-                    
-                    currentGlobalSample += 1
-                }
-                
-                isSilence.pointee = false
-                return noErr
-        }
-        
-        audioEngine.attach(sourceNode)
-        audioEngine.connect(sourceNode, to: audioEngine.outputNode, format: format)
-        
-        try! audioEngine.start()
-        
         NSLog("Begin Display Timer")
         self.workDispatcher!.resume()
         CVDisplayLinkStart(self.dplink!)
@@ -220,12 +194,57 @@ final class PeridotRenderableViewController : NSViewController {
         super.viewWillDisappear()
         NSLog("ViewWillDisappear")
         
+        self.nativeGameDriver!.terminate(viewController: self)
+        self.nativeGameDriver = nil
+        
         let rv = CVDisplayLinkStop(self.dplink!)
         NSLog("Stopped Display Timer with \(rv)")
         self.workDispatcher!.cancel()
     }
     
+    func audioFormat() -> AVAudioFormat {
+        return AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: 44100.0,
+            channels: 2,
+            interleaved: true
+        )!
+    }
+    
+    func bindAudioRenderStream(
+        format: AVAudioFormat,
+        _ renderCallback: @escaping AVAudioSourceNodeRenderBlock
+    ) throws {
+        if let existing = self.audioSourceNode {
+            throw AudioError.alreadyBound
+        }
+        
+        let sourceNode = AVAudioSourceNode(format: format, renderBlock: renderCallback)
+        self.audioEngine.attach(sourceNode)
+        self.audioEngine.connect(sourceNode, to: audioEngine.outputNode, format: format)
+        self.audioSourceNode = sourceNode
+    }
+    
+    func unbindAudioRenderStream() {
+        guard let sourceNode = self.audioSourceNode else { return }
+        self.audioEngine.disconnectNodeOutput(sourceNode)
+        self.audioEngine.detach(sourceNode)
+        self.audioSourceNode = nil
+    }
+    
+    func startAudio() {
+        try! self.audioEngine.start()
+    }
+    
+    func stopAudio() {
+        self.audioEngine.stop()
+    }
+    
     func resizeNative(_ size: NSSize) {
         self.nativeGameDriver?.resize(size)
     }
+}
+
+enum AudioError : Error {
+    case alreadyBound
 }

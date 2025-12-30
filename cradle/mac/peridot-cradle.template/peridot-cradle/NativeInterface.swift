@@ -1,5 +1,6 @@
 import Foundation
 import Cocoa
+import AVFAudio
 
 struct NativeGameDriver {
     private let callbacks: UnsafeMutablePointer<GameDriverCallbacks>
@@ -13,8 +14,11 @@ struct NativeGameDriver {
         self.contextPtr = contextPtr
     }
     
-    func terminate() {
-        self.callbacks.pointee.terminate(self.contextPtr)
+    func terminate(viewController: PeridotRenderableViewController) {
+        self.callbacks.pointee.terminate(
+            self.contextPtr,
+            unsafeBitCast(viewController, to: UnsafeMutableRawPointer.self)
+        )
     }
     
     func update() {
@@ -167,4 +171,46 @@ func scheduleUsercodeTaskPolling(initializationContext: UnsafeMutableRawPointer)
         unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self)
             .nativeGameDriver?.pollUsercodeTask()
     }
+}
+
+@_cdecl("setup_audio")
+func setupAudio(
+    initializationContext: UnsafeMutableRawPointer,
+    callbackContext: UnsafeMutableRawPointer?,
+    formatCallback: AudioFormatCallback,
+    renderCallback: AudioRenderCallback
+) {
+    let viewController = unsafeBitCast(
+        initializationContext,
+        to: PeridotRenderableViewController.self
+    )
+    
+    let format = viewController.audioFormat()
+    formatCallback(callbackContext, format.channelCount, format.sampleRate)
+    
+    try! viewController.bindAudioRenderStream(format: format) {
+        (isSilence, timestamp, frameCount, outputData) -> OSStatus in
+            isSilence.pointee = renderCallback(
+                callbackContext,
+                frameCount,
+                outputData
+            ) != 0 ? true : false;
+            return noErr
+    }
+}
+
+@_cdecl("start_audio")
+func startAudio(initializationContext: UnsafeMutableRawPointer) {
+    unsafeBitCast(initializationContext, to: PeridotRenderableViewController.self).startAudio()
+}
+
+@_cdecl("teardown_audio")
+func teardownAudio(swiftContext: UnsafeMutableRawPointer) {
+    let viewController = unsafeBitCast(
+        swiftContext,
+        to: PeridotRenderableViewController.self
+    )
+    
+    viewController.stopAudio()
+    viewController.unbindAudioRenderStream()
 }
