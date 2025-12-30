@@ -1,6 +1,8 @@
 //! CoreText Font Provider impl
 
-use objc_ext::ObjcObject;
+use apple_sdk_port::foundation;
+use apple_sdk_port::raw::core_text::kCTFontTraitItalic;
+use apple_sdk_port::text as native_text;
 
 use crate::{
     font::core_text::CoreTextFont, FontConstructionError, FontProperties, FontProvider,
@@ -22,46 +24,56 @@ impl FontProvider for CoreTextFontProvider {
         properties: &FontProperties,
         size: f32,
     ) -> Result<Self::Font, FontConstructionError> {
-        let mut traits = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
-            FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity")
-        })?;
-        let weight_num = appkit::NSNumber::from_float(properties.native_weight())
-            .map_err(|_| FontConstructionError::SysAPICallError("NSNumber::from_float"))?;
-        let symbolic_traits = appkit::NSNumber::from_uint(if properties.italic {
-            appkit::CTFontSymbolicTraits::ItalicTrait as u32
-        } else {
-            0u32
-        } as _)
-        .map_err(|_| FontConstructionError::SysAPICallError("NSNumber::from_uint"))?;
+        let mut traits = foundation::MutableDictionary::new_generic_key_value(None, 2).ok_or(
+            FontConstructionError::SysAPICallError("MutableDictionary::new(traits)"),
+        )?;
         traits.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontWeightTrait }),
-            weight_num.as_id(),
+            native_text::font_weight_trait(),
+            &*foundation::Number::new_f32(None, properties.native_weight()).ok_or(
+                FontConstructionError::SysAPICallError("Number::new(native_weight)"),
+            )?,
         );
         traits.set(
-            AsRef::as_ref(unsafe { &*appkit::kCTFontSymbolicTrait }),
-            symbolic_traits.as_id(),
-        );
-        let mut attrs = appkit::NSMutableDictionary::with_capacity(2).map_err(|_| {
-            FontConstructionError::SysAPICallError("NSMutableDictionary::with_capacity")
-        })?;
-        let family_name_nsstr = appkit::NSString::from_str(family_name)
-            .map_err(|_| FontConstructionError::SysAPICallError("NSString::from_str"))?;
-        attrs.set(
-            unsafe { &*appkit::kCTFontFamilyNameAttribute }.as_ref(),
-            family_name_nsstr.as_id(),
-        );
-        attrs.set(
-            unsafe { &*appkit::kCTFontTraitsAttribute }.as_ref(),
-            traits.as_id(),
+            native_text::font_symbolic_trait(),
+            &*foundation::Number::new_u32(
+                None,
+                if properties.italic {
+                    kCTFontTraitItalic
+                } else {
+                    0
+                },
+            )
+            .ok_or(FontConstructionError::SysAPICallError(
+                "Number::new(symbolic_traits)",
+            ))?,
         );
 
-        let fd =
-            appkit::CTFontDescriptor::with_attributes(AsRef::as_ref(&**attrs)).map_err(|_| {
-                FontConstructionError::SysAPICallError("CTFontDescriptor::with_attributes")
-            })?;
-        appkit::CTFont::from_font_descriptor(&fd, size as _, None)
-            .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
-            .map(|x| CoreTextFont(x))
+        let mut attrs =
+            foundation::MutableDictionary::<_, dyn apple_sdk_port::Object>::new_generic_key_value(
+                None, 2,
+            )
+            .ok_or(FontConstructionError::SysAPICallError(
+                "MutableDictionary::new(attrs)",
+            ))?;
+        attrs.set(
+            native_text::FontDescriptor::family_name_attribute(),
+            unsafe {
+                &*foundation::String::from_str_no_copy(None, family_name).ok_or(
+                    FontConstructionError::SysAPICallError("String::from_str_no_copy(family_name)"),
+                )?
+            },
+        );
+        attrs.set(native_text::FontDescriptor::traits_attribute(), &*traits);
+
+        let fd = native_text::FontDescriptor::from_attributes(&attrs).ok_or(
+            FontConstructionError::SysAPICallError("FontDescriptor::from_attributes"),
+        )?;
+
+        native_text::Font::from_font_descriptor(&fd, size as _, None)
+            .ok_or(FontConstructionError::SysAPICallError(
+                "Font::from_font_descriptor",
+            ))
+            .map(CoreTextFont)
     }
 
     fn load<NL: peridot::NativeLinker>(
@@ -71,14 +83,16 @@ impl FontProvider for CoreTextFontProvider {
         size: f32,
     ) -> Result<Self::Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
-        let d = appkit::CFData::new(&a.0)
-            .ok_or(FontConstructionError::SysAPICallError("CFData::new"))?;
-        let fd = appkit::CTFontDescriptor::from_data(&d).ok_or(
-            FontConstructionError::SysAPICallError("CTFontDescriptor::from_data"),
+        let d = foundation::Data::new(None, &a.0)
+            .ok_or(FontConstructionError::SysAPICallError("Data::new"))?;
+        let fd = native_text::FontDescriptor::from_data(&d).ok_or(
+            FontConstructionError::SysAPICallError("CTFontManagerCreateFontDescriptorFromData"),
         )?;
 
-        appkit::CTFont::from_font_descriptor(&fd, size as _, None)
-            .map_err(|_| FontConstructionError::SysAPICallError("CTFont::from_font_descriptor"))
-            .map(|x| CoreTextFont(x))
+        native_text::Font::from_font_descriptor(&fd, size as _, None)
+            .ok_or(FontConstructionError::SysAPICallError(
+                "Font::from_font_descriptor",
+            ))
+            .map(CoreTextFont)
     }
 }

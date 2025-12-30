@@ -122,11 +122,11 @@ pub trait Font {
     fn advance_h(&self, glyph: &Self::GlyphID) -> Result<f32, GlyphLoadingError>;
     /// in dip
     fn bounds(&self, glyph: &Self::GlyphID) -> Result<Rect<f32>, GlyphLoadingError>;
-    fn outline(
+    fn outline<B: PathBuilder>(
         &self,
         glyph: &Self::GlyphID,
         transform: &euclid::Transform2D<f32>,
-        builder: &mut impl PathBuilder,
+        builder: &mut B,
     ) -> Result<(), GlyphLoadingError>;
 }
 

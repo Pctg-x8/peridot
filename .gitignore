@@ -3,6 +3,7 @@ target/
 *.lock
 .vscode/
 .zed/
+.DS_Store
 android-build/
 **/*.pvp
 **/*.pss

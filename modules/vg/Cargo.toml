@@ -27,7 +27,7 @@ peridot-command-object = { path = "../command-object" }
 parking_lot = "0.12"
 
 [target.'cfg(target_os="macos")'.dependencies]
-appkit = { git = "https://github.com/Pctg-x8/appkit-rs" }
+apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
 objc-ext = { git = "https://github.com/Pctg-x8/objc-ext" }
 
 [target.'cfg(target_os="android")'.dependencies]
