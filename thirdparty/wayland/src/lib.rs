@@ -254,6 +254,9 @@ impl<T: Interface> Owned<T> {
 pub struct Display(NonNull<ffi::Display>);
 impl Drop for Display {
     fn drop(&mut self) {
+        #[cfg(feature = "tracing")]
+        tracing::trace!(target: "wl_drop_log", "drop wl display");
+
         unsafe { ffi::wl_display_disconnect(self.0.as_ptr()) }
     }
 }

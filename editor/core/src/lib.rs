@@ -2498,16 +2498,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
     });
-
-    // なぜかwl_displayが先にDropしてしまって警告がでるので順序を明示する
-    #[cfg(feature = "wayland")]
-    drop(w);
-    #[cfg(feature = "wayland")]
-    drop(xdg_wm_base);
-    #[cfg(feature = "wayland")]
-    drop(wl_compositor);
-    #[cfg(feature = "wayland")]
-    drop(wl_display);
 }
 
 struct BoxInstance {
