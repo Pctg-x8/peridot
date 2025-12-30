@@ -251,16 +251,12 @@ fn launch_f<'f, F>(
         let ctx = unsafe { &mut *(ctx as *mut GameDriverContext<F>) };
 
         ctx.state.event_queue.enqueue(peridot::Event::Shutdown);
-        loop {
-            if ctx
-                .usercode
-                .as_mut()
-                .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker))
-                .is_ready()
-            {
-                break;
-            }
-        }
+        while ctx
+            .usercode
+            .as_mut()
+            .poll(&mut core::task::Context::from_waker(&ctx.usercode_waker))
+            .is_pending()
+        {}
 
         unsafe {
             teardown_audio(swift_context);
