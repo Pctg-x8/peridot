@@ -1,5 +1,5 @@
 [package]
-name = "peridot-marble-editor"
+name = "peridot-marble-editor-core"
 version = "0.0.1"
 edition = "2024"
 build = "build.rs"
@@ -7,6 +7,7 @@ build = "build.rs"
 [features]
 default = []
 win32 = ["bedrock/VK_KHR_win32_surface"]
+mac = ["bedrock/VK_EXT_metal_surface"]
 linux-default = ["wayland", "freetype", "fontconfig", "harfbuzz"]
 wayland = ["dep:peridot-tp-wayland", "bedrock/VK_KHR_wayland_surface"]
 freetype = ["dep:freetype2"]
@@ -27,7 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lyon_geom = "1.0"
 freetype2 = { git = "https://github.com/Pctg-x8/ft2-rs", optional = true }
 fontconfig = { git = "https://github.com/Pctg-x8/fc-rs", optional = true }
-peridot-tp-harfbuzz = { path = "../thirdparty/harfbuzz", optional = true }
+peridot-tp-harfbuzz = { path = "../../thirdparty/harfbuzz", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
@@ -44,13 +45,13 @@ windows-core = "*"
 windows-numerics = "*"
 
 [dependencies.peridot-tp-wayland]
-path = "../thirdparty/wayland"
+path = "../../thirdparty/wayland"
 optional = true
 features = ["tracing", "xdg-shell"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
-linux-eventfd = { path = "../platform/linux/eventfd" }
-linux-epoll = { path = "../platform/linux/epoll" }
+linux-eventfd = { path = "../../platform/linux/eventfd" }
+linux-epoll = { path = "../../platform/linux/epoll" }
 
 [build-dependencies]
 winres = "0.1"

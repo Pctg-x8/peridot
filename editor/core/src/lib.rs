@@ -60,7 +60,7 @@ static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable
     |_| {},
 );
 
-fn main() {
+pub fn launch() {
     tracing_subscriber::fmt()
         .pretty()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -215,6 +215,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
     );
 
+    #[cfg(feature = "wayland")]
     let mut w = WaylandWindow {
         surface: wl_surface,
         xdg_surface: wl_xdg_surface,
@@ -228,8 +229,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             terminate_event: terminate_event.clone(),
         }),
     };
+    #[cfg(feature = "wayland")]
     w.initialize();
+    #[cfg(feature = "wayland")]
     w.surface.commit().expect("wl_surface.commit");
+    #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
     if let Some(xs) = br::instance_extension_properties_cstr_alloc(None)
@@ -430,12 +434,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("vk_surface create")
     };
 
-    if !vk_adapter
-        .surface_support(graphics_queue_family_index, &vk_surface)
-        .expect("surface_support")
-    {
-        panic!("surface not supported on graphics queue");
-    }
+    // if !vk_adapter
+    //     .surface_support(graphics_queue_family_index, &vk_surface)
+    //     .expect("surface_support")
+    // {
+    //     panic!("surface not supported on graphics queue");
+    // }
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -445,6 +449,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 tracing::info!("Starting RenderThread...");
                 let mut render_queue = vk_device.queue(graphics_queue_family_index, 0);
 
+                /*
                 let present_modes = vk_adapter
                     .surface_present_modes_alloc(&vk_surface)
                     .expect("surface_present_modes");
@@ -1832,7 +1837,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         surface_ext = if surface_caps.currentExtent.width == 0xffffffff
                             || surface_caps.currentExtent.height == 0xffffffff
                         {
-                            let (cw, ch) = w.client_size();
+                            // let (cw, ch) = w.client_size();
+                            let (cw, ch) = unimplemented!();
 
                             br::Extent2D {
                                 width: if surface_caps.currentExtent.width == 0xffffffff {
@@ -2080,7 +2086,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 unsafe {
                     vk_device.wait().expect("device wait");
                     glyph_atlas.drop(&vk_device);
-                }
+                }*/
                 tracing::info!("RenderThread terminated");
             })
             .expect("render_thread spawn");
@@ -2172,9 +2178,13 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     });
 
     // なぜかwl_displayが先にDropしてしまって警告がでるので順序を明示する
+    #[cfg(feature = "wayland")]
     drop(w);
+    #[cfg(feature = "wayland")]
     drop(xdg_wm_base);
+    #[cfg(feature = "wayland")]
     drop(wl_compositor);
+    #[cfg(feature = "wayland")]
     drop(wl_display);
 }
 
@@ -2989,8 +2999,11 @@ pub struct WaylandWindow {
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     state: Box<WaylandWindowState>,
 }
+#[cfg(feature = "wayland")]
 unsafe impl Sync for WaylandWindow {}
+#[cfg(feature = "wayland")]
 unsafe impl Send for WaylandWindow {}
+#[cfg(feature = "wayland")]
 impl WaylandWindow {
     pub fn initialize(&mut self) {
         self.surface
@@ -3019,6 +3032,7 @@ struct WaylandWindowState {
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     terminate_event: std::sync::Arc<EventFD>,
 }
+#[cfg(feature = "wayland")]
 impl wl::SurfaceEventListener for WaylandWindowState {
     #[tracing::instrument(skip(self, surface, output))]
     fn enter(
@@ -3053,6 +3067,7 @@ impl wl::SurfaceEventListener for WaylandWindowState {
         tracing::trace!("preferred buffer transform");
     }
 }
+#[cfg(feature = "wayland")]
 impl wl::XdgSurfaceEventListener for WaylandWindowState {
     #[tracing::instrument(skip(self, sender))]
     fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
@@ -3073,6 +3088,7 @@ impl wl::XdgSurfaceEventListener for WaylandWindowState {
             .expect("xdg_surface.ack_configure");
     }
 }
+#[cfg(feature = "wayland")]
 impl wl::XdgToplevelEventListener for WaylandWindowState {
     #[tracing::instrument(skip(self, sender))]
     fn close(&mut self, sender: &mut peridot_tp_wayland::XdgToplevel) {

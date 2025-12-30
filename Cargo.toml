@@ -26,7 +26,9 @@ members = [
     "modules/asset-processing",
     "modules/native-io",
     "base-lib/pinned-futures-helper",
-    "modules/sprite-atlas", "editor"
+    "modules/sprite-atlas",
+    "editor/core",
+    "editor/mac",
 ]
 
 [workspace.dependencies]
