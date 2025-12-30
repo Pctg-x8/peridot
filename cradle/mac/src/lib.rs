@@ -1,5 +1,3 @@
-use libc::c_void;
-
 use bedrock as br;
 use br::{InstanceChild, PhysicalDevice, SurfaceCreateInfo, VkHandle};
 use core::future::Future;
@@ -258,13 +256,13 @@ impl br::VkHandle for Surface {
 }
 
 pub struct Presenter {
-    layer_ptr: *mut c_void,
+    layer_ptr: *mut core::ffi::c_void,
     sc: peridot::IntegratedSwapchain<Surface>,
 }
 unsafe impl Sync for Presenter {}
 unsafe impl Send for Presenter {}
 impl Presenter {
-    fn new(layer_ptr: *mut c_void, g: &peridot::Graphics) -> Self {
+    fn new(layer_ptr: *mut core::ffi::c_void, g: &peridot::Graphics) -> Self {
         let obj = Surface {
             handle: unsafe {
                 br::MetalSurfaceCreateInfo::new(layer_ptr as *const _)
@@ -368,13 +366,13 @@ impl peridot::PlatformPresenter for Presenter {
     }
 }
 pub struct NativeLink {
-    rt_view: *mut c_void,
+    rt_view: *mut core::ffi::c_void,
     al: PlatformAssetLoader,
 }
 unsafe impl Sync for NativeLink {}
 unsafe impl Send for NativeLink {}
 impl NativeLink {
-    pub fn new(rt_view: *mut c_void) -> Self {
+    pub fn new(rt_view: *mut core::ffi::c_void) -> Self {
         NativeLink {
             al: PlatformAssetLoader::new(),
             rt_view,
@@ -686,7 +684,11 @@ unsafe extern "C" {
         out_path_length: *mut usize,
     ) -> bool;
     unsafe fn nsscreen_backing_scale_factor() -> f32;
-    unsafe fn obtain_mouse_pointer_position(rt_view: *mut libc::c_void, x: *mut f32, y: *mut f32);
+    unsafe fn obtain_mouse_pointer_position(
+        rt_view: *mut core::ffi::c_void,
+        x: *mut f32,
+        y: *mut f32,
+    );
 
     unsafe fn give_game_driver_callbacks(
         initialization_context: *mut core::ffi::c_void,
@@ -735,12 +737,12 @@ pub extern "C" fn captionbar_text(length: *mut usize) -> *const core::ffi::c_cha
 }
 
 struct NativeInputHandler {
-    rt_view: *mut libc::c_void,
+    rt_view: *mut core::ffi::c_void,
 }
 unsafe impl Sync for NativeInputHandler {}
 unsafe impl Send for NativeInputHandler {}
 impl NativeInputHandler {
-    fn new(rt_view: *mut libc::c_void) -> Self {
+    fn new(rt_view: *mut core::ffi::c_void) -> Self {
         NativeInputHandler { rt_view }
     }
 }
