@@ -3,11 +3,12 @@
 use std::collections::{BTreeSet, HashMap};
 
 use bedrock::{
-    self as br, DescriptorPoolMut, Device, Image, ImageChild, MemoryBound, RenderPass,
-    ShaderModule, TypedVulkanStructure, VkHandle,
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, Image, ImageChild, MemoryBound,
+    QueueMut, RenderPass, ShaderModule, TypedVulkanStructure, VkHandle,
 };
 
 use crate::{
+    AppEventBus, Event,
     atlas::{AtlasRect, DynamicAtlasManager},
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
@@ -49,13 +50,10 @@ pub struct CompositeInstanceData {
 }
 
 #[repr(C)]
-struct CompositeVertexPushConstants {
+struct CompositePushConstants {
     screen_x_pixels: f32,
     screen_y_pixels: f32,
-}
-
-#[repr(C)]
-struct CompositeFragmentPushConstants {
+    _padding: [f32; 2],
     rect_mask_left: f32,
     rect_mask_top: f32,
     rect_mask_right: f32,
@@ -66,16 +64,11 @@ struct CompositeFragmentPushConstants {
     rect_mask_bottom_softness: f32,
 }
 
-pub const COMPOSITE_PUSH_CONSTANT_RANGES: &'static [br::PushConstantRange] = &[
-    br::PushConstantRange::for_type::<CompositeVertexPushConstants>(
-        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+pub const COMPOSITE_PUSH_CONSTANT_RANGES: &'static [br::PushConstantRange] =
+    &[br::PushConstantRange::for_type::<CompositePushConstants>(
+        br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
         0,
-    ),
-    br::PushConstantRange::for_type::<CompositeFragmentPushConstants>(
-        br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-        16,
-    ),
-];
+    )];
 
 #[repr(C)]
 pub struct CompositeStreamingData {
@@ -119,7 +112,7 @@ pub enum FloatParameter {
         from_value: f32,
         to_value: f32,
         curve: AnimationCurve,
-        event_on_complete: Option<AppEvent>,
+        event_on_complete: Option<Event>,
     },
 }
 impl FloatParameter {
@@ -144,14 +137,14 @@ impl FloatParameter {
 
 pub enum AnimatableFloat {
     Value(f32),
-    Expression(Box<dyn Fn(&CompositeTreeParameterStore) -> f32>),
+    Expression(Box<dyn Fn(&CompositeTreeParameterStore) -> f32 + Sync + Send>),
     Animated {
         start_sec: f32,
         end_sec: f32,
         from_value: f32,
         to_value: f32,
         curve: AnimationCurve,
-        event_on_complete: Option<AppEvent>,
+        event_on_complete: Option<Event>,
     },
 }
 impl AnimatableFloat {
@@ -191,14 +184,14 @@ impl AnimatableFloat {
 
 pub enum AnimatableColor {
     Value([f32; 4]),
-    Expression(Box<dyn Fn(&CompositeTreeParameterStore) -> [f32; 4]>),
+    Expression(Box<dyn Fn(&CompositeTreeParameterStore) -> [f32; 4] + Sync + Send>),
     Animated {
         start_sec: f32,
         end_sec: f32,
         from_value: [f32; 4],
         to_value: [f32; 4],
         curve: AnimationCurve,
-        event_on_complete: Option<AppEvent>,
+        event_on_complete: Option<Event>,
     },
 }
 impl AnimatableColor {
@@ -472,7 +465,7 @@ impl Default for CompositeRect {
     }
 }
 
-pub struct CompositeInstanceManager {
+struct CompositeInstanceManager {
     buffer: br::vk::VkBuffer,
     memory: br::vk::VkDeviceMemory,
     streaming_buffer: br::vk::VkBuffer,
@@ -486,20 +479,22 @@ pub struct CompositeInstanceManager {
     free: BTreeSet<usize>,
 }
 impl CompositeInstanceManager {
-    pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
+    unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory_stg, None);
             br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.buffer_stg, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.streaming_memory, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory_stg, None);
+
             br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.streaming_buffer, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.streaming_memory, None);
+
             br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.buffer, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory, None);
         }
     }
 
     const INIT_CAP: usize = 1024;
 
-    pub fn new(gfx: &VulkanDevice) -> Self {
+    fn new(gfx: &VulkanDevice) -> Self {
         let mut buffer = br::BufferObject::new(
             gfx,
             &br::BufferCreateInfo::new(
@@ -541,7 +536,7 @@ impl CompositeInstanceManager {
         streaming_buffer
             .bind(&streaming_memory, 0)
             .expect("Failed to bind streaming buffer memory");
-        let streaming_memory_requires_flush = !gfx.adapter_memory_info.is_coherent(memory_index);
+        let streaming_memory_requires_flush = !gfx.is_coherent_memory(memory_index);
 
         let mut buffer_stg = br::BufferObject::new(
             gfx,
@@ -553,10 +548,9 @@ impl CompositeInstanceManager {
         .expect("Failed to create composite instance staging buffer");
         let buffer_mreq = buffer.requirements();
         let memory_index = gfx
-            .adapter_memory_info
-            .find_host_visible_index(buffer_mreq.memoryTypeBits)
+            .find_host_visible_memory_index(buffer_mreq.memoryTypeBits)
             .expect("no suitable memory");
-        let stg_mem_requires_flush = !gfx.adapter_memory_info.is_coherent(memory_index);
+        let stg_mem_requires_flush = !gfx.is_coherent_memory(memory_index);
         let memory_stg = br::DeviceMemoryObject::new(
             gfx,
             &br::MemoryAllocateInfo::new(buffer_mreq.size, memory_index),
@@ -588,7 +582,7 @@ impl CompositeInstanceManager {
         }
     }
 
-    pub fn alloc(&mut self) -> usize {
+    fn alloc(&mut self) -> usize {
         if let Some(x) = self.free.pop_first() {
             return x;
         }
@@ -601,7 +595,7 @@ impl CompositeInstanceManager {
         self.count - 1
     }
 
-    pub fn sync_buffer<'cb>(&self, cr: br::CmdRecord<'cb>) -> br::CmdRecord<'cb> {
+    fn sync_buffer<'cb>(&self, cr: br::CmdRecord<'cb>) -> br::CmdRecord<'cb> {
         cr.copy_buffer(
             &unsafe { br::VkHandleRef::dangling(self.buffer_stg) },
             &unsafe { br::VkHandleRef::dangling(self.buffer) },
@@ -612,35 +606,35 @@ impl CompositeInstanceManager {
         )
     }
 
-    pub const fn streaming_memory_requires_flush(&self) -> bool {
+    const fn streaming_memory_requires_flush(&self) -> bool {
         self.streaming_memory_requires_flush
     }
 
-    pub const fn count(&self) -> usize {
+    const fn count(&self) -> usize {
         self.count
     }
 
-    pub const fn memory_stg_requires_explicit_flush(&self) -> bool {
+    const fn memory_stg_requires_explicit_flush(&self) -> bool {
         self.stg_mem_requires_flush
     }
 
-    pub const fn range_all(&self) -> core::ops::Range<usize> {
+    const fn range_all(&self) -> core::ops::Range<usize> {
         0..core::mem::size_of::<CompositeInstanceData>() * self.count
     }
 
-    pub const fn buffer_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkBuffer> {
+    const fn buffer_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkBuffer> {
         br::VkHandleRef::from_raw_ref(&self.buffer)
     }
 
-    pub const fn streaming_buffer_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkBuffer> {
+    const fn streaming_buffer_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkBuffer> {
         br::VkHandleRef::from_raw_ref(&self.streaming_buffer)
     }
 
-    pub const fn staging_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
+    const fn staging_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
         self.memory_stg
     }
 
-    pub unsafe fn map_staging<'s, 'g>(
+    unsafe fn map_staging<'s, 'g>(
         &'s mut self,
         gfx_device: &'g VulkanDevice,
     ) -> br::Result<CompositeInstanceMappedStagingMemory<'s, 'g>> {
@@ -657,11 +651,11 @@ impl CompositeInstanceManager {
         Ok(CompositeInstanceMappedStagingMemory(ptr, self, gfx_device))
     }
 
-    pub const fn streaming_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
+    const fn streaming_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
         self.streaming_memory
     }
 
-    pub unsafe fn map_streaming<'s, 'g>(
+    unsafe fn map_streaming<'s, 'g>(
         &'s mut self,
         gfx_device: &'g VulkanDevice,
     ) -> br::Result<CompositeInstanceMappedStreamingMemory<'s, 'g>> {
@@ -714,35 +708,6 @@ impl Drop for CompositeInstanceMappedStreamingMemory<'_, '_> {
 impl CompositeInstanceMappedStreamingMemory<'_, '_> {
     pub const fn ptr(&self) -> *mut CompositeStreamingData {
         self.0.cast()
-    }
-}
-
-pub struct BoundCompositeInstanceManager<'d> {
-    gfx_device: &'d VulkanDevice,
-    raw: CompositeInstanceManager,
-}
-impl Drop for BoundCompositeInstanceManager<'_> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        unsafe {
-            self.raw.drop(self.gfx_device);
-        }
-    }
-}
-impl<'d> BoundCompositeInstanceManager<'d> {
-    #[tracing::instrument(skip(subsystem))]
-    pub fn new(subsystem: &'d VulkanDevice) -> Self {
-        Self {
-            raw: CompositeInstanceManager::new(subsystem),
-            gfx_device: subsystem,
-        }
-    }
-
-    pub const fn unbound(self) -> CompositeInstanceManager {
-        let raw = unsafe { core::ptr::read(&self.raw) };
-        core::mem::forget(self);
-
-        raw
     }
 }
 
@@ -1447,6 +1412,53 @@ impl CompositeTree {
     }
 }
 
+struct CompositeDescriptorSet {}
+impl CompositeDescriptorSet {
+    pub const BINDINGS: &[br::DescriptorSetLayoutBinding<'static>] = &[
+        // instance data
+        br::DescriptorType::StorageBuffer
+            .make_binding(0, 1)
+            .for_shader_stage(
+                br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+            ),
+        // streaming data
+        br::DescriptorType::UniformBuffer
+            .make_binding(1, 1)
+            .only_for_vertex(),
+        // texture atlas
+        br::DescriptorType::CombinedImageSampler
+            .make_binding(2, 1)
+            .only_for_fragment(),
+    ];
+
+    #[inline(always)]
+    pub fn set_instance_buffer<'s>(
+        set: br::DescriptorSet,
+        info: br::DescriptorBufferInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(0)
+            .write(br::DescriptorContents::StorageBuffer(vec![info]))
+    }
+
+    #[inline(always)]
+    pub fn set_streaming_buffer<'s>(
+        set: br::DescriptorSet,
+        info: br::DescriptorBufferInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(1)
+            .write(br::DescriptorContents::UniformBuffer(vec![info]))
+    }
+
+    #[inline(always)]
+    pub fn set_texture_atlas<'s>(
+        set: br::DescriptorSet,
+        info: br::DescriptorImageInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(2)
+            .write(br::DescriptorContents::CombinedImageSampler(vec![info]))
+    }
+}
+
 pub struct CompositeRenderer {
     rp_grabbed: br::vk::VkRenderPass,
     rp_final: br::vk::VkRenderPass,
@@ -1475,10 +1487,11 @@ pub struct CompositeRenderer {
     input_backdrop_descriptor_pool: br::vk::VkDescriptorPool,
     input_backdrop_descriptor_sets: Vec<br::DescriptorSet>,
     input_backdrop_descriptor_pool_capacity: usize,
-    backdrop_fx_blur_processor: BackdropEffectBlurProcessor<'subsystem>,
+    backdrop_fx_blur_processor: BackdropEffectBlurProcessor,
     fixed_descriptor_pool: br::vk::VkDescriptorPool,
     alphamask_group_input_descriptor_set: br::DescriptorSet,
     blur_fixed_descriptor_sets: Vec<br::DescriptorSet>,
+    instance_manager: CompositeInstanceManager,
 }
 impl CompositeRenderer {
     unsafe fn drop(&mut self, gfx: &VulkanDevice) {
@@ -1500,7 +1513,7 @@ impl CompositeRenderer {
                 core::ptr::null(),
             );
 
-            for &(r, v) in self.backdrop_blur_destination_fbs.iter() {
+            for &(r, v) in self.backdrop_buffers.iter() {
                 br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
                 br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
             }
@@ -1560,6 +1573,9 @@ impl CompositeRenderer {
             );
             br::vkfn::destroy_render_pass(gfx.native_ptr(), self.rp_final, core::ptr::null());
             br::vkfn::destroy_render_pass(gfx.native_ptr(), self.rp_grabbed, core::ptr::null());
+
+            self.backdrop_fx_blur_processor.drop(gfx);
+            self.instance_manager.drop(gfx);
         }
     }
 
@@ -1581,8 +1597,9 @@ impl CompositeRenderer {
 
     pub fn new(
         gfx: &VulkanDevice,
+        mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
         rt_format: br::Format,
-        rt_buffers: &[&impl br::ImageView],
+        rt_buffers: &[impl br::ImageView],
         rt_size: br::Extent2D,
     ) -> Self {
         let rp_grabbed = gfx
@@ -1739,22 +1756,7 @@ impl CompositeRenderer {
 
         let dsl_input = br::DescriptorSetLayoutObject::new(
             gfx,
-            &br::DescriptorSetLayoutCreateInfo::new(&[
-                br::DescriptorType::StorageBuffer
-                    .make_binding(0, 1)
-                    .for_shader_stage(
-                        br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-                    ),
-                br::DescriptorType::UniformBuffer
-                    .make_binding(1, 1)
-                    .for_shader_stage(br::vk::VK_SHADER_STAGE_VERTEX_BIT),
-                br::DescriptorType::CombinedImageSampler
-                    .make_binding(2, 1)
-                    .only_for_fragment(),
-                br::DescriptorType::CombinedImageSampler
-                    .make_binding(3, 1)
-                    .only_for_fragment(),
-            ]),
+            &br::DescriptorSetLayoutCreateInfo::new(CompositeDescriptorSet::BINDINGS),
         )
         .unwrap();
         let dsl_input_backdrop = br::DescriptorSetLayoutObject::new(
@@ -1777,7 +1779,7 @@ impl CompositeRenderer {
         .unwrap();
 
         let shader_binary1 =
-            std::fs::read("resources/composite.spv").expect("composite shader load");
+            std::fs::read("../core/resources/composite.spv").expect("composite shader load");
         let mut shader_binary = Vec::with_capacity(shader_binary1.len() >> 2);
         unsafe {
             core::ptr::copy_nonoverlapping(
@@ -1791,8 +1793,8 @@ impl CompositeRenderer {
             br::ShaderModuleObject::new(gfx, &br::ShaderModuleCreateInfo::new(&shader_binary))
                 .expect("shader module create");
         let shader_stages = [
-            shader.on_stage(br::ShaderStage::Vertex, c"main"),
-            shader.on_stage(br::ShaderStage::Fragment, c"main"),
+            shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+            shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
         ];
         let viewports = [rt_size
             .into_rect(br::Offset2D::ZERO)
@@ -1852,6 +1854,16 @@ impl CompositeRenderer {
                 .set_multisample_state(MS_STATE_EMPTY),
             ])
             .unwrap();
+        gfx.dbg_set_name(&pipeline_grabbed, c"Composite Pipeline[grabbed]");
+        gfx.dbg_set_name(&pipeline_final, c"Composite Pipeline[to final]");
+        gfx.dbg_set_name(
+            &pipeline_continue_grabbed,
+            c"Composite Pipeline[grabbed, continue]",
+        );
+        gfx.dbg_set_name(
+            &pipeline_continue_final,
+            c"Composite Pipeline[final, continue]",
+        );
 
         let backdrop_buffers =
             Vec::<br::ImageViewObject<br::ImageObject<&VulkanDevice>>>::with_capacity(
@@ -1892,6 +1904,7 @@ impl CompositeRenderer {
         let input_backdrop_descriptor_sets =
             Vec::<br::DescriptorSet>::with_capacity(Self::INITIAL_BACKDROP_BUFFER_COUNT);
 
+        let instance_manager = CompositeInstanceManager::new(gfx);
         let backdrop_fx_blur_processor = BackdropEffectBlurProcessor::new(gfx, rt_size, rt_format);
 
         let mut fixed_descriptor_pool = br::DescriptorPoolObject::new(
@@ -1913,28 +1926,26 @@ impl CompositeRenderer {
             .unwrap();
         let blur_fixed_descriptor_sets =
             backdrop_fx_blur_processor.alloc_fixed_descriptor_sets(&mut fixed_descriptor_pool);
+
         let mut descriptor_writes = vec![
-            alphamask_group_input_descriptor_set.binding_at(0).write(
-                br::DescriptorContents::storage_buffer(
-                    gfx.composite_instance_manager.buffer_transparent_ref(),
+            CompositeDescriptorSet::set_instance_buffer(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorBufferInfo::new(
+                    instance_manager.buffer_transparent_ref(),
                     0..(core::mem::size_of::<CompositeInstanceData>() * 1024) as _,
                 ),
             ),
-            alphamask_group_input_descriptor_set.binding_at(1).write(
-                br::DescriptorContents::uniform_buffer(
-                    gfx.composite_instance_manager
-                        .streaming_buffer_transparent_ref(),
+            CompositeDescriptorSet::set_streaming_buffer(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorBufferInfo::new(
+                    instance_manager.streaming_buffer_transparent_ref(),
                     0..core::mem::size_of::<CompositeStreamingData>() as _,
                 ),
             ),
-            alphamask_group_input_descriptor_set.binding_at(2).write(
-                br::DescriptorContents::CombinedImageSampler(vec![
-                    br::DescriptorImageInfo::new(
-                        gfx.mask_atlas_resource_transparent_ref(),
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    )
+            CompositeDescriptorSet::set_texture_atlas(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorImageInfo::new(&mask_atlas, br::ImageLayout::ShaderReadOnlyOpt)
                     .with_sampler(&sampler),
-                ]),
             ),
         ];
         backdrop_fx_blur_processor.write_input_descriptor_sets(
@@ -1966,25 +1977,96 @@ impl CompositeRenderer {
             dsl_input_backdrop: dsl_input_backdrop.unmanage().0,
             pipeline_layout: pipeline_layout.unmanage().0,
             shader: shader.unmanage().0,
-            pipeline_grabbed,
-            pipeline_final,
-            pipeline_continue_grabbed,
-            pipeline_continue_final,
+            pipeline_grabbed: pipeline_grabbed.unmanage().0,
+            pipeline_final: pipeline_final.unmanage().0,
+            pipeline_continue_grabbed: pipeline_continue_grabbed.unmanage().0,
+            pipeline_continue_final: pipeline_continue_final.unmanage().0,
             grab_buffer: grab_buffer.unmanage().0,
             grab_buffer_view,
-            grab_buffer_memory,
-            backdrop_buffers,
-            backdrop_buffer_memory,
+            grab_buffer_memory: grab_buffer_memory.unmanage().0,
+            backdrop_buffers: backdrop_buffers
+                .into_iter()
+                .map(|x| {
+                    let (v, r) = x.unmanage();
+                    let r = r.unmanage().0;
+
+                    (r, v)
+                })
+                .collect(),
+            backdrop_buffer_memory: backdrop_buffer_memory.unmanage().0,
             backdrop_blur_destination_fbs,
             backdrop_buffers_invalidated: true,
-            input_backdrop_descriptor_pool,
+            input_backdrop_descriptor_pool: input_backdrop_descriptor_pool.unmanage().0,
             input_backdrop_descriptor_sets,
             input_backdrop_descriptor_pool_capacity: Self::INITIAL_BACKDROP_BUFFER_COUNT,
             backdrop_fx_blur_processor,
-            fixed_descriptor_pool,
+            fixed_descriptor_pool: fixed_descriptor_pool.unmanage().0,
             alphamask_group_input_descriptor_set,
             blur_fixed_descriptor_sets,
+            instance_manager,
         }
+    }
+
+    pub fn update(
+        &mut self,
+        gfx: &VulkanDevice,
+        tree: &mut CompositeTree,
+        rt_size: br::Extent2D,
+        texatlas_size: br::Extent2D,
+        event_bus: &AppEventBus,
+        current_sec: f32,
+    ) -> CompositeRenderingData {
+        let h = self.instance_manager.staging_memory_raw_handle();
+        let r = self.instance_manager.range_all();
+        let flush_required = self.instance_manager.memory_stg_requires_explicit_flush();
+        let ptr = unsafe {
+            self.instance_manager
+                .map_staging(gfx)
+                .expect("composite.instances.stg.map")
+        };
+        let render_data =
+            unsafe { tree.update(rt_size, current_sec, texatlas_size, ptr.ptr(), event_bus) };
+        if flush_required {
+            unsafe {
+                gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
+                    h,
+                    r.start as _,
+                    (r.end - r.start) as _,
+                )])
+                .expect("composite.instance.stg.flush");
+            }
+        }
+        drop(ptr);
+
+        render_data
+    }
+
+    pub fn update_streaming_data(&mut self, gfx: &VulkanDevice, data: CompositeStreamingData) {
+        let h = self.instance_manager.streaming_memory_raw_handle();
+        let flush_required = self.instance_manager.streaming_memory_requires_flush();
+        let ptr = unsafe {
+            self.instance_manager
+                .map_streaming(gfx)
+                .expect("composite.streaming,map")
+        };
+        unsafe {
+            core::ptr::write(ptr.ptr().cast::<CompositeStreamingData>(), data);
+        }
+        if flush_required {
+            unsafe {
+                gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
+                    h,
+                    0,
+                    core::mem::size_of::<CompositeStreamingData>() as _,
+                )])
+                .expect("composite.streaming.flush");
+            }
+        }
+        drop(ptr);
+    }
+
+    pub fn sync_buffer<'r>(&self, r: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
+        self.instance_manager.sync_buffer(r)
     }
 
     #[inline]
@@ -2003,14 +2085,14 @@ impl CompositeRenderer {
         &'s mut self,
         gfx: &VulkanDevice,
         rt_format: br::Format,
-        rt_buffers: &[&impl br::ImageView],
+        rt_buffers: &[impl br::ImageView],
         rt_size: br::Extent2D,
         descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
     ) {
-        Self::release_all_framebuffers(self.gfx_device, &mut self.fbs_grabbed);
-        Self::release_all_framebuffers(self.gfx_device, &mut self.fbs_final);
-        Self::release_all_framebuffers(self.gfx_device, &mut self.fbs_continue_grabbed);
-        Self::release_all_framebuffers(self.gfx_device, &mut self.fbs_continue_final);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_grabbed);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_final);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_continue_grabbed);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_continue_final);
         let mut fbs_grabbed = Vec::with_capacity(rt_buffers.len());
         let mut fbs_final = Vec::with_capacity(rt_buffers.len());
         let mut fbs_continue_grabbed = Vec::with_capacity(rt_buffers.len());
@@ -2018,9 +2100,9 @@ impl CompositeRenderer {
         for bb in rt_buffers {
             fbs_grabbed.push(
                 br::FramebufferObject::new(
-                    self.gfx_device,
+                    gfx,
                     &br::FramebufferCreateInfo::new(
-                        &self.rp_grabbed,
+                        &unsafe { br::VkHandleRef::dangling(self.rp_grabbed) },
                         &[bb.as_transparent_ref()],
                         rt_size.width,
                         rt_size.height,
@@ -2030,9 +2112,9 @@ impl CompositeRenderer {
             );
             fbs_final.push(
                 br::FramebufferObject::new(
-                    self.gfx_device,
+                    gfx,
                     &br::FramebufferCreateInfo::new(
-                        &self.rp_final,
+                        &unsafe { br::VkHandleRef::dangling(self.rp_final) },
                         &[bb.as_transparent_ref()],
                         rt_size.width,
                         rt_size.height,
@@ -2042,9 +2124,9 @@ impl CompositeRenderer {
             );
             fbs_continue_grabbed.push(
                 br::FramebufferObject::new(
-                    self.gfx_device,
+                    gfx,
                     &br::FramebufferCreateInfo::new(
-                        &self.rp_continue_grabbed,
+                        &unsafe { br::VkHandleRef::dangling(self.rp_continue_grabbed) },
                         &[bb.as_transparent_ref()],
                         rt_size.width,
                         rt_size.height,
@@ -2054,9 +2136,9 @@ impl CompositeRenderer {
             );
             fbs_continue_final.push(
                 br::FramebufferObject::new(
-                    self.gfx_device,
+                    gfx,
                     &br::FramebufferCreateInfo::new(
-                        &self.rp_continue_final,
+                        &unsafe { br::VkHandleRef::dangling(self.rp_continue_final) },
                         &[bb.as_transparent_ref()],
                         rt_size.width,
                         rt_size.height,
@@ -2070,11 +2152,16 @@ impl CompositeRenderer {
 
         unsafe {
             // release first
-            core::ptr::drop_in_place(&mut self.grab_buffer);
-            core::ptr::drop_in_place(&mut self.grab_buffer_memory);
+            br::vkfn::destroy_image_view(
+                gfx.native_ptr(),
+                self.grab_buffer_view,
+                core::ptr::null(),
+            );
+            br::vkfn::destroy_image(gfx.native_ptr(), self.grab_buffer, core::ptr::null());
+            br::vkfn::free_memory(gfx.native_ptr(), self.grab_buffer_memory, core::ptr::null());
         }
         let mut grab_buffer = br::ImageObject::new(
-            self.gfx_device,
+            gfx,
             &br::ImageCreateInfo::new(rt_size, rt_format)
                 .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST),
         )
@@ -2088,14 +2175,36 @@ impl CompositeRenderer {
         )
         .create()
         .unwrap();
-        unsafe {
-            core::ptr::write(&mut self.grab_buffer, grab_buffer);
-            core::ptr::write(&mut self.grab_buffer_memory, grab_buffer_memory);
-        }
+        let (v, r) = grab_buffer.unmanage();
+        self.grab_buffer_view = v;
+        self.grab_buffer = r.unmanage().0;
+        self.grab_buffer_memory = grab_buffer_memory.unmanage().0;
 
+        unsafe {
+            br::vkfn::destroy_pipeline(gfx.native_ptr(), self.pipeline_grabbed, core::ptr::null());
+            br::vkfn::destroy_pipeline(gfx.native_ptr(), self.pipeline_final, core::ptr::null());
+            br::vkfn::destroy_pipeline(
+                gfx.native_ptr(),
+                self.pipeline_continue_grabbed,
+                core::ptr::null(),
+            );
+            br::vkfn::destroy_pipeline(
+                gfx.native_ptr(),
+                self.pipeline_continue_final,
+                core::ptr::null(),
+            );
+        }
         let shader_stages = [
-            self.shader.on_stage(br::ShaderStage::Vertex, c"main"),
-            self.shader.on_stage(br::ShaderStage::Fragment, c"main"),
+            br::PipelineShaderStage::new(
+                br::ShaderStage::Vertex,
+                br::VkHandleRef::from_raw_ref(&self.shader),
+                c"vertMain",
+            ),
+            br::PipelineShaderStage::new(
+                br::ShaderStage::Fragment,
+                br::VkHandleRef::from_raw_ref(&self.shader),
+                c"fragMain",
+            ),
         ];
         let viewports = [rt_size
             .into_rect(br::Offset2D::ZERO)
@@ -2110,8 +2219,8 @@ impl CompositeRenderer {
         ] = gfx
             .create_graphics_pipelines_array(&[
                 br::GraphicsPipelineCreateInfo::new(
-                    &self.pipeline_layout,
-                    self.rp_grabbed.subpass(0),
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_grabbed), 0),
                     &shader_stages,
                     Self::PIPELINE_VI_STATE,
                     Self::PIPELINE_IA_STATE,
@@ -2121,8 +2230,8 @@ impl CompositeRenderer {
                 )
                 .set_multisample_state(MS_STATE_EMPTY),
                 br::GraphicsPipelineCreateInfo::new(
-                    &self.pipeline_layout,
-                    self.rp_final.subpass(0),
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_final), 0),
                     &shader_stages,
                     Self::PIPELINE_VI_STATE,
                     Self::PIPELINE_IA_STATE,
@@ -2132,8 +2241,8 @@ impl CompositeRenderer {
                 )
                 .set_multisample_state(MS_STATE_EMPTY),
                 br::GraphicsPipelineCreateInfo::new(
-                    &self.pipeline_layout,
-                    self.rp_continue_grabbed.subpass(0),
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_grabbed), 0),
                     &shader_stages,
                     Self::PIPELINE_VI_STATE,
                     Self::PIPELINE_IA_STATE,
@@ -2143,8 +2252,8 @@ impl CompositeRenderer {
                 )
                 .set_multisample_state(MS_STATE_EMPTY),
                 br::GraphicsPipelineCreateInfo::new(
-                    &self.pipeline_layout,
-                    self.rp_continue_final.subpass(0),
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_final), 0),
                     &shader_stages,
                     Self::PIPELINE_VI_STATE,
                     Self::PIPELINE_IA_STATE,
@@ -2155,16 +2264,26 @@ impl CompositeRenderer {
                 .set_multisample_state(MS_STATE_EMPTY),
             ])
             .unwrap();
-        self.pipeline_grabbed = pipeline_grabbed;
-        self.pipeline_final = pipeline_final;
-        self.pipeline_continue_grabbed = pipeline_continue_grabbed;
-        self.pipeline_continue_final = pipeline_continue_final;
+        gfx.dbg_set_name(&pipeline_grabbed, c"Composite Pipeline[grabbed]");
+        gfx.dbg_set_name(&pipeline_final, c"Composite Pipeline[to final]");
+        gfx.dbg_set_name(
+            &pipeline_continue_grabbed,
+            c"Composite Pipeline[grabbed, continue]",
+        );
+        gfx.dbg_set_name(
+            &pipeline_continue_final,
+            c"Composite Pipeline[final, continue]",
+        );
+        self.pipeline_grabbed = pipeline_grabbed.unmanage().0;
+        self.pipeline_final = pipeline_final.unmanage().0;
+        self.pipeline_continue_grabbed = pipeline_continue_grabbed.unmanage().0;
+        self.pipeline_continue_final = pipeline_continue_final.unmanage().0;
 
         self.backdrop_fx_blur_processor
             .recreate_rt_resources(gfx, rt_size, rt_format);
         self.backdrop_fx_blur_processor.write_input_descriptor_sets(
             descriptor_writes,
-            &self.grab_buffer,
+            br::VkHandleRef::from_raw_ref(&self.grab_buffer_view),
             &self.blur_fixed_descriptor_sets,
         );
 
@@ -2178,44 +2297,72 @@ impl CompositeRenderer {
             .extend(fbs_continue_final.into_iter().map(|x| x.unmanage().0));
     }
 
-    pub fn ready_input_backdrop_descriptor_sets(&mut self, required_count: usize) {
-        if required_count == self.input_backdrop_descriptor_sets.len() {
+    pub fn prepare_input_backdrop_descriptor_sets(
+        &mut self,
+        gfx: &VulkanDevice,
+        required_count: usize,
+    ) {
+        let object_count = required_count.max(1);
+
+        if object_count == self.input_backdrop_descriptor_sets.len() {
             // no changes
             return;
         }
 
-        if required_count > self.input_backdrop_descriptor_pool_capacity {
+        if object_count > self.input_backdrop_descriptor_pool_capacity {
             // resize pool
-            let object_count = required_count.max(1);
 
             self.input_backdrop_descriptor_pool = br::DescriptorPoolObject::new(
-                self.gfx_device,
+                gfx,
                 &br::DescriptorPoolCreateInfo::new(
                     object_count as _,
                     &[br::DescriptorType::CombinedImageSampler.make_size(object_count as _)],
                 ),
             )
-            .unwrap();
+            .unwrap()
+            .unmanage()
+            .0;
             self.input_backdrop_descriptor_pool_capacity = object_count;
         } else {
             // just reset
             unsafe {
-                self.input_backdrop_descriptor_pool.reset(0).unwrap();
+                br::vkfn::reset_descriptor_pool(
+                    gfx.native_ptr(),
+                    self.input_backdrop_descriptor_pool,
+                    0,
+                )
+                .into_result()
+                .unwrap();
             }
         }
 
+        let mut input_backdrop_descriptor_sets =
+            Vec::<br::DescriptorSet>::with_capacity(object_count);
+        unsafe {
+            br::vkfn::allocate_descriptor_sets(
+                gfx.native_ptr(),
+                &br::vk::VkDescriptorSetAllocateInfo {
+                    sType: br::vk::VkDescriptorSetAllocateInfo::TYPE,
+                    pNext: core::ptr::null(),
+                    descriptorPool: self.input_backdrop_descriptor_pool,
+                    descriptorSetCount: object_count as _,
+                    pSetLayouts: core::iter::repeat_n(self.dsl_input_backdrop, object_count)
+                        .collect::<Vec<_>>()
+                        .as_ptr(),
+                },
+                input_backdrop_descriptor_sets
+                    .spare_capacity_mut()
+                    .as_mut_ptr()
+                    .cast(),
+            )
+            .into_result()
+            .expect("input_backdrop_descriptor_sets.realloc");
+            input_backdrop_descriptor_sets.set_len(object_count);
+        }
+
         self.input_backdrop_descriptor_sets.clear();
-        self.input_backdrop_descriptor_sets.extend(
-            self.input_backdrop_descriptor_pool
-                .alloc(
-                    &core::iter::repeat_n(
-                        self.dsl_input_backdrop.as_transparent_ref(),
-                        required_count.max(1),
-                    )
-                    .collect::<Vec<_>>(),
-                )
-                .unwrap(),
-        );
+        self.input_backdrop_descriptor_sets
+            .extend(input_backdrop_descriptor_sets);
         self.backdrop_buffers_invalidated = true;
     }
 
@@ -2224,17 +2371,27 @@ impl CompositeRenderer {
         gfx: &VulkanDevice,
         rt_format: br::Format,
         rt_size: br::Extent2D,
+        unused: bool,
     ) -> bool {
         if !self.backdrop_buffers_invalidated {
             // no changes
             return false;
         }
 
-        Self::release_all_framebuffers(self.gfx_device, &mut self.backdrop_blur_destination_fbs);
-        self.backdrop_buffers.clear();
+        Self::release_all_framebuffers(gfx, &mut self.backdrop_blur_destination_fbs);
         unsafe {
-            core::ptr::drop_in_place(&mut self.backdrop_buffer_memory);
+            for (r, v) in self.backdrop_buffers.drain(..) {
+                br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
+                br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
+            }
+
+            br::vkfn::free_memory(
+                gfx.native_ptr(),
+                self.backdrop_buffer_memory,
+                core::ptr::null(),
+            );
         }
+
         let backdrop_count = self.input_backdrop_descriptor_sets.len();
         let mut image_objects = Vec::with_capacity(backdrop_count);
         let mut offsets = Vec::with_capacity(backdrop_count);
@@ -2242,7 +2399,7 @@ impl CompositeRenderer {
         let mut memory_index_mask = !0u32;
         for _ in 0..backdrop_count {
             let image = br::ImageObject::new(
-                self.gfx_device,
+                gfx,
                 &br::ImageCreateInfo::new(rt_size, rt_format).with_usage(
                     br::ImageUsageFlags::SAMPLED
                         | br::ImageUsageFlags::COLOR_ATTACHMENT
@@ -2266,34 +2423,42 @@ impl CompositeRenderer {
             );
             std::process::exit(1);
         };
-        let backdrop_buffer_memory = br::DeviceMemoryObject::new(
-            self.gfx_device,
-            &br::MemoryAllocateInfo::new(top.max(64), memindex),
-        )
-        .unwrap();
-        for (mut r, o) in image_objects.into_iter().zip(offsets.into_iter()) {
+        let backdrop_buffer_memory =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(top.max(64), memindex))
+                .unwrap();
+        for (n, (mut r, o)) in image_objects
+            .into_iter()
+            .zip(offsets.into_iter())
+            .enumerate()
+        {
             r.bind(&backdrop_buffer_memory, o as _).unwrap();
+            gfx.dbg_set_name(&r, &unsafe {
+                std::ffi::CString::from_vec_unchecked(format!("backdrop buffer #{n}").into_bytes())
+            });
+            let o = br::ImageViewBuilder::new(
+                r,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+            )
+            .create()
+            .unwrap();
 
-            self.backdrop_buffers.push(
-                br::ImageViewBuilder::new(
-                    r,
-                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                )
-                .create()
-                .unwrap(),
-            );
+            let (v, r) = o.unmanage();
+            self.backdrop_buffers.push((r.unmanage().0, v));
         }
         unsafe {
-            core::ptr::write(&mut self.backdrop_buffer_memory, backdrop_buffer_memory);
+            core::ptr::write(
+                &mut self.backdrop_buffer_memory,
+                backdrop_buffer_memory.unmanage().0,
+            );
         }
 
         self.backdrop_blur_destination_fbs
             .extend(self.backdrop_buffers.iter().map(|b| {
                 br::FramebufferObject::new(
-                    self.gfx_device,
+                    gfx,
                     &br::FramebufferCreateInfo::new(
-                        self.backdrop_fx_blur_processor.final_render_pass(),
-                        &[b.as_transparent_ref()],
+                        &self.backdrop_fx_blur_processor.final_render_pass(),
+                        &[unsafe { br::VkHandleRef::dangling(b.1) }],
                         rt_size.width,
                         rt_size.height,
                     ),
@@ -2311,13 +2476,65 @@ impl CompositeRenderer {
                 .map(|(v, d)| {
                     d.binding_at(0)
                         .write(br::DescriptorContents::CombinedImageSampler(vec![
-                            br::DescriptorImageInfo::new(v, br::ImageLayout::ShaderReadOnlyOpt)
-                                .with_sampler(&self.sampler),
+                            br::DescriptorImageInfo::new(
+                                br::VkHandleRef::from_raw_ref(&v.1),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(br::VkHandleRef::from_raw_ref(&self.sampler)),
                         ]))
                 })
                 .collect::<Vec<_>>(),
             &[],
         );
+
+        if unused {
+            // backdrop bufferを結局つかわない場合は0番目のImageLayoutだけ変えておく(Warning対策)
+            let mut cp = br::CommandPoolObject::new(
+                gfx,
+                &br::CommandPoolCreateInfo::new(gfx.present_queue_family_index()).transient(),
+            )
+            .expect("cp.create");
+            let mut cb = br::CommandBufferObject::alloc(
+                gfx,
+                &br::CommandBufferAllocateInfo::new(&mut cp, 1, br::CommandBufferLevel::Primary),
+            )
+            .expect("cb.create");
+            unsafe {
+                cb[0]
+                    .begin(&br::CommandBufferBeginInfo::new())
+                    .expect("cb.begin")
+            }
+            .inject(|r| {
+                gfx.cmd_pipeline_barrier(
+                    r,
+                    &br::DependencyInfo::new(
+                        &[],
+                        &[],
+                        &[br::ImageMemoryBarrier2::new(
+                            br::VkHandleRef::from_raw_ref(&self.backdrop_buffers[0].0),
+                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                        )
+                        .transit_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined())],
+                    ),
+                )
+            })
+            .end()
+            .expect("cb.end");
+            let mut q = gfx.queue(gfx.present_queue_family_index(), 0);
+            unsafe {
+                q.submit_raw(
+                    &[br::SubmitInfo::new(
+                        &[],
+                        &[],
+                        &[cb[0].as_transparent_ref()],
+                        &[],
+                    )],
+                    None,
+                )
+                .expect("cb.submit");
+            }
+            q.wait().expect("cb.submit.wait");
+        }
 
         self.backdrop_buffers_invalidated = false;
         true
@@ -2327,46 +2544,51 @@ impl CompositeRenderer {
     pub fn default_backdrop_buffer(
         &self,
     ) -> &(impl br::VkHandle<Handle = br::vk::VkImage> + ?Sized) {
-        self.backdrop_buffers[0].image()
+        br::VkHandleRef::from_raw_ref(&self.backdrop_buffers[0].0)
     }
 
-    pub fn select_subpass(
-        &self,
+    pub fn select_subpass<'r>(
+        &'r self,
         requirements: &RenderPassRequirements,
-    ) -> br::SubpassRef<impl br::RenderPass + ?Sized> {
+    ) -> br::SubpassRef<'r, impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized> {
         match requirements {
             RenderPassRequirements {
                 after_operation: RenderPassAfterOperation::None,
                 continued: false,
-            } => self.rp_final.subpass(0),
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_final), 0),
             RenderPassRequirements {
                 after_operation: RenderPassAfterOperation::None,
                 continued: true,
-            } => self.rp_continue_final.subpass(0),
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_final), 0),
             RenderPassRequirements {
                 after_operation: RenderPassAfterOperation::Grab,
                 continued: false,
-            } => self.rp_grabbed.subpass(0),
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_grabbed), 0),
             RenderPassRequirements {
                 after_operation: RenderPassAfterOperation::Grab,
                 continued: true,
-            } => self.rp_continue_grabbed.subpass(0),
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_grabbed), 0),
         }
     }
 
     #[inline]
-    pub fn subpass_final(&self) -> br::SubpassRef<impl br::RenderPass + ?Sized> {
-        self.rp_final.subpass(0)
+    pub fn subpass_final<'r>(
+        &'r self,
+    ) -> br::SubpassRef<'r, impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized> {
+        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_final), 0)
     }
 
     #[inline]
-    pub fn subpass_continue_final(&self) -> br::SubpassRef<impl br::RenderPass + ?Sized> {
-        self.rp_continue_final.subpass(0)
+    pub fn subpass_continue_final<'r>(
+        &'r self,
+    ) -> br::SubpassRef<'r, impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized> {
+        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_final), 0)
     }
 
     pub fn populate_commands<'x>(
         &self,
         mut rec: br::CmdRecord<'x>,
+        gfx: &VulkanDevice,
         render_data: &CompositeRenderingData,
         rt_size: br::Extent2D,
         rt_image: &(impl br::VkHandle<Handle = br::vk::VkImage> + ?Sized),
@@ -2379,161 +2601,165 @@ impl CompositeRenderer {
         let mut rpt_pointer = 0;
         let mut pipeline_bound = false;
 
+        #[inline]
+        fn ensure_in_render_pass<'r>(
+            this: &CompositeRenderer,
+            gfx: &VulkanDevice,
+            in_render_pass: &mut bool,
+            render_data: &CompositeRenderingData,
+            rpt_pointer: usize,
+            backbuffer_index: usize,
+            render_region: br::Rect2D,
+            rec: br::CmdRecord<'r>,
+        ) -> br::CmdRecord<'r> {
+            if *in_render_pass {
+                return rec;
+            }
+
+            *in_render_pass = true;
+
+            let (rp, fb);
+            match &render_data.render_passes[rpt_pointer] {
+                RenderPassRequirements {
+                    continued: false,
+                    after_operation: RenderPassAfterOperation::Grab,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_grabbed);
+                    fb = this.fbs_grabbed[backbuffer_index];
+                }
+                RenderPassRequirements {
+                    continued: false,
+                    after_operation: RenderPassAfterOperation::None,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_final);
+                    fb = this.fbs_final[backbuffer_index];
+                }
+                RenderPassRequirements {
+                    continued: true,
+                    after_operation: RenderPassAfterOperation::Grab,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_continue_grabbed);
+                    fb = this.fbs_continue_grabbed[backbuffer_index];
+                }
+                RenderPassRequirements {
+                    continued: true,
+                    after_operation: RenderPassAfterOperation::None,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_continue_final);
+                    fb = this.fbs_continue_final[backbuffer_index];
+                }
+            };
+
+            rec.inject(|r| {
+                gfx.cmd_begin_render_pass(
+                    r,
+                    &br::RenderPassBeginInfo::new(
+                        rp,
+                        br::VkHandleRef::from_raw_ref(&fb),
+                        render_region,
+                        &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0])],
+                    ),
+                )
+            })
+        }
+
+        #[inline]
+        fn ensure_pipeline_bound<'r>(
+            this: &CompositeRenderer,
+            pipeline_bound: &mut bool,
+            render_data: &CompositeRenderingData,
+            rpt_pointer: usize,
+            rt_size: br::Extent2D,
+            rec: br::CmdRecord<'r>,
+        ) -> br::CmdRecord<'r> {
+            if *pipeline_bound {
+                return rec;
+            }
+
+            *pipeline_bound = true;
+
+            rec.bind_pipeline(
+                br::PipelineBindPoint::Graphics,
+                match &render_data.render_passes[rpt_pointer] {
+                    RenderPassRequirements {
+                        continued: false,
+                        after_operation: RenderPassAfterOperation::Grab,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_grabbed),
+                    RenderPassRequirements {
+                        continued: false,
+                        after_operation: RenderPassAfterOperation::None,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_final),
+                    RenderPassRequirements {
+                        continued: true,
+                        after_operation: RenderPassAfterOperation::Grab,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_continue_grabbed),
+                    RenderPassRequirements {
+                        continued: true,
+                        after_operation: RenderPassAfterOperation::None,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_continue_final),
+                },
+            )
+            .push_constant(
+                br::VkHandleRef::from_raw_ref(&this.pipeline_layout),
+                br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                0,
+                &[rt_size.width as f32, rt_size.height as f32],
+            )
+            .bind_descriptor_sets(
+                br::PipelineBindPoint::Graphics,
+                br::VkHandleRef::from_raw_ref(&this.pipeline_layout),
+                0,
+                &[this.alphamask_group_input_descriptor_set],
+                &[],
+            )
+        }
+
         for x in render_data.instructions.iter() {
             match x {
                 &CompositeRenderingInstruction::DrawInstanceRange {
                     ref index_range,
                     backdrop_buffer,
                 } => {
-                    if !in_render_pass {
-                        in_render_pass = true;
-
-                        let (rp, fb);
-                        match &render_data.render_passes[rpt_pointer] {
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_grabbed;
-                                fb = self.fbs_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_final;
-                                fb = self.fbs_final[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_continue_grabbed;
-                                fb = self.fbs_continue_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_continue_final;
-                                fb = self.fbs_continue_final[backbuffer_index];
-                            }
-                        };
-
-                        rec = rec.inject(|r| {
-                            inject_cmd_begin_render_pass2(
-                                r,
-                                self.gfx_device,
-                                &br::RenderPassBeginInfo::new(
-                                    rp,
-                                    br::VkHandleRef::from_raw_ref(&fb),
-                                    render_region,
-                                    &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0])],
-                                ),
-                                &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
-                            )
-                        });
-                    }
-                    if !pipeline_bound {
-                        pipeline_bound = true;
-
-                        rec = rec
-                            .bind_pipeline(
-                                br::PipelineBindPoint::Graphics,
-                                match &render_data.render_passes[rpt_pointer] {
-                                    RenderPassRequirements {
-                                        continued: false,
-                                        after_operation: RenderPassAfterOperation::Grab,
-                                    } => &self.pipeline_grabbed,
-                                    RenderPassRequirements {
-                                        continued: false,
-                                        after_operation: RenderPassAfterOperation::None,
-                                    } => &self.pipeline_final,
-                                    RenderPassRequirements {
-                                        continued: true,
-                                        after_operation: RenderPassAfterOperation::Grab,
-                                    } => &self.pipeline_continue_grabbed,
-                                    RenderPassRequirements {
-                                        continued: true,
-                                        after_operation: RenderPassAfterOperation::None,
-                                    } => &self.pipeline_continue_final,
-                                },
-                            )
-                            .push_constant(
-                                &self.pipeline_layout,
-                                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                                0,
-                                &[rt_size.width as f32, rt_size.height as f32],
-                            )
-                            .bind_descriptor_sets(
-                                br::PipelineBindPoint::Graphics,
-                                &self.pipeline_layout,
-                                0,
-                                &[self.alphamask_group_input_descriptor_set],
-                                &[],
-                            );
-                    }
-
-                    rec = rec
-                        .bind_descriptor_sets(
-                            br::PipelineBindPoint::Graphics,
-                            &self.pipeline_layout,
-                            1,
-                            &[self.input_backdrop_descriptor_sets[backdrop_buffer]],
-                            &[],
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    )
+                    .inject(|rec| {
+                        ensure_pipeline_bound(
+                            self,
+                            &mut pipeline_bound,
+                            render_data,
+                            rpt_pointer,
+                            rt_size,
+                            rec,
                         )
-                        .draw(4, index_range.len() as _, 0, index_range.start as _)
+                    })
+                    .bind_descriptor_sets(
+                        br::PipelineBindPoint::Graphics,
+                        br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                        1,
+                        &[self.input_backdrop_descriptor_sets[backdrop_buffer]],
+                        &[],
+                    )
+                    .draw(4, index_range.len() as _, 0, index_range.start as _)
                 }
                 &CompositeRenderingInstruction::InsertCustomRenderCommands(token) => {
-                    if !in_render_pass {
-                        in_render_pass = true;
-
-                        let (rp, fb);
-                        match &render_data.render_passes[rpt_pointer] {
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_grabbed;
-                                fb = self.fbs_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_final;
-                                fb = self.fbs_final[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_continue_grabbed;
-                                fb = self.fbs_continue_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_continue_final;
-                                fb = self.fbs_continue_final[backbuffer_index];
-                            }
-                        };
-
-                        rec = rec.inject(|r| {
-                            inject_cmd_begin_render_pass2(
-                                r,
-                                self.gfx_device,
-                                &br::RenderPassBeginInfo::new(
-                                    rp,
-                                    br::VkHandleRef::from_raw_ref(&fb),
-                                    render_region,
-                                    &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0])],
-                                ),
-                                &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
-                            )
-                        });
-                    }
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    );
 
                     rec = custom_render(token, rec);
 
@@ -2543,99 +2769,30 @@ impl CompositeRenderer {
                 &CompositeRenderingInstruction::SetClip {
                     ref shader_parameters,
                 } => {
-                    if !in_render_pass {
-                        in_render_pass = true;
-
-                        let (rp, fb);
-                        match &render_data.render_passes[rpt_pointer] {
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_grabbed;
-                                fb = self.fbs_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_final;
-                                fb = self.fbs_final[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_continue_grabbed;
-                                fb = self.fbs_continue_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_continue_final;
-                                fb = self.fbs_continue_final[backbuffer_index];
-                            }
-                        };
-
-                        rec = rec.inject(|r| {
-                            inject_cmd_begin_render_pass2(
-                                r,
-                                self.gfx_device,
-                                &br::RenderPassBeginInfo::new(
-                                    rp,
-                                    br::VkHandleRef::from_raw_ref(&fb),
-                                    render_region,
-                                    &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0])],
-                                ),
-                                &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
-                            )
-                        });
-                    }
-                    if !pipeline_bound {
-                        pipeline_bound = true;
-
-                        rec = rec
-                            .bind_pipeline(
-                                br::PipelineBindPoint::Graphics,
-                                match &render_data.render_passes[rpt_pointer] {
-                                    RenderPassRequirements {
-                                        continued: false,
-                                        after_operation: RenderPassAfterOperation::Grab,
-                                    } => &self.pipeline_grabbed,
-                                    RenderPassRequirements {
-                                        continued: false,
-                                        after_operation: RenderPassAfterOperation::None,
-                                    } => &self.pipeline_final,
-                                    RenderPassRequirements {
-                                        continued: true,
-                                        after_operation: RenderPassAfterOperation::Grab,
-                                    } => &self.pipeline_continue_grabbed,
-                                    RenderPassRequirements {
-                                        continued: true,
-                                        after_operation: RenderPassAfterOperation::None,
-                                    } => &self.pipeline_continue_final,
-                                },
-                            )
-                            .push_constant(
-                                &self.pipeline_layout,
-                                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                                0,
-                                &[rt_size.width as f32, rt_size.height as f32],
-                            )
-                            .bind_descriptor_sets(
-                                br::PipelineBindPoint::Graphics,
-                                &self.pipeline_layout,
-                                0,
-                                &[self.alphamask_group_input_descriptor_set],
-                                &[],
-                            );
-                    }
-
-                    rec = rec.push_constant(
-                        &self.pipeline_layout,
-                        br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-                        16,
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    )
+                    .inject(|rec| {
+                        ensure_pipeline_bound(
+                            self,
+                            &mut pipeline_bound,
+                            render_data,
+                            rpt_pointer,
+                            rt_size,
+                            rec,
+                        )
+                    })
+                    .push_constant(
+                        br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                        br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                        core::mem::offset_of!(CompositePushConstants, rect_mask_left) as _,
                         &[
                             shader_parameters[0].value() / rt_size.width as f32,
                             shader_parameters[1].value() / rt_size.height as f32,
@@ -2649,120 +2806,44 @@ impl CompositeRenderer {
                     );
                 }
                 &CompositeRenderingInstruction::ClearClip => {
-                    if !in_render_pass {
-                        in_render_pass = true;
-
-                        let (rp, fb);
-                        match &render_data.render_passes[rpt_pointer] {
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_grabbed;
-                                fb = self.fbs_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: false,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_final;
-                                fb = self.fbs_final[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::Grab,
-                            } => {
-                                rp = &self.rp_continue_grabbed;
-                                fb = self.fbs_continue_grabbed[backbuffer_index];
-                            }
-                            RenderPassRequirements {
-                                continued: true,
-                                after_operation: RenderPassAfterOperation::None,
-                            } => {
-                                rp = &self.rp_continue_final;
-                                fb = self.fbs_continue_final[backbuffer_index];
-                            }
-                        };
-
-                        rec = rec.inject(|r| {
-                            inject_cmd_begin_render_pass2(
-                                r,
-                                self.gfx_device,
-                                &br::RenderPassBeginInfo::new(
-                                    rp,
-                                    br::VkHandleRef::from_raw_ref(&fb),
-                                    render_region,
-                                    &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0])],
-                                ),
-                                &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
-                            )
-                        });
-                    }
-                    if !pipeline_bound {
-                        pipeline_bound = true;
-
-                        rec = rec
-                            .bind_pipeline(
-                                br::PipelineBindPoint::Graphics,
-                                match &render_data.render_passes[rpt_pointer] {
-                                    RenderPassRequirements {
-                                        continued: false,
-                                        after_operation: RenderPassAfterOperation::Grab,
-                                    } => &self.pipeline_grabbed,
-                                    RenderPassRequirements {
-                                        continued: false,
-                                        after_operation: RenderPassAfterOperation::None,
-                                    } => &self.pipeline_final,
-                                    RenderPassRequirements {
-                                        continued: true,
-                                        after_operation: RenderPassAfterOperation::Grab,
-                                    } => &self.pipeline_continue_grabbed,
-                                    RenderPassRequirements {
-                                        continued: true,
-                                        after_operation: RenderPassAfterOperation::None,
-                                    } => &self.pipeline_continue_final,
-                                },
-                            )
-                            .push_constant(
-                                &self.pipeline_layout,
-                                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                                0,
-                                &[rt_size.width as f32, rt_size.height as f32],
-                            )
-                            .bind_descriptor_sets(
-                                br::PipelineBindPoint::Graphics,
-                                &self.pipeline_layout,
-                                0,
-                                &[self.alphamask_group_input_descriptor_set],
-                                &[],
-                            );
-                    }
-
-                    rec = rec.push_constant(
-                        &self.pipeline_layout,
-                        br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-                        16,
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    )
+                    .inject(|rec| {
+                        ensure_pipeline_bound(
+                            self,
+                            &mut pipeline_bound,
+                            render_data,
+                            rpt_pointer,
+                            rt_size,
+                            rec,
+                        )
+                    })
+                    .push_constant(
+                        br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                        br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                        core::mem::offset_of!(CompositePushConstants, rect_mask_left) as _,
                         &[0.0f32, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
                     );
                 }
                 CompositeRenderingInstruction::GrabBackdrop => {
                     rec = rec
+                        .inject(|r| gfx.cmd_end_render_pass(r))
                         .inject(|r| {
-                            inject_cmd_end_render_pass2(
+                            gfx.cmd_pipeline_barrier(
                                 r,
-                                self.gfx_device,
-                                &br::SubpassEndInfo::new(),
-                            )
-                        })
-                        .inject(|r| {
-                            inject_cmd_pipeline_barrier_2(
-                                r,
-                                self.gfx_device,
                                 &br::DependencyInfo::new(
                                     &[],
                                     &[],
                                     &[br::ImageMemoryBarrier2::new(
-                                        self.grab_buffer.image(),
+                                        br::VkHandleRef::from_raw_ref(&self.grab_buffer),
                                         br::ImageSubresourceRange::new(
                                             br::AspectMask::COLOR,
                                             0..1,
@@ -2776,7 +2857,7 @@ impl CompositeRenderer {
                         .copy_image(
                             rt_image,
                             br::ImageLayout::TransferSrcOpt,
-                            self.grab_buffer.image(),
+                            br::VkHandleRef::from_raw_ref(&self.grab_buffer),
                             br::ImageLayout::TransferDestOpt,
                             &[br::ImageCopy {
                                 srcSubresource: br::ImageSubresourceLayers::new(
@@ -2795,14 +2876,13 @@ impl CompositeRenderer {
                             }],
                         )
                         .inject(|r| {
-                            inject_cmd_pipeline_barrier_2(
+                            gfx.cmd_pipeline_barrier(
                                 r,
-                                self.gfx_device,
                                 &br::DependencyInfo::new(
                                     &[],
                                     &[],
                                     &[br::ImageMemoryBarrier2::new(
-                                        self.grab_buffer.image(),
+                                        br::VkHandleRef::from_raw_ref(&self.grab_buffer),
                                         br::ImageSubresourceRange::new(
                                             br::AspectMask::COLOR,
                                             0..1,
@@ -2840,7 +2920,7 @@ impl CompositeRenderer {
                         br::VkHandleRef::from_raw_ref(
                             &self.backdrop_blur_destination_fbs[dest_backdrop_buffer],
                         ),
-                        self.gfx_device,
+                        gfx,
                         rt_size,
                         &self.blur_fixed_descriptor_sets,
                     );
@@ -2852,7 +2932,45 @@ impl CompositeRenderer {
     }
 }
 
-pub struct BackdropEffectBlurProcessor {
+pub struct BoundCompositeRenderer<'d> {
+    core: CompositeRenderer,
+    device: &'d VulkanDevice,
+}
+impl Drop for BoundCompositeRenderer<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.core.drop(self.device);
+        }
+    }
+}
+impl core::ops::Deref for BoundCompositeRenderer<'_> {
+    type Target = CompositeRenderer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+impl core::ops::DerefMut for BoundCompositeRenderer<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.core
+    }
+}
+impl<'d> BoundCompositeRenderer<'d> {
+    pub fn new(
+        device: &'d VulkanDevice,
+        mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
+        rt_format: br::Format,
+        rt_size: br::Extent2D,
+        back_buffer_views: &[impl br::ImageView],
+    ) -> Self {
+        Self {
+            core: CompositeRenderer::new(device, mask_atlas, rt_format, back_buffer_views, rt_size),
+            device,
+        }
+    }
+}
+
+struct BackdropEffectBlurProcessor {
     render_pass: br::vk::VkRenderPass,
     temporal_buffers: Vec<(br::vk::VkImage, br::vk::VkImageView)>,
     temporal_buffer_memory: br::vk::VkDeviceMemory,
@@ -2869,10 +2987,10 @@ impl BackdropEffectBlurProcessor {
         unsafe {
             self.destroy_framebuffers(gfx);
 
-            for x in self.upsample_pipelines {
+            for x in self.upsample_pipelines.drain(..) {
                 br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
             }
-            for x in self.downsample_pipelines {
+            for x in self.downsample_pipelines.drain(..) {
                 br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
             }
             br::vkfn::destroy_pipeline_layout(
@@ -2887,7 +3005,7 @@ impl BackdropEffectBlurProcessor {
             );
             br::vkfn::destroy_sampler(gfx.native_ptr(), self.sampler, core::ptr::null());
 
-            for (r, v) in self.temporal_buffers {
+            for (r, v) in self.temporal_buffers.drain(..) {
                 br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
                 br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
             }
@@ -2902,7 +3020,7 @@ impl BackdropEffectBlurProcessor {
     }
 
     #[tracing::instrument(name = "BackdropEffectBlurProcessor::new", skip(gfx))]
-    pub fn new(gfx: &VulkanDevice, rt_size: br::Extent2D, rt_format: br::Format) -> Self {
+    fn new(gfx: &VulkanDevice, rt_size: br::Extent2D, rt_format: br::Format) -> Self {
         let render_pass = gfx
             .create_render_pass(&br::RenderPassCreateInfo2::new(
                 &[br::AttachmentDescription2::new(rt_format)
@@ -2995,14 +3113,26 @@ impl BackdropEffectBlurProcessor {
                 .into_iter()
                 .map(|x| x.unmanage().0)
                 .collect(),
-            render_pass,
-            temporal_buffers,
+            render_pass: render_pass.unmanage().0,
+            temporal_buffers: temporal_buffers
+                .into_iter()
+                .map(|x| {
+                    let (v, r) = x.unmanage();
+                    (r.unmanage().0, v)
+                })
+                .collect(),
             temporal_buffer_memory: temporal_buffer_memory.unmanage().0,
             sampler: sampler.unmanage().0,
             input_dsl: input_dsl.unmanage().0,
             pipeline_layout: pipeline_layout.unmanage().0,
-            downsample_pipelines,
-            upsample_pipelines,
+            downsample_pipelines: downsample_pipelines
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
+            upsample_pipelines: upsample_pipelines
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
         }
     }
 
@@ -3010,26 +3140,22 @@ impl BackdropEffectBlurProcessor {
         gfx: &'x VulkanDevice,
         rt_size: br::Extent2D,
         pipeline_layout: &(impl br::VkHandle<Handle = br::vk::VkPipelineLayout> + ?Sized),
-        render_pass: &(impl br::RenderPass + ?Sized),
+        render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
     ) -> (
         Vec<br::PipelineObject<&'x VulkanDevice>>,
         Vec<br::PipelineObject<&'x VulkanDevice>>,
     ) {
-        let (downsample_vsh, downsample_fsh) = (
-            gfx.require_shader("resources/dual_kawase_filter/downsample.vert"),
-            gfx.require_shader("resources/dual_kawase_filter/downsample.frag"),
-        );
-        let (upsample_vsh, upsample_fsh) = (
-            gfx.require_shader("resources/dual_kawase_filter/upsample.vert"),
-            gfx.require_shader("resources/dual_kawase_filter/upsample.frag"),
-        );
+        let downsample_shader =
+            gfx.require_shader("../core/resources/dual_kawase_filter/downsample.spv");
+        let upsample_shader =
+            gfx.require_shader("../core/resources/dual_kawase_filter/upsample.spv");
         let downsample_stages = [
-            downsample_vsh.on_stage(br::ShaderStage::Vertex, c"main"),
-            downsample_fsh.on_stage(br::ShaderStage::Fragment, c"main"),
+            downsample_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+            downsample_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
         ];
         let upsample_stages = [
-            upsample_vsh.on_stage(br::ShaderStage::Vertex, c"main"),
-            upsample_fsh.on_stage(br::ShaderStage::Fragment, c"main"),
+            upsample_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+            upsample_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
         ];
 
         let viewport_scissors = (0..=BLUR_SAMPLE_STEPS)
@@ -3056,7 +3182,7 @@ impl BackdropEffectBlurProcessor {
                     .map(|vp_state| {
                         br::GraphicsPipelineCreateInfo::new(
                             &pipeline_layout,
-                            render_pass.subpass(0),
+                            br::SubpassRef(render_pass, 0),
                             &downsample_stages,
                             VI_STATE_EMPTY,
                             IA_STATE_TRILIST,
@@ -3076,7 +3202,7 @@ impl BackdropEffectBlurProcessor {
                     .map(|vp_state| {
                         br::GraphicsPipelineCreateInfo::new(
                             &pipeline_layout,
-                            render_pass.subpass(0),
+                            br::SubpassRef(render_pass, 0),
                             &upsample_stages,
                             VI_STATE_EMPTY,
                             IA_STATE_TRILIST,
@@ -3191,12 +3317,12 @@ impl BackdropEffectBlurProcessor {
     }
 
     unsafe fn destroy_framebuffers(&self, gfx: &VulkanDevice) {
-        for x in self.downsample_pass_fbs {
+        for &x in self.downsample_pass_fbs.iter() {
             unsafe {
                 br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
             }
         }
-        for x in self.upsample_pass_fixed_fbs {
+        for &x in self.upsample_pass_fixed_fbs.iter() {
             unsafe {
                 br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
             }
@@ -3213,7 +3339,7 @@ impl BackdropEffectBlurProcessor {
     ) -> Vec<br::DescriptorSet> {
         dp.alloc(
             &core::iter::repeat_n(
-                self.input_dsl.as_transparent_ref(),
+                unsafe { br::VkHandleRef::dangling(self.input_dsl) },
                 self.fixed_descriptor_set_count(),
             )
             .collect::<Vec<_>>(),
@@ -3232,7 +3358,7 @@ impl BackdropEffectBlurProcessor {
         writes.extend((0..BLUR_SAMPLE_STEPS).map(|n| {
             descriptor_sets[n + 1].binding_at(0).write(
                 br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
-                    &self.temporal_buffers[n],
+                    br::VkHandleRef::from_raw_ref(&self.temporal_buffers[n].1),
                     br::ImageLayout::ShaderReadOnlyOpt,
                 )]),
             )
@@ -3271,11 +3397,10 @@ impl BackdropEffectBlurProcessor {
         for lv in 1..=BLUR_SAMPLE_STEPS {
             rec = rec
                 .inject(|r| {
-                    inject_cmd_begin_render_pass2(
+                    gfx.cmd_begin_render_pass(
                         r,
-                        gfx,
                         &br::RenderPassBeginInfo::new(
-                            &self.render_pass,
+                            br::VkHandleRef::from_raw_ref(&self.render_pass),
                             &unsafe { br::VkHandleRef::dangling(self.downsample_pass_fbs[lv - 1]) },
                             br::Extent2D {
                                 width: rt_size.width >> lv,
@@ -3284,15 +3409,14 @@ impl BackdropEffectBlurProcessor {
                             .into_rect(br::Offset2D::ZERO),
                             &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 0.0])],
                         ),
-                        &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
                     )
                 })
                 .bind_pipeline(
                     br::PipelineBindPoint::Graphics,
-                    &self.downsample_pipelines[lv - 1],
+                    br::VkHandleRef::from_raw_ref(&self.downsample_pipelines[lv - 1]),
                 )
                 .push_constant(
-                    &self.pipeline_layout,
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
                     br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                     0,
                     &[
@@ -3303,13 +3427,13 @@ impl BackdropEffectBlurProcessor {
                 )
                 .bind_descriptor_sets(
                     br::PipelineBindPoint::Graphics,
-                    &self.pipeline_layout,
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
                     0,
                     &[input_descriptor_sets[lv - 1]],
                     &[],
                 )
                 .draw(3, 1, 0, 0)
-                .inject(|r| inject_cmd_end_render_pass2(r, gfx, &br::SubpassEndInfo::new()));
+                .inject(|r| gfx.cmd_end_render_pass(r));
 
             step_count += 1;
             stdev = unsafe { SafeF32::new_unchecked(stdev.value() / 2.0) };
@@ -3321,11 +3445,10 @@ impl BackdropEffectBlurProcessor {
         for lv in (0..step_count).rev() {
             rec = rec
                 .inject(|r| {
-                    inject_cmd_begin_render_pass2(
+                    gfx.cmd_begin_render_pass(
                         r,
-                        gfx,
                         &br::RenderPassBeginInfo::new(
-                            &self.render_pass,
+                            br::VkHandleRef::from_raw_ref(&self.render_pass),
                             &if lv == 0 {
                                 // final upsample
                                 dest_fb.as_transparent_ref()
@@ -3341,15 +3464,14 @@ impl BackdropEffectBlurProcessor {
                             .into_rect(br::Offset2D::ZERO),
                             &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 0.0])],
                         ),
-                        &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
                     )
                 })
                 .bind_pipeline(
                     br::PipelineBindPoint::Graphics,
-                    &self.upsample_pipelines[lv],
+                    br::VkHandleRef::from_raw_ref(&self.upsample_pipelines[lv]),
                 )
                 .push_constant(
-                    &self.pipeline_layout,
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
                     br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                     0,
                     &[
@@ -3360,13 +3482,13 @@ impl BackdropEffectBlurProcessor {
                 )
                 .bind_descriptor_sets(
                     br::PipelineBindPoint::Graphics,
-                    &self.pipeline_layout,
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
                     0,
                     &[input_descriptor_sets[lv + 1]],
                     &[],
                 )
                 .draw(3, 1, 0, 0)
-                .inject(|r| inject_cmd_end_render_pass2(r, gfx, &br::SubpassEndInfo::new()));
+                .inject(|r| gfx.cmd_end_render_pass(r));
 
             stdev = unsafe { SafeF32::new_unchecked(stdev.value() * 2.0) };
         }
@@ -3384,39 +3506,63 @@ impl BackdropEffectBlurProcessor {
         rt_size: br::Extent2D,
         rt_format: br::Format,
     ) {
-        self.destroy_ramebuffers(gfx);
-        self.downsample_pass_fbs.clear();
-        self.upsample_pass_fixed_fbs.clear();
-        self.temporal_buffers.clear();
         unsafe {
-            // release resources at first
             for x in self.downsample_pipelines.drain(..) {
                 br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
             }
             for x in self.upsample_pipelines.drain(..) {
                 br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
             }
+        }
+        let (downsample_pipelines, upsample_pipelines) = Self::create_pipelines(
+            gfx,
+            rt_size,
+            br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+            br::VkHandleRef::from_raw_ref(&self.render_pass),
+        );
 
-            core::ptr::drop_in_place(&mut self.temporal_buffer_memory);
-            core::ptr::write(
-                &mut self.temporal_buffer_memory,
-                Self::create_temporal_buffers(gfx, rt_size, rt_format, &mut self.temporal_buffers),
+        unsafe {
+            for x in self.downsample_pass_fbs.drain(..) {
+                br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
+            }
+            for x in self.upsample_pass_fixed_fbs.drain(..) {
+                br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
+            }
+
+            for (r, v) in self.temporal_buffers.drain(..) {
+                br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
+                br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
+            }
+            br::vkfn::free_memory(
+                gfx.native_ptr(),
+                self.temporal_buffer_memory,
+                core::ptr::null(),
             );
         }
+        let mut temporal_buffers = Vec::with_capacity(self.temporal_buffers.capacity());
+        let temporal_buffer_memory =
+            Self::create_temporal_buffers(gfx, rt_size, rt_format, &mut temporal_buffers);
+        let (downsample_pass_fbs, upsample_pass_fixed_fbs) = Self::create_framebuffers(
+            gfx,
+            &temporal_buffers,
+            br::VkHandleRef::from_raw_ref(&self.render_pass),
+            rt_size,
+        );
 
-        let (downsample_pass_fbs, upsample_pass_fixed_fbs) =
-            Self::create_framebuffers(gfx, &self.temporal_buffers, &self.render_pass, rt_size);
         self.downsample_pass_fbs
             .extend(downsample_pass_fbs.into_iter().map(|x| x.unmanage().0));
         self.upsample_pass_fixed_fbs
             .extend(upsample_pass_fixed_fbs.into_iter().map(|x| x.unmanage().0));
-
-        let (downsample_pipelines, upsample_pipelines) =
-            Self::create_pipelines(gfx, rt_size, &self.pipeline_layout, &self.render_pass);
         self.downsample_pipelines
             .extend(downsample_pipelines.into_iter().map(|x| x.unmanage().0));
         self.upsample_pipelines
             .extend(upsample_pipelines.into_iter().map(|x| x.unmanage().0));
+        self.temporal_buffer_memory = temporal_buffer_memory.unmanage().0;
+        self.temporal_buffers
+            .extend(temporal_buffers.into_iter().map(|x| {
+                let (v, r) = x.unmanage();
+                (r.unmanage().0, v)
+            }));
     }
 }
 
@@ -3432,9 +3578,9 @@ pub struct CompositionSurfaceAtlas {
 impl CompositionSurfaceAtlas {
     pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(gfx.native_handle(), self.resource_view, None);
-            br::vkfn_wrapper::destroy_image(gfx.native_handle(), self.resource, None);
-            br::vkfn_wrapper::free_memory(gfx.native_handle(), self.memory, None);
+            br::vkfn_wrapper::destroy_image_view(gfx.native_ptr(), self.resource_view, None);
+            br::vkfn_wrapper::destroy_image(gfx.native_ptr(), self.resource, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory, None);
         }
     }
 
@@ -3495,20 +3641,18 @@ impl CompositionSurfaceAtlas {
         let image_memory_requirements = resource.image().requirements();
         tracing::debug!(?image_memory_requirements, "image memory requirements");
 
-        let memory_index = match gfx
-            .adapter_memory_info
-            .find_device_local_index(image_memory_requirements.memoryTypeBits)
-        {
-            Some(x) => x,
-            None => {
-                tracing::error!(
-                    memory_type_mask =
-                        format!("0x{:08x}", image_memory_requirements.memoryTypeBits),
-                    "No suitable memory for surface atlas"
-                );
-                std::process::abort();
-            }
-        };
+        let memory_index =
+            match gfx.find_device_local_memory_index(image_memory_requirements.memoryTypeBits) {
+                Some(x) => x,
+                None => {
+                    tracing::error!(
+                        memory_type_mask =
+                            format!("0x{:08x}", image_memory_requirements.memoryTypeBits),
+                        "No suitable memory for surface atlas"
+                    );
+                    std::process::abort();
+                }
+            };
         let memory = match br::DeviceMemoryObject::new(
             gfx,
             &br::MemoryAllocateInfo::new(

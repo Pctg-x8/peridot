@@ -19,13 +19,11 @@ VertexOutput vertMain([vk::location(0)] float2 pos: POSITION0, [vk::location(1)]
 }
 
 [shader("fragment")]
-float fragMain(float2 uv: TEXCOORD0) : SV_Target
+void fragMain(float2 uv: TEXCOORD0)
 {
     let x = uv.x * uv.x - uv.y;
     if (x >= 0)
     {
         discard;
     }
-
-    return 1.0;
 }

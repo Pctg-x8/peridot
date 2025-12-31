@@ -1,20 +1,19 @@
 use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut,
-    Fence, FenceMut, ImageChild, Instance, MemoryBound, PhysicalDevice, QueueMut, RenderPass,
-    ShaderModule, Swapchain, TypedVulkanStructure, VkHandle, VkHandleMut, VkObject,
+    Fence, FenceMut, ImageChild, InstanceChild, MemoryBound, PhysicalDevice, QueueMut, RenderPass,
+    ShaderModule, Swapchain, VkHandle, VkHandleMut, VkObject,
 };
 use core::pin::Pin;
-#[cfg(feature = "fontconfig")]
-use fontconfig::FcConfig;
 #[cfg(feature = "wayland")]
 use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
 use linux_eventfd::{EventFD, EventFDFlags};
 #[cfg(feature = "wayland")]
 use peridot_tp_wayland as wl;
-use std::collections::HashMap;
-#[cfg(feature = "wayland")]
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{
+    cell::UnsafeCell,
+    collections::{HashMap, VecDeque},
+};
 #[cfg(windows)]
 use windows::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -42,10 +41,17 @@ use windows::Win32::{
 #[cfg(windows)]
 use windows_core::*;
 
-use crate::helper_types::SafeF32;
+use crate::{
+    composite::{
+        AnimatableColor, BoundCompositeRenderer, CompositeMode, CompositeRenderer,
+        CompositeRenderingData, CompositeStreamingData, CompositeTree,
+    },
+    graphics::VulkanDevice,
+    helper_types::SafeF32,
+};
 
 mod atlas;
-// mod composite;
+mod composite;
 mod graphics;
 mod helper_types;
 mod mathext;
@@ -83,6 +89,14 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     mut app: Pin<&mut AppFuture>,
     mut event_store: Pin<&mut Option<Event>>,
 ) {
+    let global_time_base = std::time::Instant::now();
+    let events = AppEventBus {
+        queue: std::sync::Mutex::new(VecDeque::new()),
+        #[cfg(target_os = "linux")]
+        efd: linux_eventfd::EventFD::new(0, linux_eventfd::EventFDFlags::empty())
+            .expect("app_event_bus.efd.create"),
+    };
+
     #[cfg(feature = "freetype")]
     let ft = freetype::Library::init().expect("freetype::Library::init");
 
@@ -247,178 +261,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(target_os = "macos")]
     w.make_primary_window();
 
-    match br::instance_version() {
-        Ok(v) => tracing::info!(version = %v, "Vulkan"),
-        Err(e) => tracing::error!(reason = ?e, "Failed to get vulkan version"),
-    }
-
-    if let Some(xs) = br::instance_extension_properties_cstr_alloc(None)
-        .inspect_err(
-            |e| tracing::error!(reason = ?e, "Failed to enumerate vulkan instance extensions"),
-        )
-        .ok()
-    {
-        for x in xs {
-            tracing::info!(
-                target: "vk::diag::instance",
-                name = ?x.extensionName.as_cstr(),
-                version = x.specVersion,
-                "vulkan instance extension"
-            );
-        }
-    }
-
-    if let Some(xs) = br::enumerate_layer_properties_alloc()
-        .inspect_err(|e| tracing::error!(reason = ?e, "Failed to enumerate vulkan instance layers"))
-        .ok()
-    {
-        for x in xs {
-            tracing::info!(
-                target: "vk::diag::instance",
-                name = ?x.layerName.as_cstr(),
-                version.impl = x.implementationVersion,
-                version.spec = %br::Version::from_raw(x.specVersion),
-                "vulkan instance layer"
-            );
-
-            if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| {
-                br::instance_extension_properties_cstr_alloc(Some(ln))
-                    .inspect_err(|e| {
-                        tracing::error!(
-                            reason = ?e,
-                            "Failed to enumerate vulkan instance extensions for layer"
-                        )
-                    })
-                    .ok()
-            }) {
-                for y in ys {
-                    tracing::info!(
-                        target: "vk::diag::instance",
-                        name = ?y.extensionName.as_cstr(),
-                        version = y.specVersion,
-                        "vulkan instance extension on layer"
-                    );
-                }
-            }
-        }
-    }
-
-    let mut instance_extensions = vec![c"VK_KHR_surface".into(), c"VK_EXT_debug_utils".into()];
-    #[cfg(windows)]
-    instance_extensions.push(c"VK_KHR_win32_surface".into());
-    #[cfg(feature = "wayland")]
-    instance_extensions.push(c"VK_KHR_wayland_surface".into());
-    #[cfg(target_os = "macos")]
-    instance_extensions.push(c"VK_EXT_metal_surface".into());
-    #[cfg(target_os = "macos")]
-    instance_extensions.push(c"VK_KHR_portability_enumeration".into());
-
-    let app_info = br::ApplicationInfo::new(
-        c"Peridot Marble Editor",
-        br::Version::new(0, 0, 0, 1),
-        c"InHouse",
-        br::Version::new(0, 0, 0, 1),
-    )
-    .api_version(br::Version::new(0, 1, 4, 0));
-    let inst_info = br::InstanceCreateInfo::new(&app_info, &[], &instance_extensions);
-    #[cfg(target_os = "macos")]
-    let inst_info = inst_info.flags(br::InstanceCreateFlags::ENUMERATE_PORTABILITY);
-    let vk_instance = br::InstanceObject::new(&inst_info).expect("vkInstance create");
-    let vk_adapter = vk_instance
-        .iter_physical_devices()
-        .expect("iter_physical_devices")
-        .next()
-        .expect("no physical devices");
-
-    if let Some(xs) = vk_adapter
-        .enumerate_extension_properties_cstr_alloc(None)
-        .inspect_err(
-            |e| tracing::error!(reason = ?e, "Failed to enumerate vulkan device extensions"),
-        )
-        .ok()
-    {
-        for x in xs {
-            tracing::info!(
-                target: "vk::diag::device",
-                name = ?x.extensionName.as_cstr(),
-                version = x.specVersion,
-                "vulkan device extension"
-            );
-        }
-    }
-
-    if let Some(xs) = vk_adapter
-        .enumerate_layer_properties_alloc()
-        .inspect_err(|e| tracing::error!(reason = ?e, "Failed to enumerate vulkan device layers"))
-        .ok()
-    {
-        for x in xs {
-            tracing::info!(
-                target: "vk::diag::device",
-                name = ?x.layerName.as_cstr(),
-                version.impl = x.implementationVersion,
-                version.spec = %br::Version::from_raw(x.specVersion),
-                "vulkan device layer"
-            );
-
-            if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| {
-                vk_adapter
-                    .enumerate_extension_properties_cstr_alloc(Some(ln))
-                    .inspect_err(|e| {
-                        tracing::error!(
-                            reason = ?e,
-                            "Failed to enumerate vulkan instance extensions for layer"
-                        )
-                    })
-                    .ok()
-            }) {
-                for y in ys {
-                    tracing::info!(
-                        target: "vk::diag::device",
-                        name = ?y.extensionName.as_cstr(),
-                        version = y.specVersion,
-                        "vulkan device extension on layer"
-                    );
-                }
-            }
-        }
-    }
-
-    let vk_adapter_memory_properties = vk_adapter.memory_properties();
-    let vk_adapter_queue_family_properties = vk_adapter.queue_family_properties_alloc();
-    let graphics_queue_family_index = vk_adapter_queue_family_properties
-        .find_matching_index(br::QueueFlags::GRAPHICS)
-        .expect("no graphics queue");
-    let vk_device = br::DeviceObject::new(
-        &vk_adapter,
-        &br::DeviceCreateInfo::new(
-            &[br::DeviceQueueCreateInfo::new(
-                graphics_queue_family_index,
-                &[0.0],
-            )],
-            &[],
-            &[
-                c"VK_KHR_swapchain".into(),
-                c"VK_KHR_timeline_semaphore".into(),
-                c"VK_KHR_synchronization2".into(),
-            ],
-        )
-        .with_next(
-            &br::PhysicalDeviceFeatures2::new(unsafe {
-                core::mem::MaybeUninit::<br::PhysicalDeviceFeatures>::zeroed().assume_init()
-            })
-            .with_next(
-                &mut br::PhysicalDeviceSynchronization2Features::new(true).with_next(
-                    &mut br::vk::VkPhysicalDeviceTimelineSemaphoreFeaturesKHR {
-                        sType: br::vk::VkPhysicalDeviceTimelineSemaphoreFeaturesKHR::TYPE,
-                        pNext: core::ptr::null_mut(),
-                        timelineSemaphore: 1,
-                    },
-                ),
-            ),
-        ),
-    )
-    .expect("vk_device create");
+    let vk_device = VulkanDevice::new();
 
     #[cfg(windows)]
     if !vk_adapter.win32_presentation_support(graphics_queue_family_index) {
@@ -437,22 +280,26 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     };
 
     #[cfg(feature = "wayland")]
-    if unsafe {
-        !vk_adapter
-            .wayland_presentation_support(graphics_queue_family_index, wl_display.as_raw().cast())
+    if !unsafe {
+        vk_device
+            .primary_adapter_ref()
+            .wayland_presentation_support(
+                vk_device.present_queue_family_index(),
+                wl_display.as_raw().cast(),
+            )
     } {
         panic!("wayland presentation not supported on graphics queue");
     }
     #[cfg(feature = "wayland")]
-    let vk_surface = unsafe {
-        br::SurfaceObject::new(
-            &vk_adapter,
-            &br::WaylandSurfaceCreateInfo::new(
-                wl_display.as_raw().cast(),
-                w.surface.as_raw().cast(),
-            ),
-        )
-        .expect("vk_surface create")
+    let vk_surface = Surface {
+        handle: unsafe {
+            use bedrock::SurfaceCreateInfo;
+
+            br::WaylandSurfaceCreateInfo::new(wl_display.as_raw().cast(), w.surface.as_raw().cast())
+                .execute(vk_device.instance(), None)
+                .expect("vk_surface.create")
+        },
+        device: &vk_device,
     };
 
     #[cfg(target_os = "macos")]
@@ -464,12 +311,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("vk_surface.create")
     };
 
-    if !vk_adapter
-        .surface_support(graphics_queue_family_index, &vk_surface)
-        .expect("surface_support")
+    match vk_device
+        .primary_adapter_ref()
+        .surface_support(vk_device.present_queue_family_index(), &vk_surface)
     {
-        panic!("surface not supported on graphics queue");
-    }
+        Ok(true) => (),
+        Ok(false) => {
+            panic!("surface not supported on graphics queue");
+        }
+        Err(e) => Err(e).expect("surface_support"),
+    };
+
+    let mut composite_tree = CompositeTree::new();
+    composite_tree.get_mut(CompositeTree::ROOT).composite_mode =
+        CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
+    composite_tree.get_mut(CompositeTree::ROOT).has_bitmap = true;
+    composite_tree.mark_dirty(CompositeTree::ROOT);
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -477,17 +334,20 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             .name("Render".into())
             .spawn_scoped(thread_scope, || {
                 tracing::info!("Starting RenderThread...");
-                let mut render_queue = vk_device.queue(graphics_queue_family_index, 0);
+                let mut render_queue = vk_device.queue(vk_device.present_queue_family_index(), 0);
 
-                let present_modes = vk_adapter
+                let surface_present_modes = vk_device
+                    .primary_adapter_ref()
                     .surface_present_modes_alloc(&vk_surface)
-                    .expect("surface_present_modes");
-                let surface_caps = vk_adapter
+                    .expect("vk_surface.present_modes");
+                let surface_caps = vk_device
+                    .primary_adapter_ref()
                     .surface_capabilities(&vk_surface)
-                    .expect("surface_capabilities");
-                let surface_formats = vk_adapter
+                    .expect("vk_surface.capabilities");
+                let surface_formats = vk_device
+                    .primary_adapter_ref()
                     .surface_formats_alloc(&vk_surface)
-                    .expect("surface_formats");
+                    .expect("vk_surface.formats");
                 let mut surface_ext = if surface_caps.currentExtent.width == 0xffffffff
                     || surface_caps.currentExtent.height == 0xffffffff
                 {
@@ -519,7 +379,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     })
                     .copied()
                     .expect("no suitable surface format");
-                let surface_present_mode = present_modes
+                let surface_present_mode = surface_present_modes
                     .iter()
                     .find(|&&x| x == br::PresentMode::FIFO)
                     .copied()
@@ -536,16 +396,20 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 .composite_alpha(br::CompositeAlphaFlags::OPAQUE.bits())
                 .create(&vk_device)
                 .expect("swapchain create");
-                let mut backbuffer_image_views = vk_swapchain
+                let mut backbuffer_images = vk_swapchain
                     .images_alloc()
                     .expect("backbuffer images")
                     .into_iter()
+                    .map(|x| x.unmanage().0)
+                    .collect::<Vec<_>>();
+                let mut backbuffer_image_views = backbuffer_images
+                    .iter()
                     .map(|b| LocalImageView {
                         handle: unsafe {
                             br::vkfn_wrapper::create_image_view(
                                 vk_device.native_ptr(),
                                 &br::ImageViewCreateInfo::new(
-                                    &b,
+                                    br::VkHandleRef::from_raw_ref(b),
                                     br::ImageSubresourceRange::new(
                                         br::AspectMask::COLOR,
                                         0..1,
@@ -566,9 +430,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &vk_device,
                     &br::RenderPassCreateInfo2::new(
                         &[br::AttachmentDescription2::new(surface_format.format)
-                            .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                            .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)
                             .layout_transition(
-                                br::ImageLayout::Undefined,
+                                br::ImageLayout::PresentSrc,
                                 br::ImageLayout::PresentSrc,
                             )],
                         &[br::SubpassDescription2::new()
@@ -605,7 +469,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     })
                     .collect::<Vec<_>>();
 
-                let mut glyph_atlas = GlyphAtlas::new(&vk_device, &vk_adapter_memory_properties);
+                let mut glyph_atlas = GlyphAtlas::new(&vk_device);
 
                 #[cfg(feature = "fontconfig")]
                 let (font_file_path, face_index) = unsafe {
@@ -1467,8 +1331,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &vk_device,
                     &br::MemoryAllocateInfo::new(
                         vector_draw_buffer_memreq.size,
-                        vk_adapter_memory_properties
-                            .find_device_local_index(vector_draw_buffer_memreq.memoryTypeBits)
+                        vk_device
+                            .find_device_local_memory_index(
+                                vector_draw_buffer_memreq.memoryTypeBits,
+                            )
                             .expect("no suitable memory"),
                     ),
                 )
@@ -1486,8 +1352,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 )
                 .expect("vector_draw_init_buffer create");
                 let vector_draw_init_buffer_memreq = vector_draw_init_buffer.requirements();
-                let vector_draw_init_buffer_memindex = vk_adapter_memory_properties
-                    .find_host_visible_index(vector_draw_init_buffer_memreq.memoryTypeBits)
+                let vector_draw_init_buffer_memindex = vk_device
+                    .find_host_visible_memory_index(vector_draw_init_buffer_memreq.memoryTypeBits)
                     .expect("no suitable memory");
                 let mut vector_draw_init_buffer_memory = br::DeviceMemoryObject::new(
                     &vk_device,
@@ -1520,7 +1386,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         new_curve_triangles.len(),
                     );
                 }
-                if !vk_adapter_memory_properties.is_coherent(vector_draw_init_buffer_memindex) {
+                if !vk_device.is_coherent_memory(vector_draw_init_buffer_memindex) {
                     unsafe {
                         vk_device
                             .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
@@ -1549,15 +1415,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &vk_device,
                     &br::MemoryAllocateInfo::new(
                         vector_color_ms_buffer_memreq.size,
-                        vk_adapter_memory_properties
-                            .find_lazily_allocated_device_local_index(
+                        vk_device
+                            .find_lazily_allocatable_device_local_memory_index(
                                 vector_color_ms_buffer_memreq.memoryTypeBits,
                             )
-                            .or_else(|| {
-                                vk_adapter_memory_properties.find_device_local_index(
-                                    vector_color_ms_buffer_memreq.memoryTypeBits,
-                                )
-                            })
                             .expect("no suitable memory"),
                     ),
                 )
@@ -1583,15 +1444,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &vk_device,
                     &br::MemoryAllocateInfo::new(
                         vector_stencil_buffer_memreq.size,
-                        vk_adapter_memory_properties
-                            .find_lazily_allocated_device_local_index(
+                        vk_device
+                            .find_lazily_allocatable_device_local_memory_index(
                                 vector_stencil_buffer_memreq.memoryTypeBits,
                             )
-                            .or_else(|| {
-                                vk_adapter_memory_properties.find_device_local_index(
-                                    vector_stencil_buffer_memreq.memoryTypeBits,
-                                )
-                            })
                             .expect("no suitable memory"),
                     ),
                 )
@@ -1622,7 +1478,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
                 let mut cp = br::CommandPoolObject::new(
                     &vk_device,
-                    &br::CommandPoolCreateInfo::new(graphics_queue_family_index),
+                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
                 )
                 .expect("cp init");
                 let mut cb = br::CommandBufferObject::alloc(
@@ -1639,22 +1495,24 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .begin(&br::CommandBufferBeginInfo::new())
                         .expect("cb begin")
                 }
-                .pipeline_barrier_2_khr(
-                    &vk_device,
-                    &br::DependencyInfo::new(
-                        &[],
-                        &[],
-                        &[br::ImageMemoryBarrier2::new(
-                            &glyph_atlas.image(),
-                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                        )
-                        .of_execution(br::PipelineStageFlags2(0), br::PipelineStageFlags2::COPY)
-                        .transferring_layout(
-                            br::ImageLayout::Undefined,
-                            br::ImageLayout::TransferDestOpt,
-                        )],
-                    ),
-                )
+                .inject(|r| {
+                    vk_device.cmd_pipeline_barrier(
+                        r,
+                        &br::DependencyInfo::new(
+                            &[],
+                            &[],
+                            &[br::ImageMemoryBarrier2::new(
+                                &glyph_atlas.image(),
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                            )
+                            .of_execution(br::PipelineStageFlags2(0), br::PipelineStageFlags2::COPY)
+                            .transferring_layout(
+                                br::ImageLayout::Undefined,
+                                br::ImageLayout::TransferDestOpt,
+                            )],
+                        ),
+                    )
+                })
                 .copy_buffer(
                     &vector_draw_init_buffer,
                     &vector_draw_buffer,
@@ -1673,34 +1531,36 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         0..1,
                     )],
                 )
-                .pipeline_barrier_2_khr(
-                    &vk_device,
-                    &br::DependencyInfo::new(
-                        &[br::MemoryBarrier2::new()
-                            .from(
-                                br::PipelineStageFlags2::COPY,
-                                br::AccessFlags2::TRANSFER.write,
+                .inject(|r| {
+                    vk_device.cmd_pipeline_barrier(
+                        r,
+                        &br::DependencyInfo::new(
+                            &[br::MemoryBarrier2::new()
+                                .from(
+                                    br::PipelineStageFlags2::COPY,
+                                    br::AccessFlags2::TRANSFER.write,
+                                )
+                                .to(
+                                    br::PipelineStageFlags2::VERTEX_INPUT,
+                                    br::AccessFlags2::VERTEX_ATTRIBUTE_READ
+                                        | br::AccessFlags2::INDEX_READ,
+                                )],
+                            &[],
+                            &[br::ImageMemoryBarrier2::new(
+                                &glyph_atlas.image(),
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                             )
-                            .to(
-                                br::PipelineStageFlags2::VERTEX_INPUT,
-                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ
-                                    | br::AccessFlags2::INDEX_READ,
+                            .of_execution(
+                                br::PipelineStageFlags2::COPY,
+                                br::PipelineStageFlags2::FRAGMENT_SHADER,
+                            )
+                            .transferring_layout(
+                                br::ImageLayout::TransferDestOpt,
+                                br::ImageLayout::ShaderReadOnlyOpt,
                             )],
-                        &[],
-                        &[br::ImageMemoryBarrier2::new(
-                            &glyph_atlas.image(),
-                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                        )
-                        .of_execution(
-                            br::PipelineStageFlags2::COPY,
-                            br::PipelineStageFlags2::FRAGMENT_SHADER,
-                        )
-                        .transferring_layout(
-                            br::ImageLayout::TransferDestOpt,
-                            br::ImageLayout::ShaderReadOnlyOpt,
-                        )],
-                    ),
-                )
+                        ),
+                    )
+                })
                 .begin_render_pass(
                     &br::RenderPassBeginInfo::new(
                         &vector_render_pass,
@@ -1771,8 +1631,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &vk_device,
                     &br::MemoryAllocateInfo::new(
                         draw_buffer_memory_requirements.size,
-                        vk_adapter_memory_properties
-                            .find_device_local_index(draw_buffer_memory_requirements.memoryTypeBits)
+                        vk_device
+                            .find_device_local_memory_index(
+                                draw_buffer_memory_requirements.memoryTypeBits,
+                            )
                             .expect("no suitable memory"),
                     ),
                 )
@@ -1793,8 +1655,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 )
                 .expect("init_draw_buffer create");
                 let init_draw_buffer_memory_requirements = init_draw_buffer.requirements();
-                let init_draw_buffer_memory_index = vk_adapter_memory_properties
-                    .find_host_visible_index(init_draw_buffer_memory_requirements.memoryTypeBits)
+                let init_draw_buffer_memory_index = vk_device
+                    .find_host_visible_memory_index(
+                        init_draw_buffer_memory_requirements.memoryTypeBits,
+                    )
                     .expect("no suitable memory");
                 let mut init_draw_buffer_memory = br::DeviceMemoryObject::new(
                     &vk_device,
@@ -1823,7 +1687,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     );
                 }
                 drop(p);
-                if !vk_adapter_memory_properties.is_coherent(init_draw_buffer_memory_index) {
+                if !vk_device.is_coherent_memory(init_draw_buffer_memory_index) {
                     unsafe {
                         vk_device
                             .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
@@ -1839,7 +1703,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
                 let mut init_cp = br::CommandPoolObject::new(
                     &vk_device,
-                    &br::CommandPoolCreateInfo::new(graphics_queue_family_index),
+                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
                 )
                 .expect("init command pool create");
                 let mut init_cb = br::CommandBufferObject::alloc(
@@ -1872,22 +1736,24 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         },
                     ],
                 )
-                .pipeline_barrier_2_khr(
-                    &vk_device,
-                    &br::DependencyInfo::new(
-                        &[br::MemoryBarrier2::new()
-                            .from(
-                                br::PipelineStageFlags2::COPY,
-                                br::AccessFlags2::TRANSFER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::VERTEX_INPUT,
-                                br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
-                            )],
-                        &[],
-                        &[],
-                    ),
-                )
+                .inject(|r| {
+                    vk_device.cmd_pipeline_barrier(
+                        r,
+                        &br::DependencyInfo::new(
+                            &[br::MemoryBarrier2::new()
+                                .from(
+                                    br::PipelineStageFlags2::COPY,
+                                    br::AccessFlags2::TRANSFER.write,
+                                )
+                                .to(
+                                    br::PipelineStageFlags2::VERTEX_INPUT,
+                                    br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+                                )],
+                            &[],
+                            &[],
+                        ),
+                    )
+                })
                 .end()
                 .expect("error in init cb");
                 unsafe {
@@ -1907,6 +1773,14 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 // unsafe {
                 //     manual_capture_end();
                 // }
+
+                let mut composite_renderer = BoundCompositeRenderer::new(
+                    &vk_device,
+                    glyph_atlas.view(),
+                    surface_format.format,
+                    surface_ext,
+                    &backbuffer_image_views,
+                );
 
                 let dsl_test = br::DescriptorSetLayoutObject::new(
                     &vk_device,
@@ -2033,9 +1907,38 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &[],
                 );
 
+                let mut update_cp = br::CommandPoolObject::new(
+                    &vk_device,
+                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
+                )
+                .expect("update_cp.create");
+                let mut update_cb = br::CommandBufferObject::alloc(
+                    &vk_device,
+                    &br::CommandBufferAllocateInfo::new(
+                        &mut update_cp,
+                        1,
+                        br::CommandBufferLevel::Primary,
+                    ),
+                )
+                .expect("update_cb.create");
+                unsafe {
+                    update_cb[0]
+                        .begin(&br::CommandBufferBeginInfo::new())
+                        .expect("update_cb.begin")
+                        .end()
+                        .expect("update_cb.end");
+                }
+                let mut update_completion_fence =
+                    br::FenceObject::new(&vk_device, &br::FenceCreateInfo::new(0))
+                        .expect("update_completion_fence.create");
+                let update_completion_semaphore =
+                    br::SemaphoreObject::new(&vk_device, &br::SemaphoreCreateInfo::new())
+                        .expect("update_completion_semaphore.create");
+                let mut updating = false;
+
                 let mut render_cp = br::CommandPoolObject::new(
                     &vk_device,
-                    &br::CommandPoolCreateInfo::new(graphics_queue_family_index),
+                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
                 )
                 .expect("command pool create");
                 let mut render_commands = br::CommandBufferObject::alloc(
@@ -2047,47 +1950,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     ),
                 )
                 .expect("command buffer alloc");
-                for (cb, fb) in render_commands.iter_mut().zip(vk_framebuffers.iter()) {
-                    unsafe {
-                        cb.begin(&br::CommandBufferBeginInfo::new())
-                            .expect("command buffer begin")
-                    }
-                    .begin_render_pass(
-                        &br::RenderPassBeginInfo::new(
-                            &vk_render_pass,
-                            fb,
-                            surface_ext.into_rect(br::Offset2D::ZERO),
-                            &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 1.0])],
-                        ),
-                        br::SubpassContents::Inline,
-                    )
-                    .bind_pipeline(br::PipelineBindPoint::Graphics, &pipeline)
-                    .push_constant_slice(
-                        &pipeline_layout,
-                        br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                        0,
-                        &[surface_ext.width as f32, surface_ext.height as f32],
-                    )
-                    .bind_descriptor_sets(
-                        br::PipelineBindPoint::Graphics,
-                        &pipeline_layout,
-                        0,
-                        &[ds_test],
-                        &[],
-                    )
-                    .bind_vertex_buffer_array(
-                        0,
-                        &[
-                            draw_buffer.as_transparent_ref(),
-                            draw_buffer.as_transparent_ref(),
-                        ],
-                        &[vertex_offset as _, instance_data_offset as _],
-                    )
-                    .draw(4, box_instances.len() as _, 0, 0)
-                    .end_render_pass()
-                    .end()
-                    .expect("command buffer end");
-                }
+                let mut main_cb_invalid = true;
 
                 let present_ready_semaphores = (0..vk_framebuffers.len())
                     .map(|_| {
@@ -2099,7 +1962,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     br::FenceObject::new(&vk_device, &br::FenceCreateInfo::new(0))
                         .expect("last render completion fence create");
                 let mut swapchain_invalidated = false;
-
+                let mut last_composite_render_data = CompositeRenderingData {
+                    instructions: Vec::new(),
+                    render_passes: Vec::new(),
+                    required_backdrop_buffer_count: 0,
+                };
                 'lp: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
                     #[cfg(feature = "wayland")]
                     if w.state
@@ -2138,17 +2005,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             break 'lp;
                         }
 
-                        unsafe {
-                            render_cp
-                                .reset(br::CommandPoolResetFlags::EMPTY)
-                                .expect("reset render cp");
+                        if !main_cb_invalid {
+                            unsafe {
+                                render_cp
+                                    .reset(br::CommandPoolResetFlags::EMPTY)
+                                    .expect("reset render cp");
+                            }
+                            main_cb_invalid = true;
                         }
                         drop(vk_framebuffers);
                         drop(backbuffer_image_views);
+                        drop(backbuffer_images);
 
-                        let surface_caps = vk_adapter
+                        let surface_caps = vk_device
+                            .primary_adapter_ref()
                             .surface_capabilities(&vk_surface)
-                            .expect("surface_capabilities");
+                            .expect("vk_surface.capabilities");
                         surface_ext = if surface_caps.currentExtent.width == 0xffffffff
                             || surface_caps.currentExtent.height == 0xffffffff
                         {
@@ -2187,16 +2059,20 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .old_swapchain(&vk_swapchain)
                         .create(&vk_device)
                         .expect("swapchain create");
-                        backbuffer_image_views = vk_swapchain
+                        backbuffer_images = vk_swapchain
                             .images_alloc()
                             .expect("backbuffer images")
                             .into_iter()
+                            .map(|x| x.unmanage().0)
+                            .collect::<Vec<_>>();
+                        backbuffer_image_views = backbuffer_images
+                            .iter()
                             .map(|b| LocalImageView {
                                 handle: unsafe {
                                     br::vkfn_wrapper::create_image_view(
                                         vk_device.native_ptr(),
                                         &br::ImageViewCreateInfo::new(
-                                            &b,
+                                            br::VkHandleRef::from_raw_ref(b),
                                             br::ImageSubresourceRange::new(
                                                 br::AspectMask::COLOR,
                                                 0..1,
@@ -2227,6 +2103,16 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 .expect("framebuffer create")
                             })
                             .collect::<Vec<_>>();
+
+                        let mut descriptor_writes = Vec::new();
+                        composite_renderer.recreate_rt_resources(
+                            &vk_device,
+                            surface_format.format,
+                            &backbuffer_image_views,
+                            surface_ext,
+                            &mut descriptor_writes,
+                        );
+                        vk_device.update_descriptor_sets(&descriptor_writes, &[]);
 
                         let [pipeline1] = vk_device
                             .new_graphics_pipeline_array(
@@ -2301,11 +2187,132 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             .expect("pipeline create");
                         pipeline = pipeline1;
 
-                        for (cb, fb) in render_commands.iter_mut().zip(vk_framebuffers.iter()) {
+                        swapchain_invalidated = false;
+                    }
+
+                    let backbuffer_index = match vk_swapchain.acquire_next(
+                        None,
+                        br::CompletionHandlerMut::Host(
+                            backbuffer_ready_fence.as_transparent_ref_mut(),
+                        ),
+                    ) {
+                        Ok(x) => x,
+                        Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                            swapchain_invalidated = true;
+                            continue 'lp;
+                        }
+                        Err(e) => Err(e).expect("acquire next"),
+                    };
+                    backbuffer_ready_fence
+                        .wait()
+                        .expect("last render completion fence wait");
+                    backbuffer_ready_fence
+                        .reset()
+                        .expect("last render completion fence reset");
+
+                    let current_t = global_time_base.elapsed();
+                    let composite_render_data = composite_renderer.update(
+                        &vk_device,
+                        &mut composite_tree,
+                        surface_ext,
+                        glyph_atlas.space_mgr.max,
+                        &events,
+                        current_t.as_secs_f32(),
+                    );
+                    if composite_render_data != last_composite_render_data {
+                        // requires repopulate render commands
+                        if !main_cb_invalid {
+                            unsafe {
+                                render_cp
+                                    .reset(br::CommandPoolResetFlags::EMPTY)
+                                    .expect("render_cp.reset");
+                            }
+                            main_cb_invalid = true;
+                        }
+
+                        composite_renderer.prepare_input_backdrop_descriptor_sets(
+                            &vk_device,
+                            composite_render_data.required_backdrop_buffer_count,
+                        );
+
+                        last_composite_render_data = composite_render_data;
+                    }
+
+                    composite_renderer.update_streaming_data(
+                        &vk_device,
+                        CompositeStreamingData {
+                            current_sec: current_t.as_secs_f32(),
+                        },
+                    );
+
+                    let needs_update = composite_renderer.update_backdrop_resources(
+                        &vk_device,
+                        surface_format.format,
+                        surface_ext,
+                        last_composite_render_data.required_backdrop_buffer_count == 0,
+                    );
+                    if needs_update {
+                        if updating {
+                            update_completion_fence
+                                .wait()
+                                .expect("update_completion_fence.wait");
+                            update_completion_fence
+                                .reset()
+                                .expect("update_completion_fence.reset");
+                        }
+
+                        unsafe {
+                            update_cp
+                                .reset(br::CommandPoolResetFlags::EMPTY)
+                                .expect("update_cp.reset");
+                        }
+                        unsafe {
+                            update_cb[0]
+                                .begin(&br::CommandBufferBeginInfo::new())
+                                .expect("update_cb.begin")
+                        }
+                        .inject(|r| composite_renderer.sync_buffer(r))
+                        .end()
+                        .expect("update_cb.end");
+
+                        unsafe {
+                            render_queue
+                                .submit_raw(
+                                    &[br::SubmitInfo::new(
+                                        &[],
+                                        &[],
+                                        &[update_cb[0].as_transparent_ref()],
+                                        &[update_completion_semaphore.as_transparent_ref()],
+                                    )],
+                                    Some(update_completion_fence.as_transparent_ref_mut()),
+                                )
+                                .expect("gfx.update.submit");
+                        }
+                        updating = true;
+                    }
+
+                    if main_cb_invalid {
+                        for (n, (cb, fb)) in render_commands
+                            .iter_mut()
+                            .zip(vk_framebuffers.iter())
+                            .enumerate()
+                        {
                             unsafe {
                                 cb.begin(&br::CommandBufferBeginInfo::new())
                                     .expect("command buffer begin")
                             }
+                            .inject(|r| {
+                                composite_renderer.populate_commands(
+                                    r,
+                                    &vk_device,
+                                    &last_composite_render_data,
+                                    surface_ext,
+                                    br::VkHandleRef::from_raw_ref(&backbuffer_images[n]),
+                                    n,
+                                    |_, r| r,
+                                )
+                            })
+                            .inject(|r| vk_device.cmd_end_render_pass(r))
                             .begin_render_pass(
                                 &br::RenderPassBeginInfo::new(
                                     &vk_render_pass,
@@ -2343,35 +2350,23 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             .expect("command buffer end");
                         }
 
-                        swapchain_invalidated = false;
+                        main_cb_invalid = false;
                     }
 
-                    let backbuffer_index = match vk_swapchain.acquire_next(
-                        None,
-                        br::CompletionHandlerMut::Host(
-                            backbuffer_ready_fence.as_transparent_ref_mut(),
-                        ),
-                    ) {
-                        Ok(x) => x,
-                        Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
-                            swapchain_invalidated = true;
-                            continue 'lp;
-                        }
-                        Err(e) => Err(e).expect("acquire next"),
-                    };
-                    backbuffer_ready_fence
-                        .wait()
-                        .expect("last render completion fence wait");
-                    backbuffer_ready_fence
-                        .reset()
-                        .expect("last render completion fence reset");
+                    let mut render_wait_semaphores = Vec::with_capacity(1);
+                    let mut render_wait_stages = Vec::with_capacity(1);
+                    if needs_update {
+                        render_wait_semaphores
+                            .push(update_completion_semaphore.as_transparent_ref());
+                        render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
+                    }
 
                     unsafe {
                         render_queue
                             .submit_raw(
                                 &[br::SubmitInfo::new(
-                                    &[],
-                                    &[],
+                                    &render_wait_semaphores,
+                                    &render_wait_stages,
                                     &[render_commands[backbuffer_index as usize]
                                         .as_transparent_ref()],
                                     &[present_ready_semaphores[backbuffer_index as usize]
@@ -2498,6 +2493,82 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
     });
+}
+
+struct Surface<'d> {
+    handle: br::vk::VkSurfaceKHR,
+    device: &'d VulkanDevice,
+}
+impl Drop for Surface<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(
+                self.device.instance().native_ptr(),
+                self.handle,
+                None,
+            );
+        }
+    }
+}
+impl br::VkHandle for Surface<'_> {
+    type Handle = br::vk::VkSurfaceKHR;
+
+    #[inline(always)]
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+unsafe impl Sync for Surface<'_> {}
+unsafe impl Send for Surface<'_> {}
+impl br::InstanceChild for Surface<'_> {
+    type ConcreteInstance = <VulkanDevice as br::InstanceChild>::ConcreteInstance;
+
+    #[inline(always)]
+    fn instance(&self) -> &Self::ConcreteInstance {
+        self.device.instance()
+    }
+}
+impl br::Surface for Surface<'_> {}
+
+// async logicむけにあとで作りなおすかも いったんsprite-atlas-visualizerから雑にコピー
+pub struct AppEventBus {
+    queue: std::sync::Mutex<VecDeque<Event>>,
+    #[cfg(target_os = "linux")]
+    efd: linux_eventfd::EventFD,
+    #[cfg(windows)]
+    event_notify: platform::win32::event::EventObject,
+}
+impl AppEventBus {
+    pub fn push(&self, e: Event) {
+        self.queue.lock().expect("poisoned").push_back(e);
+        #[cfg(target_os = "linux")]
+        self.efd.inc(1).unwrap();
+        #[cfg(windows)]
+        platform::win32::event::EventObject::new(None, true, false).unwrap();
+    }
+
+    fn pop(&self) -> Option<Event> {
+        self.queue.lock().expect("poisoned").pop_front()
+    }
+
+    fn notify_clear(&self) -> std::io::Result<()> {
+        #[cfg(target_os = "linux")]
+        match self.efd.take() {
+            // WouldBlock(EAGAIN)はでてきてもOK
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
+            Err(e) => Err(e),
+            Ok(_) => Ok(()),
+        }
+        #[cfg(windows)]
+        {
+            self.event_notify.reset().map_err(From::from)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            // TODO
+            Ok(())
+        }
+    }
 }
 
 struct BoxInstance {
@@ -2645,25 +2716,19 @@ struct GlyphAtlas {
 impl GlyphAtlas {
     const MULTISAMPLE_LEVEL: u32 = 4;
 
-    pub unsafe fn drop(
-        &mut self,
-        device: &(impl br::VkHandle<Handle = br::vk::VkDevice> + ?Sized),
-    ) {
+    pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(device.native_ptr(), self.view, None);
-            br::vkfn_wrapper::destroy_image(device.native_ptr(), self.res, None);
-            br::vkfn_wrapper::free_memory(device.native_ptr(), self.mem, None);
+            br::vkfn_wrapper::destroy_image_view(gfx.native_ptr(), self.view, None);
+            br::vkfn_wrapper::destroy_image(gfx.native_ptr(), self.res, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.mem, None);
         }
     }
 
-    pub fn new(
-        device: &(impl br::Device<ConcreteInstance: br::InstanceDebugUtilsExtension> + ?Sized),
-        adapter_memory_props: &br::MemoryProperties,
-    ) -> Self {
+    pub fn new(gfx: &VulkanDevice) -> Self {
         let size = br::Extent2D::spread1(4096);
 
         let mut res = br::ImageObject::new(
-            device,
+            gfx,
             &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).set_usage(
                 br::ImageUsageFlags::SAMPLED
                     | br::ImageUsageFlags::COLOR_ATTACHMENT
@@ -2673,11 +2738,10 @@ impl GlyphAtlas {
         .expect("res create");
         let memory_requirements = res.requirements();
         let mem = br::DeviceMemoryObject::new(
-            device,
+            gfx,
             &br::MemoryAllocateInfo::new(
                 memory_requirements.size,
-                adapter_memory_props
-                    .find_device_local_index(memory_requirements.memoryTypeBits)
+                gfx.find_device_local_memory_index(memory_requirements.memoryTypeBits)
                     .expect("no suitable memory"),
             ),
         )
@@ -3245,24 +3309,25 @@ impl freetype::OutlineFuncs for OutlineContext<'_> {
     }
 }
 
-struct LocalImageView<'d, 'i> {
+struct LocalImageView<'d, Device: br::Device + ?Sized + 'd> {
     handle: br::vk::VkImageView,
-    device: &'d br::DeviceObject<&'i br::InstanceObject>,
+    device: &'d Device,
 }
-impl Drop for LocalImageView<'_, '_> {
+impl<Device: br::Device + ?Sized> Drop for LocalImageView<'_, Device> {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), self.handle, None);
         }
     }
 }
-impl br::VkHandle for LocalImageView<'_, '_> {
+impl<Device: br::Device + ?Sized> br::VkHandle for LocalImageView<'_, Device> {
     type Handle = br::vk::VkImageView;
 
     fn native_ptr(&self) -> Self::Handle {
         self.handle
     }
 }
+impl<Device: br::Device + ?Sized> br::ImageView for LocalImageView<'_, Device> {}
 
 #[cfg(windows)]
 #[repr(transparent)]

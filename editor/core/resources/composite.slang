@@ -1,11 +1,7 @@
 
 struct PushConstants
 {
-    // vertex
-    [vk::offset(0)]
     float2 screenSize;
-    // fragment
-    [vk::offset(16)]
     float4 rectMaskInScreenUV;
     float4 rectMaskSoftnessInScreenUV;
 }

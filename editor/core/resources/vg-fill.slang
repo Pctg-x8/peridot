@@ -10,7 +10,6 @@ float4 vertMain([vk::location(0)] float2 pos: POSITION0) : SV_Position
 }
 
 [shader("fragment")]
-float fragMain() : SV_Target
+void fragMain()
 {
-    return 1.0;
 }

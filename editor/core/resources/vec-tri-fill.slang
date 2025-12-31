@@ -1,5 +1,5 @@
 [shader("vertex")]
-float4 vertMain(uint vindex: SV_VertexID) : SV_Position
+float4 vertMain(uint vindex: SV_VulkanVertexID) : SV_Position
 {
     switch (vindex)
     {
