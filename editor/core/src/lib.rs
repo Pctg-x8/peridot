@@ -66,8 +66,59 @@ static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable
     |_| {},
 );
 
+#[cfg(windows)]
+struct WindowsDebugOutputWriter;
+#[cfg(windows)]
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for WindowsDebugOutputWriter {
+    type Writer = &'a Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self
+    }
+}
+#[cfg(windows)]
+impl std::io::Write for &'_ WindowsDebugOutputWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut zero_terminated = Vec::with_capacity(buf.len() + 1);
+        zero_terminated.extend(buf);
+        zero_terminated.push(0);
+
+        unsafe {
+            windows::Win32::System::Diagnostics::Debug::OutputDebugStringA(windows::core::PCSTR(
+                zero_terminated.as_ptr(),
+            ));
+        }
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 pub fn launch() {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    std::panic::set_hook(Box::new(|panic| unsafe {
+        let panic_msg = match std::ffi::CString::new(panic.to_string()) {
+            Ok(x) => x,
+            Err(e) => c"<<Could not convert panic message!>>".into(),
+        };
+
+        windows::Win32::System::Diagnostics::Debug::OutputDebugStringA(windows::core::PCSTR(
+            panic_msg.as_ptr().cast(),
+        ));
+
+        windows::Win32::UI::WindowsAndMessaging::MessageBoxA(
+            None,
+            windows::core::PCSTR(panic_msg.as_ptr().cast()),
+            windows::core::PCSTR(c"Program panic!".as_ptr().cast()),
+            windows::Win32::UI::WindowsAndMessaging::MB_OK
+                | windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
+        );
+    }));
+
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
     tracing_subscriber::fmt()
         .pretty()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -76,6 +127,12 @@ pub fn launch() {
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
+    #[cfg(windows)]
+    tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(WindowsDebugOutputWriter)
         .init();
 
     let mut event_store = core::pin::pin!(None);
