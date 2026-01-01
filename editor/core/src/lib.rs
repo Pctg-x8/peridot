@@ -367,12 +367,13 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     };
 
     #[cfg(target_os = "macos")]
-    let vk_surface = unsafe {
-        br::SurfaceObject::new(
-            &vk_adapter,
-            &br::MetalSurfaceCreateInfo::new(w.metal_layer()),
-        )
-        .expect("vk_surface.create")
+    let vk_surface = Surface {
+        handle: unsafe {
+            br::MetalSurfaceCreateInfo::new(w.metal_layer())
+                .execute(vk_device.instance(), None)
+                .expect("vk_surface.create")
+        },
+        device: &vk_device,
     };
 
     match vk_device
