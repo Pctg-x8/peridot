@@ -12,8 +12,6 @@
 
 /* Begin PBXFileReference section */
 		4B4CC2222F03996D00B80F44 /* libperidot_marble_editor.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libperidot_marble_editor.a; sourceTree = "<group>"; };
-		4B4CC23F2F03A4C400B80F44 /* vulkan.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = vulkan.framework; path = /Users/pctgx8/VulkanSDK/1.4.313.0/macOS/Frameworks/vulkan.framework; sourceTree = "<absolute>"; };
-		4B569CD62F03A94000964507 /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MoltenVK.xcframework; path = ../../../../../../../usr/local/lib/MoltenVK.xcframework; sourceTree = "<group>"; };
 		4BCE80212F03951B0063E63C /* marble-editor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "marble-editor.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -46,21 +44,11 @@
 			path = ../../../target/debug;
 			sourceTree = SOURCE_ROOT;
 		};
-		4B4CC23E2F03A4C400B80F44 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				4B569CD62F03A94000964507 /* MoltenVK.xcframework */,
-				4B4CC23F2F03A4C400B80F44 /* vulkan.framework */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
 		4BCE80182F03951B0063E63C = {
 			isa = PBXGroup;
 			children = (
 				4B4CC2212F03991100B80F44 /* rust-artifact */,
 				4BCE80232F03951B0063E63C /* marble-editor */,
-				4B4CC23E2F03A4C400B80F44 /* Frameworks */,
 				4BCE80222F03951B0063E63C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -80,6 +68,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 4BCE802C2F03951C0063E63C /* Build configuration list for PBXNativeTarget "marble-editor" */;
 			buildPhases = (
+				4BAFDF692F073A9700264CCC /* Build Rust */,
 				4BCE801D2F03951B0063E63C /* Sources */,
 				4BCE801E2F03951B0063E63C /* Frameworks */,
 				4BCE801F2F03951B0063E63C /* Resources */,
@@ -141,6 +130,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4BAFDF692F073A9700264CCC /* Build Rust */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n\ncd \"$PROJECT_DIR\"/..\n~/.cargo/bin/cargo build\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4BCE801D2F03951B0063E63C /* Sources */ = {
