@@ -1,0 +1,18 @@
+[package]
+name = "peridot-marble-editor-win"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[[bin]]
+name = "peridot-marble-editor"
+path = "src/main.rs"
+
+[dependencies]
+peridot-marble-editor-core = { path = "../core", features = ["win32"] }
+
+[build-dependencies]
+winres = "0.1"
+
+[lints]
+workspace = true

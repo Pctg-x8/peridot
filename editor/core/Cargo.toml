@@ -2,7 +2,6 @@
 name = "peridot-marble-editor-core"
 version = "0.0.1"
 edition = "2024"
-build = "build.rs"
 
 [features]
 default = []
@@ -35,7 +34,9 @@ version = "0.62"
 features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
+    "Win32_Security",
     "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Direct2D_Common",
 ]
@@ -55,9 +56,6 @@ linux-epoll = { path = "../../platform/linux/epoll" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
-
-[build-dependencies]
-winres = "0.1"
 
 [lints]
 workspace = true

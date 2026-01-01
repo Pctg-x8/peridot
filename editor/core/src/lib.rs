@@ -1,7 +1,7 @@
 use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut,
     Fence, FenceMut, ImageChild, InstanceChild, MemoryBound, PhysicalDevice, QueueMut, RenderPass,
-    ShaderModule, Swapchain, VkHandle, VkHandleMut, VkObject,
+    ShaderModule, SurfaceCreateInfo, Swapchain, VkHandle, VkHandleMut, VkObject,
 };
 use core::pin::Pin;
 #[cfg(feature = "wayland")]
@@ -95,6 +95,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         #[cfg(target_os = "linux")]
         efd: linux_eventfd::EventFD::new(0, linux_eventfd::EventFDFlags::empty())
             .expect("app_event_bus.efd.create"),
+        #[cfg(windows)]
+        event_notify: unsafe {
+            windows::Win32::System::Threading::CreateEventW(None, true, false, None)
+                .expect("event_notify.create")
+        },
     };
 
     #[cfg(feature = "freetype")]
@@ -264,19 +269,23 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let vk_device = VulkanDevice::new();
 
     #[cfg(windows)]
-    if !vk_adapter.win32_presentation_support(graphics_queue_family_index) {
+    if !vk_device
+        .primary_adapter_ref()
+        .win32_presentation_support(vk_device.present_queue_family_index())
+    {
         panic!("win32 presentation not supported on graphics queue");
     }
     #[cfg(windows)]
-    let vk_surface = unsafe {
-        br::SurfaceObject::new(
-            &vk_adapter,
-            &br::Win32SurfaceCreateInfo::new(
+    let vk_surface = Surface {
+        handle: unsafe {
+            br::Win32SurfaceCreateInfo::new(
                 core::mem::transmute(hinstance),
                 core::mem::transmute(w.0),
-            ),
-        )
-        .expect("vk_surface create")
+            )
+            .execute(vk_device.instance(), None)
+            .expect("vk_surface.create")
+        },
+        device: &vk_device,
     };
 
     #[cfg(feature = "wayland")]
@@ -293,8 +302,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     let vk_surface = Surface {
         handle: unsafe {
-            use bedrock::SurfaceCreateInfo;
-
             br::WaylandSurfaceCreateInfo::new(wl_display.as_raw().cast(), w.surface.as_raw().cast())
                 .execute(vk_device.instance(), None)
                 .expect("vk_surface.create")
@@ -2536,7 +2543,21 @@ pub struct AppEventBus {
     #[cfg(target_os = "linux")]
     efd: linux_eventfd::EventFD,
     #[cfg(windows)]
-    event_notify: platform::win32::event::EventObject,
+    event_notify: windows::Win32::Foundation::HANDLE,
+}
+#[cfg(windows)]
+unsafe impl Sync for AppEventBus {}
+#[cfg(windows)]
+unsafe impl Send for AppEventBus {}
+impl Drop for AppEventBus {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            if let Err(e) = windows::Win32::Foundation::CloseHandle(self.event_notify) {
+                tracing::error!(reason = ?e, "event_notify.close");
+            }
+        }
+    }
 }
 impl AppEventBus {
     pub fn push(&self, e: Event) {
@@ -2544,7 +2565,10 @@ impl AppEventBus {
         #[cfg(target_os = "linux")]
         self.efd.inc(1).unwrap();
         #[cfg(windows)]
-        platform::win32::event::EventObject::new(None, true, false).unwrap();
+        unsafe {
+            windows::Win32::System::Threading::SetEvent(self.event_notify)
+                .expect("event_notify.set");
+        }
     }
 
     fn pop(&self) -> Option<Event> {
@@ -2560,8 +2584,8 @@ impl AppEventBus {
             Ok(_) => Ok(()),
         }
         #[cfg(windows)]
-        {
-            self.event_notify.reset().map_err(From::from)
+        unsafe {
+            windows::Win32::System::Threading::ResetEvent(self.event_notify).map_err(From::from)
         }
         #[cfg(target_os = "macos")]
         {

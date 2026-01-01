@@ -1,6 +1,7 @@
 // https://community.arm.com/cfs-file/__key/communityserver-blogs-components-weblogfiles/00-00-00-20-66/siggraph2015_2D00_mmg_2D00_marius_2D00_notes.pdf
 
-struct Params {
+struct Params
+{
     float2 texelSize;
     float offsetScale;
 }
@@ -11,13 +12,15 @@ Params params;
 [vk::binding(0, 0)]
 Sampler2D<float4> tex;
 
-struct VertexOutput {
+struct VertexOutput
+{
     float4 pos : SV_Position;
     FragmentInput fragmentInput : Varyings;
 }
 
 [shader("vertex")]
-VertexOutput vertMain(uint vindex : SV_VulkanVertexID) {
+VertexOutput vertMain(uint vindex: SV_VertexID)
+{
     let p = float2(vindex != 1 ? 0.0 : 2.0, vindex != 2 ? 0.0 : 2.0);
     let halfPixel = params.texelSize * 0.5;
 
@@ -31,14 +34,16 @@ VertexOutput vertMain(uint vindex : SV_VulkanVertexID) {
     return vo;
 }
 
-struct FragmentInput {
+struct FragmentInput
+{
     float2 uvCenter;
     float4 uv_lb_rt;
     float4 uv_lt_rb;
 }
 
 [shader("fragment")]
-float4 fragMain(FragmentInput input : Varyings) : SV_Target0 {
+float4 fragMain(FragmentInput input: Varyings) : SV_Target0
+{
     var a = tex.Sample(input.uvCenter) * 4.0;
     a += tex.Sample(input.uv_lb_rt.xy);
     a += tex.Sample(input.uv_lb_rt.zw);
