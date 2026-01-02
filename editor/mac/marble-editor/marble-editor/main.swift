@@ -4,6 +4,15 @@ let app = NSApplication.shared
 let delegate = AppMainDelegate()
 app.delegate = delegate
 
+let menu = NSMenu()
+let appMenu = NSMenu(title: "Peridot Marble Editor")
+let quitMenuItem = appMenu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate), keyEquivalent: "q")
+quitMenuItem.keyEquivalentModifierMask = .command
+let appMenuItem = menu.addItem(withTitle: "Peridot Marble Editor", action: nil, keyEquivalent: "")
+appMenuItem.title = "Peridot Marble Editor"
+menu.setSubmenu(appMenu, for: appMenuItem)
+app.mainMenu = menu
+
 rs_launch()
 
 @_cdecl("nsapp_run")
