@@ -67,6 +67,11 @@ impl Object for Font {
 }
 impl Font {
     #[inline(always)]
+    pub unsafe fn ref_from_untyped_ptr<'a>(p: *const core::ffi::c_void) -> &'a Self {
+        unsafe { &*p.cast::<Self>() }
+    }
+
+    #[inline(always)]
     pub fn from_font_descriptor(
         descriptor: &FontDescriptor,
         size: CGFloat,
@@ -127,6 +132,11 @@ impl Font {
     #[inline(always)]
     pub fn descent(&self) -> CGFloat {
         unsafe { CTFontGetDescent(&self.0) }
+    }
+
+    #[inline(always)]
+    pub fn leading(&self) -> CGFloat {
+        unsafe { CTFontGetLeading(&self.0) }
     }
 
     #[inline(always)]
@@ -292,6 +302,11 @@ impl Object for Run {
 }
 impl Run {
     #[inline(always)]
+    pub fn attributes(&self) -> &Dictionary<String, dyn Object> {
+        unsafe { &*CTRunGetAttributes(&self.0).cast::<Dictionary<String, dyn Object>>() }
+    }
+
+    #[inline(always)]
     pub fn glyph_count(&self) -> CFIndex {
         unsafe { CTRunGetGlyphCount(&self.0) }
     }
@@ -401,14 +416,14 @@ impl Framesetter {
         &self,
         string_range: Range,
         path: &Path,
-        frame_attributes: &Dictionary<String, dyn Object>,
+        frame_attributes: Option<&Dictionary<String, dyn Object>>,
     ) -> Option<Owned<Frame>> {
         unsafe {
             Owned::from_ptr(CTFramesetterCreateFrame(
                 &self.0,
                 string_range,
                 path as *const _ as _,
-                frame_attributes as *const _ as _,
+                frame_attributes.map_or(core::ptr::null(), |x| x as *const _ as _),
             ) as *mut Frame)
         }
     }

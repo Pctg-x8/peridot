@@ -54,6 +54,7 @@ impl<T: Object> Drop for Owned<T> {
     #[inline(always)]
     fn drop(&mut self) {
         unsafe {
+            tracing::trace!(target: "apple_sdk_port::drop_trace", type_name = core::any::type_name::<T>(), "release cf");
             self.0.as_ref().release();
         }
     }

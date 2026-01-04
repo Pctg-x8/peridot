@@ -10,10 +10,7 @@ use linux_epoll::{Epoll, EpollEventBits};
 use linux_eventfd::{EventFD, EventFDFlags};
 #[cfg(feature = "wayland")]
 use peridot_tp_wayland as wl;
-use std::{
-    cell::UnsafeCell,
-    collections::{HashMap, VecDeque},
-};
+use std::collections::{HashMap, VecDeque};
 #[cfg(windows)]
 use windows::Win32::{
     Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
@@ -43,11 +40,12 @@ use windows_core::*;
 
 use crate::{
     composite::{
-        AnimatableColor, BoundCompositeRenderer, CompositeMode, CompositeRenderer,
-        CompositeRenderingData, CompositeStreamingData, CompositeTree,
+        AnimatableColor, AnimatableFloat, BoundCompositeRenderer, CompositeMode, CompositeRect,
+        CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+        CompositeRectTextVerticalAlignment, CompositeRenderingData, CompositeStreamingData,
+        CompositeTree, FontID, VectorRasterizationState,
     },
     graphics::VulkanDevice,
-    helper_types::SafeF32,
 };
 
 mod atlas;
@@ -393,6 +391,40 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     composite_tree.get_mut(CompositeTree::ROOT).has_bitmap = true;
     composite_tree.mark_dirty(CompositeTree::ROOT);
 
+    // app title view
+    let app_title = composite_tree.register(CompositeRect {
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
+        relative_size_adjustment: [1.0, 0.0],
+        size: [
+            AnimatableFloat::Value(0.0),
+            AnimatableFloat::Value(24.0 * 2.0),
+        ],
+        text: Some(CompositeRectText {
+            runs: vec![
+                CompositeRectTextRun {
+                    font_id: FontID::UIDefault,
+                    content: "Peridot Marble Editor".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                },
+                CompositeRectTextRun {
+                    font_id: FontID::UITitleProjectName,
+                    content: "New Project".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    spacing_inline_start: 4.0,
+                    ..Default::default()
+                },
+            ],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+            layout_dirty: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    composite_tree.add_child(CompositeTree::ROOT, app_title);
+
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = std::thread::Builder::new()
@@ -535,6 +567,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     .collect::<Vec<_>>();
 
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device);
+                let font_set = FontSet::new();
 
                 #[cfg(feature = "fontconfig")]
                 let (font_file_path, face_index) = unsafe {
@@ -652,7 +685,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         // println!("{glyph_info:?} {glyph_position:?} {metrics:?} {}", glyph_position.x_advance as f32 / 64.0);
 
                         let (r, is_new) = glyph_atlas.acquire(
-                            (0, SafeF32::new_unchecked(12.0), glyph_info.codepoint as _),
+                            (0, glyph_info.codepoint as _),
                             glyph_width.ceil() as _,
                             glyph_height.ceil() as _,
                         );
@@ -696,20 +729,16 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
                 #[cfg(target_os = "macos")]
                 unsafe {
-                    let font = apple_sdk_port::text::Font::new_ui(
-                        apple_sdk_port::text::UIFontType::System,
-                        12.0,
-                        None,
-                    );
+                    let font = font_set.select(FontID::UIDefault);
 
                     let mut str_attr = apple_sdk_port::foundation::MutableDictionary::<
                         _,
                         dyn apple_sdk_port::Object,
-                    >::new_generic_key_value(None, 1)
+                    >::new_copying_key_generic_value(None, 1)
                     .expect("str_attr.create");
                     str_attr.set(
                         apple_sdk_port::foundation::AttributedStringKey::font(),
-                        &*font,
+                        font,
                     );
                     let str = apple_sdk_port::foundation::AttributedString::new(
                         None,
@@ -717,7 +746,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             None,
                             "Peridot Marble Editor - New Project",
                         ),
-                        &*str_attr,
+                        Some(&str_attr),
                     )
                     .expect("AttributedString.create");
                     let framesetter =
@@ -739,15 +768,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 },
                                 None,
                             ),
-                            &apple_sdk_port::foundation::Dictionary::new_raw(
-                                None,
-                                core::ptr::null_mut(),
-                                core::ptr::null_mut(),
-                                0,
-                                &apple_sdk_port::raw::kCFTypeDictionaryKeyCallBacks,
-                                &apple_sdk_port::raw::kCFTypeDictionaryValueCallBacks,
-                            )
-                            .expect("Dictionary.create"),
+                            None,
                         )
                         .expect("Frame.create");
                     let lines = frame.lines();
@@ -780,7 +801,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 }
 
                                 let (r, is_new) = glyph_atlas.acquire(
-                                    (0, SafeF32::new_unchecked(12.0), glyph),
+                                    (0, glyph),
                                     (bounding_rect.size.width * 2.0).ceil() as _,
                                     (bounding_rect.size.height * 2.0).ceil() as _,
                                 );
@@ -1090,12 +1111,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &vk_device,
                     &br::RenderPassCreateInfo2::new(
                         &[
-                            br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8_UNORM)
-                                .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)
-                                .layout_transition(
-                                    br::ImageLayout::ShaderReadOnlyOpt,
-                                    br::ImageLayout::ShaderReadOnlyOpt,
-                                ),
                             br::AttachmentDescription2::new(br::vk::VK_FORMAT_S8_UINT)
                                 .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
                                 .layout_transition(
@@ -1107,22 +1122,19 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
                                 .layout_transition(
                                     br::ImageLayout::Undefined,
-                                    br::ImageLayout::ColorAttachmentOpt,
+                                    br::ImageLayout::TransferSrcOpt,
                                 )
                                 .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
                         ],
                         &[
                             br::SubpassDescription2::new().depth_stencil(
-                                &br::AttachmentReference2::depth_stencil_attachment_opt(1),
+                                &br::AttachmentReference2::depth_stencil_attachment_opt(0),
                             ),
                             br::SubpassDescription2::new()
                                 .depth_stencil(
-                                    &br::AttachmentReference2::depth_stencil_readonly_opt(1),
+                                    &br::AttachmentReference2::depth_stencil_readonly_opt(0),
                                 )
-                                .colors(&[br::AttachmentReference2::color_attachment_opt(2)])
-                                .color_resolves(&[br::AttachmentReference2::color_attachment_opt(
-                                    0,
-                                )]),
+                                .colors(&[br::AttachmentReference2::color_attachment_opt(1)]),
                         ],
                         &[
                             br::SubpassDependency2::new(
@@ -1145,11 +1157,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             .by_region()
                             .of_memory(
                                 br::AccessFlags::COLOR_ATTACHMENT.write,
-                                br::AccessFlags::SHADER.read,
+                                br::AccessFlags::TRANSFER.read,
                             )
                             .of_execution(
                                 br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                                br::PipelineStageFlags::FRAGMENT_SHADER,
+                                br::PipelineStageFlags::TRANSFER,
                             ),
                         ],
                     ),
@@ -1531,7 +1543,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     &br::FramebufferCreateInfo::new(
                         &vector_render_pass,
                         &[
-                            glyph_atlas.view(),
                             vector_stencil_buffer.as_transparent_ref(),
                             vector_color_ms_buffer.as_transparent_ref(),
                         ],
@@ -1632,7 +1643,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         &vector_framebuffer,
                         glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO),
                         &[
-                            br::ClearValue::color_f32([0.0; 4]),
                             br::ClearValue::depth_stencil(1.0, 0),
                             br::ClearValue::color_f32([0.0; 4]),
                         ],
@@ -1662,6 +1672,27 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 .bind_pipeline(br::PipelineBindPoint::Graphics, &colorize_pipeline)
                 .draw(3, 1, 0, 0)
                 .end_render_pass()
+                .resolve_image(
+                    vector_color_ms_buffer.image(),
+                    br::ImageLayout::TransferSrcOpt,
+                    &glyph_atlas.image(),
+                    br::ImageLayout::TransferDestOpt,
+                    &[br::vk::VkImageResolve {
+                        srcSubresource: br::ImageSubresourceLayers::new(
+                            br::AspectMask::COLOR,
+                            0,
+                            0..1,
+                        ),
+                        srcOffset: br::Offset3D::ZERO,
+                        dstSubresource: br::ImageSubresourceLayers::new(
+                            br::AspectMask::COLOR,
+                            0,
+                            0..1,
+                        ),
+                        dstOffset: br::Offset3D::ZERO,
+                        extent: glyph_atlas.space_mgr.max.with_depth(1),
+                    }],
+                )
                 .end()
                 .expect("cb end");
                 unsafe {
@@ -2032,7 +2063,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     render_passes: Vec::new(),
                     required_backdrop_buffer_count: 0,
                 };
+                let mut vector_raster_state = VectorRasterizationState::new();
                 'lp: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
+                    // unsafe {
+                    //     w.manual_capture_begin();
+                    // }
+
                     #[cfg(feature = "wayland")]
                     if w.state
                         .swapchain_externally_invalidation_signal
@@ -2276,14 +2312,315 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .expect("last render completion fence reset");
 
                     let current_t = global_time_base.elapsed();
+                    vector_raster_state.clear();
                     let composite_render_data = composite_renderer.update(
                         &vk_device,
                         &mut composite_tree,
                         surface_ext,
-                        glyph_atlas.space_mgr.max,
+                        &font_set,
+                        &mut glyph_atlas,
+                        &mut vector_raster_state,
                         &events,
                         current_t.as_secs_f32(),
                     );
+                    if !vector_raster_state.is_empty() {
+                        // TODO: 最適化はあとで
+                        let filltri_points_offset = 0;
+                        let filltri_indices_offset = filltri_points_offset
+                            + core::mem::size_of_val(&vector_raster_state.fill_tri_points[..]);
+                        let curve_triangles_offset = (filltri_indices_offset
+                            + core::mem::size_of_val(&vector_raster_state.fill_tri_indices[..])
+                            + (core::mem::size_of::<[f32; 4]>() - 1))
+                            & !(core::mem::size_of::<[f32; 4]>() - 1);
+                        let vector_draw_buffer_total_size = curve_triangles_offset
+                            + core::mem::size_of_val(&vector_raster_state.curve_tris[..]);
+                        let mut vector_draw_buffer = br::BufferObject::new(
+                            &vk_device,
+                            &br::BufferCreateInfo::new(
+                                vector_draw_buffer_total_size,
+                                br::BufferUsage::VERTEX_BUFFER
+                                    | br::BufferUsage::INDEX_BUFFER
+                                    | br::BufferUsage::TRANSFER_DEST,
+                            ),
+                        )
+                        .expect("vector_draw_buffer create");
+                        let vector_draw_buffer_memreq = vector_draw_buffer.requirements();
+                        let vector_draw_buffer_memory = br::DeviceMemoryObject::new(
+                            &vk_device,
+                            &br::MemoryAllocateInfo::new(
+                                vector_draw_buffer_memreq.size,
+                                vk_device
+                                    .find_device_local_memory_index(
+                                        vector_draw_buffer_memreq.memoryTypeBits,
+                                    )
+                                    .expect("no suitable memory"),
+                            ),
+                        )
+                        .expect("vector_draw_buffer malloc");
+                        vector_draw_buffer
+                            .bind(&vector_draw_buffer_memory, 0)
+                            .expect("vector_draw_buffer bind");
+
+                        let mut vector_draw_init_buffer = br::BufferObject::new(
+                            &vk_device,
+                            &br::BufferCreateInfo::new(
+                                vector_draw_buffer_total_size,
+                                br::BufferUsage::TRANSFER_SRC,
+                            ),
+                        )
+                        .expect("vector_draw_init_buffer create");
+                        let vector_draw_init_buffer_memreq = vector_draw_init_buffer.requirements();
+                        let vector_draw_init_buffer_memindex = vk_device
+                            .find_host_visible_memory_index(
+                                vector_draw_init_buffer_memreq.memoryTypeBits,
+                            )
+                            .expect("no suitable memory");
+                        let mut vector_draw_init_buffer_memory = br::DeviceMemoryObject::new(
+                            &vk_device,
+                            &br::MemoryAllocateInfo::new(
+                                vector_draw_init_buffer_memreq.size,
+                                vector_draw_init_buffer_memindex,
+                            ),
+                        )
+                        .expect("vector_draw_init_buffer malloc");
+                        vector_draw_init_buffer
+                            .bind(&vector_draw_init_buffer_memory, 0)
+                            .expect("vector_draw_init_buffer bind");
+                        let p = vector_draw_init_buffer_memory
+                            .map(0..vector_draw_buffer_total_size)
+                            .expect("vector_draw_init_buffer_memory map");
+                        unsafe {
+                            core::ptr::copy_nonoverlapping(
+                                vector_raster_state.fill_tri_points.as_ptr(),
+                                p.ptr().byte_add(filltri_points_offset).cast(),
+                                vector_raster_state.fill_tri_points.len(),
+                            );
+                            core::ptr::copy_nonoverlapping(
+                                vector_raster_state.fill_tri_indices.as_ptr(),
+                                p.ptr().byte_add(filltri_indices_offset).cast(),
+                                vector_raster_state.fill_tri_indices.len(),
+                            );
+                            core::ptr::copy_nonoverlapping(
+                                vector_raster_state.curve_tris.as_ptr(),
+                                p.ptr().byte_add(curve_triangles_offset).cast(),
+                                vector_raster_state.curve_tris.len(),
+                            );
+                        }
+                        if !vk_device.is_coherent_memory(vector_draw_init_buffer_memindex) {
+                            unsafe {
+                                vk_device
+                                    .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                        &vector_draw_init_buffer_memory,
+                                        0..vector_draw_buffer_total_size as u64,
+                                    )])
+                                    .expect("flush_mapped_memory_ranges");
+                            }
+                        }
+                        unsafe {
+                            vector_draw_init_buffer_memory.unmap();
+                        }
+
+                        let mut vector_color_ms_buffer = br::ImageObject::new(
+                            &vk_device,
+                            &br::ImageCreateInfo::new(
+                                glyph_atlas.space_mgr.max,
+                                br::vk::VK_FORMAT_R8_UNORM,
+                            )
+                            .set_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
+                            .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                        )
+                        .expect("vector color_ms buffer create");
+                        let vector_color_ms_buffer_memreq = vector_color_ms_buffer.requirements();
+                        let vector_color_ms_buffer_mem = br::DeviceMemoryObject::new(
+                            &vk_device,
+                            &br::MemoryAllocateInfo::new(
+                                vector_color_ms_buffer_memreq.size,
+                                vk_device
+                                    .find_lazily_allocatable_device_local_memory_index(
+                                        vector_color_ms_buffer_memreq.memoryTypeBits,
+                                    )
+                                    .expect("no suitable memory"),
+                            ),
+                        )
+                        .expect("vector color_ms buffer malloc");
+                        vector_color_ms_buffer
+                            .bind(&vector_color_ms_buffer_mem, 0)
+                            .expect("vector color_ms buffer bind");
+                        let vector_color_ms_buffer = br::ImageViewBuilder::new(
+                            vector_color_ms_buffer,
+                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                        )
+                        .create()
+                        .expect("vector color_ms buffer imageview create");
+                        let mut vector_stencil_buffer = br::ImageObject::new(
+                            &vk_device,
+                            &br::ImageCreateInfo::new(
+                                glyph_atlas.space_mgr.max,
+                                br::vk::VK_FORMAT_S8_UINT,
+                            )
+                            .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                            .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                        )
+                        .expect("vector stencil buffer create");
+                        let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
+                        let vector_stencil_buffer_mem = br::DeviceMemoryObject::new(
+                            &vk_device,
+                            &br::MemoryAllocateInfo::new(
+                                vector_stencil_buffer_memreq.size,
+                                vk_device
+                                    .find_lazily_allocatable_device_local_memory_index(
+                                        vector_stencil_buffer_memreq.memoryTypeBits,
+                                    )
+                                    .expect("no suitable memory"),
+                            ),
+                        )
+                        .expect("vector stencil buffer malloc");
+                        vector_stencil_buffer
+                            .bind(&vector_stencil_buffer_mem, 0)
+                            .expect("vector stencil buffer bind");
+                        let vector_stencil_buffer = br::ImageViewBuilder::new(
+                            vector_stencil_buffer,
+                            br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
+                        )
+                        .create()
+                        .expect("vector stencil buffer imageview create");
+                        let vector_framebuffer = br::FramebufferObject::new(
+                            &vk_device,
+                            &br::FramebufferCreateInfo::new(
+                                &vector_render_pass,
+                                &[
+                                    vector_stencil_buffer.as_transparent_ref(),
+                                    vector_color_ms_buffer.as_transparent_ref(),
+                                ],
+                                glyph_atlas.space_mgr.max.width,
+                                glyph_atlas.space_mgr.max.height,
+                            ),
+                        )
+                        .expect("vector framebuffer create");
+
+                        let mut cp = br::CommandPoolObject::new(
+                            &vk_device,
+                            &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
+                        )
+                        .expect("cp init");
+                        let mut cb = br::CommandBufferObject::alloc(
+                            &vk_device,
+                            &br::CommandBufferAllocateInfo::new(
+                                &mut cp,
+                                1,
+                                br::CommandBufferLevel::Primary,
+                            ),
+                        )
+                        .expect("alloc cb");
+                        unsafe {
+                            cb[0]
+                                .begin(&br::CommandBufferBeginInfo::new())
+                                .expect("cb begin")
+                        }
+                        .copy_buffer(
+                            &vector_draw_init_buffer,
+                            &vector_draw_buffer,
+                            &[br::BufferCopy::mirror(
+                                0,
+                                vector_draw_buffer_total_size as _,
+                            )],
+                        )
+                        .inject(|r| {
+                            vk_device.cmd_pipeline_barrier(
+                                r,
+                                &br::DependencyInfo::new(
+                                    &[br::MemoryBarrier2::new()
+                                        .from(
+                                            br::PipelineStageFlags2::COPY,
+                                            br::AccessFlags2::TRANSFER.write,
+                                        )
+                                        .to(
+                                            br::PipelineStageFlags2::VERTEX_INPUT,
+                                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ
+                                                | br::AccessFlags2::INDEX_READ,
+                                        )],
+                                    &[],
+                                    &[],
+                                ),
+                            )
+                        })
+                        .begin_render_pass(
+                            &br::RenderPassBeginInfo::new(
+                                &vector_render_pass,
+                                &vector_framebuffer,
+                                glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO),
+                                &[
+                                    br::ClearValue::depth_stencil(1.0, 0),
+                                    br::ClearValue::color_f32([0.0; 4]),
+                                ],
+                            ),
+                            br::SubpassContents::Inline,
+                        )
+                        .bind_pipeline(br::PipelineBindPoint::Graphics, &triangle_fans_pipeline)
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[vector_draw_buffer.as_transparent_ref()],
+                            &[filltri_points_offset as _],
+                        )
+                        .bind_index_buffer(
+                            &vector_draw_buffer,
+                            filltri_indices_offset,
+                            br::IndexType::U16,
+                        )
+                        .draw_indexed(vector_raster_state.fill_tri_indices.len() as _, 1, 0, 0, 0)
+                        .bind_pipeline(br::PipelineBindPoint::Graphics, &curve_pipeline)
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[vector_draw_buffer.as_transparent_ref()],
+                            &[curve_triangles_offset as _],
+                        )
+                        .draw(vector_raster_state.curve_tris.len() as _, 1, 0, 0)
+                        .next_subpass(br::SubpassContents::Inline)
+                        .bind_pipeline(br::PipelineBindPoint::Graphics, &colorize_pipeline)
+                        .draw(3, 1, 0, 0)
+                        .end_render_pass()
+                        .resolve_image(
+                            vector_color_ms_buffer.image(),
+                            br::ImageLayout::TransferSrcOpt,
+                            &glyph_atlas.image(),
+                            br::ImageLayout::TransferDestOpt,
+                            &vector_raster_state
+                                .updated_rects
+                                .iter()
+                                .map(|r| br::vk::VkImageResolve {
+                                    srcSubresource: br::ImageSubresourceLayers::new(
+                                        br::AspectMask::COLOR,
+                                        0,
+                                        0..1,
+                                    ),
+                                    srcOffset: r.offset.with_z(0),
+                                    dstSubresource: br::ImageSubresourceLayers::new(
+                                        br::AspectMask::COLOR,
+                                        0,
+                                        0..1,
+                                    ),
+                                    dstOffset: r.offset.with_z(0),
+                                    extent: r.extent.with_depth(1),
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                        .end()
+                        .expect("cb end");
+                        unsafe {
+                            render_queue
+                                .submit_raw(
+                                    &[br::SubmitInfo::new(
+                                        &[],
+                                        &[],
+                                        &[cb[0].as_transparent_ref()],
+                                        &[],
+                                    )],
+                                    None,
+                                )
+                                .expect("vector render submit");
+                        }
+                        render_queue.wait().expect("vector render wait");
+                    }
                     if composite_render_data != last_composite_render_data {
                         // requires repopulate render commands
                         if !main_cb_invalid {
@@ -2458,6 +2795,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         }
                         Err(e) => Err::<(), _>(e).expect("queue present"),
                     }
+
+                    // unsafe {
+                    //     manual_capture_end();
+                    // }
                 }
 
                 unsafe {
@@ -2653,6 +2994,38 @@ impl AppEventBus {
     }
 }
 
+pub struct FontSet {
+    ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
+    ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
+}
+impl FontSet {
+    pub fn new() -> Self {
+        let ui_default = apple_sdk_port::text::Font::new_ui(
+            apple_sdk_port::text::UIFontType::System,
+            12.0,
+            None,
+        );
+        let ui_title_project_name = apple_sdk_port::text::Font::new_ui(
+            apple_sdk_port::text::UIFontType::System,
+            10.0,
+            None,
+        );
+
+        Self {
+            ui_default,
+            ui_title_project_name,
+        }
+    }
+
+    #[inline]
+    pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+        }
+    }
+}
+
 struct BoxInstance {
     posst: [f32; 4],
     uvst: [f32; 4],
@@ -2792,7 +3165,7 @@ struct GlyphAtlas {
     res: br::vk::VkImage,
     mem: br::vk::VkDeviceMemory,
     view: br::vk::VkImageView,
-    acquired_rects: HashMap<(usize, SafeF32, u16), GlyphRect>,
+    acquired_rects: HashMap<(usize, u16), GlyphRect>,
     space_mgr: GlyphAtlasSpaceManager,
 }
 impl GlyphAtlas {
@@ -2856,12 +3229,7 @@ impl GlyphAtlas {
         }
     }
 
-    pub fn acquire(
-        &mut self,
-        key: (usize, SafeF32, u16),
-        width: u32,
-        height: u32,
-    ) -> (GlyphRect, bool) {
+    pub fn acquire(&mut self, key: (usize, u16), width: u32, height: u32) -> (GlyphRect, bool) {
         match self.acquired_rects.entry(key) {
             std::collections::hash_map::Entry::Vacant(x) => (
                 x.insert(
@@ -3667,6 +4035,10 @@ impl Drop for MacWindow {
     }
 }
 #[cfg(target_os = "macos")]
+unsafe impl Sync for MacWindow {}
+#[cfg(target_os = "macos")]
+unsafe impl Send for MacWindow {}
+#[cfg(target_os = "macos")]
 impl MacWindow {
     pub fn new() -> Self {
         let native_ptr = unsafe { ni_create_window() };
@@ -3700,6 +4072,13 @@ impl MacWindow {
     #[inline(always)]
     pub fn metal_layer(&self) -> *mut core::ffi::c_void {
         unsafe { ni_get_metal_layer(self.native_ptr) }
+    }
+
+    #[inline(always)]
+    pub fn manual_capture_begin(&self) {
+        unsafe {
+            manual_capture_begin(self.native_ptr);
+        }
     }
 }
 

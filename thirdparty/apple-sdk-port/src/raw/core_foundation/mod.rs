@@ -50,6 +50,7 @@ pub type CFComparatorFunction = extern "C" fn(
 pub const kCFNotFound: CFIndex = -1;
 
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct CFRange {
     pub location: CFIndex,
     pub length: CFIndex,

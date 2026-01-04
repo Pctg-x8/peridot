@@ -8,7 +8,7 @@ use bedrock::{
 };
 
 use crate::{
-    AppEventBus, Event,
+    AppEventBus, Event, FontSet, GlyphAtlas,
     atlas::{AtlasRect, DynamicAtlasManager},
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
@@ -415,6 +415,55 @@ pub struct ClipConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomRenderToken(usize);
 
+#[derive(Default, Clone, Copy, Debug)]
+#[repr(usize)]
+pub enum FontID {
+    #[default]
+    UIDefault,
+    UITitleProjectName,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CompositeRectTextHorizontalAlignment {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CompositeRectTextVerticalAlignment {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+pub struct CompositeRectTextRun {
+    pub font_id: FontID,
+    pub content: String,
+    pub color: AnimatableColor,
+    pub spacing_inline_start: f32,
+}
+impl Default for CompositeRectTextRun {
+    fn default() -> Self {
+        Self {
+            font_id: Default::default(),
+            content: Default::default(),
+            color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
+            spacing_inline_start: 0.0,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct CompositeRectText {
+    pub runs: Vec<CompositeRectTextRun>,
+    pub layout_dirty: bool,
+    pub horizontal_alignment: CompositeRectTextHorizontalAlignment,
+    pub vertical_alignment: CompositeRectTextVerticalAlignment,
+}
+
 pub struct CompositeRect {
     pub has_bitmap: bool,
     pub base_scale_factor: f32,
@@ -431,6 +480,7 @@ pub struct CompositeRect {
     pub pivot: [f32; 2],
     pub scale_x: AnimatableFloat,
     pub scale_y: AnimatableFloat,
+    pub text: Option<CompositeRectText>,
     pub dirty: bool,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
@@ -459,6 +509,7 @@ impl Default for CompositeRect {
             pivot: [0.5; 2],
             scale_x: AnimatableFloat::Value(1.0),
             scale_y: AnimatableFloat::Value(1.0),
+            text: None,
             parent: None,
             children: Vec::new(),
         }
@@ -1084,8 +1135,73 @@ impl CompositeRenderingInstructionBuilder {
     }
 }
 
+struct GlyphPlacementBox {
+    pub left: f32,
+    pub top: f32,
+    pub tex_left: u32,
+    pub tex_top: u32,
+    pub width: u32,
+    pub height: u32,
+}
+impl GlyphPlacementBox {
+    #[inline(always)]
+    const fn right(&self) -> f32 {
+        self.left + self.width as f32
+    }
+
+    #[inline(always)]
+    const fn bottom(&self) -> f32 {
+        self.top + self.height as f32
+    }
+}
+
+struct CompositeRectCache {
+    text_rects: Vec<GlyphPlacementBox>,
+    text_width: f32,
+    text_height: f32,
+}
+impl CompositeRectCache {
+    fn new() -> Self {
+        Self {
+            text_rects: Vec::new(),
+            text_width: 0.0,
+            text_height: 0.0,
+        }
+    }
+}
+
+pub struct VectorRasterizationState {
+    pub fill_tri_points: Vec<[f32; 2]>,
+    pub fill_tri_indices: Vec<u16>,
+    pub curve_tris: Vec<[f32; 4]>,
+    pub updated_rects: Vec<br::Rect2D>,
+}
+impl VectorRasterizationState {
+    pub fn new() -> Self {
+        Self {
+            fill_tri_points: Vec::new(),
+            fill_tri_indices: Vec::new(),
+            curve_tris: Vec::new(),
+            updated_rects: Vec::new(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.fill_tri_points.clear();
+        self.fill_tri_indices.clear();
+        self.curve_tris.clear();
+        self.updated_rects.clear();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        // self.fill_tri_points.is_empty() == self.fill_tri_indices.is_empty()
+        self.fill_tri_points.is_empty() && self.curve_tris.is_empty()
+    }
+}
+
 pub struct CompositeTree {
     rects: Vec<CompositeRect>,
+    caches: Vec<CompositeRectCache>,
     unused: BTreeSet<usize>,
     dirty: bool,
     parameter_store: CompositeTreeParameterStore,
@@ -1098,14 +1214,17 @@ impl CompositeTree {
 
     pub fn new() -> Self {
         let mut rects = Vec::new();
+        let mut caches = Vec::new();
         // root is filling rect
         rects.push(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
         });
+        caches.push(CompositeRectCache::new());
 
         Self {
             rects,
+            caches,
             unused: BTreeSet::new(),
             dirty: false,
             parameter_store: CompositeTreeParameterStore {
@@ -1125,6 +1244,7 @@ impl CompositeTree {
         }
 
         self.rects.push(data);
+        self.caches.push(CompositeRectCache::new());
         CompositeTreeRef(self.rects.len() - 1)
     }
 
@@ -1193,8 +1313,10 @@ impl CompositeTree {
         &mut self,
         size: br::Extent2D,
         current_sec: f32,
-        tex_size: br::Extent2D,
         mapped_head: *mut core::ffi::c_void,
+        font_set: &FontSet,
+        mask_atlas: &mut GlyphAtlas,
+        vector_raster_state: &mut VectorRasterizationState,
         event_bus: &AppEventBus,
     ) -> CompositeRenderingData {
         // let update_timer = std::time::Instant::now();
@@ -1228,6 +1350,7 @@ impl CompositeTree {
             ),
         )) = processes.pop()
         {
+            let cache = &mut self.caches[r];
             let r = &mut self.rects[r];
             r.dirty = false;
             let local_left =
@@ -1286,6 +1409,12 @@ impl CompositeTree {
                 }
             }
 
+            if let Some((clip_rect_px, clip_config)) = active_clip {
+                inst_builder.set_clip(&clip_rect_px, &clip_config);
+            } else {
+                inst_builder.clear_clip();
+            }
+
             if let Some(t) = r.custom_render_token {
                 // Custom Renderがある場合はそっちのみ
                 inst_builder.insert_custom_render_commands(t);
@@ -1300,18 +1429,20 @@ impl CompositeTree {
                             uv_st: [
                                 ((r.texatlas_rect.right as f32 - r.texatlas_rect.left as f32)
                                     - 1.0)
-                                    / tex_size.width as f32,
+                                    / mask_atlas.space_mgr.max.width as f32,
                                 ((r.texatlas_rect.bottom as f32 - r.texatlas_rect.top as f32)
                                     - 1.0)
-                                    / tex_size.height as f32,
-                                (r.texatlas_rect.left as f32 + 0.5) / tex_size.width as f32,
-                                (r.texatlas_rect.top as f32 + 0.5) / tex_size.height as f32,
+                                    / mask_atlas.space_mgr.max.height as f32,
+                                (r.texatlas_rect.left as f32 + 0.5)
+                                    / mask_atlas.space_mgr.max.width as f32,
+                                (r.texatlas_rect.top as f32 + 0.5)
+                                    / mask_atlas.space_mgr.max.height as f32,
                             ],
                             position_modifier_matrix: matrix.clone().transpose().0,
                             slice_borders: r.slice_borders,
                             tex_size_pixels_composite_mode_opacity: [
-                                tex_size.width as _,
-                                tex_size.height as _,
+                                mask_atlas.space_mgr.max.width as _,
+                                mask_atlas.space_mgr.max.height as _,
                                 r.composite_mode.shader_mode_value(),
                                 opacity,
                             ],
@@ -1369,14 +1500,470 @@ impl CompositeTree {
                     _ => 0,
                 };
 
-                if let Some((clip_rect_px, clip_config)) = active_clip {
-                    inst_builder.set_clip(&clip_rect_px, &clip_config);
-                } else {
-                    inst_builder.clear_clip();
-                }
-
                 inst_builder.draw_instance(instance_slot_index, backdrop_buffer_index);
                 instance_slot_index += 1;
+            }
+
+            if let Some(ref mut t) = r.text {
+                if t.layout_dirty {
+                    t.layout_dirty = false;
+                    cache.text_width = 0.0;
+                    cache.text_height = 0.0;
+                    cache.text_rects.clear();
+
+                    let dip_to_pixels_scaling: f32 = 2.0;
+
+                    tracing::trace!("relayout text");
+                    let corresponding_run_index = unsafe {
+                        apple_sdk_port::foundation::String::from_str_no_copy(
+                            None,
+                            "peridot.RunIndex",
+                        )
+                    };
+                    let cat_str = t
+                        .runs
+                        .iter()
+                        .map(|x| &x.content as &str)
+                        .collect::<String>();
+                    let cat_str = unsafe {
+                        apple_sdk_port::foundation::String::from_str_no_copy(None, &cat_str)
+                    };
+                    let mut str =
+                        apple_sdk_port::foundation::AttributedString::new(None, &cat_str, None)
+                            .expect("str.create")
+                            .to_mutable(None, cat_str.len());
+                    str.begin_editing();
+                    let mut range_head = 0;
+                    for (n, r) in t.runs.iter().enumerate() {
+                        let font = font_set.select(r.font_id);
+                        let range = apple_sdk_port::foundation::Range {
+                            location: range_head,
+                            length: r.content.len() as _,
+                        };
+
+                        let mut str_attr =
+                            apple_sdk_port::foundation::MutableDictionary::<
+                                apple_sdk_port::foundation::String,
+                                dyn apple_sdk_port::Object,
+                            >::new_copying_key_generic_value(None, 2)
+                            .expect("str_attr.create");
+                        str_attr.set(
+                            apple_sdk_port::foundation::AttributedStringKey::font(),
+                            font,
+                        );
+                        str_attr.set(
+                            &corresponding_run_index,
+                            &*apple_sdk_port::foundation::Number::new_i64(None, n as _)
+                                .expect("Number.create"),
+                        );
+                        str.set_attributes(range, &str_attr, true);
+
+                        range_head += r.content.len() as apple_sdk_port::foundation::Index;
+                    }
+                    str.end_editing();
+                    let framesetter =
+                        apple_sdk_port::text::Framesetter::from_attributed_string(&str)
+                            .expect("Framesetter.create");
+                    let frame = framesetter
+                        .create_frame(
+                            apple_sdk_port::foundation::Range {
+                                location: 0,
+                                length: 0,
+                            },
+                            &apple_sdk_port::graphics::Path::new_rect(
+                                apple_sdk_port::raw::CGRect {
+                                    origin: apple_sdk_port::raw::CGPoint { x: 0.0, y: 0.0 },
+                                    size: apple_sdk_port::raw::CGSize {
+                                        width: f64::MAX,
+                                        height: f64::MAX,
+                                    },
+                                },
+                                None,
+                            ),
+                            None,
+                        )
+                        .expect("Frame.create");
+                    let lines = frame.lines();
+                    tracing::debug!(line_count = lines.len(), "frameset lines");
+                    for n in 0..lines.len() {
+                        let runs = lines[n].glyph_runs();
+                        tracing::debug!(count = runs.len(), "glyph runs");
+                        let mut baseline_pos: apple_sdk_port::raw::CGFloat = 0.0;
+                        for m in 0..runs.len() {
+                            let font = match runs[m].attributes().get_untyped_value(
+                                apple_sdk_port::foundation::AttributedStringKey::font(),
+                            ) {
+                                Some(x) => unsafe {
+                                    apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                                },
+                                None => font_set.select(Default::default()),
+                            };
+
+                            baseline_pos = baseline_pos.max(font.ascent());
+                            // TODO: 複数行になる場合はleadingを行間に足す
+                            cache.text_height = cache
+                                .text_height
+                                .max((font.ascent() + font.descent()) as f32 * 2.0);
+                        }
+                        let mut x_shift = 0.0;
+                        for m in 0..runs.len() {
+                            let run = &runs[m];
+
+                            let attributes = run.attributes();
+                            attributes.apply_untyped_value(|key, value| {
+                                tracing::debug!(?key, ?value, "run attribute");
+                            });
+                            let font = match attributes.get_untyped_value(
+                                apple_sdk_port::foundation::AttributedStringKey::font(),
+                            ) {
+                                Some(x) => unsafe {
+                                    apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                                },
+                                None => font_set.select(Default::default()),
+                            };
+                            let run_index =
+                                match attributes.get_untyped_value(&corresponding_run_index) {
+                                    Some(x) => unsafe {
+                                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(
+                                            x.as_ptr(),
+                                        )
+                                        .i64_value()
+                                        .expect("invalid attr value")
+                                            as _
+                                    },
+                                    None => 0,
+                                };
+                            let font_id = t.runs[run_index].font_id;
+                            x_shift += t.runs[run_index].spacing_inline_start;
+
+                            let glyph_count = run.glyph_count();
+                            tracing::debug!(count = glyph_count, "run");
+                            let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
+                            font.bounding_rects_for_glyphs(
+                                apple_sdk_port::text::FontOrientation::Horizontal,
+                                unsafe {
+                                    core::slice::from_raw_parts(run.glyphs_ptr(), glyph_count as _)
+                                },
+                                glyph_bounding_rects.spare_capacity_mut(),
+                            );
+                            unsafe {
+                                glyph_bounding_rects.set_len(glyph_count as _);
+                            }
+
+                            for g in 0..glyph_count {
+                                let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
+                                let pos = unsafe { &*run.positions().add(g as usize) };
+                                let bounding_rect = &glyph_bounding_rects[g as usize];
+                                tracing::debug!(glyph, ?font_id, ?pos, ?bounding_rect, "glyph");
+
+                                if bounding_rect.size.width == 0.0
+                                    && bounding_rect.size.height == 0.0
+                                {
+                                    // empty shape(whitespace)
+                                    continue;
+                                }
+
+                                let (r, is_new) = mask_atlas.acquire(
+                                    (font_id as usize, glyph),
+                                    (bounding_rect.size.width as f32 * dip_to_pixels_scaling).ceil()
+                                        as _,
+                                    (bounding_rect.size.height as f32 * dip_to_pixels_scaling)
+                                        .ceil() as _,
+                                );
+                                let placement_box = GlyphPlacementBox {
+                                    left: ((pos.x + bounding_rect.origin.x) as f32 + x_shift)
+                                        * dip_to_pixels_scaling,
+                                    top: (baseline_pos + pos.y
+                                        - (bounding_rect.size.height + bounding_rect.origin.y))
+                                        as f32
+                                        * dip_to_pixels_scaling,
+                                    tex_left: r.left,
+                                    tex_top: r.top,
+                                    width: r.width,
+                                    height: r.height,
+                                };
+                                cache.text_width = cache.text_width.max(placement_box.right());
+                                cache.text_rects.push(placement_box);
+
+                                if is_new {
+                                    vector_raster_state.updated_rects.push(br::Rect2D {
+                                        offset: br::Offset2D {
+                                            x: r.left as _,
+                                            y: r.top as _,
+                                        },
+                                        extent: br::Extent2D {
+                                            width: r.width,
+                                            height: r.height,
+                                        },
+                                    });
+
+                                    let path = font
+                                        .create_path_for_glyph(glyph, None)
+                                        .expect("font.create_path_for_glyph");
+                                    let mut current_figure = None;
+                                    let mut pen_pos = (0.0, 0.0);
+                                    let offset_x = r.left as f32
+                                        - bounding_rect.origin.x as f32 * dip_to_pixels_scaling;
+                                    let offset_y = r.top as f32
+                                        - (bounding_rect.size.height + bounding_rect.origin.y)
+                                            as f32
+                                            * dip_to_pixels_scaling;
+                                    path.apply(|e| match e.r#type {
+                                        apple_sdk_port::raw::kCGPathElementMoveToPoint => {
+                                            let to = unsafe { &*e.points };
+
+                                            current_figure = Some((
+                                                to.clone(),
+                                                vector_raster_state.fill_tri_points.len(),
+                                            ));
+                                            pen_pos = (to.x, to.y);
+                                            vector_raster_state.fill_tri_points.push([
+                                                to.x as f32 * dip_to_pixels_scaling + offset_x,
+                                                to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                            ]);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
+                                            let to = unsafe { &*e.points };
+                                            let Some((_, filltri_index0)) = current_figure else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 =
+                                                vector_raster_state.fill_tri_points.len() - 1;
+                                            vector_raster_state.fill_tri_points.push([
+                                                to.x as f32 * dip_to_pixels_scaling + offset_x,
+                                                to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                            ]);
+                                            vector_raster_state.fill_tri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                vector_raster_state.fill_tri_points.len() as u16
+                                                    - 1,
+                                            ]);
+                                            pen_pos = (to.x, to.y);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
+                                            let points =
+                                                unsafe { core::slice::from_raw_parts(e.points, 2) };
+                                            let Some((_, filltri_index0)) = current_figure else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 =
+                                                vector_raster_state.fill_tri_points.len() - 1;
+                                            vector_raster_state.fill_tri_points.push([
+                                                points[1].x as f32 * dip_to_pixels_scaling
+                                                    + offset_x,
+                                                points[1].y as f32 * dip_to_pixels_scaling
+                                                    + offset_y,
+                                            ]);
+                                            vector_raster_state.fill_tri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                vector_raster_state.fill_tri_points.len() as u16
+                                                    - 1,
+                                            ]);
+                                            vector_raster_state.curve_tris.extend([
+                                                [
+                                                    pen_pos.0 as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    pen_pos.1 as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                    0.0,
+                                                    0.0,
+                                                ],
+                                                [
+                                                    points[0].x as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    points[0].y as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                    0.5,
+                                                    0.0,
+                                                ],
+                                                [
+                                                    points[1].x as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    points[1].y as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                    1.0,
+                                                    1.0,
+                                                ],
+                                            ]);
+                                            pen_pos = (points[1].x, points[1].y);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
+                                            let points =
+                                                unsafe { core::slice::from_raw_parts(e.points, 3) };
+                                            lyon_geom::CubicBezierSegment {
+                                                from: lyon_geom::point(pen_pos.0, pen_pos.1),
+                                                ctrl1: lyon_geom::point(points[0].x, points[0].y),
+                                                ctrl2: lyon_geom::point(points[1].x, points[1].y),
+                                                to: lyon_geom::point(points[2].x, points[2].y),
+                                            }
+                                            .for_each_quadratic_bezier(0.1, &mut |q| {
+                                                let Some((_, filltri_index0)) = current_figure
+                                                else {
+                                                    panic!("no figure started?");
+                                                };
+
+                                                let filltri_index1 =
+                                                    vector_raster_state.fill_tri_points.len() - 1;
+                                                vector_raster_state.fill_tri_points.push([
+                                                    q.to.x as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    q.to.y as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                ]);
+                                                vector_raster_state.fill_tri_indices.extend([
+                                                    filltri_index0 as u16,
+                                                    filltri_index1 as u16,
+                                                    vector_raster_state.fill_tri_points.len()
+                                                        as u16
+                                                        - 1,
+                                                ]);
+                                                vector_raster_state.curve_tris.extend([
+                                                    [
+                                                        pen_pos.0 as f32 * dip_to_pixels_scaling
+                                                            + offset_x,
+                                                        pen_pos.1 as f32 * dip_to_pixels_scaling
+                                                            + offset_y,
+                                                        0.0,
+                                                        0.0,
+                                                    ],
+                                                    [
+                                                        q.ctrl.x as f32 * dip_to_pixels_scaling
+                                                            + offset_x,
+                                                        q.ctrl.y as f32 * dip_to_pixels_scaling
+                                                            + offset_y,
+                                                        0.5,
+                                                        0.0,
+                                                    ],
+                                                    [
+                                                        q.to.x as f32 * dip_to_pixels_scaling
+                                                            + offset_x,
+                                                        q.to.y as f32 * dip_to_pixels_scaling
+                                                            + offset_y,
+                                                        1.0,
+                                                        1.0,
+                                                    ],
+                                                ]);
+                                                pen_pos = (q.to.x, q.to.y);
+                                            })
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementCloseSubpath => {
+                                            // line to start point
+                                            let Some((start_point, filltri_index0)) =
+                                                current_figure.take()
+                                            else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 =
+                                                vector_raster_state.fill_tri_points.len() - 1;
+                                            vector_raster_state.fill_tri_points.push([
+                                                start_point.x as f32 * dip_to_pixels_scaling
+                                                    + offset_x,
+                                                start_point.y as f32 * dip_to_pixels_scaling
+                                                    + offset_y,
+                                            ]);
+                                            vector_raster_state.fill_tri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                vector_raster_state.fill_tri_points.len() as u16
+                                                    - 1,
+                                            ]);
+                                            pen_pos = (start_point.x, start_point.y);
+                                        }
+                                        _ => unreachable!(),
+                                    })
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let x_offset = match t.horizontal_alignment {
+                    CompositeRectTextHorizontalAlignment::Start => 0.0,
+                    CompositeRectTextHorizontalAlignment::End => w - cache.text_width,
+                    CompositeRectTextHorizontalAlignment::Middle => (w - cache.text_width) * 0.5,
+                };
+                let y_offset = match t.vertical_alignment {
+                    CompositeRectTextVerticalAlignment::Start => 0.0,
+                    CompositeRectTextVerticalAlignment::End => h - cache.text_height,
+                    CompositeRectTextVerticalAlignment::Middle => (h - cache.text_height) * 0.5,
+                };
+                for b in cache.text_rects.iter() {
+                    unsafe {
+                        core::ptr::write(
+                            mapped_head
+                                .cast::<CompositeInstanceData>()
+                                .add(instance_slot_index),
+                            CompositeInstanceData {
+                                pos_st: [
+                                    b.width as f32,
+                                    b.height as f32,
+                                    b.left + x_offset,
+                                    b.top + y_offset,
+                                ],
+                                uv_st: [
+                                    b.width as f32 / mask_atlas.space_mgr.max.width as f32,
+                                    b.height as f32 / mask_atlas.space_mgr.max.height as f32,
+                                    b.tex_left as f32 / mask_atlas.space_mgr.max.width as f32,
+                                    b.tex_top as f32 / mask_atlas.space_mgr.max.height as f32,
+                                ],
+                                position_modifier_matrix: matrix.clone().transpose().0,
+                                slice_borders: r.slice_borders,
+                                tex_size_pixels_composite_mode_opacity: [
+                                    mask_atlas.space_mgr.max.width as _,
+                                    mask_atlas.space_mgr.max.height as _,
+                                    1.0,
+                                    opacity,
+                                ],
+                                color_tint: t.runs[0]
+                                    .color
+                                    .evaluate(current_sec, &self.parameter_store),
+                                pos_x_animation_data: [0.0; 4],
+                                pos_x_curve_control_points: [0.0; 4],
+                                pos_y_animation_data: [0.0; 4],
+                                pos_y_curve_control_points: [0.0; 4],
+                                pos_width_animation_data: [0.0; 4],
+                                pos_width_curve_control_points: [0.0; 4],
+                                pos_height_animation_data: [0.0; 4],
+                                pos_height_curve_control_points: [0.0; 4],
+                            },
+                        );
+                    }
+
+                    let backdrop_buffer_index = match r.composite_mode {
+                        CompositeMode::ColorTintBackdropBlur(_, ref stdev)
+                        | CompositeMode::FillColorBackdropBlur(_, ref stdev) => {
+                            let stdev = stdev.evaluate(current_sec, &self.parameter_store);
+
+                            if stdev > 0.0 {
+                                inst_builder.request_backdrop_blur(
+                                    unsafe { SafeF32::new_unchecked(stdev) },
+                                    br::Rect2D {
+                                        offset: br::Offset2D {
+                                            x: left as _,
+                                            y: top as _,
+                                        },
+                                        extent: br::Extent2D {
+                                            width: w as _,
+                                            height: h as _,
+                                        },
+                                    },
+                                )
+                            } else {
+                                0
+                            }
+                        }
+                        // とりあえず0
+                        _ => 0,
+                    };
+
+                    inst_builder.draw_instance(instance_slot_index, backdrop_buffer_index);
+                    instance_slot_index += 1;
+                }
             }
 
             processes.extend(r.children.iter().rev().map(|&x| {
@@ -2012,7 +2599,9 @@ impl CompositeRenderer {
         gfx: &VulkanDevice,
         tree: &mut CompositeTree,
         rt_size: br::Extent2D,
-        texatlas_size: br::Extent2D,
+        font_set: &FontSet,
+        mask_atlas: &mut GlyphAtlas,
+        vector_raster_state: &mut VectorRasterizationState,
         event_bus: &AppEventBus,
         current_sec: f32,
     ) -> CompositeRenderingData {
@@ -2024,8 +2613,17 @@ impl CompositeRenderer {
                 .map_staging(gfx)
                 .expect("composite.instances.stg.map")
         };
-        let render_data =
-            unsafe { tree.update(rt_size, current_sec, texatlas_size, ptr.ptr(), event_bus) };
+        let render_data = unsafe {
+            tree.update(
+                rt_size,
+                current_sec,
+                ptr.ptr(),
+                font_set,
+                mask_atlas,
+                vector_raster_state,
+                event_bus,
+            )
+        };
         if flush_required {
             unsafe {
                 gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
