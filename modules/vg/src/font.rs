@@ -56,54 +56,36 @@ impl FontProperties {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum FontConstructionError {
-    SysAPICallError(&'static str),
+    #[error("No matcher available")]
     MatcherUnavailable,
-    IO(std::io::Error),
+    #[error("Unsupported Font File")]
     UnsupportedFontFile,
+    #[error("System API Call Error: {0}")]
+    SysAPICallError(&'static str),
+    #[error("IO Error: {0}")]
+    IO(#[from] std::io::Error),
     #[cfg(feature = "use-freetype")]
-    FT2(freetype2::FT_Error),
+    #[error("FreeType2 Error: {0}")]
+    FT2(#[from] peridot_tp_freetype::Error),
     #[cfg(target_os = "windows")]
-    WindowsSysError(windows::core::Error),
-}
-impl From<std::io::Error> for FontConstructionError {
-    fn from(v: std::io::Error) -> Self {
-        Self::IO(v)
-    }
-}
-#[cfg(target_os = "windows")]
-impl From<windows::core::Error> for FontConstructionError {
-    fn from(value: windows::core::Error) -> Self {
-        Self::WindowsSysError(value)
-    }
+    #[error("Windows System Error: {0}")]
+    WindowsSysError(#[from] windows::core::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum GlyphLoadingError {
+    #[error("System API Call Error: {0}")]
     SysAPICallError(&'static str),
-    IO(std::io::Error),
+    #[error("IO Error: {0}")]
+    IO(#[from] std::io::Error),
     #[cfg(feature = "use-freetype")]
-    FT2(freetype2::FT_Error),
+    #[error("FreeType2 Error: {0}")]
+    FT2(#[from] peridot_tp_freetype::Error),
     #[cfg(target_os = "windows")]
-    WindowsSysError(windows::core::Error),
-}
-impl From<std::io::Error> for GlyphLoadingError {
-    fn from(v: std::io::Error) -> Self {
-        Self::IO(v)
-    }
-}
-#[cfg(feature = "use-freetype")]
-impl From<freetype2::FT_Error> for GlyphLoadingError {
-    fn from(v: freetype2::FT_Error) -> Self {
-        Self::FT2(v)
-    }
-}
-#[cfg(target_os = "windows")]
-impl From<windows::core::Error> for GlyphLoadingError {
-    fn from(value: windows::core::Error) -> Self {
-        Self::WindowsSysError(value)
-    }
+    #[error("Windows System Call Error: {0}")]
+    WindowsSysError(#[from] windows::core::Error),
 }
 
 /// Represents a font(layered on DirectWrite FontFace / FreeType Face)

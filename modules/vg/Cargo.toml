@@ -6,7 +6,7 @@ edition = "2018"
 
 [features]
 default = []
-use-freetype = ["freetype2"]
+use-freetype = ["dep:peridot-tp-freetype"]
 use-fontconfig = ["fontconfig"]
 ci-nolib = []
 
@@ -25,6 +25,8 @@ libc = "0.2"
 cfg-if = "1.0.0"
 peridot-command-object = { path = "../command-object" }
 parking_lot = "0.12"
+tracing.workspace = true
+thiserror.workspace = true
 
 [target.'cfg(target_os="macos")'.dependencies]
 apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
@@ -45,8 +47,8 @@ features = [
 [target.'cfg(windows)'.dependencies]
 widestring = "1.0"
 
-[dependencies.freetype2]
-git = "https://github.com/Pctg-x8/ft2-rs"
+[dependencies.peridot-tp-freetype]
+path = "../../thirdparty/freetype"
 optional = true
 
 [dependencies.fontconfig]

@@ -1,12 +1,11 @@
 //! FreeType and Fontconfig Loaders
 
 use euclid::Rect;
-use freetype2::outline::*;
-use freetype2::*;
-use lyon_path::builder::{FlatPathBuilder, PathBuilder};
+use lyon_path::builder::PathBuilder;
 use parking_lot::{
     MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
+use peridot_tp_freetype::{self as ft, FractionalExt};
 use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::sync::Arc;
@@ -59,31 +58,27 @@ impl Font for FreetypeFont {
         self.0.get_mut(glyph.0).load_glyph(glyph.1)?;
         self.0
             .get_mut(glyph.0)
-            .decompose_outline(transform, builder);
+            .decompose_outline(transform, builder)?;
 
         Ok(())
     }
 }
 
 #[repr(transparent)]
-pub struct UniqueSystem(FT_Library);
+pub struct UniqueSystem(ft::raw::FT_Library);
 unsafe impl Sync for UniqueSystem {}
 unsafe impl Send for UniqueSystem {}
 impl UniqueSystem {
     #[inline(always)]
     pub fn new() -> Self {
-        let mut obj = core::mem::MaybeUninit::uninit();
-        unsafe {
-            FT_Init_FreeType(obj.as_mut_ptr());
-            Self(obj.assume_init())
-        }
+        Self(ft::init_freetype().expect("Failed to initialize freetype2"))
     }
 }
 impl Drop for UniqueSystem {
     #[inline(always)]
     fn drop(&mut self) {
-        unsafe {
-            FT_Done_FreeType(self.0);
+        if let Err(e) = unsafe { ft::done_freetype(self.0) } {
+            tracing::error!(reason = ?e, "Failed to deinitialize freetype2");
         }
     }
 }
@@ -99,12 +94,12 @@ impl System {
 }
 
 pub enum FaceGroupEntry {
-    Unloaded(CString, FT_Long),
+    Unloaded(CString, ft::Long),
     Loaded(Face),
-    LoadedMem(Face, Arc<Vec<u8>>),
+    LoadedMem(Face, #[allow(dead_code)] Arc<Vec<u8>>),
 }
 impl FaceGroupEntry {
-    pub fn unloaded(path: &CStr, index: FT_Long) -> Self {
+    pub fn unloaded(path: &CStr, index: ft::Long) -> Self {
         Self::Unloaded(path.to_owned(), index)
     }
 
@@ -131,11 +126,15 @@ impl FaceGroup {
     pub fn get<'x>(&'x self, index: usize) -> MappedRwLockReadGuard<'x, Face> {
         if !self.faces[index].read().is_loaded() {
             let mut new_face = match &*self.faces[index].read() {
-                FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
+                FaceGroupEntry::Unloaded(p, x) => {
+                    self.parent.new_face(p, *x).expect("Failed to load face")
+                }
                 _ => unreachable!(),
             };
 
-            new_face.set_size(self.current_size.get());
+            if let Err(e) = new_face.set_size(self.current_size.get()) {
+                tracing::warn!(reason = ?e, "Failed to set face size");
+            }
             *self.faces[index].write() = FaceGroupEntry::Loaded(new_face);
         }
 
@@ -151,11 +150,15 @@ impl FaceGroup {
     pub fn get_mut<'x>(&'x self, index: usize) -> MappedRwLockWriteGuard<'x, Face> {
         if !self.faces[index].read().is_loaded() {
             let mut new_face = match &*self.faces[index].read() {
-                FaceGroupEntry::Unloaded(p, x) => self.parent.new_face(p.as_ptr() as _, *x),
+                FaceGroupEntry::Unloaded(p, x) => {
+                    self.parent.new_face(p, *x).expect("Failed to load face")
+                }
                 _ => unreachable!(),
             };
 
-            new_face.set_size(self.current_size.get());
+            if let Err(e) = new_face.set_size(self.current_size.get()) {
+                tracing::warn!(reason = ?e, "Failed to set face size");
+            }
             *self.faces[index].write() = FaceGroupEntry::Loaded(new_face);
         }
 
@@ -170,19 +173,21 @@ impl FaceGroup {
         for e in &self.faces {
             let mut eb = e.write();
             if let FaceGroupEntry::Loaded(f) | FaceGroupEntry::LoadedMem(f, _) = &mut *eb {
-                f.set_size(size);
+                if let Err(e) = f.set_size(size) {
+                    tracing::warn!(reason = ?e, "Failed to set face size");
+                }
             }
         }
     }
 
-    pub fn units_per_em(&self) -> FT_UShort {
+    pub fn units_per_em(&self) -> ft::raw::FT_UShort {
         self.get(0).units_per_em()
     }
-    pub fn ascender(&self) -> FT_Short {
+    pub fn ascender(&self) -> ft::raw::FT_Short {
         self.get(0).ascender()
     }
 
-    pub fn char_index(&self, c: char) -> Option<(usize, FT_UInt)> {
+    pub fn char_index(&self, c: char) -> Option<(usize, ft::raw::FT_UInt)> {
         for n in 0..self.faces.len() {
             let ci = self.get(n).char_index(c);
             if ci != 0 {
@@ -196,196 +201,142 @@ impl FaceGroup {
 
 pub struct Face {
     _parent: System,
-    ptr: FT_Face,
+    ptr: ft::raw::FT_Face,
 }
 impl System {
-    pub fn new_face(&self, path: *const u8, face_index: FT_Long) -> Face {
-        let us = self.0.write();
+    #[inline]
+    pub fn new_face(&self, path: &core::ffi::CStr, face_index: ft::Long) -> ft::Result<Face> {
+        let ptr = unsafe { ft::new_face(self.0.write().0, path, face_index)? };
 
-        let mut ptr = core::mem::MaybeUninit::uninit();
-        unsafe {
-            FT_New_Face(us.0, path as _, face_index, ptr.as_mut_ptr());
-            Face {
-                _parent: self.clone(),
-                ptr: ptr.assume_init(),
-            }
-        }
+        Ok(Face {
+            _parent: self.clone(),
+            ptr,
+        })
     }
 
-    pub fn new_face_from_mem(&self, mem: &[u8], face_index: FT_Long) -> Result<Face, FT_Error> {
-        let us = self.0.write();
+    #[inline]
+    pub fn new_face_from_mem(&self, mem: &[u8], face_index: ft::Long) -> ft::Result<Face> {
+        let ptr = unsafe { ft::new_memory_face(self.0.write().0, &mem, face_index)? };
 
-        let mut ptr = core::mem::MaybeUninit::uninit();
-        unsafe {
-            let r = FT_New_Memory_Face(
-                us.0,
-                mem.as_ptr(),
-                mem.len() as _,
-                face_index,
-                ptr.as_mut_ptr(),
-            );
-            if r != 0 {
-                Err(r)
-            } else {
-                Ok(Face {
-                    _parent: self.clone(),
-                    ptr: ptr.assume_init(),
-                })
-            }
-        }
+        Ok(Face {
+            _parent: self.clone(),
+            ptr,
+        })
     }
 }
 impl Drop for Face {
     fn drop(&mut self) {
         let _us_lock = self._parent.0.write();
 
-        unsafe {
-            FT_Done_Face(self.ptr);
+        if let Err(e) = unsafe { ft::done_face(self.ptr) } {
+            tracing::error!(reason = ?e, "cleanup freetype face failed");
         }
     }
 }
 unsafe impl Sync for Face {}
 unsafe impl Send for Face {}
-
 impl Face {
-    pub fn select_unicode(&mut self) {
-        unsafe { FT_Select_Charmap(self.ptr, FT_ENCODING_UNICODE) };
+    #[inline(always)]
+    pub fn set_size(&mut self, size: f32) -> ft::Result<()> {
+        unsafe { ft::set_char_size(self.ptr, 0, size.to_f26dot6_lossy(), 0, 100) }
     }
 
-    pub fn set_size(&mut self, size: f32) {
-        unsafe { FT_Set_Char_Size(self.ptr, (size * 64.0) as _, (size * 64.0) as _, 100, 100) };
-    }
-
-    pub fn units_per_em(&self) -> FT_UShort {
+    #[inline(always)]
+    pub fn units_per_em(&self) -> ft::UShort {
         unsafe { (*self.ptr).units_per_em }
     }
 
-    pub fn ascender(&self) -> FT_Short {
+    #[inline(always)]
+    pub fn ascender(&self) -> ft::Short {
         unsafe { (*self.ptr).ascender }
     }
 
-    pub fn char_index(&self, c: char) -> FT_UInt {
-        unsafe { FT_Get_Char_Index(self.ptr, c as _) }
+    #[inline(always)]
+    pub fn char_index(&self, c: char) -> ft::UInt {
+        unsafe { ft::char_index(self.ptr, c as _) }
     }
 
-    pub fn load_glyph(&mut self, g: u32) -> Result<(), FT_Error> {
-        let r = unsafe { FT_Load_Glyph(self.ptr, g, FT_LOAD_DEFAULT) };
-        if r != 0 {
-            Err(r)
-        } else {
-            Ok(())
-        }
+    #[inline(always)]
+    pub fn load_glyph(&mut self, g: u32) -> ft::Result<()> {
+        unsafe { ft::load_glyph(self.ptr, g, ft::LoadFlags::DEFAULT) }
     }
 
-    pub fn glyph_advance(&self) -> &FT_Vector {
+    pub fn glyph_advance(&self) -> &ft::Vector {
         unsafe { &(*(*self.ptr).glyph).advance }
     }
 
-    pub fn glyph_metrics(&self) -> &FT_Glyph_Metrics {
+    pub fn glyph_metrics(&self) -> &ft::raw::FT_Glyph_Metrics {
         unsafe { &(*(*self.ptr).glyph).metrics }
     }
 
+    #[inline(always)]
     pub fn decompose_outline<B: PathBuilder>(
         &mut self,
         transform: &euclid::Transform2D<f32>,
         builder: &mut B,
-    ) {
-        let decomposer = FT_Outline_Funcs {
-            move_to: outline_decompose_moveto::<B>,
-            line_to: outline_decompose_lineto::<B>,
-            conic_to: outline_decompose_conicto::<B>,
-            cubic_to: outline_decompose_cubicto::<B>,
-            shift: 0,
-            delta: 0,
-        };
-        let mut ctx = OutlineContext { builder, transform };
-
+    ) -> ft::Result<()> {
         unsafe {
-            FT_Outline_Decompose(
+            ft::outline_decompose(
                 &mut (*(*self.ptr).glyph).outline,
-                &decomposer,
-                &mut ctx as *mut _ as _,
-            );
+                &mut OutlineContext { builder, transform },
+                0,
+                0,
+            )
         }
     }
 }
 
-struct OutlineContext<'t, B: FlatPathBuilder> {
+struct OutlineContext<'t, B> {
     builder: &'t mut B,
     transform: &'t euclid::Transform2D<f32>,
 }
+impl<B: PathBuilder> ft::OutlineFuncs for OutlineContext<'_, B> {
+    fn move_to(&mut self, to: &peridot_tp_freetype::Vector) {
+        self.builder.move_to(
+            self.transform
+                .transform_point(&euclid::point2(to.x as f32 / 64.0, to.y as f32 / 64.0)),
+        );
+    }
 
-extern "system" fn outline_decompose_moveto<B: FlatPathBuilder>(
-    to: *const FT_Vector,
-    context: *mut libc::c_void,
-) -> libc::c_int {
-    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
+    fn line_to(&mut self, to: &peridot_tp_freetype::Vector) {
+        self.builder.line_to(
+            self.transform
+                .transform_point(&euclid::point2(to.x as f32 / 64.0, to.y as f32 / 64.0)),
+        );
+    }
 
-    let vector = unsafe { &*to };
-    ctx.builder
-        .move_to(ctx.transform.transform_point(&euclid::point2(
-            vector.x as f32 / 64.0,
-            vector.y as f32 / 64.0,
-        )));
+    fn conic_to(
+        &mut self,
+        control: &peridot_tp_freetype::Vector,
+        to: &peridot_tp_freetype::Vector,
+    ) {
+        self.builder.quadratic_bezier_to(
+            self.transform.transform_point(&euclid::point2(
+                control.x as f32 / 64.0,
+                control.y as f32 / 64.0,
+            )),
+            self.transform
+                .transform_point(&euclid::point2(to.x as f32 / 64.0, to.y as f32 / 64.0)),
+        );
+    }
 
-    0
-}
-extern "system" fn outline_decompose_lineto<B: FlatPathBuilder>(
-    to: *const FT_Vector,
-    context: *mut libc::c_void,
-) -> libc::c_int {
-    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
-
-    let vector = unsafe { &*to };
-    ctx.builder
-        .line_to(ctx.transform.transform_point(&euclid::point2(
-            vector.x as f32 / 64.0,
-            vector.y as f32 / 64.0,
-        )));
-
-    0
-}
-extern "system" fn outline_decompose_conicto<B: PathBuilder>(
-    control: *const FT_Vector,
-    to: *const FT_Vector,
-    context: *mut libc::c_void,
-) -> libc::c_int {
-    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
-
-    let cv = unsafe { &*control };
-    let vector = unsafe { &*to };
-    ctx.builder.quadratic_bezier_to(
-        ctx.transform
-            .transform_point(&euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0)),
-        ctx.transform.transform_point(&euclid::point2(
-            vector.x as f32 / 64.0,
-            vector.y as f32 / 64.0,
-        )),
-    );
-
-    0
-}
-extern "system" fn outline_decompose_cubicto<B: PathBuilder>(
-    control: *const FT_Vector,
-    control2: *const FT_Vector,
-    to: *const FT_Vector,
-    context: *mut libc::c_void,
-) -> libc::c_int {
-    let ctx = unsafe { &mut *(context as *mut OutlineContext<B>) };
-
-    let cv = unsafe { &*control };
-    let cv2 = unsafe { &*control2 };
-    let vector = unsafe { &*to };
-    ctx.builder.cubic_bezier_to(
-        ctx.transform
-            .transform_point(&euclid::point2(cv.x as f32 / 64.0, cv.y as f32 / 64.0)),
-        ctx.transform
-            .transform_point(&euclid::point2(cv2.x as f32 / 64.0, cv2.y as f32 / 64.0)),
-        ctx.transform.transform_point(&euclid::point2(
-            vector.x as f32 / 64.0,
-            vector.y as f32 / 64.0,
-        )),
-    );
-
-    0
+    fn cubic_to(
+        &mut self,
+        control1: &peridot_tp_freetype::Vector,
+        control2: &peridot_tp_freetype::Vector,
+        to: &peridot_tp_freetype::Vector,
+    ) {
+        self.builder.cubic_bezier_to(
+            self.transform.transform_point(&euclid::point2(
+                control1.x as f32 / 64.0,
+                control1.y as f32 / 64.0,
+            )),
+            self.transform.transform_point(&euclid::point2(
+                control2.x as f32 / 64.0,
+                control2.y as f32 / 64.0,
+            )),
+            self.transform
+                .transform_point(&euclid::point2(to.x as f32 / 64.0, to.y as f32 / 64.0)),
+        );
+    }
 }
