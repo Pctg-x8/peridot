@@ -10,6 +10,9 @@ android-build/
 **/*.spv
 **/*.prcc
 
+# devtools
+**/.cache/clangd/
+
 ## other artifacts
 peridot-sdk/
 peridot-sdk.zip
