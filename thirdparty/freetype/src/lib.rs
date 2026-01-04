@@ -2,6 +2,20 @@ use core::mem::MaybeUninit;
 
 pub mod raw;
 
+pub type Short = raw::FT_Short;
+pub type UShort = raw::FT_UShort;
+pub type Int = raw::FT_Int;
+pub type UInt = raw::FT_UInt;
+pub type Long = raw::FT_Long;
+pub type ULong = raw::FT_ULong;
+pub type Vector = raw::FT_Vector;
+pub type Fixed = raw::FT_Fixed;
+pub type F26Dot6 = raw::FT_F26Dot6;
+pub type Matrix = raw::FT_Matrix;
+
+pub type Face = raw::FT_Face;
+pub type Outline = raw::FT_Outline;
+
 pub type Result<T> = core::result::Result<T, Error>;
 #[repr(transparent)]
 pub struct Error(pub(crate) raw::FT_Error);
@@ -10,6 +24,13 @@ impl core::fmt::Debug for Error {
         write!(f, "FT_Error({})", self.0)
     }
 }
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = unsafe { core::ffi::CStr::from_ptr(raw::FT_Error_String(self.0)) };
+        write!(f, "{}", str.to_str().unwrap_or("Unknown error"))
+    }
+}
+impl core::error::Error for Error {}
 #[inline(always)]
 pub const fn ft_error_to_result(e: raw::FT_Error) -> Result<()> {
     if e == 0 { Ok(()) } else { Err(Error(e)) }
@@ -31,7 +52,7 @@ pub unsafe fn done_freetype(lib: raw::FT_Library) -> Result<()> {
 pub unsafe fn new_face(
     lib: raw::FT_Library,
     filepathname: &core::ffi::CStr,
-    face_index: raw::FT_Long,
+    face_index: Long,
 ) -> Result<raw::FT_Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
@@ -44,7 +65,7 @@ pub unsafe fn new_face(
 pub unsafe fn new_memory_face(
     lib: raw::FT_Library,
     file_base: &[raw::FT_Byte],
-    face_index: raw::FT_Long,
+    face_index: Long,
 ) -> Result<raw::FT_Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
@@ -63,7 +84,7 @@ pub unsafe fn new_memory_face(
 pub unsafe fn open_face(
     lib: raw::FT_Library,
     args: &raw::FT_Open_Args,
-    face_index: raw::FT_Long,
+    face_index: Long,
 ) -> Result<raw::FT_Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe { raw::FT_Open_Face(lib, args, face_index, inst.as_mut_ptr()) })?;
@@ -71,27 +92,27 @@ pub unsafe fn open_face(
 }
 
 #[inline(always)]
-pub unsafe fn attach_file(face: raw::FT_Face, filepathname: &core::ffi::CStr) -> Result<()> {
+pub unsafe fn attach_file(face: Face, filepathname: &core::ffi::CStr) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Attach_File(face, filepathname.as_ptr()) })
 }
 
 #[inline(always)]
-pub unsafe fn attach_stream(face: raw::FT_Face, parameters: &raw::FT_Open_Args) -> Result<()> {
+pub unsafe fn attach_stream(face: Face, parameters: &raw::FT_Open_Args) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Attach_Stream(face, parameters) })
 }
 
 #[inline(always)]
-pub unsafe fn reference_face(face: raw::FT_Face) -> Result<()> {
+pub unsafe fn reference_face(face: Face) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Reference_Face(face) })
 }
 
 #[inline(always)]
-pub unsafe fn done_face(face: raw::FT_Face) -> Result<()> {
+pub unsafe fn done_face(face: Face) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Done_Face(face) })
 }
 
 #[inline(always)]
-pub unsafe fn select_size(face: raw::FT_Face, strike_index: raw::FT_Int) -> Result<()> {
+pub unsafe fn select_size(face: Face, strike_index: Int) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Select_Size(face, strike_index) })
 }
 
@@ -105,17 +126,17 @@ pub enum SizeRequestType {
 }
 
 #[inline(always)]
-pub unsafe fn request_size(face: raw::FT_Face, req: raw::FT_Size_Request) -> Result<()> {
+pub unsafe fn request_size(face: Face, req: raw::FT_Size_Request) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Request_Size(face, req) })
 }
 
 #[inline(always)]
 pub unsafe fn set_char_size(
-    face: raw::FT_Face,
-    char_width: raw::FT_F26Dot6,
-    char_height: raw::FT_F26Dot6,
-    horz_resolution: raw::FT_UInt,
-    vert_resolution: raw::FT_UInt,
+    face: Face,
+    char_width: F26Dot6,
+    char_height: F26Dot6,
+    horz_resolution: UInt,
+    vert_resolution: UInt,
 ) -> Result<()> {
     ft_error_to_result(unsafe {
         raw::FT_Set_Char_Size(
@@ -129,29 +150,17 @@ pub unsafe fn set_char_size(
 }
 
 #[inline(always)]
-pub unsafe fn set_pixel_sizes(
-    face: raw::FT_Face,
-    pixel_width: raw::FT_UInt,
-    pixel_height: raw::FT_UInt,
-) -> Result<()> {
+pub unsafe fn set_pixel_sizes(face: Face, pixel_width: UInt, pixel_height: UInt) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Set_Pixel_Sizes(face, pixel_width, pixel_height) })
 }
 
 #[inline(always)]
-pub unsafe fn load_glyph(
-    face: raw::FT_Face,
-    glyph_index: raw::FT_UInt,
-    load_flags: LoadFlags,
-) -> Result<()> {
+pub unsafe fn load_glyph(face: Face, glyph_index: UInt, load_flags: LoadFlags) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Load_Glyph(face, glyph_index, load_flags.bits()) })
 }
 
 #[inline(always)]
-pub unsafe fn load_char(
-    face: raw::FT_Face,
-    char_code: raw::FT_ULong,
-    load_flags: LoadFlags,
-) -> Result<()> {
+pub unsafe fn load_char(face: Face, char_code: ULong, load_flags: LoadFlags) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Load_Char(face, char_code, load_flags.bits()) })
 }
 
@@ -192,9 +201,9 @@ impl LoadFlags {
 
 #[inline(always)]
 pub unsafe fn set_transform(
-    face: raw::FT_Face,
-    transform: Option<&mut raw::FT_Matrix>,
-    delta: Option<&mut raw::FT_Vector>,
+    face: Face,
+    transform: Option<&mut Matrix>,
+    delta: Option<&mut Vector>,
 ) {
     unsafe { raw::FT_Set_Transform(face, opt_pointer_mut(transform), opt_pointer_mut(delta)) }
 }
@@ -224,11 +233,11 @@ pub enum KerningMode {
 
 #[inline(always)]
 pub unsafe fn kerning(
-    face: raw::FT_Face,
-    left_glyph: raw::FT_UInt,
-    right_glyph: raw::FT_UInt,
+    face: Face,
+    left_glyph: UInt,
+    right_glyph: UInt,
     kern_mode: KerningMode,
-) -> Result<raw::FT_Vector> {
+) -> Result<Vector> {
     let mut sink = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
         raw::FT_Get_Kerning(
@@ -243,11 +252,7 @@ pub unsafe fn kerning(
 }
 
 #[inline(always)]
-pub unsafe fn track_kerning(
-    face: raw::FT_Face,
-    point_size: raw::FT_Fixed,
-    degree: raw::FT_Int,
-) -> Result<raw::FT_Fixed> {
+pub unsafe fn track_kerning(face: Face, point_size: Fixed, degree: Int) -> Result<Fixed> {
     let mut sink = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
         raw::FT_Get_Track_Kerning(face, point_size, degree, sink.as_mut_ptr())
@@ -257,22 +262,102 @@ pub unsafe fn track_kerning(
 
 #[inline(always)]
 pub unsafe fn glyph_name(
-    face: raw::FT_Face,
-    glyph_index: raw::FT_UInt,
+    face: Face,
+    glyph_index: UInt,
     buffer: raw::FT_Pointer,
-    buffer_max: raw::FT_UInt,
+    buffer_max: UInt,
 ) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Get_Glyph_Name(face, glyph_index, buffer, buffer_max) })
 }
 
 #[inline(always)]
-pub unsafe fn select_charmap(face: raw::FT_Face, encoding: raw::FT_Encoding) -> Result<()> {
+pub unsafe fn select_charmap(face: Face, encoding: raw::FT_Encoding) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Select_Charmap(face, encoding) })
 }
 
 #[inline(always)]
-pub unsafe fn set_charmap(face: raw::FT_Face, charmap: raw::FT_CharMap) -> Result<()> {
+pub unsafe fn set_charmap(face: Face, charmap: raw::FT_CharMap) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Set_Charmap(face, charmap) })
+}
+
+#[inline(always)]
+pub unsafe fn char_index(face: Face, charcode: ULong) -> raw::FT_UInt {
+    unsafe { raw::FT_Get_Char_Index(face, charcode) }
+}
+
+pub trait OutlineFuncs {
+    fn move_to(&mut self, to: &Vector);
+    fn line_to(&mut self, to: &Vector);
+    fn conic_to(&mut self, control: &Vector, to: &Vector);
+    fn cubic_to(&mut self, control1: &Vector, control2: &Vector, to: &Vector);
+}
+
+#[inline(always)]
+pub unsafe fn outline_decompose<F: OutlineFuncs>(
+    outline: &mut Outline,
+    funcs: &mut F,
+    shift: core::ffi::c_int,
+    delta: raw::FT_Pos,
+) -> Result<()> {
+    extern "system" fn move_to<F: OutlineFuncs>(
+        to: *const Vector,
+        user: *mut core::ffi::c_void,
+    ) -> core::ffi::c_int {
+        unsafe {
+            F::move_to(&mut *user.cast::<F>(), &*to);
+        }
+        0
+    }
+    extern "system" fn line_to<F: OutlineFuncs>(
+        to: *const Vector,
+        user: *mut core::ffi::c_void,
+    ) -> core::ffi::c_int {
+        unsafe {
+            F::line_to(&mut *user.cast::<F>(), &*to);
+        }
+        0
+    }
+    extern "system" fn conic_to<F: OutlineFuncs>(
+        control: *const Vector,
+        to: *const Vector,
+        user: *mut core::ffi::c_void,
+    ) -> core::ffi::c_int {
+        unsafe {
+            F::conic_to(&mut *user.cast::<F>(), &*control, &*to.add(1));
+        }
+        0
+    }
+    extern "system" fn cubic_to<F: OutlineFuncs>(
+        control1: *const Vector,
+        control2: *const Vector,
+        to: *const Vector,
+        user: *mut core::ffi::c_void,
+    ) -> core::ffi::c_int {
+        unsafe {
+            F::cubic_to(
+                &mut *user.cast::<F>(),
+                &*control1,
+                &*control2.add(1),
+                &*to.add(2),
+            );
+        }
+        0
+    }
+
+    ft_error_to_result(unsafe {
+        raw::FT_Outline_Decompose(
+            outline,
+            &raw::FT_Outline_Funcs {
+                move_to: move_to::<F>,
+                line_to: line_to::<F>,
+                conic_to: conic_to::<F>,
+                cubic_to: cubic_to::<F>,
+                shift,
+                delta,
+            },
+            funcs as *mut _ as *mut _,
+        )
+    })
 }
 
 pub trait FractionalExt {
