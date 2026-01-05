@@ -1,24 +1,33 @@
 //! fontconfig Font Provider impl
 
-use fontconfig::FcRange;
+use peridot_tp_fontconfig as fc;
 
 use crate::{
-    font::freetype::FreetypeFont, FontConstructionError, FontProvider, FontProviderConstruct,
-    TTFBlob,
+    font::freetype::FreetypeFont, FontConstructionError, FontProperties, FontProvider,
+    FontProviderConstruct, TTFBlob,
 };
 
 use super::super::freetype;
-use fontconfig::*;
 
 pub struct FontconfigFontProvider {
     ft: freetype::System,
-    fc: Config,
+    fc: core::ptr::NonNull<fc::Config>,
+}
+impl Drop for FontconfigFontProvider {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe { fc::fini() }
+    }
 }
 impl FontProviderConstruct for FontconfigFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
+        unsafe {
+            fc::init().expect("fontconfig init failed");
+        }
+
         Ok(Self {
             ft: freetype::System::new(),
-            fc: Config::init(),
+            fc: unsafe { fc::Config::current().expect("fontconfig not active") },
         })
     }
 }
@@ -32,31 +41,29 @@ impl FontProvider for FontconfigFontProvider {
         size: f32,
     ) -> Result<Self::Font, crate::FontConstructionError> {
         let c_family_name = std::ffi::CString::new(family_name).expect("FFI Conversion failure");
-        let mut pat = Pattern::with_name_weight_style_size(
-            c_family_name.as_ptr() as *const _,
-            properties.weight as _,
-            properties.italic,
-            size,
-        )
-        .ok_or(FontConstructionError::SysAPICallError("FcPatternBuild"))?;
-        self.fc.substitute_pattern(&mut pat);
-        pat.default_substitute();
-        let fonts = self
-            .fc
-            .sort_fonts(&pat)
-            .ok_or(FontConstructionError::SysAPICallError("FcFontSort"))?;
+        let mut pat = Pattern(
+            fc::Pattern::new()
+                .ok_or_else(|| FontConstructionError::SysAPICallError("FcPatternCreate"))?,
+        );
+        pat.add_family_name(&c_family_name)
+            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
+        pat.add_properties(properties)
+            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
+        pat.add_size(size)
+            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
+        let fonts = pat.perform_match(unsafe { self.fc.as_mut() })?;
 
         let group_desc = fonts
             .iter()
             .map(|f| {
+                let face_index = f
+                    .get::<core::ffi::c_int>(fc::Pattern::KEY_INDEX)
+                    .map_err(|_| FontConstructionError::SysAPICallError("FcPatternGetInteger"))?
+                    .ok_or_else(|| FontConstructionError::SysAPICallError("FcPatternGetInteger"))?;
                 let font_path = f
-                    .get_filepath()
-                    .ok_or(FontConstructionError::SysAPICallError("FcPatternGetString"))?;
-                let face_index =
-                    f.get_face_index()
-                        .ok_or(FontConstructionError::SysAPICallError(
-                            "FcPatternGetInteger",
-                        ))?;
+                    .get::<&core::ffi::CStr>(fc::Pattern::KEY_FILE)
+                    .map_err(|_| FontConstructionError::SysAPICallError("FcPatternGetString"))?
+                    .ok_or_else(|| FontConstructionError::SysAPICallError("FcPatternGetString"))?;
 
                 Ok(freetype::FaceGroupEntry::unloaded(
                     font_path,
@@ -75,7 +82,7 @@ impl FontProvider for FontconfigFontProvider {
         e: &peridot::Engine<NL>,
         asset_path: &str,
         size: f32,
-    ) -> Result<Self::Font, crate::FontConstructionError> {
+    ) -> Result<Self::Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
         let f = self
             .ft
@@ -91,183 +98,70 @@ impl FontProvider for FontconfigFontProvider {
 }
 
 #[repr(transparent)]
-struct Config(core::ptr::NonNull<FcConfig>);
-unsafe impl Sync for Config {}
-unsafe impl Send for Config {}
-impl Config {
-    fn init() -> Self {
-        unsafe {
-            FcInit();
-
-            Self(core::ptr::NonNull::new_unchecked(FcConfigGetCurrent()))
-        }
-    }
-
-    fn substitute_pattern(&mut self, pat: &mut Pattern) {
-        unsafe {
-            FcConfigSubstitute(self.0.as_ptr(), pat.0.as_ptr(), FcMatchPattern);
-        }
-    }
-
-    fn sort_fonts(&mut self, pat: &Pattern) -> Option<FontSet> {
-        let mut _res = 0;
-        let ptr = unsafe {
-            FcFontSort(
-                self.0.as_ptr(),
-                pat.0.as_ptr(),
-                FcTrue,
-                std::ptr::null_mut(),
-                &mut _res,
-            )
-        };
-
-        core::ptr::NonNull::new(ptr).map(FontSet)
-    }
-}
-
-#[repr(transparent)]
-struct PatternRef(core::ptr::NonNull<FcPattern>);
-unsafe impl Sync for PatternRef {}
-unsafe impl Send for PatternRef {}
-impl PatternRef {
-    fn get_filepath(&self) -> Option<&core::ffi::CStr> {
-        let mut file = core::mem::MaybeUninit::uninit();
-        let res = unsafe {
-            FcPatternGetString(self.0.as_ptr(), FC_FILE.as_ptr() as _, 0, file.as_mut_ptr())
-        };
-        if res == FcResultMatch {
-            Some(unsafe { core::ffi::CStr::from_ptr(file.assume_init() as *const _) })
-        } else {
-            None
-        }
-    }
-
-    fn get_face_index(&self) -> Option<u32> {
-        let mut index = core::mem::MaybeUninit::uninit();
-        let res = unsafe {
-            FcPatternGetInteger(
-                self.0.as_ptr(),
-                FC_INDEX.as_ptr() as _,
-                0,
-                index.as_mut_ptr(),
-            )
-        };
-        if res == FcResultMatch {
-            Some(unsafe { index.assume_init() as _ })
-        } else {
-            None
-        }
-    }
-}
-
-struct Pattern(core::ptr::NonNull<FcPattern>);
-unsafe impl Sync for Pattern {}
-unsafe impl Send for Pattern {}
-impl Pattern {
-    /*pub fn parse_name(name: *const u8) -> Option<Self>
-    {
-        NonNull::new(unsafe { FcNameParse(name) }).map(|ptr| Pattern { ptr })
-    }*/
-
-    fn with_name_weight_style_size(
-        name: *const u8,
-        ot_weight: u32,
-        italic: bool,
-        size: f32,
-    ) -> Option<Self> {
-        let size_range = Range::new_double(size as _, size as _).expect("Range creation failed");
-        let ptr = unsafe {
-            FcPatternBuild(
-                core::ptr::null_mut(),
-                FC_FAMILY.as_ptr(),
-                FcTypeString,
-                name,
-                FC_WEIGHT.as_ptr(),
-                FcTypeInteger,
-                FcWeightFromOpenType(ot_weight as _) as FcChar32,
-                FC_SLANT.as_ptr(),
-                FcTypeInteger,
-                if italic { FC_SLANT_ITALIC } else { 0 } as FcChar32,
-                FC_SIZE.as_ptr(),
-                FcTypeRange,
-                size_range.0.as_ptr(),
-                core::ptr::null::<FcChar8>(),
-            )
-        };
-
-        core::ptr::NonNull::new(ptr).map(Self)
-    }
-
-    fn default_substitute(&mut self) {
-        unsafe {
-            FcDefaultSubstitute(self.0.as_ptr());
-        }
-    }
-
-    #[allow(dead_code)]
-    fn dump(&self) {
-        unsafe {
-            FcPatternPrint(self.0.as_ptr());
-        }
-    }
-}
+pub struct Pattern(core::ptr::NonNull<fc::Pattern>);
 impl Drop for Pattern {
+    #[inline(always)]
     fn drop(&mut self) {
-        unsafe {
-            FcPatternDestroy(self.0.as_ptr());
-        }
+        unsafe { fc::Pattern::destroy(self.0.as_mut()) }
     }
 }
-impl std::ops::Deref for Pattern {
-    type Target = PatternRef;
-    fn deref(&self) -> &PatternRef {
-        unsafe { std::mem::transmute(self) }
+impl Pattern {
+    #[inline(always)]
+    pub fn add_family_name(&mut self, family_name: &core::ffi::CStr) -> Result<(), ()> {
+        unsafe { self.0.as_mut().add(fc::Pattern::KEY_FAMILY, family_name) }
+    }
+
+    #[inline(always)]
+    pub fn add_properties(&mut self, props: &FontProperties) -> Result<(), ()> {
+        unsafe {
+            self.0
+                .as_mut()
+                .add(fc::Pattern::KEY_WEIGHT, &props.weight)?;
+            self.0.as_mut().add(fc::Pattern::KEY_SLANT, &props.italic)?;
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn add_size(&mut self, size: f32) -> Result<(), ()> {
+        unsafe {
+            self.0
+                .as_mut()
+                .add(fc::Pattern::KEY_SIZE, &(size as core::ffi::c_double))
+        }
+    }
+
+    pub fn perform_match(&mut self, fc: &mut fc::Config) -> Result<FontSet, FontConstructionError> {
+        unsafe {
+            fc.substitute(self.0.as_mut(), fc::MatchKind::Pattern)
+                .map_err(|_| FontConstructionError::SysAPICallError("FcConfigSubstitute"))?;
+            self.0.as_mut().default_substitute();
+
+            Ok(FontSet(
+                fc::sort(fc, self.0.as_mut(), false, None)
+                    .map_err(|_| FontConstructionError::SysAPICallError("FcFontSort"))?,
+            ))
+        }
     }
 }
 
 #[repr(transparent)]
-struct FontSet(core::ptr::NonNull<FcFontSet>);
-unsafe impl Sync for FontSet {}
-unsafe impl Send for FontSet {}
-impl FontSet {
-    #[allow(dead_code)]
-    fn dump(&self) {
-        unsafe {
-            FcFontSetPrint(self.0.as_ptr());
-        }
-    }
-
-    fn iter(&self) -> impl Iterator<Item = PatternRef> {
-        let sliced = unsafe {
-            std::slice::from_raw_parts(self.0.as_ref().fonts, self.0.as_ref().nfont as _)
-        };
-
-        sliced
-            .iter()
-            .map(|&p| unsafe { PatternRef(core::ptr::NonNull::new_unchecked(p)) })
-    }
-}
+pub struct FontSet(core::ptr::NonNull<fc::FontSet>);
 impl Drop for FontSet {
+    #[inline(always)]
     fn drop(&mut self) {
-        unsafe {
-            FcFontSetDestroy(self.0.as_ptr());
-        }
+        unsafe { fc::FontSet::destroy(self.0.as_mut()) }
     }
 }
-
-#[repr(transparent)]
-struct Range(std::ptr::NonNull<FcRange>);
-unsafe impl Sync for Range {}
-unsafe impl Send for Range {}
-impl Range {
-    fn new_double(begin: f64, end: f64) -> Option<Self> {
-        std::ptr::NonNull::new(unsafe { FcRangeCreateDouble(begin as _, end as _) }).map(Self)
-    }
-}
-impl Drop for Range {
-    fn drop(&mut self) {
+impl FontSet {
+    #[inline(always)]
+    pub fn iter(&self) -> impl Iterator<Item = &mut fc::Pattern> {
         unsafe {
-            FcRangeDestroy(self.0.as_ptr());
+            (*self.0.as_ptr())
+                .fonts_slice()
+                .into_iter()
+                .map(|x| &mut *x.as_ptr())
         }
     }
 }

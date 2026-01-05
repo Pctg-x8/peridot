@@ -7,7 +7,7 @@ edition = "2018"
 [features]
 default = []
 use-freetype = ["dep:peridot-tp-freetype"]
-use-fontconfig = ["fontconfig"]
+use-fontconfig = ["dep:peridot-tp-fontconfig"]
 ci-nolib = []
 
 [lints]
@@ -51,6 +51,6 @@ widestring = "1.0"
 path = "../../thirdparty/freetype"
 optional = true
 
-[dependencies.fontconfig]
-git = "https://github.com/Pctg-x8/fc-rs"
+[dependencies.peridot-tp-fontconfig]
+path = "../../thirdparty/fontconfig"
 optional = true
