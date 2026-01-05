@@ -3,8 +3,8 @@
 use peridot_tp_fontconfig as fc;
 
 use crate::{
-    font::freetype::FreetypeFont, FontConstructionError, FontProvider, FontProviderConstruct,
-    TTFBlob,
+    font::freetype::FreetypeFont, FontConstructionError, FontProperties, FontProvider,
+    FontProviderConstruct, TTFBlob,
 };
 
 use super::super::freetype;
@@ -12,6 +12,12 @@ use super::super::freetype;
 pub struct FontconfigFontProvider {
     ft: freetype::System,
     fc: core::ptr::NonNull<fc::Config>,
+}
+impl Drop for FontconfigFontProvider {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe { fc::fini() }
+    }
 }
 impl FontProviderConstruct for FontconfigFontProvider {
     fn new() -> Result<Self, FontConstructionError> {
@@ -35,27 +41,17 @@ impl FontProvider for FontconfigFontProvider {
         size: f32,
     ) -> Result<Self::Font, crate::FontConstructionError> {
         let c_family_name = std::ffi::CString::new(family_name).expect("FFI Conversion failure");
-        let mut pat = fc::Pattern::new()
-            .ok_or_else(|| FontConstructionError::SysAPICallError("FcPatternCreate"))?;
-        pat.add(fc::Pattern::KEY_FAMILY, &c_family_name)
+        let mut pat = Pattern(
+            fc::Pattern::new()
+                .ok_or_else(|| FontConstructionError::SysAPICallError("FcPatternCreate"))?,
+        );
+        pat.add_family_name(&c_family_name)
             .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
-        pat.add(fc::Pattern::KEY_WEIGHT, &properties.weight)
+        pat.add_properties(properties)
             .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
-        pat.add(fc::Pattern::KEY_SLANT, &properties.italic)
+        pat.add_size(size)
             .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
-        pat.add(fc::Pattern::KEY_SIZE, &(size as core::ffi::c_double))
-            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
-        unsafe {
-            self.fc
-                .as_mut()
-                .substitute(&mut pat, fc::MatchKind::Pattern)
-                .map_err(|_| FontConstructionError::SysAPICallError("FcConfigSubstitute"))?;
-        }
-        pat.default_substitute();
-        let mut fonts = unsafe {
-            fc::sort(self.fc.as_mut(), &mut pat, false, None)
-                .map_err(|_| FontConstructionError::SysAPICallError("FcFontSort"))?
-        };
+        let fonts = pat.perform_match(unsafe { self.fc.as_mut() })?;
 
         let group_desc = fonts
             .iter()
@@ -86,7 +82,7 @@ impl FontProvider for FontconfigFontProvider {
         e: &peridot::Engine<NL>,
         asset_path: &str,
         size: f32,
-    ) -> Result<Self::Font, crate::FontConstructionError> {
+    ) -> Result<Self::Font, FontConstructionError> {
         let a: TTFBlob = e.load(asset_path)?;
         let f = self
             .ft
@@ -98,5 +94,74 @@ impl FontProvider for FontconfigFontProvider {
         face.set_size(size);
 
         Ok(FreetypeFont(face, size))
+    }
+}
+
+#[repr(transparent)]
+pub struct Pattern(core::ptr::NonNull<fc::Pattern>);
+impl Drop for Pattern {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe { fc::Pattern::destroy(self.0.as_mut()) }
+    }
+}
+impl Pattern {
+    #[inline(always)]
+    pub fn add_family_name(&mut self, family_name: &core::ffi::CStr) -> Result<(), ()> {
+        unsafe { self.0.as_mut().add(fc::Pattern::KEY_FAMILY, family_name) }
+    }
+
+    #[inline(always)]
+    pub fn add_properties(&mut self, props: &FontProperties) -> Result<(), ()> {
+        unsafe {
+            self.0
+                .as_mut()
+                .add(fc::Pattern::KEY_WEIGHT, &props.weight)?;
+            self.0.as_mut().add(fc::Pattern::KEY_SLANT, &props.italic)?;
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn add_size(&mut self, size: f32) -> Result<(), ()> {
+        unsafe {
+            self.0
+                .as_mut()
+                .add(fc::Pattern::KEY_SIZE, &(size as core::ffi::c_double))
+        }
+    }
+
+    pub fn perform_match(&mut self, fc: &mut fc::Config) -> Result<FontSet, FontConstructionError> {
+        unsafe {
+            fc.substitute(self.0.as_mut(), fc::MatchKind::Pattern)
+                .map_err(|_| FontConstructionError::SysAPICallError("FcConfigSubstitute"))?;
+            self.0.as_mut().default_substitute();
+
+            Ok(FontSet(
+                fc::sort(fc, self.0.as_mut(), false, None)
+                    .map_err(|_| FontConstructionError::SysAPICallError("FcFontSort"))?,
+            ))
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct FontSet(core::ptr::NonNull<fc::FontSet>);
+impl Drop for FontSet {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe { fc::FontSet::destroy(self.0.as_mut()) }
+    }
+}
+impl FontSet {
+    #[inline(always)]
+    pub fn iter(&self) -> impl Iterator<Item = &mut fc::Pattern> {
+        unsafe {
+            (*self.0.as_ptr())
+                .fonts_slice()
+                .into_iter()
+                .map(|x| &mut *x.as_ptr())
+        }
     }
 }

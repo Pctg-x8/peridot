@@ -1,51 +1,5 @@
 pub mod raw;
 
-pub trait Destruct {
-    unsafe fn destruct(&mut self);
-}
-
-pub trait RefCounted: Destruct {
-    fn reference(&mut self);
-}
-
-#[repr(transparent)]
-pub struct Owned<T: Destruct>(core::ptr::NonNull<T>);
-impl<T: Destruct> Drop for Owned<T> {
-    #[inline(always)]
-    fn drop(&mut self) {
-        unsafe { T::destruct(self.0.as_mut()) }
-    }
-}
-impl<T: RefCounted> Clone for Owned<T> {
-    #[inline(always)]
-    fn clone(&self) -> Self {
-        T::reference(unsafe { &mut *self.0.as_ptr() });
-        Owned(self.0)
-    }
-}
-impl<T: Destruct> core::ops::Deref for Owned<T> {
-    type Target = T;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        unsafe { self.0.as_ref() }
-    }
-}
-impl<T: Destruct> core::ops::DerefMut for Owned<T> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { self.0.as_mut() }
-    }
-}
-impl<T: Destruct> Owned<T> {
-    #[inline(always)]
-    pub const fn into_raw(self) -> *mut T {
-        let ptr = self.0.as_ptr();
-        core::mem::forget(self);
-        ptr
-    }
-}
-
 #[inline(always)]
 pub unsafe fn init() -> Result<(), ()> {
     if unsafe { raw::FcInit() } == raw::FcTrue {
@@ -85,30 +39,28 @@ pub enum MatchKind {
 }
 
 pub type Pattern = raw::FcPattern;
-impl Destruct for Pattern {
-    #[inline(always)]
-    unsafe fn destruct(&mut self) {
-        unsafe {
-            raw::FcPatternDestroy(self);
-        }
-    }
-}
-impl RefCounted for Pattern {
-    #[inline(always)]
-    fn reference(&mut self) {
-        unsafe {
-            raw::FcPatternReference(self);
-        }
-    }
-}
 impl Pattern {
     #[inline(always)]
-    pub fn new() -> Option<Owned<Self>> {
-        unsafe { core::ptr::NonNull::new(raw::FcPatternCreate().cast()).map(Owned) }
+    pub fn new() -> Option<core::ptr::NonNull<Self>> {
+        unsafe { core::ptr::NonNull::new(raw::FcPatternCreate().cast()) }
     }
 
     #[inline(always)]
-    pub fn add<T: PatternValueAdd>(&mut self, key: &core::ffi::CStr, value: &T) -> Result<(), ()> {
+    pub unsafe fn destroy(&mut self) {
+        unsafe { raw::FcPatternDestroy(self) }
+    }
+
+    #[inline(always)]
+    pub unsafe fn reference(&mut self) {
+        unsafe { raw::FcPatternReference(self) }
+    }
+
+    #[inline(always)]
+    pub fn add<T: PatternValueAdd + ?Sized>(
+        &mut self,
+        key: &core::ffi::CStr,
+        value: &T,
+    ) -> Result<(), ()> {
         value.add(self, key)
     }
 
@@ -270,7 +222,7 @@ pub unsafe fn sort(
     pat: &mut Pattern,
     trim: bool,
     charset: Option<&mut core::mem::MaybeUninit<*mut raw::FcCharSet>>,
-) -> Result<Owned<FontSet>, raw::FcResult> {
+) -> Result<core::ptr::NonNull<FontSet>, raw::FcResult> {
     let mut result = core::mem::MaybeUninit::uninit();
     let fontset = unsafe {
         raw::FcFontSort(
@@ -283,31 +235,26 @@ pub unsafe fn sort(
     };
     let result = unsafe { result.assume_init() };
     if result == raw::FcResultMatch {
-        Ok(Owned(unsafe { core::ptr::NonNull::new_unchecked(fontset) }))
+        Ok(unsafe { core::ptr::NonNull::new_unchecked(fontset) })
     } else {
         Err(result)
     }
 }
 
 pub type FontSet = raw::FcFontSet;
-impl Destruct for FontSet {
+impl FontSet {
     #[inline(always)]
-    unsafe fn destruct(&mut self) {
+    pub unsafe fn destroy(&mut self) {
         unsafe { raw::FcFontSetDestroy(self) }
     }
-}
-impl FontSet {
+
     #[inline(always)]
     pub fn print(&self) {
         unsafe { raw::FcFontSetPrint(self) }
     }
 
     #[inline(always)]
-    pub fn iter(&mut self) -> impl Iterator<Item = &mut Pattern> {
-        unsafe {
-            core::slice::from_raw_parts_mut(self.fonts.cast::<&mut Pattern>(), self.nfont as usize)
-                .into_iter()
-                .map(|x| &mut **x)
-        }
+    pub const fn fonts_slice(&self) -> &[core::ptr::NonNull<Pattern>] {
+        unsafe { core::slice::from_raw_parts(self.fonts.cast(), self.nfont as _) }
     }
 }
