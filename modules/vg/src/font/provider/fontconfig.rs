@@ -1,6 +1,6 @@
 //! fontconfig Font Provider impl
 
-use fontconfig::FcRange;
+use peridot_tp_fontconfig as fc;
 
 use crate::{
     font::freetype::FreetypeFont, FontConstructionError, FontProvider, FontProviderConstruct,
@@ -8,7 +8,6 @@ use crate::{
 };
 
 use super::super::freetype;
-use fontconfig::*;
 
 pub struct FontconfigFontProvider {
     ft: freetype::System,
