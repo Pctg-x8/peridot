@@ -323,7 +323,7 @@ pub unsafe fn outline_decompose<F: OutlineFuncs>(
         user: *mut core::ffi::c_void,
     ) -> core::ffi::c_int {
         unsafe {
-            F::conic_to(&mut *user.cast::<F>(), &*control, &*to.add(1));
+            F::conic_to(&mut *user.cast::<F>(), &*control, &*to);
         }
         0
     }
@@ -334,12 +334,7 @@ pub unsafe fn outline_decompose<F: OutlineFuncs>(
         user: *mut core::ffi::c_void,
     ) -> core::ffi::c_int {
         unsafe {
-            F::cubic_to(
-                &mut *user.cast::<F>(),
-                &*control1,
-                &*control2.add(1),
-                &*to.add(2),
-            );
+            F::cubic_to(&mut *user.cast::<F>(), &*control1, &*control2, &*to);
         }
         0
     }
