@@ -13,6 +13,7 @@ pub type Fixed = raw::FT_Fixed;
 pub type F26Dot6 = raw::FT_F26Dot6;
 pub type Matrix = raw::FT_Matrix;
 
+pub type Library = raw::FT_Library;
 pub type Face = raw::FT_Face;
 pub type Outline = raw::FT_Outline;
 
@@ -37,23 +38,23 @@ pub const fn ft_error_to_result(e: raw::FT_Error) -> Result<()> {
 }
 
 #[inline(always)]
-pub fn init_freetype() -> Result<raw::FT_Library> {
+pub fn init_freetype() -> Result<Library> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe { raw::FT_Init_FreeType(inst.as_mut_ptr()) })?;
     Ok(unsafe { inst.assume_init() })
 }
 
 #[inline(always)]
-pub unsafe fn done_freetype(lib: raw::FT_Library) -> Result<()> {
+pub unsafe fn done_freetype(lib: Library) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Done_FreeType(lib) })
 }
 
 #[inline(always)]
 pub unsafe fn new_face(
-    lib: raw::FT_Library,
+    lib: Library,
     filepathname: &core::ffi::CStr,
     face_index: Long,
-) -> Result<raw::FT_Face> {
+) -> Result<Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
         raw::FT_New_Face(lib, filepathname.as_ptr(), face_index, inst.as_mut_ptr())
@@ -63,10 +64,10 @@ pub unsafe fn new_face(
 
 #[inline(always)]
 pub unsafe fn new_memory_face(
-    lib: raw::FT_Library,
+    lib: Library,
     file_base: &[raw::FT_Byte],
     face_index: Long,
-) -> Result<raw::FT_Face> {
+) -> Result<Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
         raw::FT_New_Memory_Face(
@@ -81,11 +82,7 @@ pub unsafe fn new_memory_face(
 }
 
 #[inline(always)]
-pub unsafe fn open_face(
-    lib: raw::FT_Library,
-    args: &raw::FT_Open_Args,
-    face_index: Long,
-) -> Result<raw::FT_Face> {
+pub unsafe fn open_face(lib: Library, args: &raw::FT_Open_Args, face_index: Long) -> Result<Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe { raw::FT_Open_Face(lib, args, face_index, inst.as_mut_ptr()) })?;
     Ok(unsafe { inst.assume_init() })
@@ -323,7 +320,7 @@ pub unsafe fn outline_decompose<F: OutlineFuncs>(
         user: *mut core::ffi::c_void,
     ) -> core::ffi::c_int {
         unsafe {
-            F::conic_to(&mut *user.cast::<F>(), &*control, &*to.add(1));
+            F::conic_to(&mut *user.cast::<F>(), &*control, &*to);
         }
         0
     }
@@ -334,12 +331,7 @@ pub unsafe fn outline_decompose<F: OutlineFuncs>(
         user: *mut core::ffi::c_void,
     ) -> core::ffi::c_int {
         unsafe {
-            F::cubic_to(
-                &mut *user.cast::<F>(),
-                &*control1,
-                &*control2.add(1),
-                &*to.add(2),
-            );
+            F::cubic_to(&mut *user.cast::<F>(), &*control1, &*control2, &*to);
         }
         0
     }

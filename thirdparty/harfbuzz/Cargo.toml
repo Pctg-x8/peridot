@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-freetype2 = { git = "https://github.com/Pctg-x8/ft2-rs" }
+peridot-tp-freetype.path = "../freetype"

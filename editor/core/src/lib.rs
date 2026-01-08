@@ -8,6 +8,10 @@ use core::pin::Pin;
 use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
 use linux_eventfd::{EventFD, EventFDFlags};
+#[cfg(feature = "fontconfig")]
+use peridot_tp_fontconfig as fc;
+#[cfg(feature = "freetype")]
+use peridot_tp_freetype as ft;
 #[cfg(feature = "wayland")]
 use peridot_tp_wayland as wl;
 use std::collections::{HashMap, VecDeque};
@@ -53,9 +57,6 @@ mod composite;
 mod graphics;
 mod helper_types;
 mod mathext;
-
-#[cfg(feature = "freetype")]
-mod freetype;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |data| core::task::RawWaker::new(data, &APP_WAKER_VTABLE),
@@ -158,7 +159,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     };
 
     #[cfg(feature = "freetype")]
-    let ft = freetype::Library::init().expect("freetype::Library::init");
+    let ft = FreeType::init().expect("FreeType.init");
 
     let _ = app
         .as_mut()
@@ -302,6 +303,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         xdg_toplevel: wl_xdg_toplevel,
         state: Box::new(WaylandWindowState {
             pending_configure_size: None,
+            active_buffer_scale: 1.0,
             active_size: (640, 480),
             swapchain_externally_invalidation_signal: std::sync::Arc::new(
                 std::sync::atomic::AtomicBool::new(false),
@@ -566,71 +568,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     })
                     .collect::<Vec<_>>();
 
+                let dpi = 168;
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device);
+                #[cfg(feature = "freetype")]
+                let font_set = FontSet::new(&ft, dpi);
+                #[cfg(not(feature = "freetype"))]
                 let font_set = FontSet::new();
-
-                #[cfg(feature = "fontconfig")]
-                let (font_file_path, face_index) = unsafe {
-                    fontconfig::FcInit();
-                    let pat = fontconfig::FcPatternCreate();
-                    fontconfig::FcPatternAddString(
-                        pat,
-                        fontconfig::FC_FAMILY.as_ptr(),
-                        c"Inter Display".as_ptr().cast(),
-                    );
-                    fontconfig::FcPatternAddInteger(
-                        pat,
-                        fontconfig::FC_WEIGHT.as_ptr(),
-                        fontconfig::FC_WEIGHT_REGULAR,
-                    );
-                    fontconfig::FcPatternAddDouble(pat, fontconfig::FC_SIZE.as_ptr(), 12.0);
-                    fontconfig::FcConfigSubstitute(
-                        fontconfig::FcConfigGetCurrent(),
-                        pat,
-                        fontconfig::FcMatchPattern,
-                    );
-                    fontconfig::FcDefaultSubstitute(pat);
-                    let mut sort_result = core::mem::MaybeUninit::uninit();
-                    let fonts = fontconfig::FcFontSort(
-                        fontconfig::FcConfigGetCurrent(),
-                        pat,
-                        true as _,
-                        core::ptr::null_mut(),
-                        sort_result.as_mut_ptr(),
-                    );
-                    let sort_result = sort_result.assume_init();
-                    if sort_result != fontconfig::FcResultMatch {
-                        eprintln!("fontconfig::FcFontSort failed: {sort_result}");
-                    }
-                    // for n in 0..(*fonts).nfont {
-                    //     let f = *(*fonts).fonts.add(n as usize);
-                    //     fontconfig::FcPatternPrint(f);
-                    // }
-
-                    let mut file = core::mem::MaybeUninit::uninit();
-                    let r = fontconfig::FcPatternGetString(
-                        *(*fonts).fonts,
-                        fontconfig::FC_FILE.as_ptr(),
-                        0,
-                        file.as_mut_ptr(),
-                    );
-                    if r != fontconfig::FcResultMatch {
-                        panic!("get file failed: {r}");
-                    }
-                    let file = file.assume_init();
-                    let mut index = core::mem::MaybeUninit::uninit();
-                    let r = fontconfig::FcPatternGetInteger(
-                        *(*fonts).fonts,
-                        fontconfig::FC_INDEX.as_ptr(),
-                        0,
-                        index.as_mut_ptr(),
-                    );
-                    if r != fontconfig::FcResultMatch {
-                        panic!("get index failed: {r}");
-                    }
-                    let index = index.assume_init();
-                    (core::ffi::CStr::from_ptr(file.cast()).to_owned(), index)
-                };
 
                 let mut box_instances = Vec::new();
                 let mut new_filltri_points: Vec<[f32; 2]> = Vec::new();
@@ -645,10 +588,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         hb_ft_font_create_referenced, hb_shape,
                     };
 
-                    let dpi = 168;
-                    let mut face = freetype::Face::new(&ft, &font_file_path, face_index as _)
-                        .expect("face.new");
-                    face.set_char_size(12.0, dpi).expect("face.set_char_size");
                     let hb_buffer = hb_buffer_create();
                     hb_buffer_add_utf8(
                         hb_buffer,
@@ -658,7 +597,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         -1,
                     );
                     hb_buffer_guess_segment_properties(hb_buffer);
-                    let hb_font = hb_ft_font_create_referenced(face.as_native());
+                    let hb_font = hb_ft_font_create_referenced(font_set.ui_default);
                     hb_shape(hb_font, hb_buffer, core::ptr::null(), 0);
                     let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
                     let glyph_infos =
@@ -670,16 +609,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         glyph_infos_len.assume_init(),
                         glyph_positions_len.assume_init()
                     );
-                    let baseline_y = 12.0 * (dpi as f64 / 96.0) * face.ascender_real_per_em();
+                    let baseline_y = 12.0
+                        * (dpi as f64 / 96.0)
+                        * ((*font_set.ui_default).ascender as f64
+                            / (*font_set.ui_default).units_per_em as f64);
                     let mut left_cursor = 0;
                     for n in 0..glyph_positions_len.assume_init() {
                         let glyph_info = &*glyph_infos.add(n as usize);
                         let glyph_position = &*glyph_positions.add(n as usize);
 
-                        let glyph = face
-                            .load_glyph(glyph_info.codepoint, freetype2::FT_LOAD_DEFAULT)
-                            .expect("face.load_glyph");
-                        let metrics = &glyph.0.metrics;
+                        ft::load_glyph(
+                            font_set.ui_default,
+                            glyph_info.codepoint,
+                            peridot_tp_freetype::LoadFlags::DEFAULT,
+                        )
+                        .expect("face.load_glyph");
+                        let metrics = &(*(*font_set.ui_default).glyph).metrics;
                         let glyph_width = metrics.width as f32 / 64.0;
                         let glyph_height = metrics.height as f32 / 64.0;
                         // println!("{glyph_info:?} {glyph_position:?} {metrics:?} {}", glyph_position.x_advance as f32 / 64.0);
@@ -717,10 +662,13 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 new_filltri_indices: &mut new_filltri_indices,
                                 new_curve_triangles: &mut new_curve_triangles,
                             };
-                            glyph
-                                .outline_mut()
-                                .decompose(&mut ctx, 0, 0)
-                                .expect("glyph.outline.decompose");
+                            ft::outline_decompose(
+                                &mut (*(*font_set.ui_default).glyph).outline,
+                                &mut ctx,
+                                0,
+                                0,
+                            )
+                            .expect("glyph.outline.decompose");
                         }
 
                         left_cursor += glyph_position.x_advance;
@@ -1477,17 +1425,27 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     vector_draw_init_buffer_memory.unmap();
                 }
 
+                const VG_COLOR_FORMAT: br::Format = br::vk::VK_FORMAT_R8_UNORM;
+                const VG_STENCIL_FORMAT: br::Format = br::vk::VK_FORMAT_S8_UINT;
                 let mut vector_color_ms_buffer = br::ImageObject::new(
                     &vk_device,
-                    &br::ImageCreateInfo::new(
-                        glyph_atlas.space_mgr.max,
-                        br::vk::VK_FORMAT_R8_UNORM,
-                    )
-                    .set_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
-                    .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                    &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_COLOR_FORMAT)
+                        .set_usage(
+                            br::ImageUsageFlags::COLOR_ATTACHMENT
+                                | br::ImageUsageFlags::TRANSFER_SRC,
+                        )
+                        .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
                 )
                 .expect("vector color_ms buffer create");
+                let mut vector_stencil_buffer = br::ImageObject::new(
+                    &vk_device,
+                    &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_STENCIL_FORMAT)
+                        .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                        .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                )
+                .expect("vector stencil buffer create");
                 let vector_color_ms_buffer_memreq = vector_color_ms_buffer.requirements();
+                let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
                 let vector_color_ms_buffer_mem = br::DeviceMemoryObject::new(
                     &vk_device,
                     &br::MemoryAllocateInfo::new(
@@ -1500,23 +1458,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     ),
                 )
                 .expect("vector color_ms buffer malloc");
-                vector_color_ms_buffer
-                    .bind(&vector_color_ms_buffer_mem, 0)
-                    .expect("vector color_ms buffer bind");
-                let vector_color_ms_buffer = br::ImageViewBuilder::new(
-                    vector_color_ms_buffer,
-                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                )
-                .create()
-                .expect("vector color_ms buffer imageview create");
-                let mut vector_stencil_buffer = br::ImageObject::new(
-                    &vk_device,
-                    &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, br::vk::VK_FORMAT_S8_UINT)
-                        .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                        .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
-                )
-                .expect("vector stencil buffer create");
-                let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
                 let vector_stencil_buffer_mem = br::DeviceMemoryObject::new(
                     &vk_device,
                     &br::MemoryAllocateInfo::new(
@@ -1529,9 +1470,16 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     ),
                 )
                 .expect("vector stencil buffer malloc");
-                vector_stencil_buffer
-                    .bind(&vector_stencil_buffer_mem, 0)
-                    .expect("vector stencil buffer bind");
+                br::bind_memory(&mut vector_color_ms_buffer, &vector_color_ms_buffer_mem, 0)
+                    .expect("bind.vector_color_ms_buffer");
+                br::bind_memory(&mut vector_stencil_buffer, &vector_stencil_buffer_mem, 0)
+                    .expect("bind.vector_stencil_buffer");
+                let vector_color_ms_buffer = br::ImageViewBuilder::new(
+                    vector_color_ms_buffer,
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                )
+                .create()
+                .expect("vector color_ms buffer imageview create");
                 let vector_stencil_buffer = br::ImageViewBuilder::new(
                     vector_stencil_buffer,
                     br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
@@ -1581,7 +1529,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 &glyph_atlas.image(),
                                 br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                             )
-                            .of_execution(br::PipelineStageFlags2(0), br::PipelineStageFlags2::COPY)
                             .transferring_layout(
                                 br::ImageLayout::Undefined,
                                 br::ImageLayout::TransferDestOpt,
@@ -1630,6 +1577,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 br::PipelineStageFlags2::COPY,
                                 br::PipelineStageFlags2::FRAGMENT_SHADER,
                             )
+                            .of_memory(
+                                br::AccessFlags2::TRANSFER.write,
+                                br::AccessFlags2::SHADER.read,
+                            )
                             .transferring_layout(
                                 br::ImageLayout::TransferDestOpt,
                                 br::ImageLayout::ShaderReadOnlyOpt,
@@ -1672,6 +1623,27 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 .bind_pipeline(br::PipelineBindPoint::Graphics, &colorize_pipeline)
                 .draw(3, 1, 0, 0)
                 .end_render_pass()
+                .inject(|r| {
+                    vk_device.cmd_pipeline_barrier(
+                        r,
+                        &br::DependencyInfo::new(
+                            &[],
+                            &[],
+                            &[br::ImageMemoryBarrier2::new(
+                                &glyph_atlas.image(),
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                            )
+                            .of_execution(
+                                br::PipelineStageFlags2::FRAGMENT_SHADER,
+                                br::PipelineStageFlags2::RESOLVE,
+                            )
+                            .transferring_layout(
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                                br::ImageLayout::TransferDestOpt,
+                            )],
+                        ),
+                    )
+                })
                 .resolve_image(
                     vector_color_ms_buffer.image(),
                     br::ImageLayout::TransferSrcOpt,
@@ -1693,6 +1665,31 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         extent: glyph_atlas.space_mgr.max.with_depth(1),
                     }],
                 )
+                .inject(|r| {
+                    vk_device.cmd_pipeline_barrier(
+                        r,
+                        &br::DependencyInfo::new(
+                            &[],
+                            &[],
+                            &[br::ImageMemoryBarrier2::new(
+                                &glyph_atlas.image(),
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                            )
+                            .of_execution(
+                                br::PipelineStageFlags2::RESOLVE,
+                                br::PipelineStageFlags2::FRAGMENT_SHADER,
+                            )
+                            .of_memory(
+                                br::AccessFlags2::TRANSFER.write,
+                                br::AccessFlags2::SHADER.read,
+                            )
+                            .transferring_layout(
+                                br::ImageLayout::TransferDestOpt,
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )],
+                        ),
+                    )
+                })
                 .end()
                 .expect("cb end");
                 unsafe {
@@ -2078,7 +2075,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             std::sync::atomic::Ordering::Relaxed,
                             std::sync::atomic::Ordering::Relaxed,
                         )
-                        == Ok(true)
+                        .is_ok()
                     {
                         swapchain_invalidated = true;
                     }
@@ -2994,17 +2991,156 @@ impl AppEventBus {
     }
 }
 
+#[cfg(feature = "freetype")]
+pub struct FreeType(ft::Library);
+#[cfg(feature = "freetype")]
+impl Drop for FreeType {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if let Err(e) = unsafe { ft::done_freetype(self.0) } {
+            tracing::error!(reason = ?e, "FreeType.done");
+        }
+    }
+}
+#[cfg(feature = "freetype")]
+unsafe impl Sync for FreeType {}
+#[cfg(feature = "freetype")]
+unsafe impl Send for FreeType {}
+#[cfg(feature = "freetype")]
+impl FreeType {
+    #[inline(always)]
+    pub fn init() -> ft::Result<Self> {
+        ft::init_freetype().map(Self)
+    }
+}
+
 pub struct FontSet {
+    #[cfg(target_os = "macos")]
     ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
+    #[cfg(target_os = "macos")]
     ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
+    #[cfg(feature = "freetype")]
+    ui_default: ft::Face,
+    #[cfg(feature = "freetype")]
+    ui_title_project_name: ft::Face,
+    #[cfg(feature = "harfbuzz")]
+    ui_default_shaping: core::ptr::NonNull<peridot_tp_harfbuzz::ffi::hb_font_t>,
+    #[cfg(feature = "harfbuzz")]
+    ui_title_project_name_shaping: core::ptr::NonNull<peridot_tp_harfbuzz::ffi::hb_font_t>,
+}
+impl Drop for FontSet {
+    fn drop(&mut self) {
+        #[cfg(feature = "harfbuzz")]
+        unsafe {
+            peridot_tp_harfbuzz::ffi::hb_font_destroy(self.ui_default_shaping.as_ptr());
+            peridot_tp_harfbuzz::ffi::hb_font_destroy(self.ui_title_project_name_shaping.as_ptr());
+        }
+        #[cfg(feature = "freetype")]
+        unsafe {
+            ft::done_face(self.ui_title_project_name);
+            ft::done_face(self.ui_default);
+        }
+    }
 }
 impl FontSet {
+    #[cfg(feature = "freetype")]
+    pub fn new(lib: &FreeType, dpi: u32) -> Self {
+        use peridot_tp_freetype::FractionalExt;
+
+        #[cfg(feature = "fontconfig")]
+        let (font_file_path, face_index) = unsafe {
+            fc::init().expect("FontConfig.init");
+            let mut pat = fc::Pattern::new().expect("FcPattern.create");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_FAMILY, c"Inter Display")
+                .expect("FcPattern.add.family");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_WEIGHT, &fc::raw::FC_WEIGHT_REGULAR)
+                .expect("FcPattern.add.weight");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_SIZE, &(12.0 as core::ffi::c_double))
+                .expect("FcPattern.add.size");
+            fc::Config::current()
+                .unwrap_unchecked()
+                .as_mut()
+                .substitute(pat.as_mut(), fc::MatchKind::Pattern)
+                .expect("FcConfig.substitute");
+            pat.as_mut().default_substitute();
+            let fonts = fc::sort(
+                fc::Config::current().unwrap_unchecked().as_mut(),
+                pat.as_mut(),
+                false,
+                None,
+            )
+            .expect("FontConfig.sort");
+            // for n in 0..(*fonts).nfont {
+            //     let f = *(*fonts).fonts.add(n as usize);
+            //     fontconfig::FcPatternPrint(f);
+            // }
+
+            let mut font = fonts.as_ref().fonts_slice()[0];
+            let file: &core::ffi::CStr = font
+                .as_mut()
+                .get(fc::Pattern::KEY_FILE)
+                .expect("FcPattern.get.file")
+                .expect("FcPattern.get.not_exist.file");
+            let file = file.to_owned();
+            let index: core::ffi::c_int = font
+                .as_mut()
+                .get(fc::Pattern::KEY_INDEX)
+                .expect("FcPattern.get.index")
+                .expect("FcPattern.get.not_exist.index");
+
+            (file, index)
+        };
+
+        let ui_default = unsafe {
+            ft::new_face(lib.0, &font_file_path, face_index as _)
+                .expect("FreeType.new_face.ui_default")
+        };
+        unsafe {
+            ft::set_char_size(ui_default, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi)
+                .expect("FreeType.set_char_size.ui_default")
+        }
+        let ui_title_project_name = unsafe {
+            ft::new_face(lib.0, &font_file_path, face_index as _)
+                .expect("FreeType.Face.new.ui_title_project_name")
+        };
+        unsafe {
+            ft::set_char_size(ui_title_project_name, 0, 10.0f32.to_f26dot6_lossy(), 0, dpi)
+                .expect("FreeType.set_char_size.ui_title_project_name")
+        }
+
+        #[cfg(feature = "harfbuzz")]
+        let ui_default_shaping = core::ptr::NonNull::new(unsafe {
+            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_default)
+        })
+        .expect("hb_ft_font_create_referenced.ui_default");
+        #[cfg(feature = "harfbuzz")]
+        let ui_title_project_name_shaping = core::ptr::NonNull::new(unsafe {
+            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_title_project_name)
+        })
+        .expect("hb_ft_font_create_referenced.ui_title_project_name");
+
+        Self {
+            ui_default,
+            ui_title_project_name,
+            #[cfg(feature = "harfbuzz")]
+            ui_default_shaping,
+            #[cfg(feature = "harfbuzz")]
+            ui_title_project_name_shaping,
+        }
+    }
+
+    #[cfg(not(feature = "freetype"))]
     pub fn new() -> Self {
+        #[cfg(target_os = "macos")]
         let ui_default = apple_sdk_port::text::Font::new_ui(
             apple_sdk_port::text::UIFontType::System,
             12.0,
             None,
         );
+        #[cfg(target_os = "macos")]
         let ui_title_project_name = apple_sdk_port::text::Font::new_ui(
             apple_sdk_port::text::UIFontType::System,
             10.0,
@@ -3017,11 +3153,30 @@ impl FontSet {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[inline]
     pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
         match category {
             FontID::UIDefault => &self.ui_default,
             FontID::UITitleProjectName => &self.ui_title_project_name,
+        }
+    }
+
+    #[cfg(feature = "freetype")]
+    #[inline]
+    pub fn select(&self, category: FontID) -> ft::Face {
+        match category {
+            FontID::UIDefault => self.ui_default,
+            FontID::UITitleProjectName => self.ui_title_project_name,
+        }
+    }
+
+    #[cfg(feature = "harfbuzz")]
+    #[inline]
+    pub fn select_shaping(&self, category: FontID) -> *mut peridot_tp_harfbuzz::ffi::hb_font_t {
+        match category {
+            FontID::UIDefault => self.ui_default_shaping.as_ptr(),
+            FontID::UITitleProjectName => self.ui_title_project_name_shaping.as_ptr(),
         }
     }
 }
@@ -3639,7 +3794,7 @@ impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
 struct OutlineContext<'x> {
     translate_x: f32,
     translate_y: f32,
-    current_figure_state: &'x mut Option<(freetype2::FT_Vector, freetype2::FT_Vector, u16)>,
+    current_figure_state: &'x mut Option<(ft::Vector, ft::Vector, u16)>,
     new_filltri_points: &'x mut Vec<[f32; 2]>,
     new_filltri_indices: &'x mut Vec<u16>,
     new_curve_triangles: &'x mut Vec<[f32; 4]>,
@@ -3647,6 +3802,7 @@ struct OutlineContext<'x> {
 #[cfg(feature = "freetype")]
 impl OutlineContext<'_> {
     fn add_quadratic(&mut self, q: &lyon_geom::QuadraticBezierSegment<f32>) {
+        tracing::debug!(?q);
         let &mut Some((_, _, filltri_index0)) = self.current_figure_state else {
             panic!("no figure started?");
         };
@@ -3665,18 +3821,16 @@ impl OutlineContext<'_> {
     }
 }
 #[cfg(feature = "freetype")]
-impl freetype::OutlineFuncs for OutlineContext<'_> {
-    fn move_to(&mut self, to: &freetype2::FT_Vector) -> Result<(), freetype2::FT_Error> {
+impl ft::OutlineFuncs for OutlineContext<'_> {
+    fn move_to(&mut self, to: &ft::Vector) {
         *self.current_figure_state = Some((*to, *to, self.new_filltri_points.len() as _));
         self.new_filltri_points.push([
             to.x as f32 / 64.0 + self.translate_x,
             to.y as f32 / 64.0 + self.translate_y,
         ]);
-
-        Ok(())
     }
 
-    fn line_to(&mut self, to: &freetype2::FT_Vector) -> Result<(), freetype2::FT_Error> {
+    fn line_to(&mut self, to: &ft::Vector) {
         let &mut Some((_, ref mut current_point, filltri_index0)) = self.current_figure_state
         else {
             panic!("no figure started?");
@@ -3692,15 +3846,9 @@ impl freetype::OutlineFuncs for OutlineContext<'_> {
             self.new_filltri_points.len() as u16 - 1,
         ]);
         *current_point = *to;
-
-        Ok(())
     }
 
-    fn conic_to(
-        &mut self,
-        control: &freetype2::FT_Vector,
-        to: &freetype2::FT_Vector,
-    ) -> Result<(), freetype2::FT_Error> {
+    fn conic_to(&mut self, control: &ft::Vector, to: &ft::Vector) {
         let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
         else {
             panic!("no figure started?");
@@ -3720,16 +3868,9 @@ impl freetype::OutlineFuncs for OutlineContext<'_> {
             ),
         });
         *self.current_figure_state = Some((start_point, *to, filltri_index0));
-
-        Ok(())
     }
 
-    fn cubic_to(
-        &mut self,
-        control1: &freetype2::FT_Vector,
-        control2: &freetype2::FT_Vector,
-        to: &freetype2::FT_Vector,
-    ) -> Result<(), freetype2::FT_Error> {
+    fn cubic_to(&mut self, control1: &ft::Vector, control2: &ft::Vector, to: &ft::Vector) {
         let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
         else {
             panic!("no figure started?");
@@ -3754,8 +3895,6 @@ impl freetype::OutlineFuncs for OutlineContext<'_> {
         }
         .for_each_quadratic_bezier(0.1, &mut |q| self.add_quadratic(q));
         *self.current_figure_state = Some((start_point, *to, filltri_index0));
-
-        Ok(())
     }
 }
 
@@ -3855,6 +3994,7 @@ impl WaylandWindow {
 #[cfg(feature = "wayland")]
 struct WaylandWindowState {
     pending_configure_size: Option<(i32, i32)>,
+    active_buffer_scale: f32,
     active_size: (u32, u32),
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     terminate_event: std::sync::Arc<EventFD>,
@@ -3883,6 +4023,7 @@ impl wl::SurfaceEventListener for WaylandWindowState {
         surface
             .set_buffer_scale(factor)
             .expect("wl_surface set_buffer_scale");
+        self.active_buffer_scale = factor as _;
     }
 
     #[tracing::instrument(skip(self, surface))]
@@ -3904,7 +4045,11 @@ impl wl::XdgSurfaceEventListener for WaylandWindowState {
             let w: u32 = w.try_into().expect("negative window size");
             let h: u32 = h.try_into().expect("negative window size");
             if w != self.active_size.0 || h != self.active_size.1 {
-                self.active_size = (w, h);
+                // TODO: multiply by preferred scale
+                self.active_size = (
+                    (w as f32 * self.active_buffer_scale).ceil() as _,
+                    (h as f32 * self.active_buffer_scale).ceil() as _,
+                );
                 self.swapchain_externally_invalidation_signal
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }

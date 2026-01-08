@@ -9,8 +9,8 @@ win32 = ["bedrock/VK_KHR_win32_surface"]
 mac = ["bedrock/VK_EXT_metal_surface", "bedrock/VK_KHR_portability_enumeration"]
 linux-default = ["wayland", "freetype", "fontconfig", "harfbuzz"]
 wayland = ["dep:peridot-tp-wayland", "bedrock/VK_KHR_wayland_surface"]
-freetype = ["dep:freetype2"]
-fontconfig = ["dep:fontconfig"]
+freetype = ["dep:peridot-tp-freetype"]
+fontconfig = ["dep:peridot-tp-fontconfig"]
 harfbuzz = ["dep:peridot-tp-harfbuzz"]
 
 [dependencies]
@@ -25,8 +25,8 @@ bedrock = { workspace = true, features = [
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lyon_geom = "1.0"
-freetype2 = { git = "https://github.com/Pctg-x8/ft2-rs", optional = true }
-fontconfig = { git = "https://github.com/Pctg-x8/fc-rs", optional = true }
+peridot-tp-freetype = { path = "../../thirdparty/freetype", optional = true }
+peridot-tp-fontconfig = { path = "../../thirdparty/fontconfig", optional = true }
 peridot-tp-harfbuzz = { path = "../../thirdparty/harfbuzz", optional = true }
 
 [target.'cfg(windows)'.dependencies.windows]

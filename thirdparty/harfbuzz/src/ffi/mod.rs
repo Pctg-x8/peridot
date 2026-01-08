@@ -203,6 +203,9 @@ pub use self::buffer::*;
 mod face;
 pub use self::face::*;
 
+mod font;
+pub use self::font::*;
+
 mod ft;
 pub use self::ft::*;
 

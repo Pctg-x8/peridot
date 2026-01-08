@@ -1,6 +1,6 @@
 use core::ffi::*;
 
-use freetype2::FT_Face;
+use peridot_tp_freetype::raw::FT_Face;
 
 use crate::ffi::{hb_blob_t, hb_bool_t, hb_destroy_func_t, hb_face_t, hb_font_t};
 

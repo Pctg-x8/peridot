@@ -10,5 +10,3 @@ path = "src/main.rs"
 [dependencies]
 peridot-marble-editor-core = { path = "../core", features = ["linux-default"] }
 
-[lints]
-workspace = true

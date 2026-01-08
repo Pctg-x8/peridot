@@ -8,6 +8,9 @@ exclude = [
     "thirdparty/",
     "build-script-helper/",
     "platform/",
+    "editor/win",
+    "editor/mac",
+    "editor/linux",
 ]
 members = [
     "base",
@@ -28,7 +31,6 @@ members = [
     "base-lib/pinned-futures-helper",
     "modules/sprite-atlas",
     "editor/core",
-    "editor/mac", "editor/linux", "editor/win",
 ]
 
 [workspace.dependencies]
