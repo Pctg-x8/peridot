@@ -46,11 +46,11 @@ impl FontProvider for FontconfigFontProvider {
                 .ok_or_else(|| FontConstructionError::SysAPICallError("FcPatternCreate"))?,
         );
         pat.add_family_name(&c_family_name)
-            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
+            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd.family"))?;
         pat.add_properties(properties)
-            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
+            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd.properties"))?;
         pat.add_size(size)
-            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd"))?;
+            .map_err(|_| FontConstructionError::SysAPICallError("FcPatternAdd.size"))?;
         let fonts = pat.perform_match(unsafe { self.fc.as_mut() })?;
 
         let group_desc = fonts
@@ -117,7 +117,14 @@ impl Pattern {
             self.0
                 .as_mut()
                 .add(fc::Pattern::KEY_WEIGHT, &props.weight)?;
-            self.0.as_mut().add(fc::Pattern::KEY_SLANT, &props.italic)?;
+            self.0.as_mut().add(
+                fc::Pattern::KEY_SLANT,
+                &(if props.italic {
+                    fc::raw::FC_SLANT_ITALIC
+                } else {
+                    0
+                }),
+            )?;
         }
 
         Ok(())
