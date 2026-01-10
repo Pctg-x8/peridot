@@ -13,6 +13,3 @@ peridot-marble-editor-core = { path = "../core", features = ["win32"] }
 
 [build-dependencies]
 winres = "0.1"
-
-[lints]
-workspace = true

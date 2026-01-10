@@ -9,6 +9,3 @@ name = "peridot_marble_editor"
 
 [dependencies]
 peridot-marble-editor-core = { path = "../core", features = ["mac"] }
-
-[lints]
-workspace = true

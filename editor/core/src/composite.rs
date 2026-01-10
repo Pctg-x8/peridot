@@ -6,6 +6,13 @@ use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, Image, ImageChild, MemoryBound,
     QueueMut, RenderPass, ShaderModule, TypedVulkanStructure, VkHandle,
 };
+#[cfg(windows)]
+use windows::Win32::Graphics::{
+    Direct2D::Common::{ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl},
+    DirectWrite::{IDWritePixelSnapping_Impl, IDWriteTextRenderer, IDWriteTextRenderer_Impl},
+};
+#[cfg(windows)]
+use windows_core::*;
 
 use crate::{
     AppEventBus, Event, FontSet, GlyphAtlas,
@@ -1135,6 +1142,7 @@ impl CompositeRenderingInstructionBuilder {
     }
 }
 
+#[derive(Debug)]
 struct GlyphPlacementBox {
     pub left: f32,
     pub top: f32,
@@ -1844,6 +1852,885 @@ impl CompositeTree {
                     }
                     #[cfg(target_os = "macos")]
                     str.end_editing();
+                    #[cfg(target_os = "macos")]
+                    let framesetter =
+                        apple_sdk_port::text::Framesetter::from_attributed_string(&str)
+                            .expect("Framesetter.create");
+                    #[cfg(target_os = "macos")]
+                    let frame = framesetter
+                        .create_frame(
+                            apple_sdk_port::foundation::Range {
+                                location: 0,
+                                length: 0,
+                            },
+                            &apple_sdk_port::graphics::Path::new_rect(
+                                apple_sdk_port::raw::CGRect {
+                                    origin: apple_sdk_port::raw::CGPoint { x: 0.0, y: 0.0 },
+                                    size: apple_sdk_port::raw::CGSize {
+                                        width: f64::MAX,
+                                        height: f64::MAX,
+                                    },
+                                },
+                                None,
+                            ),
+                            None,
+                        )
+                        .expect("Frame.create");
+                    #[cfg(target_os = "macos")]
+                    let lines = frame.lines();
+                    #[cfg(target_os = "macos")]
+                    tracing::debug!(line_count = lines.len(), "frameset lines");
+                    #[cfg(target_os = "macos")]
+                    for n in 0..lines.len() {
+                        let runs = lines[n].glyph_runs();
+                        tracing::debug!(count = runs.len(), "glyph runs");
+                        let mut baseline_pos: apple_sdk_port::raw::CGFloat = 0.0;
+                        for m in 0..runs.len() {
+                            let font = match runs[m].attributes().get_untyped_value(
+                                apple_sdk_port::foundation::AttributedStringKey::font(),
+                            ) {
+                                Some(x) => unsafe {
+                                    apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                                },
+                                None => font_set.select(Default::default()),
+                            };
+
+                            baseline_pos = baseline_pos.max(font.ascent());
+                            // TODO: 複数行になる場合はleadingを行間に足す
+                            cache.text_height = cache
+                                .text_height
+                                .max((font.ascent() + font.descent()) as f32 * 2.0);
+                        }
+                        let mut x_shift = 0.0;
+                        for m in 0..runs.len() {
+                            let run = &runs[m];
+
+                            let attributes = run.attributes();
+                            attributes.apply_untyped_value(|key, value| {
+                                tracing::debug!(?key, ?value, "run attribute");
+                            });
+                            let font = match attributes.get_untyped_value(
+                                apple_sdk_port::foundation::AttributedStringKey::font(),
+                            ) {
+                                Some(x) => unsafe {
+                                    apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                                },
+                                None => font_set.select(Default::default()),
+                            };
+                            let run_index =
+                                match attributes.get_untyped_value(&corresponding_run_index) {
+                                    Some(x) => unsafe {
+                                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(
+                                            x.as_ptr(),
+                                        )
+                                        .i64_value()
+                                        .expect("invalid attr value")
+                                            as _
+                                    },
+                                    None => 0,
+                                };
+                            let font_id = t.runs[run_index].font_id;
+                            x_shift += t.runs[run_index].spacing_inline_start;
+
+                            let glyph_count = run.glyph_count();
+                            tracing::debug!(count = glyph_count, "run");
+                            let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
+                            font.bounding_rects_for_glyphs(
+                                apple_sdk_port::text::FontOrientation::Horizontal,
+                                unsafe {
+                                    core::slice::from_raw_parts(run.glyphs_ptr(), glyph_count as _)
+                                },
+                                glyph_bounding_rects.spare_capacity_mut(),
+                            );
+                            unsafe {
+                                glyph_bounding_rects.set_len(glyph_count as _);
+                            }
+
+                            for g in 0..glyph_count {
+                                let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
+                                let pos = unsafe { &*run.positions().add(g as usize) };
+                                let bounding_rect = &glyph_bounding_rects[g as usize];
+                                tracing::debug!(glyph, ?font_id, ?pos, ?bounding_rect, "glyph");
+
+                                if bounding_rect.size.width == 0.0
+                                    && bounding_rect.size.height == 0.0
+                                {
+                                    // empty shape(whitespace)
+                                    continue;
+                                }
+
+                                let (r, is_new) = mask_atlas.acquire(
+                                    (font_id as usize, glyph),
+                                    (bounding_rect.size.width as f32 * dip_to_pixels_scaling).ceil()
+                                        as _,
+                                    (bounding_rect.size.height as f32 * dip_to_pixels_scaling)
+                                        .ceil() as _,
+                                );
+                                let placement_box = GlyphPlacementBox {
+                                    left: ((pos.x + bounding_rect.origin.x) as f32 + x_shift)
+                                        * dip_to_pixels_scaling,
+                                    top: (baseline_pos + pos.y
+                                        - (bounding_rect.size.height + bounding_rect.origin.y))
+                                        as f32
+                                        * dip_to_pixels_scaling,
+                                    tex_left: r.left,
+                                    tex_top: r.top,
+                                    width: r.width,
+                                    height: r.height,
+                                };
+                                cache.text_width = cache.text_width.max(placement_box.right());
+                                cache.text_rects.push(placement_box);
+
+                                if is_new {
+                                    vector_raster_state.updated_rects.push(br::Rect2D {
+                                        offset: br::Offset2D {
+                                            x: r.left as _,
+                                            y: r.top as _,
+                                        },
+                                        extent: br::Extent2D {
+                                            width: r.width,
+                                            height: r.height,
+                                        },
+                                    });
+
+                                    let path = font
+                                        .create_path_for_glyph(glyph, None)
+                                        .expect("font.create_path_for_glyph");
+                                    let mut current_figure = None;
+                                    let mut pen_pos = (0.0, 0.0);
+                                    let offset_x = r.left as f32
+                                        - bounding_rect.origin.x as f32 * dip_to_pixels_scaling;
+                                    let offset_y = r.top as f32
+                                        - (bounding_rect.size.height + bounding_rect.origin.y)
+                                            as f32
+                                            * dip_to_pixels_scaling;
+                                    path.apply(|e| match e.r#type {
+                                        apple_sdk_port::raw::kCGPathElementMoveToPoint => {
+                                            let to = unsafe { &*e.points };
+
+                                            current_figure = Some((
+                                                to.clone(),
+                                                vector_raster_state.fill_tri_points.len(),
+                                            ));
+                                            pen_pos = (to.x, to.y);
+                                            vector_raster_state.fill_tri_points.push([
+                                                to.x as f32 * dip_to_pixels_scaling + offset_x,
+                                                to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                            ]);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
+                                            let to = unsafe { &*e.points };
+                                            let Some((_, filltri_index0)) = current_figure else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 =
+                                                vector_raster_state.fill_tri_points.len() - 1;
+                                            vector_raster_state.fill_tri_points.push([
+                                                to.x as f32 * dip_to_pixels_scaling + offset_x,
+                                                to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                            ]);
+                                            vector_raster_state.fill_tri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                vector_raster_state.fill_tri_points.len() as u16
+                                                    - 1,
+                                            ]);
+                                            pen_pos = (to.x, to.y);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
+                                            let points =
+                                                unsafe { core::slice::from_raw_parts(e.points, 2) };
+                                            let Some((_, filltri_index0)) = current_figure else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 =
+                                                vector_raster_state.fill_tri_points.len() - 1;
+                                            vector_raster_state.fill_tri_points.push([
+                                                points[1].x as f32 * dip_to_pixels_scaling
+                                                    + offset_x,
+                                                points[1].y as f32 * dip_to_pixels_scaling
+                                                    + offset_y,
+                                            ]);
+                                            vector_raster_state.fill_tri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                vector_raster_state.fill_tri_points.len() as u16
+                                                    - 1,
+                                            ]);
+                                            vector_raster_state.curve_tris.extend([
+                                                [
+                                                    pen_pos.0 as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    pen_pos.1 as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                    0.0,
+                                                    0.0,
+                                                ],
+                                                [
+                                                    points[0].x as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    points[0].y as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                    0.5,
+                                                    0.0,
+                                                ],
+                                                [
+                                                    points[1].x as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    points[1].y as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                    1.0,
+                                                    1.0,
+                                                ],
+                                            ]);
+                                            pen_pos = (points[1].x, points[1].y);
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
+                                            let points =
+                                                unsafe { core::slice::from_raw_parts(e.points, 3) };
+                                            lyon_geom::CubicBezierSegment {
+                                                from: lyon_geom::point(pen_pos.0, pen_pos.1),
+                                                ctrl1: lyon_geom::point(points[0].x, points[0].y),
+                                                ctrl2: lyon_geom::point(points[1].x, points[1].y),
+                                                to: lyon_geom::point(points[2].x, points[2].y),
+                                            }
+                                            .for_each_quadratic_bezier(0.1, &mut |q| {
+                                                let Some((_, filltri_index0)) = current_figure
+                                                else {
+                                                    panic!("no figure started?");
+                                                };
+
+                                                let filltri_index1 =
+                                                    vector_raster_state.fill_tri_points.len() - 1;
+                                                vector_raster_state.fill_tri_points.push([
+                                                    q.to.x as f32 * dip_to_pixels_scaling
+                                                        + offset_x,
+                                                    q.to.y as f32 * dip_to_pixels_scaling
+                                                        + offset_y,
+                                                ]);
+                                                vector_raster_state.fill_tri_indices.extend([
+                                                    filltri_index0 as u16,
+                                                    filltri_index1 as u16,
+                                                    vector_raster_state.fill_tri_points.len()
+                                                        as u16
+                                                        - 1,
+                                                ]);
+                                                vector_raster_state.curve_tris.extend([
+                                                    [
+                                                        pen_pos.0 as f32 * dip_to_pixels_scaling
+                                                            + offset_x,
+                                                        pen_pos.1 as f32 * dip_to_pixels_scaling
+                                                            + offset_y,
+                                                        0.0,
+                                                        0.0,
+                                                    ],
+                                                    [
+                                                        q.ctrl.x as f32 * dip_to_pixels_scaling
+                                                            + offset_x,
+                                                        q.ctrl.y as f32 * dip_to_pixels_scaling
+                                                            + offset_y,
+                                                        0.5,
+                                                        0.0,
+                                                    ],
+                                                    [
+                                                        q.to.x as f32 * dip_to_pixels_scaling
+                                                            + offset_x,
+                                                        q.to.y as f32 * dip_to_pixels_scaling
+                                                            + offset_y,
+                                                        1.0,
+                                                        1.0,
+                                                    ],
+                                                ]);
+                                                pen_pos = (q.to.x, q.to.y);
+                                            })
+                                        }
+                                        apple_sdk_port::raw::kCGPathElementCloseSubpath => {
+                                            // line to start point
+                                            let Some((start_point, filltri_index0)) =
+                                                current_figure.take()
+                                            else {
+                                                panic!("no figure started?");
+                                            };
+
+                                            let filltri_index1 =
+                                                vector_raster_state.fill_tri_points.len() - 1;
+                                            vector_raster_state.fill_tri_points.push([
+                                                start_point.x as f32 * dip_to_pixels_scaling
+                                                    + offset_x,
+                                                start_point.y as f32 * dip_to_pixels_scaling
+                                                    + offset_y,
+                                            ]);
+                                            vector_raster_state.fill_tri_indices.extend([
+                                                filltri_index0 as u16,
+                                                filltri_index1 as u16,
+                                                vector_raster_state.fill_tri_points.len() as u16
+                                                    - 1,
+                                            ]);
+                                            pen_pos = (start_point.x, start_point.y);
+                                        }
+                                        _ => unreachable!(),
+                                    })
+                                }
+                            }
+                        }
+                    }
+
+                    #[cfg(windows)]
+                    let run_str_utf16s = t
+                        .runs
+                        .iter()
+                        .map(|x| x.content.encode_utf16().collect::<Vec<_>>())
+                        .collect::<Vec<_>>();
+                    #[cfg(windows)]
+                    let cat_str = run_str_utf16s.iter().flatten().copied().collect::<Vec<_>>();
+                    #[cfg(windows)]
+                    let layout = unsafe {
+                        font_set
+                            .native_factory()
+                            .CreateTextLayout(
+                                &cat_str,
+                                font_set.select(FontID::UIDefault),
+                                f32::MAX,
+                                f32::MAX,
+                            )
+                            .expect("dwrite.layout.create")
+                    };
+                    #[cfg(windows)]
+                    let mut range_head = 0;
+                    #[cfg(windows)]
+                    let mut inline_spacing_sum = 0.0;
+                    #[cfg(windows)]
+                    for (r, s) in t.runs.iter().zip(run_str_utf16s.iter()) {
+                        use windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_RANGE;
+
+                        let font = font_set.select(r.font_id);
+                        let range = DWRITE_TEXT_RANGE {
+                            startPosition: range_head,
+                            length: s.len() as _,
+                        };
+
+                        inline_spacing_sum += r.spacing_inline_start * 168.0 / 96.0;
+
+                        unsafe {
+                            let mut family_name =
+                                Vec::with_capacity(font.GetFontFamilyNameLength() as usize + 1);
+                            font.GetFontFamilyName(core::mem::transmute::<
+                                &mut [core::mem::MaybeUninit<_>],
+                                &mut [_],
+                            >(
+                                family_name.spare_capacity_mut()
+                            ))
+                            .expect("dwrite.format.get_font_family_name");
+                            family_name.set_len(family_name.capacity());
+
+                            layout
+                                .SetFontFamilyName(
+                                    windows::core::PCWSTR(family_name.as_ptr()),
+                                    range,
+                                )
+                                .expect("dwrite.layout.set_font_family_name");
+                            layout
+                                .SetFontSize(font.GetFontSize(), range)
+                                .expect("dwrite.layout.set_font_size");
+                            layout
+                                .SetFontStretch(font.GetFontStretch(), range)
+                                .expect("dwrite.layout.set_font_stretch");
+                            layout
+                                .SetFontStyle(font.GetFontStyle(), range)
+                                .expect("dwrite.layout.set_font_style");
+                            layout
+                                .SetFontWeight(font.GetFontWeight(), range)
+                                .expect("dwrite.layout.set_font_weight");
+                            layout
+                                .SetDrawingEffect(
+                                    &IUnknown::from(DrawingEffect {
+                                        font_id: r.font_id,
+                                        offset_x: inline_spacing_sum,
+                                    }),
+                                    range,
+                                )
+                                .expect("dwrite.layout.set_drawing_effect");
+                        }
+
+                        range_head += s.len() as u32;
+                    }
+
+                    let mut layout_metrics = core::mem::MaybeUninit::uninit();
+                    unsafe {
+                        layout
+                            .GetMetrics(layout_metrics.as_mut_ptr())
+                            .expect("dwrite.layout.get_metrics");
+                    }
+                    let layout_metrics = unsafe { layout_metrics.assume_init() };
+                    tracing::debug!(?layout_metrics);
+                    cache.text_width = layout_metrics.width * 168.0 / 96.0 + inline_spacing_sum;
+                    cache.text_height = layout_metrics.height * 168.0 / 96.0;
+
+                    unsafe {
+                        layout
+                            .Draw(
+                                None,
+                                &IDWriteTextRenderer::from(TextLayoutRenderer {
+                                    vector_raster_state,
+                                    atlas: mask_atlas,
+                                    cache,
+                                }),
+                                0.0,
+                                0.0,
+                            )
+                            .expect("dwrite.layout.draw");
+                    }
+
+                    #[cfg(windows)]
+                    #[interface("317f101a-1c78-488b-b1d5-39fedc987e05")]
+                    unsafe trait IAppDrawingEffect: IUnknown {
+                        fn font_id(&self) -> FontID;
+                        fn offset_x(&self) -> f32;
+                    }
+                    #[cfg(windows)]
+                    #[implement(IAppDrawingEffect)]
+                    pub struct DrawingEffect {
+                        font_id: FontID,
+                        offset_x: f32,
+                    }
+                    #[cfg(windows)]
+                    impl IAppDrawingEffect_Impl for DrawingEffect_Impl {
+                        #[inline(always)]
+                        unsafe fn font_id(&self) -> FontID {
+                            self.font_id
+                        }
+
+                        #[inline(always)]
+                        unsafe fn offset_x(&self) -> f32 {
+                            self.offset_x
+                        }
+                    }
+
+                    #[cfg(windows)]
+                    #[implement(IDWriteTextRenderer)]
+                    pub struct TextLayoutRenderer {
+                        vector_raster_state: *mut VectorRasterizationState,
+                        atlas: *mut GlyphAtlas,
+                        cache: *mut CompositeRectCache,
+                    }
+                    #[cfg(windows)]
+                    impl IDWritePixelSnapping_Impl for TextLayoutRenderer_Impl {
+                        fn GetCurrentTransform(
+                            &self,
+                            clientdrawingcontext: *const core::ffi::c_void,
+                            transform: *mut windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX,
+                        ) -> windows_core::Result<()> {
+                            unsafe {
+                                *transform = windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX {
+                                    m11: 1.0,
+                                    m12: 0.0,
+                                    m21: 0.0,
+                                    m22: 1.0,
+                                    dx: 0.0,
+                                    dy: 0.0,
+                                };
+                            }
+
+                            Ok(())
+                        }
+
+                        fn GetPixelsPerDip(
+                            &self,
+                            clientdrawingcontext: *const core::ffi::c_void,
+                        ) -> windows_core::Result<f32> {
+                            Ok(168.0 / 96.0)
+                        }
+
+                        fn IsPixelSnappingDisabled(
+                            &self,
+                            clientdrawingcontext: *const core::ffi::c_void,
+                        ) -> windows_core::Result<windows_core::BOOL> {
+                            Ok(BOOL(0))
+                        }
+                    }
+                    #[cfg(windows)]
+                    impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl {
+                        fn DrawGlyphRun(
+                            &self,
+                            clientdrawingcontext: *const core::ffi::c_void,
+                            mut baselineoriginx: f32,
+                            baselineoriginy: f32,
+                            measuringmode: windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE,
+                            glyphrun: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN,
+                            glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
+                            clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+                        ) -> windows_core::Result<()> {
+                            use windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_METRICS;
+
+                            let dip_to_pixels_scaling = 168.0f32 / 96.0;
+                            let var = clientdrawingeffect
+                                .unwrap()
+                                .cast::<IAppDrawingEffect>()
+                                .expect("clientdrawingeffect.cast.appDrawingEffect");
+                            tracing::debug!(?var, fid = ?unsafe { var.font_id() }, baselineoriginx);
+
+                            let glyphrun = unsafe { &*glyphrun };
+                            let font_face = glyphrun.fontFace.as_ref().expect("no font face");
+                            let mut font_metrics = core::mem::MaybeUninit::uninit();
+                            unsafe { font_face.GetMetrics(font_metrics.as_mut_ptr()) };
+                            let font_metrics = unsafe { font_metrics.assume_init_ref() };
+                            let design_unit = font_metrics.designUnitsPerEm;
+                            let mut glyph_metrics: Vec<DWRITE_GLYPH_METRICS> =
+                                Vec::with_capacity(glyphrun.glyphCount as _);
+                            tracing::debug!(count = glyphrun.glyphCount, "glyphrun");
+                            unsafe {
+                                font_face
+                                    .GetDesignGlyphMetrics(
+                                        glyphrun.glyphIndices,
+                                        glyphrun.glyphCount,
+                                        glyph_metrics.spare_capacity_mut().as_mut_ptr() as _,
+                                        glyphrun.isSideways.as_bool(),
+                                    )
+                                    .expect("GetDesignGlyphMetrics");
+                                glyph_metrics.set_len(glyphrun.glyphCount as _);
+                            }
+                            for n in 0..glyphrun.glyphCount as usize {
+                                let glyph_width = (glyph_metrics[n].advanceWidth as i32
+                                    - glyph_metrics[n].leftSideBearing
+                                    - glyph_metrics[n].rightSideBearing)
+                                    as f32
+                                    * glyphrun.fontEmSize
+                                    * dip_to_pixels_scaling
+                                    / design_unit as f32;
+                                let glyph_height = (glyph_metrics[n].advanceHeight as i32
+                                    - glyph_metrics[n].topSideBearing
+                                    - glyph_metrics[n].bottomSideBearing)
+                                    as f32
+                                    * glyphrun.fontEmSize
+                                    * dip_to_pixels_scaling
+                                    / design_unit as f32;
+
+                                let (r, is_new) = unsafe {
+                                    (*self.atlas).acquire(
+                                        (var.font_id() as _, *glyphrun.glyphIndices.add(n)),
+                                        glyph_width.ceil() as _,
+                                        glyph_height.ceil() as _,
+                                    )
+                                };
+
+                                let glyph_placement_box = GlyphPlacementBox {
+                                    left: (baselineoriginx
+                                        + glyph_metrics[n].leftSideBearing as f32
+                                            * glyphrun.fontEmSize
+                                            / design_unit as f32)
+                                        * dip_to_pixels_scaling
+                                        + unsafe { var.offset_x() },
+                                    top: (baselineoriginy
+                                        - (glyph_metrics[n].verticalOriginY as f32
+                                            - glyph_metrics[n].topSideBearing as f32)
+                                            * glyphrun.fontEmSize
+                                            / design_unit as f32)
+                                        * dip_to_pixels_scaling,
+                                    tex_left: r.left,
+                                    tex_top: r.top,
+                                    width: r.width,
+                                    height: r.height,
+                                };
+                                tracing::debug!(?glyph_placement_box);
+
+                                unsafe {
+                                    (*self.cache).text_rects.push(glyph_placement_box);
+                                }
+                                if is_new {
+                                    unsafe {
+                                        (*self.vector_raster_state).updated_rects.push(
+                                            br::Rect2D {
+                                                offset: br::Offset2D {
+                                                    x: r.left as _,
+                                                    y: r.top as _,
+                                                },
+                                                extent: br::Extent2D {
+                                                    width: r.width,
+                                                    height: r.height,
+                                                },
+                                            },
+                                        );
+                                    }
+
+                                    use windows::Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink;
+                                    let mut current_figure_state = None;
+                                    let sink =
+                                        ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
+                                            translate: windows_numerics::Vector2 {
+                                                X: r.left as f32
+                                                    - glyph_metrics[n].leftSideBearing as f32
+                                                        * glyphrun.fontEmSize
+                                                        * dip_to_pixels_scaling
+                                                        / design_unit as f32,
+                                                Y: r.top as f32
+                                                    - (glyph_metrics[n].verticalOriginY as f32
+                                                        - glyph_metrics[n].topSideBearing as f32)
+                                                        * glyphrun.fontEmSize
+                                                        * dip_to_pixels_scaling
+                                                        / design_unit as f32,
+                                            },
+                                            dip_to_pixels_scale: dip_to_pixels_scaling,
+                                            current_figure_state: &mut current_figure_state,
+                                            vector_raster_state: self.vector_raster_state,
+                                        });
+                                    unsafe {
+                                        font_face
+                                            .GetGlyphRunOutline(
+                                                glyphrun.fontEmSize,
+                                                glyphrun.glyphIndices.add(n),
+                                                None,
+                                                None,
+                                                1,
+                                                glyphrun.isSideways.as_bool(),
+                                                false,
+                                                &sink,
+                                            )
+                                            .expect("GetGlyphRunOutline");
+                                    }
+                                    assert!(current_figure_state.is_none());
+                                }
+
+                                baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) };
+                            }
+
+                            Ok(())
+                        }
+
+                        fn DrawInlineObject(
+                            &self,
+                            clientdrawingcontext: *const core::ffi::c_void,
+                            originx: f32,
+                            originy: f32,
+                            inlineobject: windows_core::Ref<
+                                windows::Win32::Graphics::DirectWrite::IDWriteInlineObject,
+                            >,
+                            issideways: windows_core::BOOL,
+                            isrighttoleft: windows_core::BOOL,
+                            clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+                        ) -> windows_core::Result<()> {
+                            unimplemented!();
+                        }
+
+                        fn DrawStrikethrough(
+                            &self,
+                            clientdrawingcontext: *const core::ffi::c_void,
+                            baselineoriginx: f32,
+                            baselineoriginy: f32,
+                            strikethrough: *const windows::Win32::Graphics::DirectWrite::DWRITE_STRIKETHROUGH,
+                            clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+                        ) -> windows_core::Result<()> {
+                            unimplemented!();
+                        }
+
+                        fn DrawUnderline(
+                            &self,
+                            clientdrawingcontext: *const core::ffi::c_void,
+                            baselineoriginx: f32,
+                            baselineoriginy: f32,
+                            underline: *const windows::Win32::Graphics::DirectWrite::DWRITE_UNDERLINE,
+                            clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+                        ) -> windows_core::Result<()> {
+                            unimplemented!();
+                        }
+                    }
+                    #[cfg(windows)]
+                    #[implement(ID2D1SimplifiedGeometrySink)]
+                    struct GlyphOutlineSink {
+                        translate: windows_numerics::Vector2,
+                        dip_to_pixels_scale: f32,
+                        current_figure_state: *mut Option<(windows_numerics::Vector2, u16)>,
+                        vector_raster_state: *mut VectorRasterizationState,
+                    }
+                    #[cfg(windows)]
+                    impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
+                        fn BeginFigure(
+                            &self,
+                            startpoint: &windows_numerics::Vector2,
+                            figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
+                        ) {
+                            use windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN_FILLED;
+
+                            assert_eq!(figurebegin, D2D1_FIGURE_BEGIN_FILLED, "not filled figure");
+
+                            unsafe {
+                                *self.current_figure_state = Some((
+                                    *startpoint,
+                                    (*self.vector_raster_state).fill_tri_points.len() as _,
+                                ));
+                                (*self.vector_raster_state).fill_tri_points.push([
+                                    startpoint.X * self.dip_to_pixels_scale + self.translate.X,
+                                    -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y,
+                                ]);
+                            }
+                        }
+
+                        fn EndFigure(
+                            &self,
+                            figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END,
+                        ) {
+                            use windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END_CLOSED;
+
+                            let (start_point, filltri_index0) = unsafe {
+                                (*self.current_figure_state)
+                                    .take()
+                                    .expect("no figure started?")
+                            };
+
+                            if figureend == D2D1_FIGURE_END_CLOSED {
+                                // line to start
+                                unsafe {
+                                    let filltri_point1 =
+                                        (*self.vector_raster_state).fill_tri_points.len() - 1;
+                                    (*self.vector_raster_state).fill_tri_points.push([
+                                        start_point.X * self.dip_to_pixels_scale + self.translate.X,
+                                        -start_point.Y * self.dip_to_pixels_scale
+                                            + self.translate.Y,
+                                    ]);
+                                    (*self.vector_raster_state).fill_tri_indices.extend([
+                                        filltri_index0,
+                                        filltri_point1 as u16,
+                                        (*self.vector_raster_state).fill_tri_points.len() as u16
+                                            - 1,
+                                    ]);
+                                }
+                            }
+                        }
+
+                        fn AddLines(
+                            &self,
+                            points: *const windows_numerics::Vector2,
+                            pointscount: u32,
+                        ) {
+                            let &(_, filltri_index0) = unsafe {
+                                (*self.current_figure_state)
+                                    .as_ref()
+                                    .expect("no figure started?")
+                            };
+
+                            for p in
+                                unsafe { core::slice::from_raw_parts(points, pointscount as _) }
+                            {
+                                unsafe {
+                                    let filltri_point1 =
+                                        (*self.vector_raster_state).fill_tri_points.len() - 1;
+                                    (*self.vector_raster_state).fill_tri_points.push([
+                                        p.X * self.dip_to_pixels_scale + self.translate.X,
+                                        -p.Y * self.dip_to_pixels_scale + self.translate.Y,
+                                    ]);
+                                    (*self.vector_raster_state).fill_tri_indices.extend([
+                                        filltri_index0,
+                                        filltri_point1 as u16,
+                                        (*self.vector_raster_state).fill_tri_points.len() as u16
+                                            - 1,
+                                    ]);
+                                }
+                            }
+                        }
+
+                        fn AddBeziers(
+                            &self,
+                            beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
+                            bezierscount: u32,
+                        ) {
+                            let &(_, filltri_index0) = unsafe {
+                                (*self.current_figure_state)
+                                    .as_ref()
+                                    .expect("no figure started?")
+                            };
+
+                            for p in
+                                unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) }
+                            {
+                                let from_p = unsafe {
+                                    (*self.vector_raster_state)
+                                        .fill_tri_points
+                                        .last()
+                                        .expect("no points emitted")
+                                };
+                                let bez = lyon_geom::CubicBezierSegment {
+                                    from: lyon_geom::point(from_p[0], from_p[1]),
+                                    ctrl1: lyon_geom::point(
+                                        p.point1.X * self.dip_to_pixels_scale + self.translate.X,
+                                        -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y,
+                                    ),
+                                    ctrl2: lyon_geom::point(
+                                        p.point2.X * self.dip_to_pixels_scale + self.translate.X,
+                                        -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y,
+                                    ),
+                                    to: lyon_geom::point(
+                                        p.point3.X * self.dip_to_pixels_scale + self.translate.X,
+                                        -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y,
+                                    ),
+                                };
+
+                                bez.for_each_quadratic_bezier(0.1, &mut |q| unsafe {
+                                    let filltri_point1 =
+                                        (*self.vector_raster_state).fill_tri_points.len() - 1;
+                                    (*self.vector_raster_state)
+                                        .fill_tri_points
+                                        .push([q.to.x, q.to.y]);
+                                    (*self.vector_raster_state).fill_tri_indices.extend([
+                                        filltri_index0,
+                                        filltri_point1 as u16,
+                                        (*self.vector_raster_state).fill_tri_points.len() as u16
+                                            - 1,
+                                    ]);
+
+                                    (*self.vector_raster_state).curve_tris.extend([
+                                        [q.from.x, q.from.y, 0.0, 0.0],
+                                        [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
+                                        [q.to.x, q.to.y, 1.0, 1.0],
+                                    ]);
+                                });
+                            }
+                        }
+
+                        fn Close(&self) -> windows_core::Result<()> {
+                            let &(ref start_point, filltri_index0) = unsafe {
+                                (*self.current_figure_state)
+                                    .as_ref()
+                                    .expect("no figure started?")
+                            };
+
+                            // line to start
+                            unsafe {
+                                let filltri_point1 =
+                                    (*self.vector_raster_state).fill_tri_points.len() - 1;
+                                (*self.vector_raster_state).fill_tri_points.push([
+                                    start_point.X * self.dip_to_pixels_scale + self.translate.X,
+                                    start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
+                                ]);
+                                (*self.vector_raster_state).fill_tri_indices.extend([
+                                    filltri_index0,
+                                    filltri_point1 as u16,
+                                    (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
+                                ]);
+                            }
+
+                            Ok(())
+                        }
+
+                        fn SetFillMode(
+                            &self,
+                            fillmode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE,
+                        ) {
+                            use windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE_WINDING;
+
+                            if fillmode != D2D1_FILL_MODE_WINDING {
+                                tracing::warn!("not winding fill mode specified");
+                            }
+                        }
+
+                        fn SetSegmentFlags(
+                            &self,
+                            vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
+                        ) {
+                            unimplemented!("SetSegmentFlags {vertexflags:?}")
+                        }
+                    }
+
                     #[cfg(target_os = "macos")]
                     let framesetter =
                         apple_sdk_port::text::Framesetter::from_attributed_string(&str)

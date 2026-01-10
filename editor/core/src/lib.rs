@@ -26,7 +26,8 @@ use windows::Win32::{
         DirectWrite::{
             DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWriteCreateFactory, IDWriteFactory,
-            IDWritePixelSnapping_Impl, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
+            IDWritePixelSnapping_Impl, IDWriteTextFormat, IDWriteTextRenderer,
+            IDWriteTextRenderer_Impl,
         },
         Gdi::HBRUSH,
     },
@@ -101,7 +102,7 @@ pub fn launch() {
     std::panic::set_hook(Box::new(|panic| unsafe {
         let panic_msg = match std::ffi::CString::new(panic.to_string()) {
             Ok(x) => x,
-            Err(e) => c"<<Could not convert panic message!>>".into(),
+            Err(_) => c"<<Could not convert panic message!>>".into(),
         };
 
         windows::Win32::System::Diagnostics::Debug::OutputDebugStringA(windows::core::PCSTR(
@@ -115,6 +116,7 @@ pub fn launch() {
             windows::Win32::UI::WindowsAndMessaging::MB_OK
                 | windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
         );
+        std::process::abort();
     }));
 
     #[cfg(all(not(target_os = "macos"), not(windows)))]
@@ -435,6 +437,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 tracing::info!("Starting RenderThread...");
                 let mut render_queue = vk_device.queue(vk_device.present_queue_family_index(), 0);
 
+                #[cfg(windows)]
+                let dw_factory: IDWriteFactory = unsafe {
+                    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("dwrite.factory.create")
+                };
+
                 let surface_present_modes = vk_device
                     .primary_adapter_ref()
                     .surface_present_modes_alloc(&vk_surface)
@@ -572,8 +579,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device);
                 #[cfg(feature = "freetype")]
                 let font_set = FontSet::new(&ft, dpi);
-                #[cfg(not(feature = "freetype"))]
+                #[cfg(target_os = "macos")]
                 let font_set = FontSet::new();
+                #[cfg(windows)]
+                let font_set = FontSet::new(dw_factory);
 
                 let mut box_instances = Vec::new();
                 let mut new_filltri_points: Vec<[f32; 2]> = Vec::new();
@@ -931,31 +940,14 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 // });
 
                 #[cfg(windows)]
-                let dwfactory: IDWriteFactory = unsafe {
-                    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("DWriteCreateFactory")
-                };
-                #[cfg(windows)]
-                let ui_text_format = unsafe {
-                    dwfactory
-                        .CreateTextFormat(
-                            w!("Inter Display"),
-                            None,
-                            DWRITE_FONT_WEIGHT_NORMAL,
-                            DWRITE_FONT_STYLE_NORMAL,
-                            DWRITE_FONT_STRETCH_NORMAL,
-                            12.0,
-                            w!("ja-JP"),
-                        )
-                        .expect("CreateTextFormat ui")
-                };
-                #[cfg(windows)]
                 let title_layout = unsafe {
-                    dwfactory
+                    font_set
+                        .native_factory()
                         .CreateTextLayout(
                             &"Peridot Marble Editor - New Project"
                                 .encode_utf16()
                                 .collect::<Vec<_>>(),
-                            &ui_text_format,
+                            font_set.select(FontID::UIDefault),
                             f32::MAX,
                             f32::MAX,
                         )
@@ -3085,7 +3077,14 @@ pub struct FontSet {
     ui_default_shaping: core::ptr::NonNull<peridot_tp_harfbuzz::ffi::hb_font_t>,
     #[cfg(feature = "harfbuzz")]
     ui_title_project_name_shaping: core::ptr::NonNull<peridot_tp_harfbuzz::ffi::hb_font_t>,
+    #[cfg(windows)]
+    dw_factory: IDWriteFactory,
+    #[cfg(windows)]
+    ui_default: IDWriteTextFormat,
+    #[cfg(windows)]
+    ui_title_project_name: IDWriteTextFormat,
 }
+#[cfg(not(windows))]
 impl Drop for FontSet {
     fn drop(&mut self) {
         #[cfg(feature = "harfbuzz")]
@@ -3101,6 +3100,63 @@ impl Drop for FontSet {
     }
 }
 impl FontSet {
+    #[cfg(windows)]
+    pub fn new(dw: IDWriteFactory) -> Self {
+        use windows::Win32::Globalization::GetUserDefaultLocaleName;
+
+        let mut locale_name = [const { core::mem::MaybeUninit::uninit() }; 32];
+        let len = unsafe {
+            GetUserDefaultLocaleName(core::mem::transmute::<
+                &mut [core::mem::MaybeUninit<u16>; 32],
+                &mut [u16; 32],
+            >(&mut locale_name))
+        };
+        let locale_name = if len == 0 {
+            // fallback to en_US
+            let e = std::io::Error::last_os_error();
+            tracing::warn!(reason = ?e, "GetUserDefaultLocaleName.fallback");
+
+            &[b'e' as u16, b'n' as _, b'_' as _, b'U' as _, b'S' as _, 0]
+        } else {
+            unsafe {
+                core::mem::transmute::<&[core::mem::MaybeUninit<u16>], &[u16]>(
+                    &locale_name[..len as usize],
+                )
+            }
+        };
+
+        let ui_default = unsafe {
+            dw.CreateTextFormat(
+                w!("Inter Display"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                12.0,
+                PCWSTR(locale_name.as_ptr()),
+            )
+            .expect("dwrite.textformat.create.ui_default")
+        };
+        let ui_title_project_name = unsafe {
+            dw.CreateTextFormat(
+                w!("Inter Display"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                10.0,
+                PCWSTR(locale_name.as_ptr()),
+            )
+            .expect("dwrite.textformat.create.ui_title_project_name")
+        };
+
+        Self {
+            dw_factory: dw,
+            ui_default,
+            ui_title_project_name,
+        }
+    }
+
     #[cfg(feature = "freetype")]
     pub fn new(lib: &FreeType, dpi: u32) -> Self {
         use peridot_tp_freetype::FractionalExt;
@@ -3190,15 +3246,13 @@ impl FontSet {
         }
     }
 
-    #[cfg(not(feature = "freetype"))]
+    #[cfg(target_os = "macos")]
     pub fn new() -> Self {
-        #[cfg(target_os = "macos")]
         let ui_default = apple_sdk_port::text::Font::new_ui(
             apple_sdk_port::text::UIFontType::System,
             12.0,
             None,
         );
-        #[cfg(target_os = "macos")]
         let ui_title_project_name = apple_sdk_port::text::Font::new_ui(
             apple_sdk_port::text::UIFontType::System,
             10.0,
@@ -3235,6 +3289,21 @@ impl FontSet {
         match category {
             FontID::UIDefault => self.ui_default_shaping.as_ptr(),
             FontID::UITitleProjectName => self.ui_title_project_name_shaping.as_ptr(),
+        }
+    }
+
+    #[cfg(windows)]
+    #[inline(always)]
+    pub const fn native_factory(&self) -> &IDWriteFactory {
+        &self.dw_factory
+    }
+
+    #[cfg(windows)]
+    #[inline]
+    pub fn select(&self, category: FontID) -> &IDWriteTextFormat {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
         }
     }
 }
@@ -3565,11 +3634,7 @@ impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
 
             let (r, is_new) = unsafe {
                 (*self.atlas).acquire(
-                    (
-                        0,
-                        SafeF32::new_unchecked(glyphrun.fontEmSize),
-                        *glyphrun.glyphIndices.add(n),
-                    ),
+                    (FontID::UIDefault as _, *glyphrun.glyphIndices.add(n)),
                     glyph_width.ceil() as _,
                     glyph_height.ceil() as _,
                 )
