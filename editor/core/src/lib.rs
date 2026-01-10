@@ -2576,6 +2576,35 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .bind_pipeline(br::PipelineBindPoint::Graphics, &colorize_pipeline)
                         .draw(3, 1, 0, 0)
                         .end_render_pass()
+                        .inject(|r| {
+                            vk_device.cmd_pipeline_barrier(
+                                r,
+                                &br::DependencyInfo::new(
+                                    &[],
+                                    &[],
+                                    &[br::ImageMemoryBarrier2::new(
+                                        &glyph_atlas.image(),
+                                        br::ImageSubresourceRange::new(
+                                            br::AspectMask::COLOR,
+                                            0..1,
+                                            0..1,
+                                        ),
+                                    )
+                                    .from(
+                                        br::PipelineStageFlags2::FRAGMENT_SHADER,
+                                        br::AccessFlags2::SHADER.read,
+                                    )
+                                    .to(
+                                        br::PipelineStageFlags2::RESOLVE,
+                                        br::AccessFlags2::TRANSFER.read,
+                                    )
+                                    .transferring_layout(
+                                        br::ImageLayout::ShaderReadOnlyOpt,
+                                        br::ImageLayout::TransferDestOpt,
+                                    )],
+                                ),
+                            )
+                        })
                         .resolve_image(
                             vector_color_ms_buffer.image(),
                             br::ImageLayout::TransferSrcOpt,
@@ -2601,6 +2630,35 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 })
                                 .collect::<Vec<_>>(),
                         )
+                        .inject(|r| {
+                            vk_device.cmd_pipeline_barrier(
+                                r,
+                                &br::DependencyInfo::new(
+                                    &[],
+                                    &[],
+                                    &[br::ImageMemoryBarrier2::new(
+                                        &glyph_atlas.image(),
+                                        br::ImageSubresourceRange::new(
+                                            br::AspectMask::COLOR,
+                                            0..1,
+                                            0..1,
+                                        ),
+                                    )
+                                    .from(
+                                        br::PipelineStageFlags2::RESOLVE,
+                                        br::AccessFlags2::TRANSFER.read,
+                                    )
+                                    .to(
+                                        br::PipelineStageFlags2::FRAGMENT_SHADER,
+                                        br::AccessFlags2::SHADER.read,
+                                    )
+                                    .transferring_layout(
+                                        br::ImageLayout::TransferDestOpt,
+                                        br::ImageLayout::ShaderReadOnlyOpt,
+                                    )],
+                                ),
+                            )
+                        })
                         .end()
                         .expect("cb end");
                         unsafe {
