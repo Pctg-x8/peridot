@@ -1521,6 +1521,9 @@ impl CompositeTree {
                     cache.text_height = 0.0;
                     cache.text_rects.clear();
 
+                    #[cfg(windows)]
+                    let dip_to_pixels_scaling: f32 = 168.0 / 96.0;
+                    #[cfg(not(windows))]
                     let dip_to_pixels_scaling: f32 = 2.0;
 
                     #[cfg(feature = "harfbuzz")]
@@ -1569,6 +1572,7 @@ impl CompositeTree {
                         }
                     }
 
+                    #[cfg(feature = "harfbuzz")]
                     let mut x_shift = 0.0;
                     #[cfg(feature = "harfbuzz")]
                     for (r, &b) in t.runs.iter().zip(buffers.iter()) {
@@ -2211,7 +2215,7 @@ impl CompositeTree {
                             length: s.len() as _,
                         };
 
-                        inline_spacing_sum += r.spacing_inline_start * 168.0 / 96.0;
+                        inline_spacing_sum += r.spacing_inline_start * dip_to_pixels_scaling;
 
                         unsafe {
                             let mut family_name =
@@ -2265,14 +2269,16 @@ impl CompositeTree {
                     }
                     let layout_metrics = unsafe { layout_metrics.assume_init() };
                     tracing::debug!(?layout_metrics);
-                    cache.text_width = layout_metrics.width * 168.0 / 96.0 + inline_spacing_sum;
-                    cache.text_height = layout_metrics.height * 168.0 / 96.0;
+                    cache.text_width =
+                        layout_metrics.width * dip_to_pixels_scaling + inline_spacing_sum;
+                    cache.text_height = layout_metrics.height * dip_to_pixels_scaling;
 
                     unsafe {
                         layout
                             .Draw(
                                 None,
                                 &IDWriteTextRenderer::from(TextLayoutRenderer {
+                                    dip_to_pixels_scaling,
                                     vector_raster_state,
                                     atlas: mask_atlas,
                                     cache,
@@ -2311,6 +2317,7 @@ impl CompositeTree {
                     #[cfg(windows)]
                     #[implement(IDWriteTextRenderer)]
                     pub struct TextLayoutRenderer {
+                        dip_to_pixels_scaling: f32,
                         vector_raster_state: *mut VectorRasterizationState,
                         atlas: *mut GlyphAtlas,
                         cache: *mut CompositeRectCache,
@@ -2319,7 +2326,7 @@ impl CompositeTree {
                     impl IDWritePixelSnapping_Impl for TextLayoutRenderer_Impl {
                         fn GetCurrentTransform(
                             &self,
-                            clientdrawingcontext: *const core::ffi::c_void,
+                            _clientdrawingcontext: *const core::ffi::c_void,
                             transform: *mut windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX,
                         ) -> windows_core::Result<()> {
                             unsafe {
@@ -2338,14 +2345,14 @@ impl CompositeTree {
 
                         fn GetPixelsPerDip(
                             &self,
-                            clientdrawingcontext: *const core::ffi::c_void,
+                            _clientdrawingcontext: *const core::ffi::c_void,
                         ) -> windows_core::Result<f32> {
-                            Ok(168.0 / 96.0)
+                            Ok(self.dip_to_pixels_scaling)
                         }
 
                         fn IsPixelSnappingDisabled(
                             &self,
-                            clientdrawingcontext: *const core::ffi::c_void,
+                            _clientdrawingcontext: *const core::ffi::c_void,
                         ) -> windows_core::Result<windows_core::BOOL> {
                             Ok(BOOL(0))
                         }
@@ -2354,17 +2361,16 @@ impl CompositeTree {
                     impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl {
                         fn DrawGlyphRun(
                             &self,
-                            clientdrawingcontext: *const core::ffi::c_void,
+                            _clientdrawingcontext: *const core::ffi::c_void,
                             mut baselineoriginx: f32,
                             baselineoriginy: f32,
-                            measuringmode: windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE,
+                            _measuringmode: windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE,
                             glyphrun: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN,
-                            glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
+                            _glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
                             clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
                         ) -> windows_core::Result<()> {
                             use windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_METRICS;
 
-                            let dip_to_pixels_scaling = 168.0f32 / 96.0;
                             let var = clientdrawingeffect
                                 .unwrap()
                                 .cast::<IAppDrawingEffect>()
@@ -2397,14 +2403,14 @@ impl CompositeTree {
                                     - glyph_metrics[n].rightSideBearing)
                                     as f32
                                     * glyphrun.fontEmSize
-                                    * dip_to_pixels_scaling
+                                    * self.dip_to_pixels_scaling
                                     / design_unit as f32;
                                 let glyph_height = (glyph_metrics[n].advanceHeight as i32
                                     - glyph_metrics[n].topSideBearing
                                     - glyph_metrics[n].bottomSideBearing)
                                     as f32
                                     * glyphrun.fontEmSize
-                                    * dip_to_pixels_scaling
+                                    * self.dip_to_pixels_scaling
                                     / design_unit as f32;
 
                                 let (r, is_new) = unsafe {
@@ -2420,14 +2426,14 @@ impl CompositeTree {
                                         + glyph_metrics[n].leftSideBearing as f32
                                             * glyphrun.fontEmSize
                                             / design_unit as f32)
-                                        * dip_to_pixels_scaling
+                                        * self.dip_to_pixels_scaling
                                         + unsafe { var.offset_x() },
                                     top: (baselineoriginy
                                         - (glyph_metrics[n].verticalOriginY as f32
                                             - glyph_metrics[n].topSideBearing as f32)
                                             * glyphrun.fontEmSize
                                             / design_unit as f32)
-                                        * dip_to_pixels_scaling,
+                                        * self.dip_to_pixels_scaling,
                                     tex_left: r.left,
                                     tex_top: r.top,
                                     width: r.width,
@@ -2462,16 +2468,16 @@ impl CompositeTree {
                                                 X: r.left as f32
                                                     - glyph_metrics[n].leftSideBearing as f32
                                                         * glyphrun.fontEmSize
-                                                        * dip_to_pixels_scaling
+                                                        * self.dip_to_pixels_scaling
                                                         / design_unit as f32,
                                                 Y: r.top as f32
                                                     - (glyph_metrics[n].verticalOriginY as f32
                                                         - glyph_metrics[n].topSideBearing as f32)
                                                         * glyphrun.fontEmSize
-                                                        * dip_to_pixels_scaling
+                                                        * self.dip_to_pixels_scaling
                                                         / design_unit as f32,
                                             },
-                                            dip_to_pixels_scale: dip_to_pixels_scaling,
+                                            dip_to_pixels_scale: self.dip_to_pixels_scaling,
                                             current_figure_state: &mut current_figure_state,
                                             vector_raster_state: self.vector_raster_state,
                                         });
@@ -2500,37 +2506,37 @@ impl CompositeTree {
 
                         fn DrawInlineObject(
                             &self,
-                            clientdrawingcontext: *const core::ffi::c_void,
-                            originx: f32,
-                            originy: f32,
-                            inlineobject: windows_core::Ref<
+                            _clientdrawingcontext: *const core::ffi::c_void,
+                            _originx: f32,
+                            _originy: f32,
+                            _inlineobject: windows_core::Ref<
                                 windows::Win32::Graphics::DirectWrite::IDWriteInlineObject,
                             >,
-                            issideways: windows_core::BOOL,
-                            isrighttoleft: windows_core::BOOL,
-                            clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+                            _issideways: windows_core::BOOL,
+                            _isrighttoleft: windows_core::BOOL,
+                            _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
                         ) -> windows_core::Result<()> {
                             unimplemented!();
                         }
 
                         fn DrawStrikethrough(
                             &self,
-                            clientdrawingcontext: *const core::ffi::c_void,
-                            baselineoriginx: f32,
-                            baselineoriginy: f32,
-                            strikethrough: *const windows::Win32::Graphics::DirectWrite::DWRITE_STRIKETHROUGH,
-                            clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+                            _clientdrawingcontext: *const core::ffi::c_void,
+                            _baselineoriginx: f32,
+                            _baselineoriginy: f32,
+                            _strikethrough: *const windows::Win32::Graphics::DirectWrite::DWRITE_STRIKETHROUGH,
+                            _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
                         ) -> windows_core::Result<()> {
                             unimplemented!();
                         }
 
                         fn DrawUnderline(
                             &self,
-                            clientdrawingcontext: *const core::ffi::c_void,
-                            baselineoriginx: f32,
-                            baselineoriginy: f32,
-                            underline: *const windows::Win32::Graphics::DirectWrite::DWRITE_UNDERLINE,
-                            clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+                            _clientdrawingcontext: *const core::ffi::c_void,
+                            _baselineoriginx: f32,
+                            _baselineoriginy: f32,
+                            _underline: *const windows::Win32::Graphics::DirectWrite::DWRITE_UNDERLINE,
+                            _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
                         ) -> windows_core::Result<()> {
                             unimplemented!();
                         }
