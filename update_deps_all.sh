@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
 
-# update root workspace
-echo "* Updating root workspace..."
-cargo update
+set -e
+PROJECT_ROOT=$(dirname $0)
 
-# update tools workspace
-echo "* Updating tools workspace..."
-(cd tools; cargo update)
+function update_workspace() {
+    local DIR=$1
+    echo "* Updating $(tput bold)$DIR$(tput sgr0)..."
+    (cd $DIR; cargo update)
+}
 
-# update examples
-for f in examples/**/Cargo.toml; do
-    echo "* Updating examples $(dirname $f)..."
-    (cd $(dirname $f); cargo update)
-done
+update_workspace $PROJECT_ROOT
+update_workspace $PROJECT_ROOT/tools
 
+# examples
+for f in $PROJECT_ROOT/examples/**/Cargo.toml; do update_workspace $(dirname $f); done
+
+# editor
+update_workspace $PROJECT_ROOT/editor/win
+update_workspace $PROJECT_ROOT/editor/mac
+update_workspace $PROJECT_ROOT/editor/linux
