@@ -975,28 +975,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     #[constant_id = 1]
                     target_texture_height: f32,
                 }
-                let fill_shader_binary1 =
-                    std::fs::read("../core/resources/vg-fill.spv").expect("vg-fill load");
-                let mut fill_shader_binary = Vec::with_capacity(fill_shader_binary1.len() >> 2);
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        fill_shader_binary1.as_ptr(),
-                        fill_shader_binary
-                            .spare_capacity_mut()
-                            .as_mut_ptr()
-                            .cast::<u8>(),
-                        fill_shader_binary1.len(),
-                    );
-                }
-                unsafe {
-                    fill_shader_binary.set_len(fill_shader_binary1.len() >> 2);
-                }
-                let fill_shader_module = br::ShaderModuleObject::new(
-                    &vk_device,
-                    &br::ShaderModuleCreateInfo::new(&fill_shader_binary),
-                )
-                .expect("fill_shader module create");
-
                 #[derive(br::SpecializationConstants)]
                 struct CurveShaderVertexConstants {
                     #[constant_id = 0]
@@ -1004,48 +982,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     #[constant_id = 1]
                     target_texture_height: f32,
                 }
-                let curve_shader_binary1 =
-                    std::fs::read("../core/resources/vg-curve.spv").expect("vg-curve load");
-                let mut curve_shader_binary = Vec::with_capacity(curve_shader_binary1.len() >> 2);
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        curve_shader_binary1.as_ptr(),
-                        curve_shader_binary
-                            .spare_capacity_mut()
-                            .as_mut_ptr()
-                            .cast::<u8>(),
-                        curve_shader_binary1.len(),
-                    );
-                }
-                unsafe {
-                    curve_shader_binary.set_len(curve_shader_binary1.len() >> 2);
-                }
-                let curve_shader_module = br::ShaderModuleObject::new(
-                    &vk_device,
-                    &br::ShaderModuleCreateInfo::new(&curve_shader_binary),
-                )
-                .expect("curve_shader module create");
-
-                let vec_tri_fill_shader_binary1 =
-                    std::fs::read("../core/resources/vec-tri-fill.spv").expect("vec-tri-fill load");
-                let mut vec_tri_fill_shader_binary =
-                    Vec::with_capacity(vec_tri_fill_shader_binary1.len() >> 2);
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        vec_tri_fill_shader_binary1.as_ptr(),
-                        vec_tri_fill_shader_binary
-                            .spare_capacity_mut()
-                            .as_mut_ptr()
-                            .cast::<u8>(),
-                        vec_tri_fill_shader_binary1.len(),
-                    );
-                    vec_tri_fill_shader_binary.set_len(vec_tri_fill_shader_binary1.len() >> 2);
-                }
-                let vec_tri_fill_shader_module = br::ShaderModuleObject::new(
-                    &vk_device,
-                    &br::ShaderModuleCreateInfo::new(&vec_tri_fill_shader_binary),
-                )
-                .expect("vec_tri_fill_shader module create");
+                let fill_shader_module = vk_device.require_shader("vg-fill.spv");
+                let curve_shader_module = vk_device.require_shader("vg-curve.spv");
+                let vec_tri_fill_shader_module = vk_device.require_shader("vec-tri-fill.spv");
 
                 let vector_render_pass = br::RenderPassObject::new(
                     &vk_device,
@@ -2411,12 +2350,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
                         let mut vector_color_ms_buffer = br::ImageObject::new(
                             &vk_device,
-                            &br::ImageCreateInfo::new(
-                                glyph_atlas.space_mgr.max,
-                                br::vk::VK_FORMAT_R8_UNORM,
-                            )
-                            .set_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
-                            .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                            &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_COLOR_FORMAT)
+                                .set_usage(
+                                    br::ImageUsageFlags::COLOR_ATTACHMENT
+                                        | br::ImageUsageFlags::TRANSFER_SRC,
+                                )
+                                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
                         )
                         .expect("vector color_ms buffer create");
                         let vector_color_ms_buffer_memreq = vector_color_ms_buffer.requirements();
@@ -2443,12 +2382,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .expect("vector color_ms buffer imageview create");
                         let mut vector_stencil_buffer = br::ImageObject::new(
                             &vk_device,
-                            &br::ImageCreateInfo::new(
-                                glyph_atlas.space_mgr.max,
-                                br::vk::VK_FORMAT_S8_UINT,
-                            )
-                            .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                            .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                            &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_STENCIL_FORMAT)
+                                .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
                         )
                         .expect("vector stencil buffer create");
                         let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
@@ -3925,7 +3861,6 @@ struct OutlineContext<'x> {
 #[cfg(feature = "freetype")]
 impl OutlineContext<'_> {
     fn add_quadratic(&mut self, q: &lyon_geom::QuadraticBezierSegment<f32>) {
-        tracing::debug!(?q);
         let &mut Some((_, _, filltri_index0)) = self.current_figure_state else {
             panic!("no figure started?");
         };

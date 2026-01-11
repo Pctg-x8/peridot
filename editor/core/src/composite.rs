@@ -2261,18 +2261,26 @@ impl CompositeTree {
                         range_head += s.len() as u32;
                     }
 
+                    #[cfg(windows)]
                     let mut layout_metrics = core::mem::MaybeUninit::uninit();
+                    #[cfg(windows)]
                     unsafe {
                         layout
                             .GetMetrics(layout_metrics.as_mut_ptr())
                             .expect("dwrite.layout.get_metrics");
                     }
+                    #[cfg(windows)]
                     let layout_metrics = unsafe { layout_metrics.assume_init() };
+                    #[cfg(windows)]
                     tracing::debug!(?layout_metrics);
-                    cache.text_width =
-                        layout_metrics.width * dip_to_pixels_scaling + inline_spacing_sum;
-                    cache.text_height = layout_metrics.height * dip_to_pixels_scaling;
+                    #[cfg(windows)]
+                    {
+                        cache.text_width =
+                            layout_metrics.width * dip_to_pixels_scaling + inline_spacing_sum;
+                        cache.text_height = layout_metrics.height * dip_to_pixels_scaling;
+                    }
 
+                    #[cfg(windows)]
                     unsafe {
                         layout
                             .Draw(
@@ -4924,10 +4932,8 @@ impl BackdropEffectBlurProcessor {
         Vec<br::PipelineObject<&'x VulkanDevice>>,
         Vec<br::PipelineObject<&'x VulkanDevice>>,
     ) {
-        let downsample_shader =
-            gfx.require_shader("../core/resources/dual_kawase_filter/downsample.spv");
-        let upsample_shader =
-            gfx.require_shader("../core/resources/dual_kawase_filter/upsample.spv");
+        let downsample_shader = gfx.require_shader("dual_kawase_filter/downsample.spv");
+        let upsample_shader = gfx.require_shader("dual_kawase_filter/upsample.spv");
         let downsample_stages = [
             downsample_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
             downsample_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),

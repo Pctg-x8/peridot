@@ -311,8 +311,9 @@ impl VulkanDevice {
 
     #[tracing::instrument(skip(self), fields(path = ?path.as_ref()))]
     pub fn require_shader(&self, path: impl AsRef<Path>) -> br::ShaderModuleObject<&Self> {
-        let bin = std::fs::read(path)
-            .inspect_err(|e| tracing::error!(reason = ?e, "missing required shader"))
+        // TODO: resolving resource path
+        let bin = std::fs::read(&std::path::Path::new("../core/resources/").join(&path))
+            .inspect_err(|e| tracing::error!(reason = %e, "required_shader.read"))
             .expect("require_shader");
         let mut aligned_bin = Vec::with_capacity(bin.len() >> 2);
         unsafe {
@@ -324,9 +325,14 @@ impl VulkanDevice {
             aligned_bin.set_len(bin.len() >> 2);
         }
 
-        br::ShaderModuleObject::new(self, &br::ShaderModuleCreateInfo::new(&aligned_bin))
+        let o = br::ShaderModuleObject::new(self, &br::ShaderModuleCreateInfo::new(&aligned_bin))
             .inspect_err(|e| tracing::error!(reason = ?e, "shader instantiation failed"))
-            .expect("require_shader")
+            .expect("require_shader");
+        self.dbg_set_name(
+            &o,
+            &std::ffi::CString::new(path.as_ref().to_string_lossy().into_owned()).unwrap(),
+        );
+        o
     }
 
     pub fn create_graphics_pipelines_array<const N: usize>(
