@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use bedrock::{
-    self as br, Device, Instance, PhysicalDevice, ResolverInterface, TypedVulkanStructure,
-    VkHandle, VkRawHandle,
+    self as br, Device, Instance, PhysicalDevice, ResolverInterface, VkHandle, VkRawHandle,
+    VulkanStructure,
 };
 
 pub const VI_STATE_EMPTY: &br::PipelineVertexInputStateCreateInfo =
@@ -77,55 +77,46 @@ impl VulkanDevice {
             }
         };
 
-        if let Some(xs) = br::instance_extension_properties_cstr_alloc(None)
-            .inspect_err(
-                |e| tracing::error!(reason = ?e, "Failed to enumerate vulkan instance extensions"),
-            )
-            .ok()
-        {
-            for x in xs {
-                tracing::info!(
-                    target: "vk::diag::instance",
-                    name = ?x.extensionName.as_cstr(),
-                    version = x.specVersion,
-                    "vulkan instance extension"
-                );
-            }
+        for x in br::instance_extension_properties_cstr_alloc(None).unwrap_or_else(|e| {
+            tracing::error!(reason = ?e, "Failed to enumerate vulkan instance extensions");
+            Vec::new()
+        }) {
+            tracing::info!(
+                target: "vk::diag::instance",
+                name = ?x.extensionName.as_cstr(),
+                version = x.specVersion,
+                "vulkan instance extension"
+            );
         }
 
-        if let Some(xs) = br::enumerate_layer_properties_alloc()
-            .inspect_err(
-                |e| tracing::error!(reason = ?e, "Failed to enumerate vulkan instance layers"),
-            )
-            .ok()
-        {
-            for x in xs {
-                tracing::info!(
-                    target: "vk::diag::instance",
-                    name = ?x.layerName.as_cstr(),
-                    version.impl = x.implementationVersion,
-                    version.spec = %br::Version::from_raw(x.specVersion),
-                    "vulkan instance layer"
-                );
+        for x in br::enumerate_layer_properties_alloc().unwrap_or_else(|e| {
+            tracing::error!(reason = ?e, "Failed to enumerate vulkan instance layers");
+            Vec::new()
+        }) {
+            tracing::info!(
+                target: "vk::diag::instance",
+                name = ?x.layerName.as_cstr(),
+                version.impl = x.implementationVersion,
+                version.spec = %br::Version::from_raw(x.specVersion),
+                "vulkan instance layer"
+            );
 
-                if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| {
-                    br::instance_extension_properties_cstr_alloc(Some(ln))
-                        .inspect_err(|e| {
-                            tracing::error!(
-                                reason = ?e,
-                                "Failed to enumerate vulkan instance extensions for layer"
-                            )
-                        })
-                        .ok()
-                }) {
-                    for y in ys {
-                        tracing::info!(
-                            target: "vk::diag::instance",
-                            name = ?y.extensionName.as_cstr(),
-                            version = y.specVersion,
-                            "vulkan instance extension on layer"
+            if let Some(ln) = x.layerName.as_cstr().ok() {
+                for y in
+                    br::instance_extension_properties_cstr_alloc(Some(ln)).unwrap_or_else(|e| {
+                        tracing::error!(
+                            reason = ?e,
+                            "Failed to enumerate vulkan instance extensions for layer"
                         );
-                    }
+                        Vec::new()
+                    })
+                {
+                    tracing::info!(
+                        target: "vk::diag::instance",
+                        name = ?y.extensionName.as_cstr(),
+                        version = y.specVersion,
+                        "vulkan instance extension on layer"
+                    );
                 }
             }
         }
@@ -157,58 +148,53 @@ impl VulkanDevice {
             .next()
             .expect("no physical devices");
 
-        if let Some(xs) = vk_adapter
+        for x in vk_adapter
             .enumerate_extension_properties_cstr_alloc(None)
-            .inspect_err(
-                |e| tracing::error!(reason = ?e, "Failed to enumerate vulkan device extensions"),
-            )
-            .ok()
+            .unwrap_or_else(|e| {
+                tracing::error!(reason = ?e, "Failed to enumerate vulkan device extensions");
+                Vec::new()
+            })
         {
-            for x in xs {
-                tracing::info!(
-                    target: "vk::diag::device",
-                    name = ?x.extensionName.as_cstr(),
-                    version = x.specVersion,
-                    "vulkan device extension"
-                );
-            }
+            tracing::info!(
+                target: "vk::diag::device",
+                name = ?x.extensionName.as_cstr(),
+                version = x.specVersion,
+                "vulkan device extension"
+            );
         }
 
-        if let Some(xs) = vk_adapter
+        for x in vk_adapter
             .enumerate_layer_properties_alloc()
-            .inspect_err(
-                |e| tracing::error!(reason = ?e, "Failed to enumerate vulkan device layers"),
-            )
-            .ok()
+            .unwrap_or_else(|e| {
+                tracing::error!(reason = ?e, "Failed to enumerate vulkan device layers");
+                Vec::new()
+            })
         {
-            for x in xs {
-                tracing::info!(
-                    target: "vk::diag::device",
-                    name = ?x.layerName.as_cstr(),
-                    version.impl = x.implementationVersion,
-                    version.spec = %br::Version::from_raw(x.specVersion),
-                    "vulkan device layer"
-                );
+            tracing::info!(
+                target: "vk::diag::device",
+                name = ?x.layerName.as_cstr(),
+                version.impl = x.implementationVersion,
+                version.spec = %br::Version::from_raw(x.specVersion),
+                "vulkan device layer"
+            );
 
-                if let Some(ys) = x.layerName.as_cstr().ok().and_then(|ln| {
-                    vk_adapter
-                        .enumerate_extension_properties_cstr_alloc(Some(ln))
-                        .inspect_err(|e| {
-                            tracing::error!(
-                                reason = ?e,
-                                "Failed to enumerate vulkan instance extensions for layer"
-                            )
-                        })
-                        .ok()
-                }) {
-                    for y in ys {
-                        tracing::info!(
-                            target: "vk::diag::device",
-                            name = ?y.extensionName.as_cstr(),
-                            version = y.specVersion,
-                            "vulkan device extension on layer"
+            if let Some(ln) = x.layerName.as_cstr().ok() {
+                for y in vk_adapter
+                    .enumerate_extension_properties_cstr_alloc(Some(ln))
+                    .unwrap_or_else(|e| {
+                        tracing::error!(
+                            reason = ?e,
+                            "Failed to enumerate vulkan instance extensions for layer"
                         );
-                    }
+                        Vec::new()
+                    })
+                {
+                    tracing::info!(
+                        target: "vk::diag::device",
+                        name = ?y.extensionName.as_cstr(),
+                        version = y.specVersion,
+                        "vulkan device extension on layer"
+                    );
                 }
             }
         }
@@ -224,6 +210,27 @@ impl VulkanDevice {
         let graphics_queue_family_index = vk_adapter_queue_family_properties
             .find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("no graphics queue");
+
+        let mut device_features = br::PhysicalDeviceFeatures2::new(Default::default());
+        let mut device_sync2_features = br::PhysicalDeviceSynchronization2Features::new(true);
+        let mut device_timeline_semaphore_features =
+            br::PhysicalDeviceTimelineSemaphoreFeatures::new(true);
+        let mut vk11_features = (api_version >= br::Version::new(0, 1, 2, 0)).then(|| {
+            br::PhysicalDeviceVulkan11Features {
+                shaderDrawParameters: true as _,
+                ..Default::default()
+            }
+        });
+        br::chain_structures(
+            [
+                Some(device_features.as_generic_mut()),
+                vk11_features.as_mut().map(|x| x.as_generic_mut()),
+                Some(device_sync2_features.as_generic_mut()),
+                Some(device_timeline_semaphore_features.as_generic_mut()),
+            ]
+            .into_iter()
+            .flatten(),
+        );
         let vk_device = br::DeviceObject::new(
             &vk_adapter,
             &br::DeviceCreateInfo::new(
@@ -237,20 +244,7 @@ impl VulkanDevice {
                     .map(|&x| x.into())
                     .collect::<Vec<_>>(),
             )
-            .with_next(
-                &br::PhysicalDeviceFeatures2::new(unsafe {
-                    core::mem::MaybeUninit::<br::PhysicalDeviceFeatures>::zeroed().assume_init()
-                })
-                .with_next(
-                    &mut br::PhysicalDeviceSynchronization2Features::new(true).with_next(
-                        &mut br::vk::VkPhysicalDeviceTimelineSemaphoreFeaturesKHR {
-                            sType: br::vk::VkPhysicalDeviceTimelineSemaphoreFeaturesKHR::TYPE,
-                            pNext: core::ptr::null_mut(),
-                            timelineSemaphore: 1,
-                        },
-                    ),
-                ),
-            ),
+            .with_next(&device_features),
         )
         .expect("vk_device create");
 
@@ -313,7 +307,7 @@ impl VulkanDevice {
     pub fn require_shader(&self, path: impl AsRef<Path>) -> br::ShaderModuleObject<&Self> {
         // TODO: resolving resource path
         let bin = std::fs::read(&std::path::Path::new("../core/resources/").join(&path))
-            .inspect_err(|e| tracing::error!(reason = %e, "required_shader.read"))
+            .inspect_err(|e| tracing::error!(reason = %e, "require_shader.read"))
             .expect("require_shader");
         let mut aligned_bin = Vec::with_capacity(bin.len() >> 2);
         unsafe {
@@ -326,12 +320,14 @@ impl VulkanDevice {
         }
 
         let o = br::ShaderModuleObject::new(self, &br::ShaderModuleCreateInfo::new(&aligned_bin))
-            .inspect_err(|e| tracing::error!(reason = ?e, "shader instantiation failed"))
+            .inspect_err(|e| tracing::error!(reason = %e, "require_shader.instantiate"))
             .expect("require_shader");
-        self.dbg_set_name(
-            &o,
-            &std::ffi::CString::new(path.as_ref().to_string_lossy().into_owned()).unwrap(),
-        );
+        if let Some(n) = std::ffi::CString::new(path.as_ref().to_string_lossy().into_owned())
+            .inspect_err(|e| tracing::warn!(reason = %e, "require_shader.generate_name"))
+            .ok()
+        {
+            self.dbg_set_name(&o, &n);
+        }
         o
     }
 
