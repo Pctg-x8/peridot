@@ -230,6 +230,11 @@ impl<T: Interface> Owned<T> {
         Self(p)
     }
 
+    #[inline(always)]
+    pub const fn as_ptr(&self) -> *mut T {
+        self.0.as_ptr()
+    }
+
     pub const unsafe fn copy_ptr(&self) -> NonNull<T> {
         self.0
     }

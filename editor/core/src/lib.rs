@@ -323,12 +323,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let mut wl_global_msg = WaylandGlobalMessaging {
         pointer: None,
         pointer_pos: (0.0, 0.0),
-        compositor: unsafe { wl_compositor.copy_ptr().as_ptr() },
-        viewporter: unsafe { viewporter.copy_ptr().as_ptr() },
-        kde_blur_manager: kde_blur_manager
-            .as_ref()
-            .map(|x| unsafe { x.copy_ptr().as_ptr() }),
-        wm_base: unsafe { xdg_wm_base.copy_ptr().as_ptr() },
+        compositor: wl_compositor.as_ptr(),
+        viewporter: viewporter.as_ptr(),
+        kde_blur_manager: kde_blur_manager.as_ref().map(wl::Owned::as_ptr),
+        wm_base: xdg_wm_base.as_ptr(),
         root_window: core::ptr::null_mut(),
         popup_buf: core::ptr::null_mut(),
         popup: None,
@@ -425,7 +423,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             .create_u32_rgba_buffer(0x00, 0x00, 0x00, 0x80000000)
             .expect("popup_buf.create.single_pixel_buffer");
 
-        wl_global_msg.popup_buf = unsafe { popup_buf.copy_ptr().as_ptr() };
+        wl_global_msg.popup_buf = popup_buf.as_ptr();
         PopupBuffer::SinglePixel(popup_buf)
     } else {
         // traditional shm-based single pixel buffer
@@ -435,7 +433,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             unsafe {
                 libc::clock_gettime(libc::CLOCK_REALTIME, ts.as_mut_ptr());
             }
-            let mut r = unsafe { ts.assume_init().tv_nsec };
+            let mut r = unsafe { ts.assume_init_ref().tv_nsec };
             for n in 0..6 {
                 shm_name[9 + n] = (b'A' as i64 + (r & 15) + (r & 16) * 2) as _;
                 r >>= 5;
@@ -487,7 +485,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
             .expect("buf.create.popup");
 
-        wl_global_msg.popup_buf = unsafe { buf.copy_ptr().as_ptr() };
+        wl_global_msg.popup_buf = buf.as_ptr();
         PopupBuffer::Shm {
             shm_name,
             fd,
@@ -498,7 +496,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     };
     #[cfg(feature = "wayland")]
     {
-        wl_global_msg.root_window = unsafe { w.xdg_surface.copy_ptr().as_ptr() };
+        wl_global_msg.root_window = w.xdg_surface.as_ptr();
     }
 
     #[cfg(target_os = "macos")]
