@@ -237,7 +237,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
         seat: Option<wl::Owned<wl::Seat>>,
         shm: Option<wl::Owned<wl::Shm>>,
-        layer_shell: Option<wl::Owned<wl::ZwlrLayerShellV1>>,
+        single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
+        viewporter: Option<wl::Owned<wl::WpViewporter>>,
+        kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     }
     #[cfg(feature = "wayland")]
     impl wl::RegistryListener for RegistryListener {
@@ -262,8 +264,17 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 self.seat = Some(registry.bind(name, version).expect("bind seat"));
             } else if interface == c"wl_shm" {
                 self.shm = Some(registry.bind(name, version).expect("bind shm"));
-            } else if interface == c"zwlr_layer_shell_v1" {
-                self.layer_shell = Some(registry.bind(name, version).expect("bind layer_shell"));
+            } else if interface == c"wp_viewporter" {
+                self.viewporter = Some(registry.bind(name, version).expect("bind viewporter"));
+            } else if interface == c"wp_single_pixel_buffer_manager_v1" {
+                self.single_pixel_buffer_manager = Some(
+                    registry
+                        .bind(name, version)
+                        .expect("bind single_pixel_buffer_manager"),
+                );
+            } else if interface == c"org_kde_kwin_blur_manager" {
+                self.kde_blur_manager =
+                    Some(registry.bind(name, version).expect("bind kde_blur_manager"));
             }
         }
 
@@ -278,7 +289,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         xdg_wm_base: None,
         seat: None,
         shm: None,
-        layer_shell: None,
+        single_pixel_buffer_manager: None,
+        viewporter: None,
+        kde_blur_manager: None,
     };
     #[cfg(feature = "wayland")]
     wl_registry
@@ -298,15 +311,23 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     let mut shm = rl.shm.expect("no shm");
     #[cfg(feature = "wayland")]
-    let layer_shell = rl.layer_shell.expect("no layer_shell");
-    #[cfg(feature = "wayland")]
     let outputs = rl.outputs;
+    #[cfg(feature = "wayland")]
+    let single_pixel_buffer_manager = rl.single_pixel_buffer_manager;
+    #[cfg(feature = "wayland")]
+    let viewporter = rl.viewporter.expect("no viewporter");
+    #[cfg(feature = "wayland")]
+    let kde_blur_manager = rl.kde_blur_manager;
 
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = WaylandGlobalMessaging {
         pointer: None,
         pointer_pos: (0.0, 0.0),
         compositor: unsafe { wl_compositor.copy_ptr().as_ptr() },
+        viewporter: unsafe { viewporter.copy_ptr().as_ptr() },
+        kde_blur_manager: kde_blur_manager
+            .as_ref()
+            .map(|x| unsafe { x.copy_ptr().as_ptr() }),
         wm_base: unsafe { xdg_wm_base.copy_ptr().as_ptr() },
         root_window: core::ptr::null_mut(),
         popup_buf: core::ptr::null_mut(),
@@ -368,66 +389,116 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
-    let fd = unsafe {
-        loop {
-            let mut nambuf = b"/wl_shm-000000\x00".clone();
-            let mut ts = core::mem::MaybeUninit::uninit();
-            libc::clock_gettime(libc::CLOCK_REALTIME, ts.as_mut_ptr());
-            let mut r = ts.assume_init_ref().tv_nsec;
-            for n in 0..6 {
-                nambuf[8 + n] = (b'A' as i64 + (r & 15) + (r & 16) * 2) as _;
-                r >>= 5;
+    #[cfg(feature = "wayland")]
+    #[allow(dead_code)]
+    enum PopupBuffer {
+        SinglePixel(wl::Owned<wl::Buffer>),
+        Shm {
+            shm_name: Vec<u8>,
+            fd: core::ffi::c_int,
+            mapped_addr: *mut core::ffi::c_void,
+            shm_pool: wl::Owned<wl::ShmPool>,
+            buf: wl::Owned<wl::Buffer>,
+        },
+    }
+    #[cfg(feature = "wayland")]
+    impl Drop for PopupBuffer {
+        fn drop(&mut self) {
+            match self {
+                &mut Self::SinglePixel(_) => (),
+                &mut Self::Shm {
+                    ref shm_name,
+                    fd,
+                    mapped_addr,
+                    ..
+                } => unsafe {
+                    libc::munmap(mapped_addr, 4);
+                    libc::close(fd);
+                    libc::shm_unlink(shm_name.as_ptr().cast());
+                },
             }
-
-            let fd = libc::shm_open(
-                nambuf.as_ptr().cast(),
-                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-                0o600,
-            );
-            if fd == -1 {
-                continue;
-            }
-
-            if libc::ftruncate(fd, 1024 * 1024 * 4) < 0 {
-                panic!("ftruncate failed");
-            }
-            break fd;
-        }
-    };
-    #[cfg(feature = "wayland")]
-    let a = unsafe {
-        let a = libc::mmap(
-            std::ptr::null_mut(),
-            1024 * 1024 * 4,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            fd,
-            0,
-        );
-        if a == libc::MAP_FAILED {
-            panic!("mmap failed");
-        }
-
-        a
-    };
-    #[cfg(feature = "wayland")]
-    let shmp = shm
-        .create_pool(&fd, 1024 * 1024 * 4)
-        .expect("shm.create_pool");
-    #[cfg(feature = "wayland")]
-    let popup_buf = shmp
-        .create_buffer(0, 1024, 1024, 1024 * 4, wl::ShmFormat::ARGB8888)
-        .expect("shmp.create_buffer");
-    #[cfg(feature = "wayland")]
-    unsafe {
-        for n in 0..1024 * 1024 {
-            core::ptr::write(a.cast::<u32>().add(n), 0x80000000);
         }
     }
     #[cfg(feature = "wayland")]
+    let _popup_buf_resources = if let Some(ref spb) = single_pixel_buffer_manager {
+        let popup_buf = spb
+            .create_u32_rgba_buffer(0x00, 0x00, 0x00, 0x80000000)
+            .expect("popup_buf.create.single_pixel_buffer");
+
+        wl_global_msg.popup_buf = unsafe { popup_buf.copy_ptr().as_ptr() };
+        PopupBuffer::SinglePixel(popup_buf)
+    } else {
+        // traditional shm-based single pixel buffer
+        let mut shm_name = b"/pme_shm-000000\x00".to_vec();
+        let fd = loop {
+            let mut ts = core::mem::MaybeUninit::uninit();
+            unsafe {
+                libc::clock_gettime(libc::CLOCK_REALTIME, ts.as_mut_ptr());
+            }
+            let mut r = unsafe { ts.assume_init().tv_nsec };
+            for n in 0..6 {
+                shm_name[9 + n] = (b'A' as i64 + (r & 15) + (r & 16) * 2) as _;
+                r >>= 5;
+            }
+
+            let fd = unsafe {
+                libc::shm_open(
+                    shm_name.as_ptr().cast(),
+                    libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                    0o0600,
+                )
+            };
+            if fd < 0 {
+                let err = std::io::Error::last_os_error();
+                tracing::warn!(reason = %err, "shm_open failed, retrying");
+            }
+
+            break fd;
+        };
+
+        if unsafe { libc::ftruncate(fd, 4) } < 0 {
+            let err = std::io::Error::last_os_error();
+            tracing::error!(reason = %err, "ftruncate failed");
+            std::process::abort();
+        }
+
+        let addr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                4,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
+        if addr == libc::MAP_FAILED {
+            let err = std::io::Error::last_os_error();
+            tracing::error!(reason = %err, "mmap failed");
+            std::process::abort();
+        }
+
+        unsafe {
+            core::ptr::write(addr.cast::<u32>(), 0x80000000);
+        }
+
+        let shmp = shm.create_pool(&fd, 4).expect("shmp.create.popup");
+        let buf = shmp
+            .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
+            .expect("buf.create.popup");
+
+        wl_global_msg.popup_buf = unsafe { buf.copy_ptr().as_ptr() };
+        PopupBuffer::Shm {
+            shm_name,
+            fd,
+            mapped_addr: addr,
+            shm_pool: shmp,
+            buf,
+        }
+    };
+    #[cfg(feature = "wayland")]
     {
         wl_global_msg.root_window = unsafe { w.xdg_surface.copy_ptr().as_ptr() };
-        wl_global_msg.popup_buf = unsafe { popup_buf.copy_ptr().as_ptr() };
     }
 
     #[cfg(target_os = "macos")]
@@ -2951,12 +3022,16 @@ struct WaylandGlobalMessaging {
     pub pointer: Option<wl::Owned<wl::Pointer>>,
     pub pointer_pos: (f32, f32),
     pub compositor: *mut wl::Compositor,
+    pub viewporter: *mut wl::WpViewporter,
+    pub kde_blur_manager: Option<*mut wl::OrgKdeKwinBlurManager>,
     pub wm_base: *mut wl::XdgWmBase,
     pub root_window: *mut wl::XdgSurface,
     pub popup_buf: *mut wl::Buffer,
     pub popup: Option<(
+        Option<wl::Owned<wl::OrgKdeKwinBlur>>,
         wl::Owned<wl::XdgPopup>,
         wl::Owned<wl::XdgSurface>,
+        wl::Owned<wl::WpViewport>,
         wl::Owned<wl::Surface>,
         Box<WaylandPopupState>,
     )>,
@@ -3085,17 +3160,49 @@ impl wl::PointerEventListener for WaylandGlobalMessaging {
                 // process configure event...
                 (*self.display).roundtrip().expect("roundtrip");
             }
-            unsafe {
-                wl_popup_surface
-                    .attach(Some(&*self.popup_buf), 0, 0)
-                    .expect("wl_popup_surface.attach");
-                wl_popup_surface
-                    .damage(0, 0, -1, -1)
-                    .expect("wl_popup_surface.damage");
-                wl_popup_surface.commit().expect("wl_popup_surface.commit");
-            }
 
-            self.popup = Some((pp, xdg_popup_surface, wl_popup_surface, popup_state));
+            wl_popup_surface
+                .attach(Some(unsafe { &*self.popup_buf }), 0, 0)
+                .expect("wl_popup_surface.attach");
+            wl_popup_surface
+                .damage(0, 0, -1, -1)
+                .expect("wl_popup_surface.damage");
+            let viewport = unsafe {
+                (*self.viewporter)
+                    .get_viewport(&wl_popup_surface)
+                    .expect("popup_viewport.create")
+            };
+            viewport
+                .set_source(
+                    wl::Fixed::from_f32_lossy(0.0),
+                    wl::Fixed::from_f32_lossy(0.0),
+                    wl::Fixed::from_f32_lossy(1.0),
+                    wl::Fixed::from_f32_lossy(1.0),
+                )
+                .expect("viewport.set_source");
+            viewport
+                .set_destination(128, 128)
+                .expect("viewport.set_destination");
+
+            let blur = if let Some(bm) = self.kde_blur_manager {
+                let blur = unsafe { (*bm).create(&wl_popup_surface).expect("blur.create") };
+                blur.commit().expect("blur.commit");
+
+                Some(blur)
+            } else {
+                None
+            };
+
+            wl_popup_surface.commit().expect("wl_popup_surface.commit");
+
+            self.popup = Some((
+                blur,
+                pp,
+                xdg_popup_surface,
+                viewport,
+                wl_popup_surface,
+                popup_state,
+            ));
         } else if state == wl::PointerButtonState::Released {
             self.popup = None;
         }

@@ -779,10 +779,13 @@ impl XmlProtocol {
                     copyright = Some(xml_copyright(reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"interface" => {
                     interfaces.push(XmlInterface::read(t, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Text(_) => (/* ignore */),
                 e => panic!("unexpected: {e:?}"),
@@ -804,6 +807,9 @@ fn xml_copyright<'a>(reader: &mut Reader<&'a [u8]>) -> Result<String, quick_xml:
         match reader.read_event()? {
             Event::End(e) if e.name().0 == b"copyright" => break Ok(content),
             Event::Text(t) => {
+                content.push_str(&t.decode()?);
+            }
+            Event::CData(t) => {
                 content.push_str(&t.decode()?);
             }
             Event::Comment(_) => (/* ignore */),
@@ -846,7 +852,7 @@ impl XmlInterface {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"interface" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"request" => {
                     requests.push(XmlRequest::read(t, reader)?);
@@ -856,6 +862,9 @@ impl XmlInterface {
                 }
                 Event::Start(t) if t.name().0 == b"enum" => {
                     enums.push(XmlEnum::read(t, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Text(_) => (/* ignore */),
                 Event::Comment(_) => (/* ignore */),
@@ -919,10 +928,13 @@ impl XmlRequest {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"request" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, false, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Empty(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, true, reader)?);
@@ -988,10 +1000,13 @@ impl XmlEvent {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"event" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, false, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Empty(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, true, reader)?);
@@ -1049,10 +1064,13 @@ impl XmlEnum {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"enum" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"entry" => {
                     entries.push(XmlEntry::read(t, false, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Empty(t) if t.name().0 == b"entry" => {
                     entries.push(XmlEntry::read(t, true, reader)?);
@@ -1127,7 +1145,10 @@ impl XmlEntry {
                 match reader.read_event()? {
                     Event::End(e) if e.name().0 == b"entry" => break,
                     Event::Start(t) if t.name().0 == b"description" => {
-                        description = Some(XmlDescription::read(t, reader)?);
+                        description = Some(XmlDescription::read(t, false, reader)?);
+                    }
+                    Event::Empty(t) if t.name().0 == b"description" => {
+                        description = Some(XmlDescription::read(t, true, reader)?);
                     }
                     Event::Text(_) => (/* ignore */),
                     e => panic!("unexpected: {e:?}"),
@@ -1196,7 +1217,10 @@ impl XmlArg {
                 match reader.read_event()? {
                     Event::End(e) if e.name().0 == b"arg" => break,
                     Event::Start(t) if t.name().0 == b"description" => {
-                        description = Some(XmlDescription::read(t, reader)?);
+                        description = Some(XmlDescription::read(t, false, reader)?);
+                    }
+                    Event::Empty(t) if t.name().0 == b"description" => {
+                        description = Some(XmlDescription::read(t, true, reader)?);
                     }
                     Event::Text(_) => (/* ignore */),
                     e => panic!("unexpected: {e:?}"),
@@ -1224,6 +1248,7 @@ pub struct XmlDescription {
 impl XmlDescription {
     pub fn read<'a>(
         tag: BytesStart<'a>,
+        empty: bool,
         reader: &mut Reader<&'a [u8]>,
     ) -> Result<Self, quick_xml::Error> {
         let mut summary = None;
@@ -1235,14 +1260,16 @@ impl XmlDescription {
         }
 
         let mut content = String::new();
-        loop {
-            match reader.read_event()? {
-                Event::End(e) if e.name().0 == b"description" => break,
-                Event::Text(t) => {
-                    content.push_str(&t.decode()?);
+        if !empty {
+            loop {
+                match reader.read_event()? {
+                    Event::End(e) if e.name().0 == b"description" => break,
+                    Event::Text(t) => {
+                        content.push_str(&t.decode()?);
+                    }
+                    Event::Comment(_) => (/* ignore */),
+                    e => panic!("unexpected: {e:?}"),
                 }
-                Event::Comment(_) => (/* ignore */),
-                e => panic!("unexpected: {e:?}"),
             }
         }
 

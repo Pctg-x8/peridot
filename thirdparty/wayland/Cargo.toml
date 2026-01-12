@@ -20,11 +20,13 @@ tablet-v2 = []
 fractional-scale-v1 = []
 cursor-shape-v1 = ["tablet-v2"]
 content-type-v1 = []
+single-pixel-buffer-v1 = []
 
 # unstable
 xdg-decoration-unstable-v1 = []
 xdg-foreign-unstable-v2 = []
 wlr-layer-shell-unstable-v1 = ["xdg-shell"]
+kde-blur = []
 
 # external
 gtk-shell = []

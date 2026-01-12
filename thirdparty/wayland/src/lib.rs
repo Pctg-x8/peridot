@@ -1290,11 +1290,13 @@ Ext!("tablet-v2", tablet);
 Ext!("fractional-scale-v1", fractional_scale);
 Ext!("cursor-shape-v1", cursor_shape);
 Ext!("content-type-v1", content_type);
+Ext!("single-pixel-buffer-v1", single_pixel_buffer);
 
 // unstable
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
 Ext!("xdg-foreign-unstable-v2", xdg_foreign);
 Ext!("wlr-layer-shell-unstable-v1", layer_shell);
+Ext!("kde-blur", kde_blur);
 
 // external
 Ext!("gtk-shell", gtk_shell);
