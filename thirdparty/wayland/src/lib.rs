@@ -1294,6 +1294,7 @@ Ext!("content-type-v1", content_type);
 // unstable
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
 Ext!("xdg-foreign-unstable-v2", xdg_foreign);
+Ext!("wlr-layer-shell-unstable-v1", layer_shell);
 
 // external
 Ext!("gtk-shell", gtk_shell);

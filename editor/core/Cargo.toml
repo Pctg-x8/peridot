@@ -50,11 +50,12 @@ windows-numerics = "*"
 [dependencies.peridot-tp-wayland]
 path = "../../thirdparty/wayland"
 optional = true
-features = ["tracing", "xdg-shell"]
+features = ["tracing", "xdg-shell", "wlr-layer-shell-unstable-v1"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-eventfd = { path = "../../platform/linux/eventfd" }
 linux-epoll = { path = "../../platform/linux/epoll" }
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }

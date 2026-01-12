@@ -5,6 +5,9 @@ use bedrock::{
     VulkanStructure,
 };
 
+pub const VG_COLOR_FORMAT: br::Format = br::vk::VK_FORMAT_R8_UNORM;
+pub const VG_STENCIL_FORMAT: br::Format = br::vk::VK_FORMAT_S8_UINT;
+
 pub const VI_STATE_EMPTY: &br::PipelineVertexInputStateCreateInfo =
     &br::PipelineVertexInputStateCreateInfo::new(&[], &[]);
 

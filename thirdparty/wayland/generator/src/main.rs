@@ -56,6 +56,53 @@ fn enum_type_name(n: &str) -> String {
     sink
 }
 
+fn wrapper_enum_type_name(n: &str, callsite_type_name: &str) -> String {
+    if n.contains('.') {
+        // fully qualified
+        let mut sink = String::with_capacity(n.len());
+        let mut needs_upper = true;
+        for c in n.chars() {
+            if c == '_' {
+                needs_upper = true;
+                continue;
+            }
+            if c == '.' {
+                needs_upper = true;
+                continue;
+            }
+
+            if needs_upper {
+                sink.extend(c.to_uppercase());
+                needs_upper = false;
+            } else {
+                sink.push(c);
+            }
+        }
+
+        return sink;
+    }
+
+    // should prefixed with callsite_type_name
+    let mut sink = String::with_capacity(n.len() + callsite_type_name.len());
+    sink.push_str(callsite_type_name);
+    let mut needs_upper = true;
+    for c in n.chars() {
+        if c == '_' {
+            needs_upper = true;
+            continue;
+        }
+
+        if needs_upper {
+            sink.extend(c.to_uppercase());
+            needs_upper = false;
+        } else {
+            sink.push(c);
+        }
+    }
+
+    sink
+}
+
 fn enum_entry_name(n: &str) -> String {
     let mut needs_upper = true;
     let mut sink = String::with_capacity(n.len());
@@ -278,13 +325,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (WlWireFormatType::UInt, None, Some(t), false) => {
                         let _ = write!(
                             wrapper_args,
-                            "{arg_name_ident}: {type_name}{},",
-                            enum_type_name(t)
+                            "{arg_name_ident}: {},",
+                            wrapper_enum_type_name(t, type_name.as_str())
                         );
-                        let _ = write!(
-                            marshal_args,
-                            "ffi::Argument {{ u: {arg_name_ident} as _ }},"
-                        );
+                        let _ = write!(marshal_args, "{arg_name_ident}.as_arg(),");
                     }
                     (WlWireFormatType::Int, None, None, false) => {
                         let _ = write!(wrapper_args, "{arg_name_ident}: i32,");
@@ -649,14 +693,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         for e in x.enums.iter() {
-            println!(
-                "#[repr(u32)] #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum {type_name}{enum_name} {{",
-                enum_name = enum_type_name(&e.name)
-            );
-            for ee in e.entries.iter() {
-                println!("    {} = {},", enum_entry_name(&ee.name), ee.value);
+            let enum_name = enum_type_name(&e.name);
+
+            if e.bitfield
+                .as_ref()
+                .is_some_and(|x| x.eq_ignore_ascii_case("true"))
+            {
+                // bitfield
+                println!(
+                    "bitflags::bitflags! {{ #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct {type_name}{enum_name} : u32 {{",
+                );
+                for ee in e.entries.iter() {
+                    println!("    const {} = {};", enum_entry_name(&ee.name), ee.value);
+                }
+                println!("}} }}");
+                println!(
+                    "impl {type_name}{enum_name} {{ pub const fn as_arg(&self) -> ffi::Argument {{ ffi::Argument {{ u: self.bits() }} }} }}\n"
+                );
+            } else {
+                println!(
+                    "#[repr(u32)] #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum {type_name}{enum_name} {{",
+                );
+                for ee in e.entries.iter() {
+                    println!("    {} = {},", enum_entry_name(&ee.name), ee.value);
+                }
+                println!("}}");
+                println!(
+                    "impl {type_name}{enum_name} {{ pub const fn as_arg(&self) -> ffi::Argument {{ ffi::Argument {{ u: *self as _ }} }} }}\n"
+                );
             }
-            println!("}}\n");
         }
     }
 

@@ -1,7 +1,7 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut,
-    Fence, FenceMut, ImageChild, InstanceChild, MemoryBound, PhysicalDevice, QueueMut, RenderPass,
-    ShaderModule, SurfaceCreateInfo, Swapchain, VkHandle, VkHandleMut, VkObject,
+    self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut,
+    ImageChild, InstanceChild, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule,
+    SurfaceCreateInfo, Swapchain, VkHandle, VkHandleMut, VkObject,
 };
 use core::pin::Pin;
 #[cfg(feature = "wayland")]
@@ -50,7 +50,7 @@ use crate::{
         CompositeRectTextVerticalAlignment, CompositeRenderingData, CompositeStreamingData,
         CompositeTree, FontID, VectorRasterizationState,
     },
-    graphics::VulkanDevice,
+    graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
 };
 
 mod atlas;
@@ -227,13 +227,17 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     }
 
     #[cfg(feature = "wayland")]
-    let wl_display = wl::Display::connect().expect("wl_display connect");
+    let mut wl_display = wl::Display::connect().expect("wl_display connect");
     #[cfg(feature = "wayland")]
     let mut wl_registry = wl_display.get_registry().expect("wl_registry get");
     #[cfg(feature = "wayland")]
     struct RegistryListener {
         compositor: Option<wl::Owned<wl::Compositor>>,
+        outputs: Vec<wl::Owned<wl::Output>>,
         xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
+        seat: Option<wl::Owned<wl::Seat>>,
+        shm: Option<wl::Owned<wl::Shm>>,
+        layer_shell: Option<wl::Owned<wl::ZwlrLayerShellV1>>,
     }
     #[cfg(feature = "wayland")]
     impl wl::RegistryListener for RegistryListener {
@@ -248,8 +252,18 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
             if interface == c"wl_compositor" {
                 self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
+            } else if interface == c"wl_output" {
+                self.outputs
+                    .push(registry.bind(name, version).expect("bind output"));
             } else if interface == c"xdg_wm_base" {
                 self.xdg_wm_base = Some(registry.bind(name, version).expect("bind xdg_wm_base"));
+            } else if interface == c"wl_seat" {
+                assert!(self.seat.is_none(), "multiple seat?");
+                self.seat = Some(registry.bind(name, version).expect("bind seat"));
+            } else if interface == c"wl_shm" {
+                self.shm = Some(registry.bind(name, version).expect("bind shm"));
+            } else if interface == c"zwlr_layer_shell_v1" {
+                self.layer_shell = Some(registry.bind(name, version).expect("bind layer_shell"));
             }
         }
 
@@ -260,7 +274,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     let mut rl = RegistryListener {
         compositor: None,
+        outputs: Vec::new(),
         xdg_wm_base: None,
+        seat: None,
+        shm: None,
+        layer_shell: None,
     };
     #[cfg(feature = "wayland")]
     wl_registry
@@ -275,14 +293,36 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let wl_compositor = rl.compositor.expect("no compositor");
     #[cfg(feature = "wayland")]
     let mut xdg_wm_base = rl.xdg_wm_base.expect("no xdg-shell");
+    #[cfg(feature = "wayland")]
+    let mut seat = rl.seat.expect("no seat");
+    #[cfg(feature = "wayland")]
+    let mut shm = rl.shm.expect("no shm");
+    #[cfg(feature = "wayland")]
+    let layer_shell = rl.layer_shell.expect("no layer_shell");
+    #[cfg(feature = "wayland")]
+    let outputs = rl.outputs;
 
     #[cfg(feature = "wayland")]
-    let mut wl_global_msg = WaylandGlobalMessaging;
+    let mut wl_global_msg = WaylandGlobalMessaging {
+        pointer: None,
+        pointer_pos: (0.0, 0.0),
+        compositor: unsafe { wl_compositor.copy_ptr().as_ptr() },
+        wm_base: unsafe { xdg_wm_base.copy_ptr().as_ptr() },
+        root_window: core::ptr::null_mut(),
+        popup_buf: core::ptr::null_mut(),
+        popup: None,
+        display: &mut wl_display,
+        _pinned: core::marker::PhantomPinned,
+    };
     #[cfg(feature = "wayland")]
     xdg_wm_base
         .set_listener(&mut wl_global_msg)
         .into_result()
         .expect("xdg_wm_base set_listener");
+    #[cfg(feature = "wayland")]
+    seat.set_listener(&mut wl_global_msg)
+        .into_result()
+        .expect("seat set_listener");
 
     #[cfg(feature = "wayland")]
     let wl_surface = wl_compositor.create_surface().expect("wl_surface create");
@@ -292,6 +332,14 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("xdg_surface create");
     #[cfg(feature = "wayland")]
     let wl_xdg_toplevel = wl_xdg_surface.get_toplevel().expect("xdg_toplevel create");
+    #[cfg(feature = "wayland")]
+    wl_xdg_toplevel
+        .set_title(c"Peridot Marble Editor")
+        .expect("xdg_toplevel.set_title");
+    #[cfg(feature = "wayland")]
+    wl_xdg_surface
+        .set_window_geometry(0, 0, 640, 480)
+        .expect("xdg_surface.set_window_geometry");
 
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
@@ -319,6 +367,68 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     w.surface.commit().expect("wl_surface.commit");
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
+
+    let fd = unsafe {
+        loop {
+            let mut nambuf = b"/wl_shm-000000\x00".clone();
+            let mut ts = core::mem::MaybeUninit::uninit();
+            libc::clock_gettime(libc::CLOCK_REALTIME, ts.as_mut_ptr());
+            let mut r = ts.assume_init_ref().tv_nsec;
+            for n in 0..6 {
+                nambuf[8 + n] = (b'A' as i64 + (r & 15) + (r & 16) * 2) as _;
+                r >>= 5;
+            }
+
+            let fd = libc::shm_open(
+                nambuf.as_ptr().cast(),
+                libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+                0o600,
+            );
+            if fd == -1 {
+                continue;
+            }
+
+            if libc::ftruncate(fd, 1024 * 1024 * 4) < 0 {
+                panic!("ftruncate failed");
+            }
+            break fd;
+        }
+    };
+    #[cfg(feature = "wayland")]
+    let a = unsafe {
+        let a = libc::mmap(
+            std::ptr::null_mut(),
+            1024 * 1024 * 4,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if a == libc::MAP_FAILED {
+            panic!("mmap failed");
+        }
+
+        a
+    };
+    #[cfg(feature = "wayland")]
+    let shmp = shm
+        .create_pool(&fd, 1024 * 1024 * 4)
+        .expect("shm.create_pool");
+    #[cfg(feature = "wayland")]
+    let popup_buf = shmp
+        .create_buffer(0, 1024, 1024, 1024 * 4, wl::ShmFormat::ARGB8888)
+        .expect("shmp.create_buffer");
+    #[cfg(feature = "wayland")]
+    unsafe {
+        for n in 0..1024 * 1024 {
+            core::ptr::write(a.cast::<u32>().add(n), 0x80000000);
+        }
+    }
+    #[cfg(feature = "wayland")]
+    {
+        wl_global_msg.root_window = unsafe { w.xdg_surface.copy_ptr().as_ptr() };
+        wl_global_msg.popup_buf = unsafe { popup_buf.copy_ptr().as_ptr() };
+    }
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new();
@@ -583,390 +693,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 let font_set = FontSet::new();
                 #[cfg(windows)]
                 let font_set = FontSet::new(dw_factory);
-
-                let mut box_instances = Vec::new();
-                let mut new_filltri_points: Vec<[f32; 2]> = Vec::new();
-                let mut new_filltri_indices: Vec<u16> = Vec::new();
-                let mut new_curve_triangles: Vec<[f32; 4]> = Vec::new();
-
-                #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
-                unsafe {
-                    use peridot_tp_harfbuzz::ffi::{
-                        hb_buffer_add_utf8, hb_buffer_create, hb_buffer_get_glyph_infos,
-                        hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties,
-                        hb_ft_font_create_referenced, hb_shape,
-                    };
-
-                    let hb_buffer = hb_buffer_create();
-                    hb_buffer_add_utf8(
-                        hb_buffer,
-                        c"Peridot Marble Editor - New Project".as_ptr(),
-                        -1,
-                        0,
-                        -1,
-                    );
-                    hb_buffer_guess_segment_properties(hb_buffer);
-                    let hb_font = hb_ft_font_create_referenced(font_set.ui_default);
-                    hb_shape(hb_font, hb_buffer, core::ptr::null(), 0);
-                    let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-                    let glyph_infos =
-                        hb_buffer_get_glyph_infos(hb_buffer, glyph_infos_len.as_mut_ptr());
-                    let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                    let glyph_positions =
-                        hb_buffer_get_glyph_positions(hb_buffer, glyph_positions_len.as_mut_ptr());
-                    assert_eq!(
-                        glyph_infos_len.assume_init(),
-                        glyph_positions_len.assume_init()
-                    );
-                    let baseline_y = 12.0
-                        * (dpi as f64 / 96.0)
-                        * ((*font_set.ui_default).ascender as f64
-                            / (*font_set.ui_default).units_per_em as f64);
-                    let mut left_cursor = 0;
-                    for n in 0..glyph_positions_len.assume_init() {
-                        let glyph_info = &*glyph_infos.add(n as usize);
-                        let glyph_position = &*glyph_positions.add(n as usize);
-
-                        ft::load_glyph(
-                            font_set.ui_default,
-                            glyph_info.codepoint,
-                            peridot_tp_freetype::LoadFlags::DEFAULT,
-                        )
-                        .expect("face.load_glyph");
-                        let metrics = &(*(*font_set.ui_default).glyph).metrics;
-                        let glyph_width = metrics.width as f32 / 64.0;
-                        let glyph_height = metrics.height as f32 / 64.0;
-                        // println!("{glyph_info:?} {glyph_position:?} {metrics:?} {}", glyph_position.x_advance as f32 / 64.0);
-
-                        let (r, is_new) = glyph_atlas.acquire(
-                            (0, glyph_info.codepoint as _),
-                            glyph_width.ceil() as _,
-                            glyph_height.ceil() as _,
-                        );
-
-                        box_instances.push(BoxInstance {
-                            posst: [
-                                metrics.width as f32 / 64.0,
-                                metrics.height as f32 / 64.0,
-                                (left_cursor as i64
-                                    + glyph_position.x_offset as i64
-                                    + metrics.horiBearingX) as f32
-                                    / 64.0,
-                                baseline_y as f32 - metrics.horiBearingY as f32 / 64.0,
-                            ],
-                            uvst: [
-                                r.width as f32 / glyph_atlas.space_mgr.max.width as f32,
-                                r.height as f32 / glyph_atlas.space_mgr.max.height as f32,
-                                r.left as f32 / glyph_atlas.space_mgr.max.width as f32,
-                                r.top as f32 / glyph_atlas.space_mgr.max.height as f32,
-                            ],
-                        });
-
-                        if is_new {
-                            let mut ctx = OutlineContext {
-                                translate_x: r.left as f32 - metrics.horiBearingX as f32 / 64.0,
-                                translate_y: r.top as f32 - metrics.horiBearingY as f32 / 64.0,
-                                current_figure_state: &mut None,
-                                new_filltri_points: &mut new_filltri_points,
-                                new_filltri_indices: &mut new_filltri_indices,
-                                new_curve_triangles: &mut new_curve_triangles,
-                            };
-                            ft::outline_decompose(
-                                &mut (*(*font_set.ui_default).glyph).outline,
-                                &mut ctx,
-                                0,
-                                0,
-                            )
-                            .expect("glyph.outline.decompose");
-                        }
-
-                        left_cursor += glyph_position.x_advance;
-                    }
-                }
-
-                #[cfg(target_os = "macos")]
-                unsafe {
-                    let font = font_set.select(FontID::UIDefault);
-
-                    let mut str_attr = apple_sdk_port::foundation::MutableDictionary::<
-                        _,
-                        dyn apple_sdk_port::Object,
-                    >::new_copying_key_generic_value(None, 1)
-                    .expect("str_attr.create");
-                    str_attr.set(
-                        apple_sdk_port::foundation::AttributedStringKey::font(),
-                        font,
-                    );
-                    let str = apple_sdk_port::foundation::AttributedString::new(
-                        None,
-                        &apple_sdk_port::foundation::String::from_str_no_copy(
-                            None,
-                            "Peridot Marble Editor - New Project",
-                        ),
-                        Some(&str_attr),
-                    )
-                    .expect("AttributedString.create");
-                    let framesetter =
-                        apple_sdk_port::text::Framesetter::from_attributed_string(&str)
-                            .expect("Framesetter.create");
-                    let frame = framesetter
-                        .create_frame(
-                            apple_sdk_port::foundation::Range {
-                                location: 0,
-                                length: 0,
-                            },
-                            &apple_sdk_port::graphics::Path::new_rect(
-                                apple_sdk_port::raw::CGRect {
-                                    origin: apple_sdk_port::raw::CGPoint { x: 0.0, y: 0.0 },
-                                    size: apple_sdk_port::raw::CGSize {
-                                        width: f64::MAX,
-                                        height: f64::MAX,
-                                    },
-                                },
-                                None,
-                            ),
-                            None,
-                        )
-                        .expect("Frame.create");
-                    let lines = frame.lines();
-                    tracing::debug!(line_count = lines.len(), "frameset lines");
-                    let font_ascent = font.ascent();
-                    for n in 0..lines.len() {
-                        let runs = lines[n].glyph_runs();
-                        tracing::debug!(count = runs.len(), "glyph runs");
-                        for m in 0..runs.len() {
-                            let glyph_count = runs[m].glyph_count();
-                            tracing::debug!(count = glyph_count, "run");
-                            let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
-                            font.bounding_rects_for_glyphs(
-                                apple_sdk_port::text::FontOrientation::Horizontal,
-                                core::slice::from_raw_parts(runs[m].glyphs_ptr(), glyph_count as _),
-                                glyph_bounding_rects.spare_capacity_mut(),
-                            );
-                            glyph_bounding_rects.set_len(glyph_count as _);
-                            for g in 0..glyph_count {
-                                let glyph = *runs[m].glyphs_ptr().add(g as usize);
-                                let pos = &*runs[m].positions().add(g as usize);
-                                let bounding_rect = &glyph_bounding_rects[g as usize];
-                                tracing::debug!(glyph, ?pos, ?bounding_rect, "glyph");
-
-                                if bounding_rect.size.width == 0.0
-                                    && bounding_rect.size.height == 0.0
-                                {
-                                    // empty shape(whitespace)
-                                    continue;
-                                }
-
-                                let (r, is_new) = glyph_atlas.acquire(
-                                    (0, glyph),
-                                    (bounding_rect.size.width * 2.0).ceil() as _,
-                                    (bounding_rect.size.height * 2.0).ceil() as _,
-                                );
-                                box_instances.push(BoxInstance {
-                                    posst: [
-                                        r.width as f32,
-                                        r.height as f32,
-                                        ((pos.x + bounding_rect.origin.x) * 2.0) as f32,
-                                        ((pos.y + font_ascent
-                                            - (bounding_rect.size.height + bounding_rect.origin.y))
-                                            * 2.0) as f32,
-                                    ],
-                                    uvst: [
-                                        r.width as f32 / glyph_atlas.space_mgr.max.width as f32,
-                                        r.height as f32 / glyph_atlas.space_mgr.max.height as f32,
-                                        r.left as f32 / glyph_atlas.space_mgr.max.width as f32,
-                                        r.top as f32 / glyph_atlas.space_mgr.max.height as f32,
-                                    ],
-                                });
-
-                                if is_new {
-                                    let path = font
-                                        .create_path_for_glyph(glyph, None)
-                                        .expect("font.create_path_for_glyph");
-                                    let mut current_figure = None;
-                                    let mut pen_pos = (0.0, 0.0);
-                                    let offset_x =
-                                        r.left as f32 - (bounding_rect.origin.x * 2.0) as f32;
-                                    let offset_y = r.top as f32
-                                        - ((bounding_rect.size.height + bounding_rect.origin.y)
-                                            * 2.0) as f32;
-                                    path.apply(|e| match e.r#type {
-                                        apple_sdk_port::raw::kCGPathElementMoveToPoint => {
-                                            current_figure = Some((
-                                                (*e.points).clone(),
-                                                new_filltri_points.len(),
-                                            ));
-                                            pen_pos = ((*e.points).x, (*e.points).y);
-                                            new_filltri_points.push([
-                                                (*e.points).x as f32 * 2.0 + offset_x,
-                                                (*e.points).y as f32 * 2.0 + offset_y,
-                                            ]);
-                                        }
-                                        apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
-                                            let Some((_, filltri_index0)) = current_figure else {
-                                                panic!("no figure started?");
-                                            };
-
-                                            let filltri_index1 = new_filltri_points.len() - 1;
-                                            new_filltri_points.push([
-                                                (*e.points).x as f32 * 2.0 + offset_x,
-                                                (*e.points).y as f32 * 2.0 + offset_y,
-                                            ]);
-                                            new_filltri_indices.extend([
-                                                filltri_index0 as u16,
-                                                filltri_index1 as u16,
-                                                new_filltri_points.len() as u16 - 1,
-                                            ]);
-                                            pen_pos = ((*e.points).x, (*e.points).y);
-                                        }
-                                        apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
-                                            let points = core::slice::from_raw_parts(e.points, 2);
-                                            let Some((_, filltri_index0)) = current_figure else {
-                                                panic!("no figure started?");
-                                            };
-
-                                            let filltri_index1 = new_filltri_points.len() - 1;
-                                            new_filltri_points.push([
-                                                points[1].x as f32 * 2.0 + offset_x,
-                                                points[1].y as f32 * 2.0 + offset_y,
-                                            ]);
-                                            new_filltri_indices.extend([
-                                                filltri_index0 as u16,
-                                                filltri_index1 as u16,
-                                                new_filltri_points.len() as u16 - 1,
-                                            ]);
-                                            new_curve_triangles.extend([
-                                                [
-                                                    pen_pos.0 as f32 * 2.0 + offset_x,
-                                                    pen_pos.1 as f32 * 2.0 + offset_y,
-                                                    0.0,
-                                                    0.0,
-                                                ],
-                                                [
-                                                    points[0].x as f32 * 2.0 + offset_x,
-                                                    points[0].y as f32 * 2.0 + offset_y,
-                                                    0.5,
-                                                    0.0,
-                                                ],
-                                                [
-                                                    points[1].x as f32 * 2.0 + offset_x,
-                                                    points[1].y as f32 * 2.0 + offset_y,
-                                                    1.0,
-                                                    1.0,
-                                                ],
-                                            ]);
-                                            pen_pos = (points[1].x, points[1].y);
-                                        }
-                                        apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
-                                            let points = core::slice::from_raw_parts(e.points, 3);
-                                            lyon_geom::CubicBezierSegment {
-                                                from: lyon_geom::point(pen_pos.0, pen_pos.1),
-                                                ctrl1: lyon_geom::point(points[0].x, points[0].y),
-                                                ctrl2: lyon_geom::point(points[1].x, points[1].y),
-                                                to: lyon_geom::point(points[2].x, points[2].y),
-                                            }
-                                            .for_each_quadratic_bezier(0.1, &mut |q| {
-                                                let Some((_, filltri_index0)) = current_figure
-                                                else {
-                                                    panic!("no figure started?");
-                                                };
-
-                                                let filltri_index1 = new_filltri_points.len() - 1;
-                                                new_filltri_points.push([
-                                                    q.to.x as f32 * 2.0 + offset_x,
-                                                    q.to.y as f32 * 2.0 + offset_y,
-                                                ]);
-                                                new_filltri_indices.extend([
-                                                    filltri_index0 as u16,
-                                                    filltri_index1 as u16,
-                                                    new_filltri_points.len() as u16 - 1,
-                                                ]);
-                                                new_curve_triangles.extend([
-                                                    [
-                                                        pen_pos.0 as f32 * 2.0 + offset_x,
-                                                        pen_pos.1 as f32 * 2.0 + offset_y,
-                                                        0.0,
-                                                        0.0,
-                                                    ],
-                                                    [
-                                                        q.ctrl.x as f32 * 2.0 + offset_x,
-                                                        q.ctrl.y as f32 * 2.0 + offset_y,
-                                                        0.5,
-                                                        0.0,
-                                                    ],
-                                                    [
-                                                        q.to.x as f32 * 2.0 + offset_x,
-                                                        q.to.y as f32 * 2.0 + offset_y,
-                                                        1.0,
-                                                        1.0,
-                                                    ],
-                                                ]);
-                                                pen_pos = (q.to.x, q.to.y);
-                                            })
-                                        }
-                                        apple_sdk_port::raw::kCGPathElementCloseSubpath => {
-                                            // line to start point
-                                            let Some((start_point, filltri_index0)) =
-                                                current_figure.take()
-                                            else {
-                                                panic!("no figure started?");
-                                            };
-
-                                            let filltri_index1 = new_filltri_points.len() - 1;
-                                            new_filltri_points.push([
-                                                start_point.x as f32 * 2.0 + offset_x,
-                                                start_point.y as f32 * 2.0 + offset_y,
-                                            ]);
-                                            new_filltri_indices.extend([
-                                                filltri_index0 as u16,
-                                                filltri_index1 as u16,
-                                                new_filltri_points.len() as u16 - 1,
-                                            ]);
-                                            pen_pos = (start_point.x, start_point.y);
-                                        }
-                                        _ => unreachable!(),
-                                    })
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // debug print glyph_atlas
-                // box_instances.clear();
-                // box_instances.push(BoxInstance {
-                //     posst: [4096.0, 4096.0, 0.0, 0.0],
-                //     uvst: [1.0, 1.0, 0.0, 0.0],
-                // });
-
-                #[cfg(windows)]
-                let title_layout = unsafe {
-                    font_set
-                        .native_factory()
-                        .CreateTextLayout(
-                            &"Peridot Marble Editor - New Project"
-                                .encode_utf16()
-                                .collect::<Vec<_>>(),
-                            font_set.select(FontID::UIDefault),
-                            f32::MAX,
-                            f32::MAX,
-                        )
-                        .expect("CreateTextLayout title")
-                };
-                #[cfg(windows)]
-                let renderer = IDWriteTextRenderer::from(AtlasTextRenderer {
-                    box_instances: &mut box_instances,
-                    atlas: &mut glyph_atlas,
-                    new_filltri_points: &mut new_filltri_points,
-                    new_filltri_indices: &mut new_filltri_indices,
-                    new_curve_triangles: &mut new_curve_triangles,
-                });
-                #[cfg(windows)]
-                unsafe {
-                    title_layout
-                        .Draw(None, &renderer, 0.0, 0.0)
-                        .expect("title_layout.Draw");
-                }
 
                 #[derive(br::SpecializationConstants)]
                 struct FillShaderVertexConstants {
@@ -1260,195 +986,31 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     )
                     .expect("create vector rasterize pipelines");
 
-                // unsafe {
-                //     manual_capture_begin();
-                // }
-                let filltri_points_offset = 0;
-                let filltri_indices_offset =
-                    filltri_points_offset + core::mem::size_of_val(&new_filltri_points[..]);
-                let curve_triangles_offset = (filltri_indices_offset
-                    + core::mem::size_of_val(&new_filltri_indices[..])
-                    + (core::mem::size_of::<[f32; 4]>() - 1))
-                    & !(core::mem::size_of::<[f32; 4]>() - 1);
-                let vector_draw_buffer_total_size =
-                    curve_triangles_offset + core::mem::size_of_val(&new_curve_triangles[..]);
-                let mut vector_draw_buffer = br::BufferObject::new(
+                let mut composite_renderer = BoundCompositeRenderer::new(
                     &vk_device,
-                    &br::BufferCreateInfo::new(
-                        vector_draw_buffer_total_size,
-                        br::BufferUsage::VERTEX_BUFFER
-                            | br::BufferUsage::INDEX_BUFFER
-                            | br::BufferUsage::TRANSFER_DEST,
-                    ),
-                )
-                .expect("vector_draw_buffer create");
-                let vector_draw_buffer_memreq = vector_draw_buffer.requirements();
-                let vector_draw_buffer_memory = br::DeviceMemoryObject::new(
-                    &vk_device,
-                    &br::MemoryAllocateInfo::new(
-                        vector_draw_buffer_memreq.size,
-                        vk_device
-                            .find_device_local_memory_index(
-                                vector_draw_buffer_memreq.memoryTypeBits,
-                            )
-                            .expect("no suitable memory"),
-                    ),
-                )
-                .expect("vector_draw_buffer malloc");
-                vector_draw_buffer
-                    .bind(&vector_draw_buffer_memory, 0)
-                    .expect("vector_draw_buffer bind");
+                    glyph_atlas.view(),
+                    surface_format.format,
+                    surface_ext,
+                    &backbuffer_image_views,
+                );
 
-                let mut vector_draw_init_buffer = br::BufferObject::new(
-                    &vk_device,
-                    &br::BufferCreateInfo::new(
-                        vector_draw_buffer_total_size,
-                        br::BufferUsage::TRANSFER_SRC,
-                    ),
-                )
-                .expect("vector_draw_init_buffer create");
-                let vector_draw_init_buffer_memreq = vector_draw_init_buffer.requirements();
-                let vector_draw_init_buffer_memindex = vk_device
-                    .find_host_visible_memory_index(vector_draw_init_buffer_memreq.memoryTypeBits)
-                    .expect("no suitable memory");
-                let mut vector_draw_init_buffer_memory = br::DeviceMemoryObject::new(
-                    &vk_device,
-                    &br::MemoryAllocateInfo::new(
-                        vector_draw_init_buffer_memreq.size,
-                        vector_draw_init_buffer_memindex,
-                    ),
-                )
-                .expect("vector_draw_init_buffer malloc");
-                vector_draw_init_buffer
-                    .bind(&vector_draw_init_buffer_memory, 0)
-                    .expect("vector_draw_init_buffer bind");
-                let p = vector_draw_init_buffer_memory
-                    .map(0..vector_draw_buffer_total_size)
-                    .expect("vector_draw_init_buffer_memory map");
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        new_filltri_points.as_ptr(),
-                        p.ptr().byte_add(filltri_points_offset).cast(),
-                        new_filltri_points.len(),
-                    );
-                    core::ptr::copy_nonoverlapping(
-                        new_filltri_indices.as_ptr(),
-                        p.ptr().byte_add(filltri_indices_offset).cast(),
-                        new_filltri_indices.len(),
-                    );
-                    core::ptr::copy_nonoverlapping(
-                        new_curve_triangles.as_ptr(),
-                        p.ptr().byte_add(curve_triangles_offset).cast(),
-                        new_curve_triangles.len(),
-                    );
-                }
-                if !vk_device.is_coherent_memory(vector_draw_init_buffer_memindex) {
-                    unsafe {
-                        vk_device
-                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
-                                &vector_draw_init_buffer_memory,
-                                0..vector_draw_buffer_total_size as u64,
-                            )])
-                            .expect("flush_mapped_memory_ranges");
-                    }
-                }
-                unsafe {
-                    vector_draw_init_buffer_memory.unmap();
-                }
-
-                const VG_COLOR_FORMAT: br::Format = br::vk::VK_FORMAT_R8_UNORM;
-                const VG_STENCIL_FORMAT: br::Format = br::vk::VK_FORMAT_S8_UINT;
-                let mut vector_color_ms_buffer = br::ImageObject::new(
-                    &vk_device,
-                    &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_COLOR_FORMAT)
-                        .set_usage(
-                            br::ImageUsageFlags::COLOR_ATTACHMENT
-                                | br::ImageUsageFlags::TRANSFER_SRC,
-                        )
-                        .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
-                )
-                .expect("vector color_ms buffer create");
-                let mut vector_stencil_buffer = br::ImageObject::new(
-                    &vk_device,
-                    &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_STENCIL_FORMAT)
-                        .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                        .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
-                )
-                .expect("vector stencil buffer create");
-                let vector_color_ms_buffer_memreq = vector_color_ms_buffer.requirements();
-                let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
-                let vector_color_ms_buffer_mem = br::DeviceMemoryObject::new(
-                    &vk_device,
-                    &br::MemoryAllocateInfo::new(
-                        vector_color_ms_buffer_memreq.size,
-                        vk_device
-                            .find_lazily_allocatable_device_local_memory_index(
-                                vector_color_ms_buffer_memreq.memoryTypeBits,
-                            )
-                            .expect("no suitable memory"),
-                    ),
-                )
-                .expect("vector color_ms buffer malloc");
-                let vector_stencil_buffer_mem = br::DeviceMemoryObject::new(
-                    &vk_device,
-                    &br::MemoryAllocateInfo::new(
-                        vector_stencil_buffer_memreq.size,
-                        vk_device
-                            .find_lazily_allocatable_device_local_memory_index(
-                                vector_stencil_buffer_memreq.memoryTypeBits,
-                            )
-                            .expect("no suitable memory"),
-                    ),
-                )
-                .expect("vector stencil buffer malloc");
-                br::bind_memory(&mut vector_color_ms_buffer, &vector_color_ms_buffer_mem, 0)
-                    .expect("bind.vector_color_ms_buffer");
-                br::bind_memory(&mut vector_stencil_buffer, &vector_stencil_buffer_mem, 0)
-                    .expect("bind.vector_stencil_buffer");
-                let vector_color_ms_buffer = br::ImageViewBuilder::new(
-                    vector_color_ms_buffer,
-                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                )
-                .create()
-                .expect("vector color_ms buffer imageview create");
-                let vector_stencil_buffer = br::ImageViewBuilder::new(
-                    vector_stencil_buffer,
-                    br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
-                )
-                .create()
-                .expect("vector stencil buffer imageview create");
-                let vector_framebuffer = br::FramebufferObject::new(
-                    &vk_device,
-                    &br::FramebufferCreateInfo::new(
-                        &vector_render_pass,
-                        &[
-                            vector_stencil_buffer.as_transparent_ref(),
-                            vector_color_ms_buffer.as_transparent_ref(),
-                        ],
-                        glyph_atlas.space_mgr.max.width,
-                        glyph_atlas.space_mgr.max.height,
-                    ),
-                )
-                .expect("vector framebuffer create");
-
-                let mut cp = br::CommandPoolObject::new(
+                let mut init_cp = br::CommandPoolObject::new(
                     &vk_device,
                     &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
                 )
-                .expect("cp init");
-                let mut cb = br::CommandBufferObject::alloc(
+                .expect("init_cp.create");
+                let [mut init_cb] = br::CommandBufferObject::alloc_array(
                     &vk_device,
-                    &br::CommandBufferAllocateInfo::new(
-                        &mut cp,
-                        1,
+                    &br::CommandBufferFixedCountAllocateInfo::new(
+                        &mut init_cp,
                         br::CommandBufferLevel::Primary,
                     ),
                 )
-                .expect("alloc cb");
+                .expect("init_cb.create");
                 unsafe {
-                    cb[0]
+                    init_cb
                         .begin(&br::CommandBufferBeginInfo::new())
-                        .expect("cb begin")
+                        .expect("init_cb.begin")
                 }
                 .inject(|r| {
                     vk_device.cmd_pipeline_barrier(
@@ -1458,23 +1020,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             &[],
                             &[br::ImageMemoryBarrier2::new(
                                 &glyph_atlas.image(),
-                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                                glyph_atlas.image_range_entire(),
                             )
-                            .transferring_layout(
-                                br::ImageLayout::Undefined,
-                                br::ImageLayout::TransferDestOpt,
-                            )],
+                            .transit_to(br::ImageLayout::TransferDestOpt.from_undefined())],
                         ),
                     )
                 })
-                .copy_buffer(
-                    &vector_draw_init_buffer,
-                    &vector_draw_buffer,
-                    &[br::BufferCopy::mirror(
-                        0,
-                        vector_draw_buffer_total_size as _,
-                    )],
-                )
                 .clear_color_image(
                     &glyph_atlas.image(),
                     br::ImageLayout::TransferDestOpt,
@@ -1489,464 +1040,59 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     vk_device.cmd_pipeline_barrier(
                         r,
                         &br::DependencyInfo::new(
-                            &[br::MemoryBarrier2::new()
-                                .from(
-                                    br::PipelineStageFlags2::COPY,
-                                    br::AccessFlags2::TRANSFER.write,
-                                )
-                                .to(
-                                    br::PipelineStageFlags2::VERTEX_INPUT,
-                                    br::AccessFlags2::VERTEX_ATTRIBUTE_READ
-                                        | br::AccessFlags2::INDEX_READ,
-                                )],
+                            &[],
                             &[],
                             &[br::ImageMemoryBarrier2::new(
                                 &glyph_atlas.image(),
-                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                                glyph_atlas.image_range_entire(),
                             )
-                            .of_execution(
-                                br::PipelineStageFlags2::COPY,
-                                br::PipelineStageFlags2::FRAGMENT_SHADER,
+                            .transit_to(
+                                br::ImageLayout::ShaderReadOnlyOpt
+                                    .from(br::ImageLayout::TransferDestOpt),
                             )
-                            .of_memory(
+                            .from(
+                                br::PipelineStageFlags2::CLEAR,
                                 br::AccessFlags2::TRANSFER.write,
-                                br::AccessFlags2::SHADER.read,
                             )
-                            .transferring_layout(
-                                br::ImageLayout::TransferDestOpt,
-                                br::ImageLayout::ShaderReadOnlyOpt,
-                            )],
-                        ),
-                    )
-                })
-                .begin_render_pass(
-                    &br::RenderPassBeginInfo::new(
-                        &vector_render_pass,
-                        &vector_framebuffer,
-                        glyph_atlas.space_mgr.max.into_rect(br::Offset2D::ZERO),
-                        &[
-                            br::ClearValue::depth_stencil(1.0, 0),
-                            br::ClearValue::color_f32([0.0; 4]),
-                        ],
-                    ),
-                    br::SubpassContents::Inline,
-                )
-                .bind_pipeline(br::PipelineBindPoint::Graphics, &triangle_fans_pipeline)
-                .bind_vertex_buffer_array(
-                    0,
-                    &[vector_draw_buffer.as_transparent_ref()],
-                    &[filltri_points_offset as _],
-                )
-                .bind_index_buffer(
-                    &vector_draw_buffer,
-                    filltri_indices_offset,
-                    br::IndexType::U16,
-                )
-                .draw_indexed(new_filltri_indices.len() as _, 1, 0, 0, 0)
-                .bind_pipeline(br::PipelineBindPoint::Graphics, &curve_pipeline)
-                .bind_vertex_buffer_array(
-                    0,
-                    &[vector_draw_buffer.as_transparent_ref()],
-                    &[curve_triangles_offset as _],
-                )
-                .draw(new_curve_triangles.len() as _, 1, 0, 0)
-                .next_subpass(br::SubpassContents::Inline)
-                .bind_pipeline(br::PipelineBindPoint::Graphics, &colorize_pipeline)
-                .draw(3, 1, 0, 0)
-                .end_render_pass()
-                .inject(|r| {
-                    vk_device.cmd_pipeline_barrier(
-                        r,
-                        &br::DependencyInfo::new(
-                            &[],
-                            &[],
-                            &[br::ImageMemoryBarrier2::new(
-                                &glyph_atlas.image(),
-                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                            )
-                            .of_execution(
+                            .to(
                                 br::PipelineStageFlags2::FRAGMENT_SHADER,
-                                br::PipelineStageFlags2::RESOLVE,
-                            )
-                            .transferring_layout(
-                                br::ImageLayout::ShaderReadOnlyOpt,
-                                br::ImageLayout::TransferDestOpt,
-                            )],
-                        ),
-                    )
-                })
-                .resolve_image(
-                    vector_color_ms_buffer.image(),
-                    br::ImageLayout::TransferSrcOpt,
-                    &glyph_atlas.image(),
-                    br::ImageLayout::TransferDestOpt,
-                    &[br::vk::VkImageResolve {
-                        srcSubresource: br::ImageSubresourceLayers::new(
-                            br::AspectMask::COLOR,
-                            0,
-                            0..1,
-                        ),
-                        srcOffset: br::Offset3D::ZERO,
-                        dstSubresource: br::ImageSubresourceLayers::new(
-                            br::AspectMask::COLOR,
-                            0,
-                            0..1,
-                        ),
-                        dstOffset: br::Offset3D::ZERO,
-                        extent: glyph_atlas.space_mgr.max.with_depth(1),
-                    }],
-                )
-                .inject(|r| {
-                    vk_device.cmd_pipeline_barrier(
-                        r,
-                        &br::DependencyInfo::new(
-                            &[],
-                            &[],
-                            &[br::ImageMemoryBarrier2::new(
-                                &glyph_atlas.image(),
-                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                            )
-                            .of_execution(
-                                br::PipelineStageFlags2::RESOLVE,
-                                br::PipelineStageFlags2::FRAGMENT_SHADER,
-                            )
-                            .of_memory(
-                                br::AccessFlags2::TRANSFER.write,
                                 br::AccessFlags2::SHADER.read,
-                            )
-                            .transferring_layout(
-                                br::ImageLayout::TransferDestOpt,
-                                br::ImageLayout::ShaderReadOnlyOpt,
                             )],
                         ),
                     )
                 })
                 .end()
-                .expect("cb end");
+                .expect("init_cb.end");
                 unsafe {
                     render_queue
                         .submit_raw(
                             &[br::SubmitInfo::new(
                                 &[],
                                 &[],
-                                &[cb[0].as_transparent_ref()],
+                                &[init_cb.as_transparent_ref()],
                                 &[],
                             )],
                             None,
                         )
-                        .expect("vector render submit");
+                        .expect("init_cb.submit");
+                    render_queue.wait().expect("init_cb.wait");
                 }
-                render_queue.wait().expect("vector render wait");
-
-                let vertex_offset = 0;
-                let instance_data_offset = vertex_offset + core::mem::size_of::<[[f32; 4]; 4]>();
-                let total_size = instance_data_offset
-                    + core::mem::size_of::<BoxInstance>() * box_instances.len();
-                let mut draw_buffer = br::BufferObject::new(
-                    &vk_device,
-                    &br::BufferCreateInfo::new(
-                        total_size,
-                        br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::TRANSFER_DEST,
-                    ),
-                )
-                .expect("draw_buffer create");
-                let draw_buffer_memory_requirements = draw_buffer.requirements();
-                let draw_buffer_memory = br::DeviceMemoryObject::new(
-                    &vk_device,
-                    &br::MemoryAllocateInfo::new(
-                        draw_buffer_memory_requirements.size,
-                        vk_device
-                            .find_device_local_memory_index(
-                                draw_buffer_memory_requirements.memoryTypeBits,
-                            )
-                            .expect("no suitable memory"),
-                    ),
-                )
-                .expect("draw_buffer memalloc");
-                draw_buffer
-                    .bind(&draw_buffer_memory, 0)
-                    .expect("draw_buffer bind memory");
-
-                struct DrawBufferInitContent {
-                    pos01: [[f32; 4]; 4],
-                    instance_data: [BoxInstance; 0],
-                }
-                let init_size = core::mem::offset_of!(DrawBufferInitContent, instance_data)
-                    + core::mem::size_of::<BoxInstance>() * box_instances.len();
-                let mut init_draw_buffer = br::BufferObject::new(
-                    &vk_device,
-                    &br::BufferCreateInfo::new(init_size, br::BufferUsage::TRANSFER_SRC),
-                )
-                .expect("init_draw_buffer create");
-                let init_draw_buffer_memory_requirements = init_draw_buffer.requirements();
-                let init_draw_buffer_memory_index = vk_device
-                    .find_host_visible_memory_index(
-                        init_draw_buffer_memory_requirements.memoryTypeBits,
-                    )
-                    .expect("no suitable memory");
-                let mut init_draw_buffer_memory = br::DeviceMemoryObject::new(
-                    &vk_device,
-                    &br::MemoryAllocateInfo::new(
-                        init_draw_buffer_memory_requirements.size,
-                        init_draw_buffer_memory_index,
-                    ),
-                )
-                .expect("init_draw_buffer memalloc");
-                init_draw_buffer
-                    .bind(&init_draw_buffer_memory, 0)
-                    .expect("init_draw_buffer bind memory");
-                let p = init_draw_buffer_memory
-                    .map(0..init_size)
-                    .expect("init_draw_buffer_memory map");
-                unsafe {
-                    let content = p.ptr().cast::<DrawBufferInitContent>();
-                    (*content).pos01[0] = [0.0, 0.0, 0.0, 1.0];
-                    (*content).pos01[1] = [1.0, 0.0, 0.0, 1.0];
-                    (*content).pos01[2] = [0.0, 1.0, 0.0, 1.0];
-                    (*content).pos01[3] = [1.0, 1.0, 0.0, 1.0];
-                    core::ptr::copy_nonoverlapping(
-                        box_instances.as_ptr(),
-                        (*content).instance_data.as_mut_ptr(),
-                        box_instances.len(),
-                    );
-                }
-                drop(p);
-                if !vk_device.is_coherent_memory(init_draw_buffer_memory_index) {
-                    unsafe {
-                        vk_device
-                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
-                                &init_draw_buffer_memory,
-                                0..init_size as u64,
-                            )])
-                            .expect("flush_mapped_memory_ranges");
-                    }
-                }
-                unsafe {
-                    init_draw_buffer_memory.unmap();
-                }
-
-                let mut init_cp = br::CommandPoolObject::new(
-                    &vk_device,
-                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
-                )
-                .expect("init command pool create");
-                let mut init_cb = br::CommandBufferObject::alloc(
-                    &vk_device,
-                    &br::CommandBufferAllocateInfo::new(
-                        &mut init_cp,
-                        1,
-                        br::CommandBufferLevel::Primary,
-                    ),
-                )
-                .expect("init command buffer alloc");
-                unsafe {
-                    init_cb[0]
-                        .begin(&br::CommandBufferBeginInfo::new())
-                        .expect("begin init cb")
-                }
-                .copy_buffer(
-                    &init_draw_buffer,
-                    &draw_buffer,
-                    &[
-                        br::BufferCopy::copy_data::<[[f32; 4]; 4]>(
-                            core::mem::offset_of!(DrawBufferInitContent, pos01) as _,
-                            0,
-                        ),
-                        br::BufferCopy {
-                            srcOffset: core::mem::offset_of!(DrawBufferInitContent, instance_data)
-                                as _,
-                            dstOffset: instance_data_offset as _,
-                            size: (core::mem::size_of::<BoxInstance>() * box_instances.len()) as _,
-                        },
-                    ],
-                )
-                .inject(|r| {
-                    vk_device.cmd_pipeline_barrier(
-                        r,
-                        &br::DependencyInfo::new(
-                            &[br::MemoryBarrier2::new()
-                                .from(
-                                    br::PipelineStageFlags2::COPY,
-                                    br::AccessFlags2::TRANSFER.write,
-                                )
-                                .to(
-                                    br::PipelineStageFlags2::VERTEX_INPUT,
-                                    br::AccessFlags2::VERTEX_ATTRIBUTE_READ,
-                                )],
-                            &[],
-                            &[],
-                        ),
-                    )
-                })
-                .end()
-                .expect("error in init cb");
-                unsafe {
-                    render_queue
-                        .submit_raw(
-                            &[br::SubmitInfo::new(
-                                &[],
-                                &[],
-                                &[init_cb[0].as_transparent_ref()],
-                                &[],
-                            )],
-                            None,
-                        )
-                        .expect("submit init");
-                }
-                render_queue.wait().expect("wait init commands");
-                // unsafe {
-                //     manual_capture_end();
-                // }
-
-                let mut composite_renderer = BoundCompositeRenderer::new(
-                    &vk_device,
-                    glyph_atlas.view(),
-                    surface_format.format,
-                    surface_ext,
-                    &backbuffer_image_views,
-                );
-
-                let dsl_test = br::DescriptorSetLayoutObject::new(
-                    &vk_device,
-                    &br::DescriptorSetLayoutCreateInfo::new(&[
-                        br::DescriptorType::CombinedImageSampler.make_binding(0, 1),
-                    ]),
-                )
-                .expect("dsl_test create");
-
-                let shader_binary1 =
-                    std::fs::read("../core/resources/test.spv").expect("no shader");
-                let mut shader_binary = Vec::with_capacity(shader_binary1.len() >> 2);
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        shader_binary1.as_ptr(),
-                        shader_binary.spare_capacity_mut().as_mut_ptr().cast::<u8>(),
-                        shader_binary1.len(),
-                    );
-                }
-                unsafe {
-                    shader_binary.set_len(shader_binary1.len() >> 2);
-                }
-                let shader_module = br::ShaderModuleObject::new(
-                    &vk_device,
-                    &br::ShaderModuleCreateInfo::new(&shader_binary),
-                )
-                .expect("shader module create");
-                let pipeline_layout = br::PipelineLayoutObject::new(
-                    &vk_device,
-                    &br::PipelineLayoutCreateInfo::new(
-                        &[dsl_test.as_transparent_ref()],
-                        &[br::PushConstantRange::new(
-                            br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                            0..core::mem::size_of::<[f32; 2]>() as u32,
-                        )],
-                    ),
-                )
-                .expect("pipeline layout create");
-                let [mut pipeline] = vk_device
-                    .new_graphics_pipeline_array(
-                        &[br::GraphicsPipelineCreateInfo::new(
-                            &pipeline_layout,
-                            vk_render_pass.subpass(0),
-                            &[
-                                shader_module.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                                shader_module.on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                            ],
-                            &br::PipelineVertexInputStateCreateInfo::new(
-                                &[
-                                    br::VertexInputBindingDescription::per_vertex_typed::<[f32; 4]>(
-                                        0,
-                                    ),
-                                    br::VertexInputBindingDescription::per_instance_typed::<
-                                        BoxInstance,
-                                    >(1),
-                                ],
-                                &[
-                                    br::VertexInputAttributeDescription {
-                                        location: 0,
-                                        binding: 0,
-                                        offset: 0,
-                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                    },
-                                    br::VertexInputAttributeDescription {
-                                        location: 1,
-                                        binding: 1,
-                                        offset: core::mem::offset_of!(BoxInstance, posst) as _,
-                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                    },
-                                    br::VertexInputAttributeDescription {
-                                        location: 2,
-                                        binding: 1,
-                                        offset: core::mem::offset_of!(BoxInstance, uvst) as _,
-                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                    },
-                                ],
-                            ),
-                            &br::PipelineInputAssemblyStateCreateInfo::new(
-                                br::PrimitiveTopology::TriangleStrip,
-                            ),
-                            &br::PipelineViewportStateCreateInfo::new(
-                                &[surface_ext
-                                    .into_rect(br::Offset2D::ZERO)
-                                    .make_viewport(0.0..1.0)],
-                                &[surface_ext.into_rect(br::Offset2D::ZERO)],
-                            ),
-                            &br::PipelineRasterizationStateCreateInfo::new(
-                                br::PolygonMode::Fill,
-                                br::CullModeFlags::NONE,
-                                br::FrontFace::CounterClockwise,
-                            ),
-                            &br::PipelineColorBlendStateCreateInfo::new(&[
-                                br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
-                            ]),
-                        )
-                        .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
-                        None::<&br::PipelineCacheObject<&br::DeviceObject<&br::InstanceObject>>>,
-                    )
-                    .expect("pipeline create");
-
-                let smp = br::SamplerObject::new(&vk_device, &br::SamplerCreateInfo::new())
-                    .expect("smp create");
-                let mut dp = br::DescriptorPoolObject::new(
-                    &vk_device,
-                    &br::DescriptorPoolCreateInfo::new(
-                        1,
-                        &[br::DescriptorType::CombinedImageSampler.make_size(1)],
-                    ),
-                )
-                .expect("dp create");
-                let [ds_test] = dp
-                    .alloc_array(&[dsl_test.as_transparent_ref()])
-                    .expect("dp alloc");
-                vk_device.update_descriptor_sets(
-                    &[ds_test
-                        .binding_at(0)
-                        .write(br::DescriptorContents::CombinedImageSampler(vec![
-                            br::DescriptorImageInfo::new(
-                                &glyph_atlas.view(),
-                                br::ImageLayout::ShaderReadOnlyOpt,
-                            )
-                            .with_sampler(&smp),
-                        ]))],
-                    &[],
-                );
 
                 let mut update_cp = br::CommandPoolObject::new(
                     &vk_device,
                     &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
                 )
                 .expect("update_cp.create");
-                let mut update_cb = br::CommandBufferObject::alloc(
+                let [mut update_cb] = br::CommandBufferObject::alloc_array(
                     &vk_device,
-                    &br::CommandBufferAllocateInfo::new(
+                    &br::CommandBufferFixedCountAllocateInfo::new(
                         &mut update_cp,
-                        1,
                         br::CommandBufferLevel::Primary,
                     ),
                 )
                 .expect("update_cb.create");
                 unsafe {
-                    update_cb[0]
+                    update_cb
                         .begin(&br::CommandBufferBeginInfo::new())
                         .expect("update_cb.begin")
                         .end()
@@ -2143,79 +1289,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         );
                         vk_device.update_descriptor_sets(&descriptor_writes, &[]);
 
-                        let [pipeline1] = vk_device
-                            .new_graphics_pipeline_array(
-                                &[br::GraphicsPipelineCreateInfo::new(
-                                    &pipeline_layout,
-                                    vk_render_pass.subpass(0),
-                                    &[
-                                        shader_module
-                                            .on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                                        shader_module
-                                            .on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                                    ],
-                                    &br::PipelineVertexInputStateCreateInfo::new(
-                                        &[
-                                            br::VertexInputBindingDescription::per_vertex_typed::<
-                                                [f32; 4],
-                                            >(0),
-                                            br::VertexInputBindingDescription::per_instance_typed::<
-                                                BoxInstance,
-                                            >(1),
-                                        ],
-                                        &[
-                                            br::VertexInputAttributeDescription {
-                                                location: 0,
-                                                binding: 0,
-                                                offset: 0,
-                                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                            },
-                                            br::VertexInputAttributeDescription {
-                                                location: 1,
-                                                binding: 1,
-                                                offset: core::mem::offset_of!(BoxInstance, posst)
-                                                    as _,
-                                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                            },
-                                            br::VertexInputAttributeDescription {
-                                                location: 2,
-                                                binding: 1,
-                                                offset: core::mem::offset_of!(BoxInstance, uvst)
-                                                    as _,
-                                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                            },
-                                        ],
-                                    ),
-                                    &br::PipelineInputAssemblyStateCreateInfo::new(
-                                        br::PrimitiveTopology::TriangleStrip,
-                                    ),
-                                    &br::PipelineViewportStateCreateInfo::new(
-                                        &[surface_ext
-                                            .into_rect(br::Offset2D::ZERO)
-                                            .make_viewport(0.0..1.0)],
-                                        &[surface_ext.into_rect(br::Offset2D::ZERO)],
-                                    ),
-                                    &br::PipelineRasterizationStateCreateInfo::new(
-                                        br::PolygonMode::Fill,
-                                        br::CullModeFlags::NONE,
-                                        br::FrontFace::CounterClockwise,
-                                    ),
-                                    &br::PipelineColorBlendStateCreateInfo::new(&[
-                                        br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
-                                    ]),
-                                )
-                                .set_multisample_state(
-                                    &br::PipelineMultisampleStateCreateInfo::new(),
-                                )],
-                                None::<
-                                    &br::PipelineCacheObject<
-                                        &br::DeviceObject<&br::InstanceObject>,
-                                    >,
-                                >,
-                            )
-                            .expect("pipeline create");
-                        pipeline = pipeline1;
-
                         swapchain_invalidated = false;
                     }
 
@@ -2358,7 +1431,21 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
                         )
                         .expect("vector color_ms buffer create");
+                        vk_device.dbg_set_name(&vector_color_ms_buffer, c"Vector::color_ms_buffer");
+                        let mut vector_stencil_buffer = br::ImageObject::new(
+                            &vk_device,
+                            &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_STENCIL_FORMAT)
+                                .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                        )
+                        .expect("vector stencil buffer create");
+                        vk_device.dbg_set_name(&vector_stencil_buffer, c"Vector::stencil_buffer");
                         let vector_color_ms_buffer_memreq = vector_color_ms_buffer.requirements();
+                        let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
+                        tracing::debug!(
+                            ?vector_color_ms_buffer_memreq,
+                            ?vector_stencil_buffer_memreq
+                        );
                         let vector_color_ms_buffer_mem = br::DeviceMemoryObject::new(
                             &vk_device,
                             &br::MemoryAllocateInfo::new(
@@ -2380,14 +1467,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         )
                         .create()
                         .expect("vector color_ms buffer imageview create");
-                        let mut vector_stencil_buffer = br::ImageObject::new(
-                            &vk_device,
-                            &br::ImageCreateInfo::new(glyph_atlas.space_mgr.max, VG_STENCIL_FORMAT)
-                                .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
-                        )
-                        .expect("vector stencil buffer create");
-                        let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
                         let vector_stencil_buffer_mem = br::DeviceMemoryObject::new(
                             &vk_device,
                             &br::MemoryAllocateInfo::new(
@@ -2652,7 +1731,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 .expect("update_cp.reset");
                         }
                         unsafe {
-                            update_cb[0]
+                            update_cb
                                 .begin(&br::CommandBufferBeginInfo::new())
                                 .expect("update_cb.begin")
                         }
@@ -2666,7 +1745,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                     &[br::SubmitInfo::new(
                                         &[],
                                         &[],
-                                        &[update_cb[0].as_transparent_ref()],
+                                        &[update_cb.as_transparent_ref()],
                                         &[update_completion_semaphore.as_transparent_ref()],
                                     )],
                                     Some(update_completion_fence.as_transparent_ref_mut()),
@@ -2677,11 +1756,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                     }
 
                     if main_cb_invalid {
-                        for (n, (cb, fb)) in render_commands
-                            .iter_mut()
-                            .zip(vk_framebuffers.iter())
-                            .enumerate()
-                        {
+                        for (n, cb) in render_commands.iter_mut().enumerate() {
                             unsafe {
                                 cb.begin(&br::CommandBufferBeginInfo::new())
                                     .expect("command buffer begin")
@@ -2698,39 +1773,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                                 )
                             })
                             .inject(|r| vk_device.cmd_end_render_pass(r))
-                            .begin_render_pass(
-                                &br::RenderPassBeginInfo::new(
-                                    &vk_render_pass,
-                                    fb,
-                                    surface_ext.into_rect(br::Offset2D::ZERO),
-                                    &[br::ClearValue::color_f32([0.1, 0.2, 0.3, 1.0])],
-                                ),
-                                br::SubpassContents::Inline,
-                            )
-                            .bind_pipeline(br::PipelineBindPoint::Graphics, &pipeline)
-                            .push_constant_slice(
-                                &pipeline_layout,
-                                br::vk::VK_SHADER_STAGE_VERTEX_BIT,
-                                0,
-                                &[surface_ext.width as f32, surface_ext.height as f32],
-                            )
-                            .bind_descriptor_sets(
-                                br::PipelineBindPoint::Graphics,
-                                &pipeline_layout,
-                                0,
-                                &[ds_test],
-                                &[],
-                            )
-                            .bind_vertex_buffer_array(
-                                0,
-                                &[
-                                    draw_buffer.as_transparent_ref(),
-                                    draw_buffer.as_transparent_ref(),
-                                ],
-                                &[vertex_offset as _, instance_data_offset as _],
-                            )
-                            .draw(4, box_instances.len() as _, 0, 0)
-                            .end_render_pass()
                             .end()
                             .expect("command buffer end");
                         }
@@ -3468,6 +2510,11 @@ impl GlyphAtlas {
     }
 
     #[inline(always)]
+    pub const fn image_range_entire(&self) -> br::ImageSubresourceRange {
+        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)
+    }
+
+    #[inline(always)]
     pub const fn view<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImageView> {
         unsafe { br::VkHandleRef::dangling(self.view) }
     }
@@ -3849,113 +2896,6 @@ impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
     }
 }
 
-#[cfg(feature = "freetype")]
-struct OutlineContext<'x> {
-    translate_x: f32,
-    translate_y: f32,
-    current_figure_state: &'x mut Option<(ft::Vector, ft::Vector, u16)>,
-    new_filltri_points: &'x mut Vec<[f32; 2]>,
-    new_filltri_indices: &'x mut Vec<u16>,
-    new_curve_triangles: &'x mut Vec<[f32; 4]>,
-}
-#[cfg(feature = "freetype")]
-impl OutlineContext<'_> {
-    fn add_quadratic(&mut self, q: &lyon_geom::QuadraticBezierSegment<f32>) {
-        let &mut Some((_, _, filltri_index0)) = self.current_figure_state else {
-            panic!("no figure started?");
-        };
-        let filltri_index1 = self.new_filltri_points.len() - 1;
-        self.new_filltri_points.push([q.to.x, q.to.y]);
-        self.new_filltri_indices.extend([
-            filltri_index0,
-            filltri_index1 as u16,
-            self.new_filltri_points.len() as u16 - 1,
-        ]);
-        self.new_curve_triangles.extend([
-            [q.from.x, q.from.y, 0.0, 0.0],
-            [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
-            [q.to.x, q.to.y, 1.0, 1.0],
-        ]);
-    }
-}
-#[cfg(feature = "freetype")]
-impl ft::OutlineFuncs for OutlineContext<'_> {
-    fn move_to(&mut self, to: &ft::Vector) {
-        *self.current_figure_state = Some((*to, *to, self.new_filltri_points.len() as _));
-        self.new_filltri_points.push([
-            to.x as f32 / 64.0 + self.translate_x,
-            to.y as f32 / 64.0 + self.translate_y,
-        ]);
-    }
-
-    fn line_to(&mut self, to: &ft::Vector) {
-        let &mut Some((_, ref mut current_point, filltri_index0)) = self.current_figure_state
-        else {
-            panic!("no figure started?");
-        };
-        let filltri_index1 = self.new_filltri_points.len() - 1;
-        self.new_filltri_points.push([
-            to.x as f32 / 64.0 + self.translate_x,
-            to.y as f32 / 64.0 + self.translate_y,
-        ]);
-        self.new_filltri_indices.extend([
-            filltri_index0,
-            filltri_index1 as u16,
-            self.new_filltri_points.len() as u16 - 1,
-        ]);
-        *current_point = *to;
-    }
-
-    fn conic_to(&mut self, control: &ft::Vector, to: &ft::Vector) {
-        let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
-        else {
-            panic!("no figure started?");
-        };
-        self.add_quadratic(&lyon_geom::QuadraticBezierSegment {
-            from: lyon_geom::point(
-                current_point.x as f32 / 64.0 + self.translate_x,
-                current_point.y as f32 / 64.0 + self.translate_y,
-            ),
-            ctrl: lyon_geom::point(
-                control.x as f32 / 64.0 + self.translate_x,
-                control.y as f32 / 64.0 + self.translate_y,
-            ),
-            to: lyon_geom::point(
-                to.x as f32 / 64.0 + self.translate_x,
-                to.y as f32 / 64.0 + self.translate_y,
-            ),
-        });
-        *self.current_figure_state = Some((start_point, *to, filltri_index0));
-    }
-
-    fn cubic_to(&mut self, control1: &ft::Vector, control2: &ft::Vector, to: &ft::Vector) {
-        let &mut Some((start_point, current_point, filltri_index0)) = self.current_figure_state
-        else {
-            panic!("no figure started?");
-        };
-        lyon_geom::CubicBezierSegment {
-            from: lyon_geom::point(
-                current_point.x as f32 / 64.0 + self.translate_x,
-                current_point.y as f32 / 64.0 + self.translate_y,
-            ),
-            ctrl1: lyon_geom::point(
-                control1.x as f32 / 64.0 + self.translate_x,
-                control1.y as f32 / 64.0 + self.translate_y,
-            ),
-            ctrl2: lyon_geom::point(
-                control2.x as f32 / 64.0 + self.translate_x,
-                control2.y as f32 / 64.0 + self.translate_y,
-            ),
-            to: lyon_geom::point(
-                to.x as f32 / 64.0 + self.translate_x,
-                to.y as f32 / 64.0 + self.translate_y,
-            ),
-        }
-        .for_each_quadratic_bezier(0.1, &mut |q| self.add_quadratic(q));
-        *self.current_figure_state = Some((start_point, *to, filltri_index0));
-    }
-}
-
 struct LocalImageView<'d, Device: br::Device + ?Sized + 'd> {
     handle: br::vk::VkImageView,
     device: &'d Device,
@@ -4007,12 +2947,235 @@ impl Win32Window {
 }
 
 #[cfg(feature = "wayland")]
-struct WaylandGlobalMessaging;
+struct WaylandGlobalMessaging {
+    pub pointer: Option<wl::Owned<wl::Pointer>>,
+    pub pointer_pos: (f32, f32),
+    pub compositor: *mut wl::Compositor,
+    pub wm_base: *mut wl::XdgWmBase,
+    pub root_window: *mut wl::XdgSurface,
+    pub popup_buf: *mut wl::Buffer,
+    pub popup: Option<(
+        wl::Owned<wl::XdgPopup>,
+        wl::Owned<wl::XdgSurface>,
+        wl::Owned<wl::Surface>,
+        Box<WaylandPopupState>,
+    )>,
+    pub display: *mut wl::Display,
+    _pinned: core::marker::PhantomPinned,
+}
 #[cfg(feature = "wayland")]
 impl wl::XdgWmBaseEventListener for WaylandGlobalMessaging {
     #[inline(always)]
     fn ping(&mut self, sender: &mut peridot_tp_wayland::XdgWmBase, serial: u32) {
         sender.pong(serial).expect("xdg_wm_base pong");
+    }
+}
+#[cfg(feature = "wayland")]
+impl wl::SeatEventListener for WaylandGlobalMessaging {
+    fn capabilities(&mut self, seat: &mut peridot_tp_wayland::Seat, capabilities: u32) {
+        tracing::trace!(capabilities, "seat::capabilities");
+
+        if (capabilities & 0x01) != 0 {
+            // pointer
+            let mut p = seat.get_pointer().expect("seat.get_pointer");
+            p.set_listener(self)
+                .into_result()
+                .expect("pointer.set_listener");
+
+            self.pointer = Some(p);
+        } else {
+            // no pointer
+            self.pointer = None;
+        }
+    }
+
+    fn name(&mut self, seat: &mut peridot_tp_wayland::Seat, name: &core::ffi::CStr) {
+        tracing::trace!(?name, "seat::name");
+    }
+}
+#[cfg(feature = "wayland")]
+impl wl::PointerEventListener for WaylandGlobalMessaging {
+    #[tracing::instrument(skip(self, _pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
+    fn enter(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        serial: u32,
+        surface: &mut peridot_tp_wayland::Surface,
+        surface_x: peridot_tp_wayland::Fixed,
+        surface_y: peridot_tp_wayland::Fixed,
+    ) {
+        tracing::trace!("pointer.enter");
+
+        self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
+    }
+
+    #[tracing::instrument(skip(self, _pointer, surface))]
+    fn leave(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        serial: u32,
+        surface: &mut peridot_tp_wayland::Surface,
+    ) {
+        tracing::trace!("pointer.leave");
+    }
+
+    #[tracing::instrument(skip(self, _pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
+    fn motion(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        time: u32,
+        surface_x: peridot_tp_wayland::Fixed,
+        surface_y: peridot_tp_wayland::Fixed,
+    ) {
+        tracing::trace!("pointer.motion");
+
+        self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
+    }
+
+    #[tracing::instrument(skip(self, _pointer), fields(state = state as u32))]
+    fn button(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        serial: u32,
+        time: u32,
+        button: u32,
+        state: peridot_tp_wayland::PointerButtonState,
+    ) {
+        tracing::trace!("pointer.button");
+
+        if state == wl::PointerButtonState::Pressed {
+            let wl_popup_surface = unsafe {
+                (*self.compositor)
+                    .create_surface()
+                    .expect("wl_popup_surface.create")
+            };
+            let mut xdg_popup_surface = unsafe {
+                (*self.wm_base)
+                    .get_xdg_surface(&wl_popup_surface)
+                    .expect("xdg_popup_surface.create")
+            };
+
+            let pos = unsafe { (*self.wm_base).create_positioner().expect("pos.create") };
+            pos.set_size(128, 128).expect("pos.set_size");
+            pos.set_offset(self.pointer_pos.0 as _, self.pointer_pos.1 as _)
+                .expect("pos.set_offset");
+            pos.set_anchor(wl::XdgPositionerAnchor::TopLeft)
+                .expect("pos.set_anchor");
+            pos.set_anchor_rect(0, 0, 1, 1)
+                .expect("pos.set_anchor_rect");
+            pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
+                .expect("pos.set_gravity");
+            pos.set_constraint_adjustment(wl::XdgPositionerConstraintAdjustment::None)
+                .expect("pos.set_constraint_adjustment");
+            let mut pp = unsafe {
+                xdg_popup_surface
+                    .get_popup(Some(&*self.root_window), &pos)
+                    .expect("pop.create")
+            };
+            let mut popup_state = Box::new(WaylandPopupState {});
+            xdg_popup_surface
+                .set_listener(&mut *popup_state)
+                .into_result()
+                .expect("xdg_popup_surface.set_listener");
+            pp.set_listener(&mut *popup_state)
+                .into_result()
+                .expect("pop.set_listener");
+            wl_popup_surface.commit().expect("wl_popup_surface.commit");
+            unsafe {
+                // process configure event...
+                (*self.display).roundtrip().expect("roundtrip");
+            }
+            unsafe {
+                wl_popup_surface
+                    .attach(Some(&*self.popup_buf), 0, 0)
+                    .expect("wl_popup_surface.attach");
+                wl_popup_surface
+                    .damage(0, 0, -1, -1)
+                    .expect("wl_popup_surface.damage");
+                wl_popup_surface.commit().expect("wl_popup_surface.commit");
+            }
+
+            self.popup = Some((pp, xdg_popup_surface, wl_popup_surface, popup_state));
+        } else if state == wl::PointerButtonState::Released {
+            self.popup = None;
+        }
+    }
+
+    #[tracing::instrument(skip(self, _pointer))]
+    fn axis(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        time: u32,
+        axis: u32,
+        value: peridot_tp_wayland::Fixed,
+    ) {
+        tracing::trace!("pointer.axis");
+    }
+
+    #[tracing::instrument(skip(self, _pointer))]
+    fn frame(&mut self, _pointer: &mut peridot_tp_wayland::Pointer) {
+        tracing::trace!("pointer.frame");
+    }
+
+    #[tracing::instrument(skip(self, _pointer))]
+    fn axis_source(&mut self, _pointer: &mut peridot_tp_wayland::Pointer, axis_source: u32) {
+        tracing::trace!("pointer.axis_source");
+    }
+
+    #[tracing::instrument(skip(self, _pointer))]
+    fn axis_stop(&mut self, _pointer: &mut peridot_tp_wayland::Pointer, time: u32, axis: u32) {
+        tracing::trace!("pointer.axis_stop");
+    }
+
+    #[tracing::instrument(skip(self, _pointer))]
+    fn axis_discrete(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        axis: u32,
+        discrete: i32,
+    ) {
+        tracing::trace!("pointer.axis_discrete");
+    }
+
+    #[tracing::instrument(skip(self, _pointer))]
+    fn axis_value120(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        axis: u32,
+        value120: i32,
+    ) {
+        tracing::trace!("pointer.axis_value120");
+    }
+
+    #[tracing::instrument(skip(self, _pointer))]
+    fn axis_relative_direction(
+        &mut self,
+        _pointer: &mut peridot_tp_wayland::Pointer,
+        axis: u32,
+        direction: u32,
+    ) {
+        tracing::trace!("pointer.axis_relative_direction");
+    }
+}
+#[cfg(feature = "wayland")]
+impl wl::ZwlrLayerSurfaceV1EventListener for WaylandGlobalMessaging {
+    #[tracing::instrument(skip(self, sender))]
+    fn configure(
+        &mut self,
+        sender: &mut peridot_tp_wayland::ZwlrLayerSurfaceV1,
+        serial: u32,
+        width: u32,
+        height: u32,
+    ) {
+        tracing::trace!("layer surface configure");
+        sender
+            .ack_configure(serial)
+            .expect("layer_surface.ack_configure");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn closed(&mut self, sender: &mut peridot_tp_wayland::ZwlrLayerSurfaceV1) {
+        tracing::trace!("layer surface closed");
     }
 }
 
@@ -4046,6 +3209,41 @@ impl WaylandWindow {
 
     pub fn client_size(&self) -> (u32, u32) {
         self.state.active_size
+    }
+}
+
+#[cfg(feature = "wayland")]
+struct WaylandPopupState {}
+#[cfg(feature = "wayland")]
+impl wl::XdgSurfaceEventListener for WaylandPopupState {
+    #[tracing::instrument(skip(self, sender))]
+    fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
+        tracing::trace!("popup.surface.configure");
+        sender.ack_configure(serial).expect("popup.ack_configure");
+    }
+}
+#[cfg(feature = "wayland")]
+impl wl::XdgPopupEventListener for WaylandPopupState {
+    #[tracing::instrument(skip(self, sender))]
+    fn configure(
+        &mut self,
+        sender: &mut peridot_tp_wayland::XdgPopup,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
+        tracing::trace!("popup.configure");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn popup_done(&mut self, sender: &mut peridot_tp_wayland::XdgPopup) {
+        tracing::trace!("popup.popup_done");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn repositioned(&mut self, sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
+        tracing::trace!("popup.repositioned");
     }
 }
 
@@ -4100,14 +3298,14 @@ impl wl::XdgSurfaceEventListener for WaylandWindowState {
         tracing::trace!("xdg surface configure");
 
         if let Some((w, h)) = self.pending_configure_size.take() {
-            let w: u32 = w.try_into().expect("negative window size");
-            let h: u32 = h.try_into().expect("negative window size");
+            let w: u32 = (u32::try_from(w).expect("negative window size") as f32
+                * self.active_buffer_scale)
+                .ceil() as _;
+            let h: u32 = (u32::try_from(h).expect("negative window size") as f32
+                * self.active_buffer_scale)
+                .ceil() as _;
             if w != self.active_size.0 || h != self.active_size.1 {
-                // TODO: multiply by preferred scale
-                self.active_size = (
-                    (w as f32 * self.active_buffer_scale).ceil() as _,
-                    (h as f32 * self.active_buffer_scale).ceil() as _,
-                );
+                self.active_size = (w, h);
                 self.swapchain_externally_invalidation_signal
                     .store(true, std::sync::atomic::Ordering::Relaxed);
             }
@@ -4136,7 +3334,18 @@ impl wl::XdgToplevelEventListener for WaylandWindowState {
     ) {
         tracing::trace!("xdg toplevel configure");
 
-        self.pending_configure_size = Some((width, height));
+        self.pending_configure_size = Some((
+            if width == 0 {
+                self.active_size.0 as _
+            } else {
+                width
+            },
+            if height == 0 {
+                self.active_size.1 as _
+            } else {
+                height
+            },
+        ));
     }
 
     fn configure_bounds(
