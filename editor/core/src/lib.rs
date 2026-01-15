@@ -248,6 +248,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         viewporter: Option<wl::Owned<wl::WpViewporter>>,
         kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
         kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
+        zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
     }
     #[cfg(feature = "wayland")]
     impl wl::RegistryListener for RegistryListener {
@@ -289,6 +290,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                         .bind(name, version)
                         .expect("bind kde_appmenu_manager"),
                 );
+            } else if interface == c"zxdg_decoration_manager_v1" {
+                self.zxdg_decoration_manager = Some(
+                    registry
+                        .bind(name, version)
+                        .expect("bind zxdg_decoration_manager"),
+                );
             }
         }
 
@@ -307,6 +314,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         viewporter: None,
         kde_blur_manager: None,
         kde_appmenu_manager: None,
+        zxdg_decoration_manager: None,
     };
     #[cfg(feature = "wayland")]
     wl_registry
@@ -335,6 +343,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let kde_blur_manager = rl.kde_blur_manager;
     #[cfg(feature = "wayland")]
     let kde_appmenu_manager = rl.kde_appmenu_manager;
+    #[cfg(feature = "wayland")]
+    let zxdg_decoration_manager = rl.zxdg_decoration_manager;
 
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = WaylandGlobalMessaging {
@@ -389,6 +399,19 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     };
 
     #[cfg(feature = "wayland")]
+    let deco = if let Some(ref dm) = zxdg_decoration_manager {
+        let d = dm
+            .get_toplevel_decoration(&wl_xdg_toplevel)
+            .expect("decoration.get_toplevel");
+        d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
+            .expect("decoration.set_mode");
+
+        Some(d)
+    } else {
+        None
+    };
+
+    #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
     );
@@ -398,6 +421,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         surface: wl_surface,
         xdg_surface: wl_xdg_surface,
         xdg_toplevel: wl_xdg_toplevel,
+        deco,
         state: Box::new(WaylandWindowState {
             pending_configure_size: None,
             active_buffer_scale: 1.0,
@@ -3740,6 +3764,7 @@ pub struct WaylandWindow {
     surface: wl::Owned<wl::Surface>,
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
+    deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     state: Box<WaylandWindowState>,
 }
 #[cfg(feature = "wayland")]
@@ -3761,6 +3786,11 @@ impl WaylandWindow {
             .set_listener(&mut *self.state.as_mut())
             .into_result()
             .expect("xdg_toplevel set listener");
+        if let Some(ref mut x) = self.deco {
+            x.set_listener(&mut *self.state.as_mut())
+                .into_result()
+                .expect("zxdg_toplevel_decoration_v1.set_listener");
+        }
     }
 
     pub fn client_size(&self) -> (u32, u32) {
@@ -3917,6 +3947,16 @@ impl wl::XdgToplevelEventListener for WaylandWindowState {
         sender: &mut peridot_tp_wayland::XdgToplevel,
         capabilities: &mut peridot_tp_wayland::ffi::Array,
     ) {
+    }
+}
+#[cfg(feature = "wayland")]
+impl wl::ZxdgToplevelDecorationV1EventListener for WaylandWindowState {
+    fn configure(
+        &mut self,
+        sender: &mut peridot_tp_wayland::ZxdgToplevelDecorationV1,
+        mode: peridot_tp_wayland::ZxdgToplevelDecorationV1Mode,
+    ) {
+        tracing::warn!(?mode, "TODO: client side decoration impl");
     }
 }
 

@@ -50,7 +50,7 @@ windows-numerics = "*"
 [dependencies.peridot-tp-wayland]
 path = "../../thirdparty/wayland"
 optional = true
-features = ["tracing", "xdg-shell", "wlr-layer-shell-unstable-v1", "single-pixel-buffer-v1", "viewporter", "kde-blur", "kde-appmenu"]
+features = ["tracing", "xdg-shell", "wlr-layer-shell-unstable-v1", "single-pixel-buffer-v1", "viewporter", "kde-blur", "kde-appmenu", "xdg-decoration-unstable-v1"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-eventfd = { path = "../../platform/linux/eventfd" }
