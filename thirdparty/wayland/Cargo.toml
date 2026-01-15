@@ -27,6 +27,7 @@ xdg-decoration-unstable-v1 = []
 xdg-foreign-unstable-v2 = []
 wlr-layer-shell-unstable-v1 = ["xdg-shell"]
 kde-blur = []
+kde-appmenu = []
 
 # external
 gtk-shell = []

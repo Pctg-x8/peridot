@@ -36,6 +36,7 @@
         pkgs.fontconfig
         pkgs.freetype
         pkgs.harfbuzz
+        pkgs.dbus
         # required for some asset processing
         pkgs.shaderc
         # required for workflow generator(also included in githooks)
