@@ -31,6 +31,7 @@ members = [
     "base-lib/pinned-futures-helper",
     "modules/sprite-atlas",
     "editor/core",
+    "editor/core/bindgen"
 ]
 
 [workspace.dependencies]

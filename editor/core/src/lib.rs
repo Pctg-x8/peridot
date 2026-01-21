@@ -21,7 +21,7 @@ use std::collections::{HashMap, VecDeque};
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use windows::Win32::{
-    Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
+    Foundation::{HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
     Graphics::{
         Direct2D::Common::{
             D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_WINDING,
@@ -35,19 +35,39 @@ use windows::Win32::{
         },
         Gdi::HBRUSH,
     },
-    System::LibraryLoader::GetModuleHandleW,
+    Storage::Packaging::Appx::PACKAGE_VERSION,
+    System::{
+        LibraryLoader::GetModuleHandleW,
+        WinRT::{
+            Composition::ICompositorInterop, CreateDispatcherQueueController, DQTAT_COM_ASTA,
+            DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
+        },
+    },
     UI::WindowsAndMessaging::{
         CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
-        GetMessageW, GetWindowLongPtrW, HCURSOR, IDI_APPLICATION, LoadIconW, PostQuitMessage,
-        RegisterClassExW, SHOW_WINDOW_CMD, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow,
-        WINDOW_LONG_PTR_INDEX, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
-        WS_OVERLAPPEDWINDOW,
+        GetMessageW, GetWindowLongPtrW, HCURSOR, HICON, IDI_APPLICATION, LoadIconW,
+        PostQuitMessage, RegisterClassExW, SHOW_WINDOW_CMD, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+        SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
+        WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+        WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    },
+};
+use windows::{
+    UI::Composition::CompositionEffectSourceParameter,
+    Win32::{
+        Foundation::FreeLibrary,
+        System::{
+            LibraryLoader::{GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExA, LoadLibraryExW},
+            WinRT::Composition::ICompositorDesktopInterop,
+        },
     },
 };
 #[cfg(windows)]
 use windows_core::*;
+use windows_numerics::{Vector2, Vector3};
 
 use crate::{
+    bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     composite::{
         AnimatableColor, AnimatableFloat, BoundCompositeRenderer, CompositeMode, CompositeRect,
         CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
@@ -58,6 +78,8 @@ use crate::{
 };
 
 mod atlas;
+#[cfg(windows)]
+mod bindgen;
 mod composite;
 mod graphics;
 mod helper_types;
@@ -164,6 +186,21 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         },
     };
 
+    #[cfg(windows)]
+    let app_runtime = WindowsAppRuntimeBootstrap::init();
+    #[cfg(windows)]
+    let _dispatcher_queue = unsafe {
+        CreateDispatcherQueueController(DispatcherQueueOptions {
+            dwSize: core::mem::size_of::<DispatcherQueueOptions>() as _,
+            threadType: DQTYPE_THREAD_CURRENT,
+            apartmentType: DQTAT_COM_ASTA,
+        })
+        .expect("dispatchqueuecontroller.create")
+    };
+    #[cfg(windows)]
+    let native_compositor =
+        windows::UI::Composition::Compositor::new().expect("win.compositor.create");
+
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
@@ -180,11 +217,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
     #[cfg(windows)]
     let atom = unsafe {
-        RegisterClassExW(&WNDCLASSEXW {
+        register_class(&WNDCLASSEXW {
             cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
             style: WNDCLASS_STYLES(0),
             cbClsExtra: 0,
-            cbWndExtra: core::mem::size_of::<[usize; 2]>() as _,
+            cbWndExtra: core::mem::size_of::<[usize; 3]>() as _,
             lpfnWndProc: Some(wndproc::<AppFuture>),
             hInstance: hinstance,
             hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
@@ -194,12 +231,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             lpszClassName: w!("MainWindow"),
             hIconSm: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
         })
+        .expect("register_class.main")
     };
-    #[cfg(windows)]
-    if atom == 0 {
-        Err::<(), _>(std::io::Error::last_os_error()).expect("RegisterClassExW");
-    }
-
     #[cfg(windows)]
     let w = unsafe {
         CreateWindowExW(
@@ -222,6 +255,137 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let mut w = Win32Window(w);
 
     #[cfg(windows)]
+    let atom_drag_floating = unsafe {
+        register_class(&WNDCLASSEXW {
+            cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
+            style: WNDCLASS_STYLES(0),
+            cbClsExtra: 0,
+            cbWndExtra: core::mem::size_of::<[usize; 2]>() as _,
+            lpfnWndProc: Some(wndproc_drag),
+            hInstance: hinstance,
+            hIcon: HICON(core::ptr::null_mut()),
+            hCursor: HCURSOR(core::ptr::null_mut()),
+            hbrBackground: HBRUSH(core::ptr::null_mut()),
+            lpszMenuName: PCWSTR::null(),
+            lpszClassName: w!("DragFloatingWindow"),
+            hIconSm: HICON(core::ptr::null_mut()),
+        })
+        .expect("register_class.drag")
+    };
+    #[cfg(windows)]
+    let drag_preview_window = Win32Window(unsafe {
+        use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
+
+        CreateWindowExW(
+            WS_EX_TRANSPARENT
+                | WS_EX_LAYERED
+                | WS_EX_NOACTIVATE
+                | WS_EX_TOPMOST
+                | WS_EX_NOREDIRECTIONBITMAP,
+            PCWSTR(core::ptr::without_provenance(atom_drag_floating as _)),
+            w!(""),
+            WS_POPUP,
+            100,
+            100,
+            128,
+            128,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        )
+        .expect("CreateWindowExW")
+    });
+
+    let fx = GaussianBlurEffect::new().expect("drag.fx.create");
+    fx.SetSource(
+        &CompositionEffectSourceParameter::Create(h!("source"))
+            .expect("compositioneffectsourceparameter.create"),
+    )
+    .expect("drag.fx.set_source");
+    fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
+    fx.SetOptimization(EffectOptimization::Speed)
+        .expect("drag.fx.set_optimization");
+    let effect_factory = native_compositor
+        .CreateEffectFactory(&fx)
+        .expect("drag.fx.create_factory");
+    let backdrop_brush = native_compositor
+        .CreateBackdropBrush()
+        .expect("drag.backdrop_brush.create");
+    let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
+    blur_brush
+        .SetSourceParameter(h!("Source"), &backdrop_brush)
+        .expect("drag.fx.set_blur_source");
+    let blur_visual = native_compositor
+        .CreateSpriteVisual()
+        .expect("drag.visual.blur.create");
+    blur_visual
+        .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
+        .expect("drag.visual.blur.set_center_point");
+    blur_visual
+        .SetAnchorPoint(Vector2::new(0.5, 0.5))
+        .expect("drag.visual.blur.set_anchor_point");
+    blur_visual
+        .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
+        .expect("drag.visual.blur.set_relative_offset_adjustment");
+    blur_visual
+        .SetBrush(&blur_brush)
+        .expect("drag.visual.blur.set_brush");
+    blur_visual
+        .SetShadow(&{
+            let x = native_compositor
+                .CreateDropShadow()
+                .expect("drag.visual.shadow.create");
+            x.SetBlurRadius(32.0)
+                .expect("drag.visual.shadow.set_blur_radius");
+            x.SetOffset(Vector3::new(0.0, 16.0, 0.0))
+                .expect("drag.visual.shadow.set_offset");
+            x.SetOpacity(0.3).expect("drag.visual.shadow.set_opacity");
+            x
+        })
+        .expect("drag.visual.set_shadow");
+    let color_tint_visual = native_compositor
+        .CreateSpriteVisual()
+        .expect("drag.visual.color_tint.create");
+    color_tint_visual
+        .SetBrush(
+            &native_compositor
+                .CreateColorBrushWithColor(windows::UI::Color {
+                    A: 16,
+                    R: 16,
+                    G: 176,
+                    B: 255,
+                })
+                .expect("drag.visual.color_tint.brush.create"),
+        )
+        .expect("drag.visual.color_tint.set_brush");
+    color_tint_visual
+        .SetRelativeOffsetAdjustment(Vector3::zero())
+        .expect("drag.visual.color_tint.set_relative_offset_adjustment");
+    color_tint_visual
+        .SetRelativeSizeAdjustment(Vector2::one())
+        .expect("drag.visual.color_tint.set_relative_size_adjustment");
+    blur_visual
+        .Children()
+        .expect("drag.visual.get_children")
+        .InsertAtTop(&color_tint_visual)
+        .expect("drag.visual.add_child");
+
+    let drag_preview_composite_target = unsafe {
+        native_compositor
+            .cast::<ICompositorDesktopInterop>()
+            .expect("native_compositor.cast.desktop_interop")
+            .CreateDesktopWindowTarget(drag_preview_window.0, true)
+            .expect("drag.composition_target.create")
+    };
+    drag_preview_composite_target
+        .SetRoot(&blur_visual)
+        .expect("drag.visual.set_root");
+    blur_visual
+        .SetSize(Vector2::new(128.0 - 32.0, 128.0 - 32.0))
+        .expect("drag.visual.set_size");
+
+    #[cfg(windows)]
     unsafe {
         w.set_long_ptr(
             WINDOW_LONG_PTR_INDEX(0),
@@ -230,6 +394,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         w.set_long_ptr(
             WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
             event_store.as_mut().get_mut() as *mut _ as _,
+        );
+        w.set_long_ptr(
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            &drag_preview_window as *const _ as _,
         );
     }
 
@@ -2467,6 +2635,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
+
+        #[cfg(windows)]
+        app_runtime.shutdown();
     });
 }
 
@@ -3461,6 +3632,76 @@ impl<Device: br::Device + ?Sized> br::VkHandle for LocalImageView<'_, Device> {
 impl<Device: br::Device + ?Sized> br::ImageView for LocalImageView<'_, Device> {}
 
 #[cfg(windows)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum MddBootstrapInitializeOptions {
+    ShowUI = 0x08,
+}
+// copy from WindowsAppSDK-VersionInfo.h
+#[cfg(windows)]
+pub const APP_SDK_VERSION_U64: u64 = 0;
+#[cfg(windows)]
+pub type FPMddBootstrapInitialize2 = unsafe extern "system" fn(
+    majorMinorVersion: u32,
+    versionTag: PCWSTR,
+    minVersion: PACKAGE_VERSION,
+    options: MddBootstrapInitializeOptions,
+) -> HRESULT;
+#[cfg(windows)]
+pub type FPMddBootstrapShutdown = unsafe extern "system" fn();
+
+#[cfg(windows)]
+pub struct WindowsAppRuntimeBootstrap {
+    lib: HMODULE,
+    shutdown: FPMddBootstrapShutdown,
+}
+impl Drop for WindowsAppRuntimeBootstrap {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            if let Err(e) = FreeLibrary(self.lib) {
+                tracing::error!(reason = %e, "freelibrary");
+            }
+        }
+    }
+}
+impl WindowsAppRuntimeBootstrap {
+    pub fn init() -> Self {
+        let lib = unsafe {
+            LoadLibraryExW(
+                w!("Microsoft.WindowsAppRuntime.Bootstrap.dll"),
+                None,
+                LOAD_LIBRARY_FLAGS(0),
+            )
+            .expect("loadlibrary")
+        };
+        let initialize: FPMddBootstrapInitialize2 =
+            unsafe { core::mem::transmute(GetProcAddress(lib, s!("MddBootstrapInitialize2"))) };
+        let shutdown: FPMddBootstrapShutdown =
+            unsafe { core::mem::transmute(GetProcAddress(lib, s!("MddBootstrapShutdown"))) };
+
+        unsafe {
+            initialize(
+                0x00010008,
+                w!(""),
+                core::mem::transmute(APP_SDK_VERSION_U64),
+                MddBootstrapInitializeOptions::ShowUI,
+            )
+            .ok()
+            .expect("windowsappruntime.bootstrap.initialize");
+        }
+        Self { lib, shutdown }
+    }
+
+    #[inline(always)]
+    pub fn shutdown(self) {
+        unsafe {
+            (self.shutdown)();
+        }
+    }
+}
+
+#[cfg(windows)]
 #[repr(transparent)]
 pub struct Win32Window(HWND);
 #[cfg(windows)]
@@ -4003,12 +4244,23 @@ async fn run(event_queue: EventQueue) {
 }
 
 #[cfg(windows)]
+#[inline(always)]
+unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
+    match unsafe { RegisterClassExW(x) } {
+        r if r == 0 => Err(std::io::Error::last_os_error()),
+        r => Ok(r),
+    }
+}
+
+#[cfg(windows)]
 extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    use windows::Win32::UI::WindowsAndMessaging::{WM_LBUTTONDOWN, WM_LBUTTONUP};
+
     let app_future = unsafe { GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)) };
     let event_store = unsafe {
         GetWindowLongPtrW(
@@ -4025,6 +4277,71 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         return LRESULT(0);
     }
 
+    if msg == WM_LBUTTONDOWN {
+        use windows::Win32::Graphics::Gdi::MapWindowPoints;
+
+        unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
+            SetCapture(hwnd);
+        }
+
+        let x = (lparam.0 & 0xffff) as i16;
+        let y = ((lparam.0 >> 16) & 0xffff) as i16;
+        let mut p = [windows::Win32::Foundation::POINT {
+            x: x as _,
+            y: y as _,
+        }];
+        unsafe {
+            MapWindowPoints(Some(hwnd), None, &mut p);
+        }
+
+        let drag_preview_window = unsafe {
+            &*core::ptr::with_exposed_provenance::<Win32Window>(GetWindowLongPtrW(
+                hwnd,
+                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            ) as _)
+        };
+
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+            };
+
+            SetWindowPos(
+                drag_preview_window.0,
+                None,
+                p[0].x - 16,
+                p[0].y - 16,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .expect("setwindowpos");
+        }
+        drag_preview_window.show(SW_SHOWNOACTIVATE);
+    }
+
+    if msg == WM_LBUTTONUP {
+        let drag_preview_window = unsafe {
+            &*core::ptr::with_exposed_provenance::<Win32Window>(GetWindowLongPtrW(
+                hwnd,
+                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            ) as _)
+        };
+
+        drag_preview_window.show(SW_HIDE);
+
+        unsafe {
+            use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+            ReleaseCapture().expect("releasecapture");
+        }
+    }
+
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+#[cfg(windows)]
+extern "system" fn wndproc_drag(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
