@@ -4259,7 +4259,9 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    use windows::Win32::UI::WindowsAndMessaging::{WM_LBUTTONDOWN, WM_LBUTTONUP};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowRect, WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCCALCSIZE, WM_NCHITTEST,
+    };
 
     let app_future = unsafe { GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)) };
     let event_store = unsafe {
@@ -4275,6 +4277,101 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         }
 
         return LRESULT(0);
+    }
+
+    if msg == WM_CREATE {
+        let mut rc = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetWindowRect(hwnd, rc.as_mut_ptr()).expect("getwindowrect");
+        }
+        let rc = unsafe { rc.assume_init() };
+
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+            };
+
+            SetWindowPos(
+                hwnd,
+                None,
+                rc.left,
+                rc.top,
+                rc.right - rc.left,
+                rc.bottom - rc.top,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            )
+            .expect("create.swp.framechange");
+        }
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_NCCALCSIZE {
+        if wparam.0 == 1 {
+            // remove non-client area
+
+            let params = unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::NCCALCSIZE_PARAMS;
+
+                &mut *core::ptr::without_provenance_mut::<NCCALCSIZE_PARAMS>(
+                    lparam.0.cast_unsigned(),
+                )
+            };
+            let w = unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSIZEFRAME};
+                GetSystemMetrics(SM_CXSIZEFRAME)
+            };
+            let h = unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
+                GetSystemMetrics(SM_CYSIZEFRAME)
+            };
+            params.rgrc[0].left += w;
+            params.rgrc[0].right -= w;
+            params.rgrc[0].bottom -= h;
+            // topはいじらない（topいじるともとのタイトルバーが一部表示される 他アプリもそんな感じなのでtopは自前で当たり判定組んでリサイズ判定する）
+
+            return LRESULT(0);
+        }
+    }
+
+    if msg == WM_NCHITTEST {
+        let x = (lparam.0 & 0xffff) as i16;
+        let y = ((lparam.0 >> 16) & 0xffff) as i16;
+        let mut p = [windows::Win32::Foundation::POINT {
+            x: x as _,
+            y: y as _,
+        }];
+        unsafe {
+            use windows::Win32::Graphics::Gdi::MapWindowPoints;
+            MapWindowPoints(None, Some(hwnd), &mut p);
+        }
+        let [windows::Win32::Foundation::POINT { x, y }] = p;
+
+        let mut client_size = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(hwnd, client_size.as_mut_ptr()).expect("getclientsize");
+        }
+        let client_size = unsafe { client_size.assume_init() };
+
+        if 0 > x || x > client_size.right || 0 > y || y > client_size.bottom {
+            // ウィンドウ範囲外はシステムにおまかせ
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        }
+
+        let resize_h = unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
+            GetSystemMetrics(SM_CYSIZEFRAME)
+        };
+        if y < resize_h {
+            return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTTOP as _);
+        }
+
+        // TODO: 仮 本来はViewのヒットテストの仕組みを別で作る
+        if y < 24 {
+            return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCAPTION as _);
+        }
+
+        return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCLIENT as _);
     }
 
     if msg == WM_LBUTTONDOWN {
