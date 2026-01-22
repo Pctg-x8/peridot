@@ -543,99 +543,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let zxdg_decoration_manager = rl.zxdg_decoration_manager;
 
     #[cfg(feature = "wayland")]
-    let mut wl_global_msg = WaylandGlobalMessaging {
-        pointer: None,
-        pointer_pos: (0.0, 0.0),
-        compositor: wl_compositor.as_ptr(),
-        viewporter: viewporter.as_ptr(),
-        kde_blur_manager: kde_blur_manager.as_ref().map(wl::Owned::as_ptr),
-        wm_base: xdg_wm_base.as_ptr(),
-        root_window: core::ptr::null_mut(),
-        popup_buf: core::ptr::null_mut(),
-        popup: None,
-        display: &mut wl_display,
-        _pinned: core::marker::PhantomPinned,
-    };
-    #[cfg(feature = "wayland")]
-    xdg_wm_base
-        .set_listener(&mut wl_global_msg)
-        .into_result()
-        .expect("xdg_wm_base set_listener");
-    #[cfg(feature = "wayland")]
-    seat.set_listener(&mut wl_global_msg)
-        .into_result()
-        .expect("seat set_listener");
-
-    #[cfg(feature = "wayland")]
-    let wl_surface = wl_compositor.create_surface().expect("wl_surface create");
-    #[cfg(feature = "wayland")]
-    let wl_xdg_surface = xdg_wm_base
-        .get_xdg_surface(&wl_surface)
-        .expect("xdg_surface create");
-    #[cfg(feature = "wayland")]
-    let wl_xdg_toplevel = wl_xdg_surface.get_toplevel().expect("xdg_toplevel create");
-    #[cfg(feature = "wayland")]
-    wl_xdg_toplevel
-        .set_title(c"Peridot Marble Editor")
-        .expect("xdg_toplevel.set_title");
-    #[cfg(feature = "wayland")]
-    wl_xdg_surface
-        .set_window_geometry(0, 0, 640, 480)
-        .expect("xdg_surface.set_window_geometry");
-
-    #[cfg(feature = "wayland")]
-    let appmenu = if let Some(ref am) = kde_appmenu_manager {
-        let a = am.create(&wl_surface).expect("appmenu.create");
-        a.set_address(dbus.unique_name().expect("no name"), c"/AppMenu")
-            .expect("appmenu.set_address");
-
-        Some(a)
-    } else {
-        None
-    };
-
-    #[cfg(feature = "wayland")]
-    let deco = if let Some(ref dm) = zxdg_decoration_manager {
-        let d = dm
-            .get_toplevel_decoration(&wl_xdg_toplevel)
-            .expect("decoration.get_toplevel");
-        d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
-            .expect("decoration.set_mode");
-
-        Some(d)
-    } else {
-        None
-    };
-
-    #[cfg(feature = "wayland")]
-    let terminate_event = std::sync::Arc::new(
-        EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
-    );
-
-    #[cfg(feature = "wayland")]
-    let mut w = WaylandWindow {
-        surface: wl_surface,
-        xdg_surface: wl_xdg_surface,
-        xdg_toplevel: wl_xdg_toplevel,
-        deco,
-        state: Box::new(WaylandWindowState {
-            pending_configure_size: None,
-            active_buffer_scale: 1.0,
-            active_size: (640, 480),
-            swapchain_externally_invalidation_signal: std::sync::Arc::new(
-                std::sync::atomic::AtomicBool::new(false),
-            ),
-            terminate_event: terminate_event.clone(),
-        }),
-    };
-    #[cfg(feature = "wayland")]
-    w.initialize();
-    #[cfg(feature = "wayland")]
-    w.surface.commit().expect("wl_surface.commit");
-    #[cfg(feature = "wayland")]
-    wl_display.roundtrip().expect("roundtrip");
-
-    #[cfg(feature = "wayland")]
     #[allow(dead_code)]
     enum PopupBuffer {
         SinglePixel(wl::Owned<wl::Buffer>),
@@ -666,13 +573,12 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         }
     }
     #[cfg(feature = "wayland")]
-    let _popup_buf_resources = if let Some(ref spb) = single_pixel_buffer_manager {
+    let (popup_buf, _popup_buf_resources) = if let Some(ref spb) = single_pixel_buffer_manager {
         let popup_buf = spb
             .create_u32_rgba_buffer(0x00, 0x00, 0x00, 0x80000000)
             .expect("popup_buf.create.single_pixel_buffer");
 
-        wl_global_msg.popup_buf = popup_buf.as_ptr();
-        PopupBuffer::SinglePixel(popup_buf)
+        (popup_buf.as_ptr(), PopupBuffer::SinglePixel(popup_buf))
     } else {
         // traditional shm-based single pixel buffer
         let mut shm_name = b"/pme_shm-000000\x00".to_vec();
@@ -733,19 +639,117 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
             .expect("buf.create.popup");
 
-        wl_global_msg.popup_buf = buf.as_ptr();
-        PopupBuffer::Shm {
-            shm_name,
-            fd,
-            mapped_addr: addr,
-            shm_pool: shmp,
-            buf,
-        }
+        (
+            buf.as_ptr(),
+            PopupBuffer::Shm {
+                shm_name,
+                fd,
+                mapped_addr: addr,
+                shm_pool: shmp,
+                buf,
+            },
+        )
+    };
+
+    #[cfg(feature = "wayland")]
+    let mut wl_global_msg = WaylandGlobalMessaging {
+        pointer: None,
+        pointer_pos: (0.0, 0.0),
+        drag_preview_popup: WaylandDragPreviewPopupHandle {
+            display: &mut wl_display,
+            compositor: wl_compositor.as_ptr(),
+            viewporter: viewporter.as_ptr(),
+            kde_blur_manager: kde_blur_manager.as_ref().map(wl::Owned::as_ptr),
+            wm_base: xdg_wm_base.as_ptr(),
+            root_window: core::ptr::null_mut(),
+            popup_buf,
+            popup: None,
+        },
+        surface_to_xdg_surface: HashMap::new(),
+        _pinned: core::marker::PhantomPinned,
     };
     #[cfg(feature = "wayland")]
-    {
-        wl_global_msg.root_window = w.xdg_surface.as_ptr();
-    }
+    xdg_wm_base
+        .set_listener(&mut wl_global_msg)
+        .into_result()
+        .expect("xdg_wm_base set_listener");
+    #[cfg(feature = "wayland")]
+    seat.set_listener(&mut wl_global_msg)
+        .into_result()
+        .expect("seat set_listener");
+
+    #[cfg(feature = "wayland")]
+    let mut wl_surface = wl_compositor.create_surface().expect("wl_surface create");
+    #[cfg(feature = "wayland")]
+    let mut wl_xdg_surface = xdg_wm_base
+        .get_xdg_surface(&wl_surface)
+        .expect("xdg_surface create");
+    #[cfg(feature = "wayland")]
+    let wl_xdg_toplevel = wl_xdg_surface.get_toplevel().expect("xdg_toplevel create");
+    #[cfg(feature = "wayland")]
+    wl_xdg_toplevel
+        .set_title(c"Peridot Marble Editor")
+        .expect("xdg_toplevel.set_title");
+    #[cfg(feature = "wayland")]
+    wl_xdg_surface
+        .set_window_geometry(0, 0, 640, 480)
+        .expect("xdg_surface.set_window_geometry");
+    #[cfg(feature = "wayland")]
+    wl_global_msg
+        .surface_to_xdg_surface
+        .insert(wl_surface.as_ptr(), wl_xdg_surface.as_ptr());
+
+    #[cfg(feature = "wayland")]
+    let appmenu = if let Some(ref am) = kde_appmenu_manager {
+        let a = am.create(&wl_surface).expect("appmenu.create");
+        a.set_address(dbus.unique_name().expect("no name"), c"/AppMenu")
+            .expect("appmenu.set_address");
+
+        Some(a)
+    } else {
+        None
+    };
+
+    #[cfg(feature = "wayland")]
+    let deco = if let Some(ref dm) = zxdg_decoration_manager {
+        let d = dm
+            .get_toplevel_decoration(&wl_xdg_toplevel)
+            .expect("decoration.get_toplevel");
+        d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
+            .expect("decoration.set_mode");
+
+        Some(d)
+    } else {
+        None
+    };
+
+    #[cfg(feature = "wayland")]
+    let terminate_event = std::sync::Arc::new(
+        EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
+    );
+
+    #[cfg(feature = "wayland")]
+    let mut w = WaylandWindow {
+        surface: wl_surface,
+        xdg_surface: wl_xdg_surface,
+        xdg_toplevel: wl_xdg_toplevel,
+        deco,
+        state: Box::new(WaylandWindowState {
+            pending_configure_size: None,
+            active_buffer_scale: 1.0,
+            active_size: (640, 480),
+            swapchain_externally_invalidation_signal: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
+            terminate_event: terminate_event.clone(),
+        }),
+    };
+    #[cfg(feature = "wayland")]
+    w.initialize();
+    #[cfg(feature = "wayland")]
+    w.surface.commit().expect("wl_surface.commit");
+    #[cfg(feature = "wayland")]
+    wl_display.roundtrip().expect("roundtrip");
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new();
@@ -3761,10 +3765,16 @@ impl Win32Window {
     }
 }
 
+pub struct DesktopRect {
+    pub left: i32,
+    pub top: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[cfg(feature = "wayland")]
-struct WaylandGlobalMessaging {
-    pub pointer: Option<wl::Owned<wl::Pointer>>,
-    pub pointer_pos: (f32, f32),
+struct WaylandDragPreviewPopupHandle {
+    pub display: *mut wl::Display,
     pub compositor: *mut wl::Compositor,
     pub viewporter: *mut wl::WpViewporter,
     pub kde_blur_manager: Option<*mut wl::OrgKdeKwinBlurManager>,
@@ -3779,7 +3789,108 @@ struct WaylandGlobalMessaging {
         wl::Owned<wl::Surface>,
         Box<WaylandPopupState>,
     )>,
-    pub display: *mut wl::Display,
+}
+#[cfg(feature = "wayland")]
+impl WaylandDragPreviewPopupHandle {
+    pub fn show(&mut self, rect: &DesktopRect) {
+        let wl_popup_surface = unsafe {
+            (*self.compositor)
+                .create_surface()
+                .expect("wl_popup_surface.create")
+        };
+        let mut xdg_popup_surface = unsafe {
+            (*self.wm_base)
+                .get_xdg_surface(&wl_popup_surface)
+                .expect("xdg_popup_surface.create")
+        };
+
+        let pos = unsafe { (*self.wm_base).create_positioner().expect("pos.create") };
+        pos.set_size(rect.width as _, rect.height as _)
+            .expect("pos.set_size");
+        pos.set_offset(rect.left as _, rect.top as _)
+            .expect("pos.set_offset");
+        pos.set_anchor(wl::XdgPositionerAnchor::TopLeft)
+            .expect("pos.set_anchor");
+        pos.set_anchor_rect(0, 0, 1, 1)
+            .expect("pos.set_anchor_rect");
+        pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
+            .expect("pos.set_gravity");
+        pos.set_constraint_adjustment(wl::XdgPositionerConstraintAdjustment::None)
+            .expect("pos.set_constraint_adjustment");
+        let mut pp = unsafe {
+            xdg_popup_surface
+                .get_popup(Some(&*self.root_window), &pos)
+                .expect("pop.create")
+        };
+        let mut popup_state = Box::new(WaylandPopupState {});
+        xdg_popup_surface
+            .set_listener(&mut *popup_state)
+            .into_result()
+            .expect("xdg_popup_surface.set_listener");
+        pp.set_listener(&mut *popup_state)
+            .into_result()
+            .expect("pop.set_listener");
+        wl_popup_surface.commit().expect("wl_popup_surface.commit");
+        unsafe {
+            // process configure event...
+            (*self.display).roundtrip().expect("roundtrip");
+        }
+
+        wl_popup_surface
+            .attach(Some(unsafe { &*self.popup_buf }), 0, 0)
+            .expect("wl_popup_surface.attach");
+        wl_popup_surface
+            .damage(0, 0, -1, -1)
+            .expect("wl_popup_surface.damage");
+        let viewport = unsafe {
+            (*self.viewporter)
+                .get_viewport(&wl_popup_surface)
+                .expect("popup_viewport.create")
+        };
+        viewport
+            .set_source(
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::from_f32_lossy(1.0),
+            )
+            .expect("viewport.set_source");
+        viewport
+            .set_destination(128, 128)
+            .expect("viewport.set_destination");
+
+        let blur = if let Some(bm) = self.kde_blur_manager {
+            let blur = unsafe { (*bm).create(&wl_popup_surface).expect("blur.create") };
+            blur.commit().expect("blur.commit");
+
+            Some(blur)
+        } else {
+            None
+        };
+
+        wl_popup_surface.commit().expect("wl_popup_surface.commit");
+
+        self.popup = Some((
+            blur,
+            pp,
+            xdg_popup_surface,
+            viewport,
+            wl_popup_surface,
+            popup_state,
+        ));
+    }
+
+    pub fn hide(&mut self) {
+        self.popup = None;
+    }
+}
+
+#[cfg(feature = "wayland")]
+struct WaylandGlobalMessaging {
+    pub pointer: Option<wl::Owned<wl::Pointer>>,
+    pub pointer_pos: (f32, f32),
+    pub drag_preview_popup: WaylandDragPreviewPopupHandle,
+    pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
     _pinned: core::marker::PhantomPinned,
 }
 #[cfg(feature = "wayland")]
@@ -3825,6 +3936,7 @@ impl wl::PointerEventListener for WaylandGlobalMessaging {
     ) {
         tracing::trace!("pointer.enter");
 
+        self.drag_preview_popup.root_window = self.surface_to_xdg_surface[&(surface as *mut _)];
         self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
     }
 
@@ -3836,6 +3948,8 @@ impl wl::PointerEventListener for WaylandGlobalMessaging {
         surface: &mut peridot_tp_wayland::Surface,
     ) {
         tracing::trace!("pointer.leave");
+
+        self.drag_preview_popup.root_window = core::ptr::null_mut();
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
@@ -3863,92 +3977,14 @@ impl wl::PointerEventListener for WaylandGlobalMessaging {
         tracing::trace!("pointer.button");
 
         if state == wl::PointerButtonState::Pressed {
-            let wl_popup_surface = unsafe {
-                (*self.compositor)
-                    .create_surface()
-                    .expect("wl_popup_surface.create")
-            };
-            let mut xdg_popup_surface = unsafe {
-                (*self.wm_base)
-                    .get_xdg_surface(&wl_popup_surface)
-                    .expect("xdg_popup_surface.create")
-            };
-
-            let pos = unsafe { (*self.wm_base).create_positioner().expect("pos.create") };
-            pos.set_size(128, 128).expect("pos.set_size");
-            pos.set_offset(self.pointer_pos.0 as _, self.pointer_pos.1 as _)
-                .expect("pos.set_offset");
-            pos.set_anchor(wl::XdgPositionerAnchor::TopLeft)
-                .expect("pos.set_anchor");
-            pos.set_anchor_rect(0, 0, 1, 1)
-                .expect("pos.set_anchor_rect");
-            pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
-                .expect("pos.set_gravity");
-            pos.set_constraint_adjustment(wl::XdgPositionerConstraintAdjustment::None)
-                .expect("pos.set_constraint_adjustment");
-            let mut pp = unsafe {
-                xdg_popup_surface
-                    .get_popup(Some(&*self.root_window), &pos)
-                    .expect("pop.create")
-            };
-            let mut popup_state = Box::new(WaylandPopupState {});
-            xdg_popup_surface
-                .set_listener(&mut *popup_state)
-                .into_result()
-                .expect("xdg_popup_surface.set_listener");
-            pp.set_listener(&mut *popup_state)
-                .into_result()
-                .expect("pop.set_listener");
-            wl_popup_surface.commit().expect("wl_popup_surface.commit");
-            unsafe {
-                // process configure event...
-                (*self.display).roundtrip().expect("roundtrip");
-            }
-
-            wl_popup_surface
-                .attach(Some(unsafe { &*self.popup_buf }), 0, 0)
-                .expect("wl_popup_surface.attach");
-            wl_popup_surface
-                .damage(0, 0, -1, -1)
-                .expect("wl_popup_surface.damage");
-            let viewport = unsafe {
-                (*self.viewporter)
-                    .get_viewport(&wl_popup_surface)
-                    .expect("popup_viewport.create")
-            };
-            viewport
-                .set_source(
-                    wl::Fixed::from_f32_lossy(0.0),
-                    wl::Fixed::from_f32_lossy(0.0),
-                    wl::Fixed::from_f32_lossy(1.0),
-                    wl::Fixed::from_f32_lossy(1.0),
-                )
-                .expect("viewport.set_source");
-            viewport
-                .set_destination(128, 128)
-                .expect("viewport.set_destination");
-
-            let blur = if let Some(bm) = self.kde_blur_manager {
-                let blur = unsafe { (*bm).create(&wl_popup_surface).expect("blur.create") };
-                blur.commit().expect("blur.commit");
-
-                Some(blur)
-            } else {
-                None
-            };
-
-            wl_popup_surface.commit().expect("wl_popup_surface.commit");
-
-            self.popup = Some((
-                blur,
-                pp,
-                xdg_popup_surface,
-                viewport,
-                wl_popup_surface,
-                popup_state,
-            ));
+            self.drag_preview_popup.show(&DesktopRect {
+                left: self.pointer_pos.0 as _,
+                top: self.pointer_pos.1 as _,
+                width: 128,
+                height: 128,
+            });
         } else if state == wl::PointerButtonState::Released {
-            self.popup = None;
+            self.drag_preview_popup.hide();
         }
     }
 
