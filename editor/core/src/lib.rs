@@ -52,6 +52,8 @@ use windows::Win32::{
         WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
     },
 };
+
+#[cfg(windows)]
 use windows::{
     UI::Composition::CompositionEffectSourceParameter,
     Win32::{
@@ -64,10 +66,14 @@ use windows::{
 };
 #[cfg(windows)]
 use windows_core::*;
+#[cfg(windows)]
 use windows_numerics::{Vector2, Vector3};
 
+#[cfg(windows)]
+use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
+    EffectOptimization, GaussianBlurEffect,
+};
 use crate::{
-    bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     composite::{
         AnimatableColor, AnimatableFloat, BoundCompositeRenderer, CompositeMode, CompositeRect,
         CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
@@ -297,40 +303,54 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("CreateWindowExW")
     });
 
+    #[cfg(windows)]
     let fx = GaussianBlurEffect::new().expect("drag.fx.create");
+    #[cfg(windows)]
     fx.SetSource(
         &CompositionEffectSourceParameter::Create(h!("source"))
             .expect("compositioneffectsourceparameter.create"),
     )
     .expect("drag.fx.set_source");
+    #[cfg(windows)]
     fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
+    #[cfg(windows)]
     fx.SetOptimization(EffectOptimization::Speed)
         .expect("drag.fx.set_optimization");
+    #[cfg(windows)]
     let effect_factory = native_compositor
         .CreateEffectFactory(&fx)
         .expect("drag.fx.create_factory");
+    #[cfg(windows)]
     let backdrop_brush = native_compositor
         .CreateBackdropBrush()
         .expect("drag.backdrop_brush.create");
+    #[cfg(windows)]
     let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
+    #[cfg(windows)]
     blur_brush
         .SetSourceParameter(h!("Source"), &backdrop_brush)
         .expect("drag.fx.set_blur_source");
+    #[cfg(windows)]
     let blur_visual = native_compositor
         .CreateSpriteVisual()
         .expect("drag.visual.blur.create");
+    #[cfg(windows)]
     blur_visual
         .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
         .expect("drag.visual.blur.set_center_point");
+    #[cfg(windows)]
     blur_visual
         .SetAnchorPoint(Vector2::new(0.5, 0.5))
         .expect("drag.visual.blur.set_anchor_point");
+    #[cfg(windows)]
     blur_visual
         .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
         .expect("drag.visual.blur.set_relative_offset_adjustment");
+    #[cfg(windows)]
     blur_visual
         .SetBrush(&blur_brush)
         .expect("drag.visual.blur.set_brush");
+    #[cfg(windows)]
     blur_visual
         .SetShadow(&{
             let x = native_compositor
@@ -344,9 +364,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             x
         })
         .expect("drag.visual.set_shadow");
+    #[cfg(windows)]
     let color_tint_visual = native_compositor
         .CreateSpriteVisual()
         .expect("drag.visual.color_tint.create");
+    #[cfg(windows)]
     color_tint_visual
         .SetBrush(
             &native_compositor
@@ -359,18 +381,22 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 .expect("drag.visual.color_tint.brush.create"),
         )
         .expect("drag.visual.color_tint.set_brush");
+    #[cfg(windows)]
     color_tint_visual
         .SetRelativeOffsetAdjustment(Vector3::zero())
         .expect("drag.visual.color_tint.set_relative_offset_adjustment");
+    #[cfg(windows)]
     color_tint_visual
         .SetRelativeSizeAdjustment(Vector2::one())
         .expect("drag.visual.color_tint.set_relative_size_adjustment");
+    #[cfg(windows)]
     blur_visual
         .Children()
         .expect("drag.visual.get_children")
         .InsertAtTop(&color_tint_visual)
         .expect("drag.visual.add_child");
 
+    #[cfg(windows)]
     let drag_preview_composite_target = unsafe {
         native_compositor
             .cast::<ICompositorDesktopInterop>()
@@ -378,9 +404,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             .CreateDesktopWindowTarget(drag_preview_window.0, true)
             .expect("drag.composition_target.create")
     };
+    #[cfg(windows)]
     drag_preview_composite_target
         .SetRoot(&blur_visual)
         .expect("drag.visual.set_root");
+    #[cfg(windows)]
     blur_visual
         .SetSize(Vector2::new(128.0 - 32.0, 128.0 - 32.0))
         .expect("drag.visual.set_size");
@@ -3655,6 +3683,7 @@ pub struct WindowsAppRuntimeBootstrap {
     lib: HMODULE,
     shutdown: FPMddBootstrapShutdown,
 }
+#[cfg(windows)]
 impl Drop for WindowsAppRuntimeBootstrap {
     #[inline(always)]
     fn drop(&mut self) {
@@ -3665,6 +3694,7 @@ impl Drop for WindowsAppRuntimeBootstrap {
         }
     }
 }
+#[cfg(windows)]
 impl WindowsAppRuntimeBootstrap {
     pub fn init() -> Self {
         let lib = unsafe {
