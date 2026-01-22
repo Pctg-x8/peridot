@@ -4260,7 +4260,7 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     lparam: LPARAM,
 ) -> LRESULT {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCCALCSIZE, WM_NCHITTEST,
+        WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCCALCSIZE, WM_NCHITTEST,
     };
 
     let app_future = unsafe { GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)) };
@@ -4280,13 +4280,8 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     }
 
     if msg == WM_CREATE {
-        let mut rc = core::mem::MaybeUninit::uninit();
         unsafe {
-            GetWindowRect(hwnd, rc.as_mut_ptr()).expect("getwindowrect");
-        }
-        let rc = unsafe { rc.assume_init() };
-
-        unsafe {
+            // notify frame change
             use windows::Win32::UI::WindowsAndMessaging::{
                 SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
             };
@@ -4294,10 +4289,10 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
             SetWindowPos(
                 hwnd,
                 None,
-                rc.left,
-                rc.top,
-                rc.right - rc.left,
-                rc.bottom - rc.top,
+                0,
+                0,
+                0,
+                0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
             )
             .expect("create.swp.framechange");
