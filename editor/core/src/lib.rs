@@ -4526,6 +4526,7 @@ impl MacWindow {
     pub fn new() -> Self {
         let native_ptr = unsafe { ni_create_window() };
         let mut state = Box::pin(MacWindowState {
+            wlink: native_ptr,
             swapchain_externally_invalidation_signal: std::sync::Arc::new(
                 std::sync::atomic::AtomicBool::new(false),
             ),
@@ -4533,6 +4534,8 @@ impl MacWindow {
         });
         let callbacks: &'static WindowLinkCallbacks = &WindowLinkCallbacks {
             on_resize: MacWindowState::on_resize,
+            on_pointer_down: MacWindowState::on_pointer_down,
+            on_pointer_up: MacWindowState::on_pointer_up,
         };
         unsafe {
             ni_set_window_callbacks(
@@ -4567,9 +4570,14 @@ impl MacWindow {
 
 #[cfg(target_os = "macos")]
 struct MacWindowState {
+    wlink: *mut core::ffi::c_void,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     active_rt_size: std::sync::Mutex<(u32, u32)>,
 }
+#[cfg(target_os = "macos")]
+unsafe impl Sync for MacWindowState {}
+#[cfg(target_os = "macos")]
+unsafe impl Send for MacWindowState {}
 #[cfg(target_os = "macos")]
 impl MacWindowState {
     extern "C" fn on_resize(caller_context: *mut core::ffi::c_void, width: u32, height: u32) {
@@ -4582,12 +4590,35 @@ impl MacWindowState {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
+
+    extern "C" fn on_pointer_down(caller_context: *mut core::ffi::c_void, mut x: f64, mut y: f64) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        tracing::info!(x, y, "pointer down");
+        unsafe {
+            ni_convert_point_to_screen(this.wlink, &mut x, &mut y);
+            ni_show_drag_preview();
+            // macはleft,bottomが0,0なのでその分を考慮して計算してleft,topを合わせる
+            ni_move_drag_preview(x, y - 128.0, 128.0, 128.0);
+        }
+    }
+
+    extern "C" fn on_pointer_up(caller_context: *mut core::ffi::c_void) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        tracing::info!("pointer up");
+        unsafe {
+            ni_hide_drag_preview();
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
 pub struct WindowLinkCallbacks {
     pub on_resize: extern "C" fn(caller_context: *mut core::ffi::c_void, width: u32, height: u32),
+    pub on_pointer_down: extern "C" fn(caller_context: *mut core::ffi::c_void, x: f64, y: f64),
+    pub on_pointer_up: extern "C" fn(caller_context: *mut core::ffi::c_void),
 }
 
 #[cfg(target_os = "macos")]
@@ -4604,6 +4635,20 @@ unsafe extern "C" {
     );
     fn ni_unset_window_callbacks(window_link: *mut core::ffi::c_void);
     fn ni_get_metal_layer(window_link: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+    fn ni_convert_point_to_screen(
+        window_link: *mut core::ffi::c_void,
+        x: *mut core::ffi::c_double,
+        y: *mut core::ffi::c_double,
+    );
+
+    fn ni_show_drag_preview();
+    fn ni_hide_drag_preview();
+    fn ni_move_drag_preview(
+        x: core::ffi::c_double,
+        y: core::ffi::c_double,
+        width: core::ffi::c_double,
+        height: core::ffi::c_double,
+    );
 
     fn manual_capture_begin(window_link: *mut core::ffi::c_void);
     fn manual_capture_end();

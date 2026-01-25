@@ -13,6 +13,19 @@ appMenuItem.title = "Peridot Marble Editor"
 menu.setSubmenu(appMenu, for: appMenuItem)
 app.mainMenu = menu
 
+let dragPreviewWindow = NSPanel(
+    contentRect: NSRect(x: 0, y: 0, width: 128, height: 128),
+    styleMask: [.nonactivatingPanel, .borderless],
+    backing: .buffered,
+    defer: false
+)
+dragPreviewWindow.backgroundColor = NSColor(red: 0.0625, green: 0.6875, blue: 1.0, alpha: 0.0625)
+let dragPreviewWindowView = NSVisualEffectView()
+dragPreviewWindowView.blendingMode = .behindWindow
+dragPreviewWindowView.material = .popover
+dragPreviewWindowView.state = .active
+dragPreviewWindow.contentView = dragPreviewWindowView
+
 rs_launch()
 
 @_cdecl("nsapp_run")
@@ -55,10 +68,18 @@ struct WindowLinkCallbackSet {
     func notifyResize(_ width: UInt32, _ height: UInt32) {
         self.funcs.pointee.onResize(self.ctx, width, height)
     }
+    
+    func notifyPointerDown(_ x: Double, _ y: Double) {
+        self.funcs.pointee.onPointerDown(self.ctx, x, y)
+    }
+    
+    func notifyPointerUp() {
+        self.funcs.pointee.onPointerUp(self.ctx)
+    }
 }
 
 final class WindowLink {
-    private let w: NSWindow
+    let w: NSWindow
     private var mainWindowDelegate: MainWindowDelegate? = nil
     private var callbacks: WindowLinkCallbackSet? = nil
     
@@ -105,10 +126,7 @@ final class WindowLink {
 @_cdecl("ni_create_window")
 func createWindow() -> UnsafeMutableRawPointer {
     let w = NSWindow(
-        contentRect: NSRect(
-            origin: NSPoint(x: 0.0, y: 0.0),
-            size: NSSize(width: 960.0, height: 540.0)
-        ),
+        contentRect: NSRect(x: 0.0, y: 0.0, width: 960.0, height: 540.0),
         styleMask: [.titled, .closable, .miniaturizable, .resizable],
         backing: .buffered,
         defer: false
@@ -148,4 +166,27 @@ func getMetalLayer(windowLink: UnsafeMutableRawPointer) -> UnsafeMutableRawPoint
         Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().metalLayer,
         to: UnsafeMutableRawPointer.self
     )
+}
+
+@_cdecl("ni_convert_point_to_screen")
+func convertPointToScreen(windowLink: UnsafeMutableRawPointer, x: UnsafeMutablePointer<Double>, y: UnsafeMutablePointer<Double>) {
+    let result = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().w
+        .convertPoint(toScreen: NSPoint(x: x.pointee, y: y.pointee))
+    x.pointee = result.x
+    y.pointee = result.y
+}
+
+@_cdecl("ni_show_drag_preview")
+func showDragPreview() {
+    dragPreviewWindow.orderFront(dragPreviewWindow)
+}
+
+@_cdecl("ni_hide_drag_preview")
+func hideDragPreview() {
+    dragPreviewWindow.orderOut(dragPreviewWindow)
+}
+
+@_cdecl("ni_move_drag_preview")
+func moveDragPreview(x: Double, y: Double, width: Double, height: Double) {
+    dragPreviewWindow.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
 }
