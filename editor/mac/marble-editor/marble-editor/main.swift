@@ -15,7 +15,7 @@ app.mainMenu = menu
 
 let dragPreviewWindow = NSPanel(
     contentRect: NSRect(x: 0, y: 0, width: 128, height: 128),
-    styleMask: [.nonactivatingPanel, .borderless],
+    styleMask: [.nonactivatingPanel, .borderless, .utilityWindow],
     backing: .buffered,
     defer: false
 )

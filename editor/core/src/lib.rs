@@ -3885,6 +3885,30 @@ impl WaylandDragPreviewPopupHandle {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub struct MacDragPreviewPopupHandle;
+#[cfg(target_os = "macos")]
+impl MacDragPreviewPopupHandle {
+    pub fn show(&mut self, rect: &DesktopRect) {
+        unsafe {
+            ni_show_drag_preview();
+            // macはleft,bottomが0,0なのでその分を考慮して計算してleft,topを合わせる
+            ni_move_drag_preview(
+                rect.left as _,
+                (rect.top - rect.height as i32) as _,
+                rect.width as _,
+                rect.height as _,
+            );
+        }
+    }
+
+    pub fn hide(&mut self) {
+        unsafe {
+            ni_hide_drag_preview();
+        }
+    }
+}
+
 #[cfg(feature = "wayland")]
 struct WaylandGlobalMessaging {
     pub pointer: Option<wl::Owned<wl::Pointer>>,
@@ -4527,6 +4551,7 @@ impl MacWindow {
         let native_ptr = unsafe { ni_create_window() };
         let mut state = Box::pin(MacWindowState {
             wlink: native_ptr,
+            drag_preview: MacDragPreviewPopupHandle,
             swapchain_externally_invalidation_signal: std::sync::Arc::new(
                 std::sync::atomic::AtomicBool::new(false),
             ),
@@ -4571,6 +4596,7 @@ impl MacWindow {
 #[cfg(target_os = "macos")]
 struct MacWindowState {
     wlink: *mut core::ffi::c_void,
+    drag_preview: MacDragPreviewPopupHandle,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     active_rt_size: std::sync::Mutex<(u32, u32)>,
 }
@@ -4597,19 +4623,20 @@ impl MacWindowState {
         tracing::info!(x, y, "pointer down");
         unsafe {
             ni_convert_point_to_screen(this.wlink, &mut x, &mut y);
-            ni_show_drag_preview();
-            // macはleft,bottomが0,0なのでその分を考慮して計算してleft,topを合わせる
-            ni_move_drag_preview(x, y - 128.0, 128.0, 128.0);
         }
+        this.drag_preview.show(&DesktopRect {
+            left: x as _,
+            top: y as _,
+            width: 128,
+            height: 128,
+        });
     }
 
     extern "C" fn on_pointer_up(caller_context: *mut core::ffi::c_void) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
         tracing::info!("pointer up");
-        unsafe {
-            ni_hide_drag_preview();
-        }
+        this.drag_preview.hide();
     }
 }
 
