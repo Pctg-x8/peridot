@@ -279,29 +279,31 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("register_class.drag")
     };
     #[cfg(windows)]
-    let drag_preview_window = Win32Window(unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
+    let mut drag_preview_window = WindowsDragPreviewPopupHandle {
+        w: unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
 
-        CreateWindowExW(
-            WS_EX_TRANSPARENT
-                | WS_EX_LAYERED
-                | WS_EX_NOACTIVATE
-                | WS_EX_TOPMOST
-                | WS_EX_NOREDIRECTIONBITMAP,
-            PCWSTR(core::ptr::without_provenance(atom_drag_floating as _)),
-            w!(""),
-            WS_POPUP,
-            100,
-            100,
-            128,
-            128,
-            None,
-            None,
-            Some(hinstance),
-            None,
-        )
-        .expect("CreateWindowExW")
-    });
+            CreateWindowExW(
+                WS_EX_TRANSPARENT
+                    | WS_EX_LAYERED
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_TOPMOST
+                    | WS_EX_NOREDIRECTIONBITMAP,
+                PCWSTR(core::ptr::without_provenance(atom_drag_floating as _)),
+                w!(""),
+                WS_POPUP,
+                100,
+                100,
+                128,
+                128,
+                None,
+                None,
+                Some(hinstance),
+                None,
+            )
+            .expect("CreateWindowExW")
+        },
+    };
 
     #[cfg(windows)]
     let fx = GaussianBlurEffect::new().expect("drag.fx.create");
@@ -401,7 +403,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         native_compositor
             .cast::<ICompositorDesktopInterop>()
             .expect("native_compositor.cast.desktop_interop")
-            .CreateDesktopWindowTarget(drag_preview_window.0, true)
+            .CreateDesktopWindowTarget(drag_preview_window.w, true)
             .expect("drag.composition_target.create")
     };
     #[cfg(windows)]
@@ -425,7 +427,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         );
         w.set_long_ptr(
             WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            &drag_preview_window as *const _ as _,
+            &mut drag_preview_window as *mut _ as _,
         );
     }
 
@@ -3909,6 +3911,40 @@ impl MacDragPreviewPopupHandle {
     }
 }
 
+#[cfg(windows)]
+pub struct WindowsDragPreviewPopupHandle {
+    w: HWND,
+}
+#[cfg(windows)]
+impl WindowsDragPreviewPopupHandle {
+    pub fn show(&mut self, rect: &DesktopRect) {
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+            };
+
+            // 影のぶんだけ余分に設定する
+            SetWindowPos(
+                self.w,
+                None,
+                rect.left - 16,
+                rect.top - 16,
+                (rect.width + 32) as _,
+                (rect.height + 32) as _,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .expect("setwindowpos");
+            let _ = ShowWindow(self.w, SW_SHOWNOACTIVATE);
+        }
+    }
+
+    pub fn hide(&mut self) {
+        unsafe {
+            let _ = ShowWindow(self.w, SW_HIDE);
+        }
+    }
+}
+
 #[cfg(feature = "wayland")]
 struct WaylandGlobalMessaging {
     pub pointer: Option<wl::Owned<wl::Pointer>>,
@@ -4478,40 +4514,33 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         }
 
         let drag_preview_window = unsafe {
-            &*core::ptr::with_exposed_provenance::<Win32Window>(GetWindowLongPtrW(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            ) as _)
+            &mut *core::ptr::with_exposed_provenance_mut::<WindowsDragPreviewPopupHandle>(
+                GetWindowLongPtrW(
+                    hwnd,
+                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+                ) as _,
+            )
         };
 
-        unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
-            };
-
-            SetWindowPos(
-                drag_preview_window.0,
-                None,
-                p[0].x - 16,
-                p[0].y - 16,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            )
-            .expect("setwindowpos");
-        }
-        drag_preview_window.show(SW_SHOWNOACTIVATE);
+        drag_preview_window.show(&DesktopRect {
+            left: p[0].x,
+            top: p[0].y,
+            width: 128,
+            height: 128,
+        });
     }
 
     if msg == WM_LBUTTONUP {
         let drag_preview_window = unsafe {
-            &*core::ptr::with_exposed_provenance::<Win32Window>(GetWindowLongPtrW(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            ) as _)
+            &mut *core::ptr::with_exposed_provenance_mut::<WindowsDragPreviewPopupHandle>(
+                GetWindowLongPtrW(
+                    hwnd,
+                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+                ) as _,
+            )
         };
 
-        drag_preview_window.show(SW_HIDE);
+        drag_preview_window.hide();
 
         unsafe {
             use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
