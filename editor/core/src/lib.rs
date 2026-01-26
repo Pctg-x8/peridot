@@ -467,88 +467,16 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     }
 
     #[cfg(feature = "wayland")]
+    let terminate_event = std::sync::Arc::new(
+        EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
+    );
+
+    #[cfg(feature = "wayland")]
     let mut wl_display = wl::Display::connect().expect("wl_display connect");
     #[cfg(feature = "wayland")]
     let mut wl_registry = wl_display.get_registry().expect("wl_registry get");
     #[cfg(feature = "wayland")]
-    struct RegistryListener {
-        compositor: Option<wl::Owned<wl::Compositor>>,
-        outputs: Vec<wl::Owned<wl::Output>>,
-        xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
-        seat: Option<wl::Owned<wl::Seat>>,
-        shm: Option<wl::Owned<wl::Shm>>,
-        single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
-        viewporter: Option<wl::Owned<wl::WpViewporter>>,
-        kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
-        kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
-        zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
-    }
-    #[cfg(feature = "wayland")]
-    impl wl::RegistryListener for RegistryListener {
-        fn global(
-            &mut self,
-            registry: &mut peridot_tp_wayland::Registry,
-            name: u32,
-            interface: &core::ffi::CStr,
-            version: u32,
-        ) {
-            tracing::info!(target: "wl::diag", name, ?interface, version, "wl interface");
-
-            if interface == c"wl_compositor" {
-                self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
-            } else if interface == c"wl_output" {
-                self.outputs
-                    .push(registry.bind(name, version).expect("bind output"));
-            } else if interface == c"xdg_wm_base" {
-                self.xdg_wm_base = Some(registry.bind(name, version).expect("bind xdg_wm_base"));
-            } else if interface == c"wl_seat" {
-                assert!(self.seat.is_none(), "multiple seat?");
-                self.seat = Some(registry.bind(name, version).expect("bind seat"));
-            } else if interface == c"wl_shm" {
-                self.shm = Some(registry.bind(name, version).expect("bind shm"));
-            } else if interface == c"wp_viewporter" {
-                self.viewporter = Some(registry.bind(name, version).expect("bind viewporter"));
-            } else if interface == c"wp_single_pixel_buffer_manager_v1" {
-                self.single_pixel_buffer_manager = Some(
-                    registry
-                        .bind(name, version)
-                        .expect("bind single_pixel_buffer_manager"),
-                );
-            } else if interface == c"org_kde_kwin_blur_manager" {
-                self.kde_blur_manager =
-                    Some(registry.bind(name, version).expect("bind kde_blur_manager"));
-            } else if interface == c"org_kde_kwin_appmenu_manager" {
-                self.kde_appmenu_manager = Some(
-                    registry
-                        .bind(name, version)
-                        .expect("bind kde_appmenu_manager"),
-                );
-            } else if interface == c"zxdg_decoration_manager_v1" {
-                self.zxdg_decoration_manager = Some(
-                    registry
-                        .bind(name, version)
-                        .expect("bind zxdg_decoration_manager"),
-                );
-            }
-        }
-
-        fn global_remove(&mut self, _registry: &mut peridot_tp_wayland::Registry, name: u32) {
-            tracing::info!(target: "wl::diag", name, "wl interface remove");
-        }
-    }
-    #[cfg(feature = "wayland")]
-    let mut rl = RegistryListener {
-        compositor: None,
-        outputs: Vec::new(),
-        xdg_wm_base: None,
-        seat: None,
-        shm: None,
-        single_pixel_buffer_manager: None,
-        viewporter: None,
-        kde_blur_manager: None,
-        kde_appmenu_manager: None,
-        zxdg_decoration_manager: None,
-    };
+    let mut rl = RegistryListener::default();
     #[cfg(feature = "wayland")]
     wl_registry
         .set_listener(&mut rl)
@@ -559,28 +487,21 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     drop(wl_registry);
     #[cfg(feature = "wayland")]
-    let wl_compositor = rl.compositor.expect("no compositor");
-    #[cfg(feature = "wayland")]
-    let mut xdg_wm_base = rl.xdg_wm_base.expect("no xdg-shell");
-    #[cfg(feature = "wayland")]
-    let mut seat = rl.seat.expect("no seat");
-    #[cfg(feature = "wayland")]
-    let shm = rl.shm.expect("no shm");
-    #[cfg(feature = "wayland")]
-    let outputs = rl.outputs;
-    #[cfg(feature = "wayland")]
-    let single_pixel_buffer_manager = rl.single_pixel_buffer_manager;
-    #[cfg(feature = "wayland")]
-    let viewporter = rl.viewporter.expect("no viewporter");
-    #[cfg(feature = "wayland")]
-    let kde_blur_manager = rl.kde_blur_manager;
-    #[cfg(feature = "wayland")]
-    let kde_appmenu_manager = rl.kde_appmenu_manager;
-    #[cfg(feature = "wayland")]
-    let zxdg_decoration_manager = rl.zxdg_decoration_manager;
+    let mut wl_interfaces = WaylandGlobalInterfaces {
+        outputs: rl.outputs,
+        compositor: rl.compositor.expect("no compositor"),
+        xdg_wm_base: rl.xdg_wm_base.expect("no xdg-shell"),
+        seat: rl.seat.expect("no seat"),
+        shm: rl.shm.expect("no shm"),
+        viewporter: rl.viewporter.expect("no viewporter"),
+        single_pixel_buffer_manager: rl.single_pixel_buffer_manager,
+        kde_blur_manager: rl.kde_blur_manager,
+        kde_appmenu_manager: rl.kde_appmenu_manager,
+        zxdg_decoration_manager: rl.zxdg_decoration_manager,
+    };
 
     #[cfg(feature = "wayland")]
-    let popover_buf = if let Some(ref spb) = single_pixel_buffer_manager {
+    let popover_buf = if let Some(ref spb) = wl_interfaces.single_pixel_buffer_manager {
         let c = DragPreviewPopoverHandle::BG_COLOR.premultiplied();
         let b = spb
             .create_u32_rgba_buffer(c.r_u32(), c.g_u32(), c.b_u32(), c.a_u32())
@@ -609,11 +530,16 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         unsafe {
             core::ptr::write(
                 mapped.as_ptr().cast::<u32>(),
-                DragPreviewPopoverHandle::BG_COLOR.premultiplied().argb8888(),
+                DragPreviewPopoverHandle::BG_COLOR
+                    .premultiplied()
+                    .argb8888(),
             );
         }
 
-        let shmp = shm.create_pool(&shm_region, 4).expect("shmp.create.popup");
+        let shmp = wl_interfaces
+            .shm
+            .create_pool(&shm_region, 4)
+            .expect("shmp.create.popup");
         let buf = shmp
             .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
             .expect("buf.create.popup");
@@ -629,10 +555,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     let drag_preview_popover = DragPreviewPopoverHandle {
         display: &mut wl_display,
-        compositor: wl_compositor.as_ptr(),
-        viewporter: viewporter.as_ptr(),
-        kde_blur_manager: kde_blur_manager.as_ref().map(wl::Owned::as_ptr),
-        wm_base: xdg_wm_base.as_ptr(),
+        wl_interfaces: &wl_interfaces as *const _ as _,
         root_window: core::ptr::null_mut(),
         buf: popover_buf,
         popup: None,
@@ -640,75 +563,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
     #[cfg(feature = "wayland")]
     let mut surface_to_xdg_surface = HashMap::new();
-    #[cfg(feature = "wayland")]
-    let wl_surface = wl_compositor.create_surface().expect("wl_surface create");
-    #[cfg(feature = "wayland")]
-    let wl_xdg_surface = xdg_wm_base
-        .get_xdg_surface(&wl_surface)
-        .expect("xdg_surface create");
-    #[cfg(feature = "wayland")]
-    let wl_xdg_toplevel = wl_xdg_surface.get_toplevel().expect("xdg_toplevel create");
-    #[cfg(feature = "wayland")]
-    wl_xdg_toplevel
-        .set_title(c"Peridot Marble Editor")
-        .expect("xdg_toplevel.set_title");
-    #[cfg(feature = "wayland")]
-    wl_xdg_surface
-        .set_window_geometry(0, 0, 640, 480)
-        .expect("xdg_surface.set_window_geometry");
-    #[cfg(feature = "wayland")]
-    surface_to_xdg_surface.insert(wl_surface.as_ptr(), wl_xdg_surface.as_ptr());
 
     #[cfg(feature = "wayland")]
-    let appmenu = if let Some(ref am) = kde_appmenu_manager {
-        let a = am.create(&wl_surface).expect("appmenu.create");
-        a.set_address(dbus.unique_name().expect("no name"), WL_APPMENU_OBJECT_PATH)
-            .expect("appmenu.set_address");
-
-        Some(a)
-    } else {
-        None
-    };
-
+    let mut w = WaylandWindow::new(&wl_interfaces, &dbus, terminate_event.clone());
     #[cfg(feature = "wayland")]
-    let deco = if let Some(ref dm) = zxdg_decoration_manager {
-        let d = dm
-            .get_toplevel_decoration(&wl_xdg_toplevel)
-            .expect("decoration.get_toplevel");
-        d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
-            .expect("decoration.set_mode");
-
-        Some(d)
-    } else {
-        None
-    };
-
-    #[cfg(feature = "wayland")]
-    let terminate_event = std::sync::Arc::new(
-        EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
-    );
-
-    #[cfg(feature = "wayland")]
-    let mut w = WaylandWindow {
-        surface: wl_surface,
-        xdg_surface: wl_xdg_surface,
-        xdg_toplevel: wl_xdg_toplevel,
-        _appmenu: appmenu,
-        deco,
-        state: Box::new(WaylandWindowState {
-            pending_configure_size: None,
-            active_buffer_scale: 1.0,
-            active_size: (640, 480),
-            swapchain_externally_invalidation_signal: std::sync::Arc::new(
-                std::sync::atomic::AtomicBool::new(false),
-            ),
-            terminate_event: terminate_event.clone(),
-        }),
-    };
-    #[cfg(feature = "wayland")]
-    w.initialize();
-    #[cfg(feature = "wayland")]
-    w.surface.commit().expect("wl_surface.commit");
+    surface_to_xdg_surface.insert(w.surface.as_ptr(), w.xdg_surface.as_ptr());
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new();
@@ -836,12 +695,15 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         _pinned: core::marker::PhantomPinned,
     });
     #[cfg(feature = "wayland")]
-    xdg_wm_base
+    wl_interfaces
+        .xdg_wm_base
         .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
         .into_result()
         .expect("xdg_wm_base set_listener");
     #[cfg(feature = "wayland")]
-    seat.set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
+    wl_interfaces
+        .seat
+        .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
         .into_result()
         .expect("seat set_listener");
 
@@ -3689,6 +3551,88 @@ pub struct DesktopRect {
 }
 
 #[cfg(feature = "wayland")]
+struct WaylandGlobalInterfaces {
+    outputs: Vec<wl::Owned<wl::Output>>,
+    compositor: wl::Owned<wl::Compositor>,
+    xdg_wm_base: wl::Owned<wl::XdgWmBase>,
+    seat: wl::Owned<wl::Seat>,
+    shm: wl::Owned<wl::Shm>,
+    viewporter: wl::Owned<wl::WpViewporter>,
+    // optional requirements
+    single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
+    kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
+    kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
+    zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
+}
+#[cfg(feature = "wayland")]
+#[derive(Default)]
+struct RegistryListener {
+    compositor: Option<wl::Owned<wl::Compositor>>,
+    outputs: Vec<wl::Owned<wl::Output>>,
+    xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
+    seat: Option<wl::Owned<wl::Seat>>,
+    shm: Option<wl::Owned<wl::Shm>>,
+    viewporter: Option<wl::Owned<wl::WpViewporter>>,
+    single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
+    kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
+    kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
+    zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
+}
+#[cfg(feature = "wayland")]
+impl wl::RegistryListener for RegistryListener {
+    fn global(
+        &mut self,
+        registry: &mut peridot_tp_wayland::Registry,
+        name: u32,
+        interface: &core::ffi::CStr,
+        version: u32,
+    ) {
+        tracing::info!(target: "wl::diag", name, ?interface, version, "wl interface");
+
+        if interface == c"wl_compositor" {
+            self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
+        } else if interface == c"wl_output" {
+            self.outputs
+                .push(registry.bind(name, version).expect("bind output"));
+        } else if interface == c"xdg_wm_base" {
+            self.xdg_wm_base = Some(registry.bind(name, version).expect("bind xdg_wm_base"));
+        } else if interface == c"wl_seat" {
+            assert!(self.seat.is_none(), "multiple seat?");
+            self.seat = Some(registry.bind(name, version).expect("bind seat"));
+        } else if interface == c"wl_shm" {
+            self.shm = Some(registry.bind(name, version).expect("bind shm"));
+        } else if interface == c"wp_viewporter" {
+            self.viewporter = Some(registry.bind(name, version).expect("bind viewporter"));
+        } else if interface == c"wp_single_pixel_buffer_manager_v1" {
+            self.single_pixel_buffer_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind single_pixel_buffer_manager"),
+            );
+        } else if interface == c"org_kde_kwin_blur_manager" {
+            self.kde_blur_manager =
+                Some(registry.bind(name, version).expect("bind kde_blur_manager"));
+        } else if interface == c"org_kde_kwin_appmenu_manager" {
+            self.kde_appmenu_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind kde_appmenu_manager"),
+            );
+        } else if interface == c"zxdg_decoration_manager_v1" {
+            self.zxdg_decoration_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind zxdg_decoration_manager"),
+            );
+        }
+    }
+
+    fn global_remove(&mut self, _registry: &mut peridot_tp_wayland::Registry, name: u32) {
+        tracing::info!(target: "wl::diag", name, "wl interface remove");
+    }
+}
+
+#[cfg(feature = "wayland")]
 #[allow(dead_code)]
 enum DragPreviewPopoverBuffer {
     SinglePixel(wl::Owned<wl::Buffer>),
@@ -3712,10 +3656,7 @@ impl DragPreviewPopoverBuffer {
 #[cfg(feature = "wayland")]
 struct DragPreviewPopoverHandle {
     pub display: *mut wl::Display,
-    pub compositor: *mut wl::Compositor,
-    pub viewporter: *mut wl::WpViewporter,
-    pub kde_blur_manager: Option<*mut wl::OrgKdeKwinBlurManager>,
-    pub wm_base: *mut wl::XdgWmBase,
+    pub wl_interfaces: *const WaylandGlobalInterfaces,
     pub root_window: *mut wl::XdgSurface,
     pub buf: DragPreviewPopoverBuffer,
     pub popup: Option<(
@@ -3731,17 +3672,24 @@ struct DragPreviewPopoverHandle {
 impl DragPreviewPopoverHandle {
     pub fn show(&mut self, rect: &DesktopRect) {
         let wl_popup_surface = unsafe {
-            (*self.compositor)
+            (*self.wl_interfaces)
+                .compositor
                 .create_surface()
                 .expect("wl_popup_surface.create")
         };
         let mut xdg_popup_surface = unsafe {
-            (*self.wm_base)
+            (*self.wl_interfaces)
+                .xdg_wm_base
                 .get_xdg_surface(&wl_popup_surface)
                 .expect("xdg_popup_surface.create")
         };
 
-        let pos = unsafe { (*self.wm_base).create_positioner().expect("pos.create") };
+        let pos = unsafe {
+            (*self.wl_interfaces)
+                .xdg_wm_base
+                .create_positioner()
+                .expect("pos.create")
+        };
         pos.set_size(rect.width as _, rect.height as _)
             .expect("pos.set_size");
         pos.set_offset(rect.left as _, rect.top as _)
@@ -3780,7 +3728,8 @@ impl DragPreviewPopoverHandle {
             .damage(0, 0, -1, -1)
             .expect("wl_popup_surface.damage");
         let viewport = unsafe {
-            (*self.viewporter)
+            (*self.wl_interfaces)
+                .viewporter
                 .get_viewport(&wl_popup_surface)
                 .expect("popup_viewport.create")
         };
@@ -3796,8 +3745,8 @@ impl DragPreviewPopoverHandle {
             .set_destination(rect.width as _, rect.height as _)
             .expect("viewport.set_destination");
 
-        let blur = if let Some(bm) = self.kde_blur_manager {
-            let blur = unsafe { (*bm).create(&wl_popup_surface).expect("blur.create") };
+        let blur = if let Some(bm) = unsafe { (*self.wl_interfaces).kde_blur_manager.as_ref() } {
+            let blur = bm.create(&wl_popup_surface).expect("blur.create");
             blur.commit().expect("blur.commit");
 
             Some(blur)
@@ -4114,23 +4063,86 @@ unsafe impl Sync for WaylandWindow {}
 unsafe impl Send for WaylandWindow {}
 #[cfg(feature = "wayland")]
 impl WaylandWindow {
-    pub fn initialize(&mut self) {
-        self.surface
-            .set_listener(&mut *self.state.as_mut())
+    fn new(
+        wl_interfaces: &WaylandGlobalInterfaces,
+        dbus: &dbus::Connection,
+        terminate_event: std::sync::Arc<EventFD>,
+    ) -> Self {
+        let mut surface = wl_interfaces
+            .compositor
+            .create_surface()
+            .expect("wl_surface create");
+        let mut xdg_surface = wl_interfaces
+            .xdg_wm_base
+            .get_xdg_surface(&surface)
+            .expect("xdg_surface create");
+        let mut xdg_toplevel = xdg_surface.get_toplevel().expect("xdg_toplevel create");
+        xdg_toplevel
+            .set_title(c"Peridot Marble Editor")
+            .expect("xdg_toplevel.set_title");
+        xdg_surface
+            .set_window_geometry(0, 0, 640, 480)
+            .expect("xdg_surface.set_window_geometry");
+
+        let appmenu = if let Some(ref am) = wl_interfaces.kde_appmenu_manager {
+            let a = am.create(&surface).expect("appmenu.create");
+            a.set_address(dbus.unique_name().expect("no name"), WL_APPMENU_OBJECT_PATH)
+                .expect("appmenu.set_address");
+
+            Some(a)
+        } else {
+            None
+        };
+
+        let mut deco = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager {
+            let d = dm
+                .get_toplevel_decoration(&xdg_toplevel)
+                .expect("decoration.get_toplevel");
+            d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
+                .expect("decoration.set_mode");
+
+            Some(d)
+        } else {
+            None
+        };
+
+        let mut state = Box::new(WaylandWindowState {
+            pending_configure_size: None,
+            active_buffer_scale: 1.0,
+            active_size: (640, 480),
+            swapchain_externally_invalidation_signal: std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            ),
+            terminate_event,
+        });
+        surface
+            .set_listener(&mut *state.as_mut())
             .into_result()
             .expect("wl_surface set listener");
-        self.xdg_surface
-            .set_listener(&mut *self.state.as_mut())
+        xdg_surface
+            .set_listener(&mut *state.as_mut())
             .into_result()
             .expect("xdg_surface set listener");
-        self.xdg_toplevel
-            .set_listener(&mut *self.state.as_mut())
+        xdg_toplevel
+            .set_listener(&mut *state.as_mut())
             .into_result()
             .expect("xdg_toplevel set listener");
-        if let Some(ref mut x) = self.deco {
-            x.set_listener(&mut *self.state.as_mut())
+        if let Some(ref mut x) = deco {
+            x.set_listener(&mut *state.as_mut())
                 .into_result()
                 .expect("zxdg_toplevel_decoration_v1.set_listener");
+        }
+
+        // commits initial state
+        surface.commit().expect("wl_surface.commit");
+
+        Self {
+            surface,
+            xdg_surface,
+            xdg_toplevel,
+            _appmenu: appmenu,
+            deco,
+            state,
         }
     }
 
@@ -4297,7 +4309,14 @@ impl wl::ZxdgToplevelDecorationV1EventListener for WaylandWindowState {
         sender: &mut peridot_tp_wayland::ZxdgToplevelDecorationV1,
         mode: peridot_tp_wayland::ZxdgToplevelDecorationV1Mode,
     ) {
-        tracing::warn!(?mode, "TODO: client side decoration impl");
+        match mode {
+            wl::ZxdgToplevelDecorationV1Mode::ClientSide => {
+                tracing::warn!("TODO: client side decoration impl");
+            }
+            wl::ZxdgToplevelDecorationV1Mode::ServerSide => {
+                tracing::warn!("server side decoration?");
+            }
+        }
     }
 }
 
@@ -4310,9 +4329,10 @@ struct DBusWatcher<'e> {
 }
 #[cfg(target_os = "linux")]
 impl dbus::WatchFunction for DBusWatcher<'_> {
+    #[tracing::instrument(target = "dbus", skip(self, watch), fields(fd = watch.as_raw_fd()))]
     fn add(&mut self, watch: &mut dbus::WatchRef) -> bool {
         if watch.enabled() {
-            tracing::trace!(target: "dbus", fd = watch.as_raw_fd(), "add watch");
+            tracing::trace!("add watch");
 
             let mut event_type = EpollEventBits::empty();
             let flags = watch.flags();
@@ -4337,13 +4357,14 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
         true
     }
 
+    #[tracing::instrument(target = "dbus", skip(self, watch), fields(fd = watch.as_raw_fd()))]
     fn remove(&mut self, watch: &mut dbus::WatchRef) {
         let Some(poll_id) = self.fd_to_poll_id.remove(&watch.as_raw_fd()) else {
             // not added?
             return;
         };
 
-        tracing::trace!(target: "dbus", fd = watch.as_raw_fd(), poll_id, "remove watch");
+        tracing::trace!(poll_id, "remove watch");
 
         unsafe {
             (*self.poll_id_to_watch_ref.get()).remove(&poll_id);
