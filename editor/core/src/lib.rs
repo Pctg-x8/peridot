@@ -2601,9 +2601,13 @@ impl Drop for FontSet {
             peridot_tp_harfbuzz::ffi::hb_font_destroy(self.ui_title_project_name_shaping.as_ptr());
         }
         #[cfg(feature = "freetype")]
-        unsafe {
-            ft::done_face(self.ui_title_project_name);
-            ft::done_face(self.ui_default);
+        {
+            if let Err(e) = unsafe { ft::done_face(self.ui_title_project_name) } {
+                tracing::error!(reason = %e, "ui_title_project_name.done_face");
+            }
+            if let Err(e) = unsafe { ft::done_face(self.ui_default) } {
+                tracing::error!(reason = %e, "ui_default.done_face");
+            }
         }
     }
 }
@@ -3881,7 +3885,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
         }
     }
 
-    fn name(&mut self, seat: &mut peridot_tp_wayland::Seat, name: &core::ffi::CStr) {
+    fn name(&mut self, _seat: &mut peridot_tp_wayland::Seat, name: &core::ffi::CStr) {
         tracing::trace!(?name, "seat::name");
     }
 }
@@ -4042,8 +4046,8 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwlrLayerSurfaceV1EventLi
             .expect("layer_surface.ack_configure");
     }
 
-    #[tracing::instrument(skip(self, sender))]
-    fn closed(&mut self, sender: &mut peridot_tp_wayland::ZwlrLayerSurfaceV1) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn closed(&mut self, _sender: &mut peridot_tp_wayland::ZwlrLayerSurfaceV1) {
         tracing::trace!("layer surface closed");
     }
 }

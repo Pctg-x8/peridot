@@ -680,11 +680,13 @@ impl CompositeInstanceManager {
         0..core::mem::size_of::<CompositeInstanceData>() * self.count
     }
 
-    const fn buffer_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkBuffer> {
+    const fn buffer_transparent_ref<'x>(&'x self) -> &'x br::VkHandleRef<'x, br::vk::VkBuffer> {
         br::VkHandleRef::from_raw_ref(&self.buffer)
     }
 
-    const fn streaming_buffer_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkBuffer> {
+    const fn streaming_buffer_transparent_ref<'x>(
+        &'x self,
+    ) -> &'x br::VkHandleRef<'x, br::vk::VkBuffer> {
         br::VkHandleRef::from_raw_ref(&self.streaming_buffer)
     }
 
@@ -5517,11 +5519,13 @@ impl CompositionSurfaceAtlas {
         }
     }
 
-    pub const fn resource_view_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkImageView> {
+    pub const fn resource_view_transparent_ref<'x>(
+        &'x self,
+    ) -> &'x br::VkHandleRef<'x, br::vk::VkImageView> {
         br::VkHandleRef::from_raw_ref(&self.resource_view)
     }
 
-    pub const fn image_transparent_ref(&self) -> &br::VkHandleRef<br::vk::VkImage> {
+    pub const fn image_transparent_ref<'x>(&'x self) -> &'x br::VkHandleRef<'x, br::vk::VkImage> {
         br::VkHandleRef::from_raw_ref(&self.resource)
     }
 
