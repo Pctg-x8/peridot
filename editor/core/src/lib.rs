@@ -3832,7 +3832,7 @@ impl WaylandDragPreviewPopupHandle {
             .expect("pop.set_listener");
         wl_popup_surface.commit().expect("wl_popup_surface.commit");
         unsafe {
-            // process configure event...
+            // process configure event...(Kwinとかはconfigureくるまえにattachするとエラーが出ておちる)
             (*self.display).roundtrip().expect("roundtrip");
         }
 
@@ -3856,7 +3856,7 @@ impl WaylandDragPreviewPopupHandle {
             )
             .expect("viewport.set_source");
         viewport
-            .set_destination(128, 128)
+            .set_destination(rect.width as _, rect.height as _)
             .expect("viewport.set_destination");
 
         let blur = if let Some(bm) = self.kde_blur_manager {
