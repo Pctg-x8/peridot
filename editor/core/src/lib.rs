@@ -20,50 +20,41 @@ use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
-use windows::Win32::{
-    Foundation::{HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
-    Graphics::{
-        Direct2D::Common::{
-            D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_WINDING,
-            ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl,
-        },
-        DirectWrite::{
-            DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWriteCreateFactory, IDWriteFactory,
-            IDWritePixelSnapping_Impl, IDWriteTextFormat, IDWriteTextRenderer,
-            IDWriteTextRenderer_Impl,
-        },
-        Gdi::HBRUSH,
-    },
-    Storage::Packaging::Appx::PACKAGE_VERSION,
-    System::{
-        LibraryLoader::GetModuleHandleW,
-        WinRT::{
-            Composition::ICompositorInterop, CreateDispatcherQueueController, DQTAT_COM_ASTA,
-            DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
-        },
-    },
-    UI::WindowsAndMessaging::{
-        CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
-        GetMessageW, GetWindowLongPtrW, HCURSOR, HICON, IDI_APPLICATION, LoadIconW,
-        PostQuitMessage, RegisterClassExW, SHOW_WINDOW_CMD, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
-        SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_DESTROY,
-        WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-        WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
-    },
-};
-
-#[cfg(windows)]
 use windows::{
     UI::Composition::CompositionEffectSourceParameter,
     Win32::{
-        Foundation::FreeLibrary,
+        Foundation::{FreeLibrary, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
+        Graphics::{
+            DirectWrite::{
+                DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_WEIGHT_NORMAL, DWriteCreateFactory, IDWriteFactory, IDWriteTextFormat,
+            },
+            Gdi::HBRUSH,
+        },
+        Storage::Packaging::Appx::PACKAGE_VERSION,
         System::{
-            LibraryLoader::{GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExA, LoadLibraryExW},
-            WinRT::Composition::ICompositorDesktopInterop,
+            LibraryLoader::{
+                GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExA,
+                LoadLibraryExW,
+            },
+            WinRT::{
+                Composition::{ICompositorDesktopInterop, ICompositorInterop},
+                CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
+                DispatcherQueueOptions,
+            },
+        },
+        UI::WindowsAndMessaging::{
+            CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
+            GetMessageW, GetWindowLongPtrW, HCURSOR, HICON, IDI_APPLICATION, LoadIconW,
+            PostQuitMessage, RegisterClassExW, SHOW_WINDOW_CMD, SW_HIDE, SW_SHOW,
+            SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX,
+            WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
+            WS_POPUP,
         },
     },
 };
+
 #[cfg(windows)]
 use windows_core::*;
 #[cfg(windows)]
@@ -214,6 +205,16 @@ impl Color32 {
     pub const fn a_u32(&self) -> u32 {
         (0xffffffffu32 as f32 * (self.a as f32 / 255.0).min(1.0)) as u32
     }
+
+    #[cfg(windows)]
+    pub const fn windows_native_color(&self) -> windows::UI::Color {
+        windows::UI::Color {
+            A: self.a,
+            R: self.r,
+            G: self.g,
+            B: self.b,
+        }
+    }
 }
 
 fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
@@ -262,7 +263,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
             style: WNDCLASS_STYLES(0),
             cbClsExtra: 0,
-            cbWndExtra: core::mem::size_of::<[usize; 3]>() as _,
+            cbWndExtra: core::mem::size_of::<[usize; 2]>() as _,
             lpfnWndProc: Some(wndproc::<AppFuture>),
             hInstance: hinstance,
             hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
@@ -301,7 +302,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
             style: WNDCLASS_STYLES(0),
             cbClsExtra: 0,
-            cbWndExtra: core::mem::size_of::<[usize; 2]>() as _,
+            cbWndExtra: 0,
             lpfnWndProc: Some(wndproc_drag),
             hInstance: hinstance,
             hIcon: HICON(core::ptr::null_mut()),
@@ -314,7 +315,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("register_class.drag")
     };
     #[cfg(windows)]
-    let mut drag_preview_window = WindowsDragPreviewPopupHandle {
+    let drag_preview_popover = DragPreviewPopoverHandle {
         w: unsafe {
             use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
 
@@ -409,12 +410,9 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     color_tint_visual
         .SetBrush(
             &native_compositor
-                .CreateColorBrushWithColor(windows::UI::Color {
-                    A: 16,
-                    R: 16,
-                    G: 176,
-                    B: 255,
-                })
+                .CreateColorBrushWithColor(
+                    DragPreviewPopoverHandle::BG_COLOR.windows_native_color(),
+                )
                 .expect("drag.visual.color_tint.brush.create"),
         )
         .expect("drag.visual.color_tint.set_brush");
@@ -438,7 +436,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         native_compositor
             .cast::<ICompositorDesktopInterop>()
             .expect("native_compositor.cast.desktop_interop")
-            .CreateDesktopWindowTarget(drag_preview_window.w, true)
+            .CreateDesktopWindowTarget(drag_preview_popover.w, true)
             .expect("drag.composition_target.create")
     };
     #[cfg(windows)]
@@ -449,22 +447,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     blur_visual
         .SetSize(Vector2::new(128.0 - 32.0, 128.0 - 32.0))
         .expect("drag.visual.set_size");
-
-    #[cfg(windows)]
-    unsafe {
-        w.set_long_ptr(
-            WINDOW_LONG_PTR_INDEX(0),
-            app.as_mut().get_unchecked_mut() as *mut _ as _,
-        );
-        w.set_long_ptr(
-            WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
-            event_store.as_mut().get_mut() as *mut _ as _,
-        );
-        w.set_long_ptr(
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            &mut drag_preview_window as *mut _ as _,
-        );
-    }
 
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
@@ -709,6 +691,18 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
+
+    #[cfg(windows)]
+    unsafe {
+        w.set_long_ptr(
+            WINDOW_LONG_PTR_INDEX(0),
+            app.as_mut().get_unchecked_mut() as *mut _ as _,
+        );
+        w.set_long_ptr(
+            WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
+            event_store.as_mut().get_mut() as *mut _ as _,
+        );
+    }
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -3049,382 +3043,6 @@ impl GlyphAtlas {
     }
 }
 
-#[cfg(windows)]
-#[implement(IDWriteTextRenderer)]
-pub struct AtlasTextRenderer {
-    box_instances: *mut Vec<BoxInstance>,
-    atlas: *mut GlyphAtlas,
-    new_filltri_points: *mut Vec<[f32; 2]>,
-    new_filltri_indices: *mut Vec<u16>,
-    new_curve_triangles: *mut Vec<[f32; 4]>,
-}
-#[cfg(windows)]
-impl IDWritePixelSnapping_Impl for AtlasTextRenderer_Impl {
-    fn GetCurrentTransform(
-        &self,
-        clientdrawingcontext: *const core::ffi::c_void,
-        transform: *mut windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX,
-    ) -> windows_core::Result<()> {
-        unsafe {
-            *transform = windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX {
-                m11: 1.0,
-                m12: 0.0,
-                m21: 0.0,
-                m22: 1.0,
-                dx: 0.0,
-                dy: 0.0,
-            };
-        }
-
-        Ok(())
-    }
-
-    fn GetPixelsPerDip(
-        &self,
-        clientdrawingcontext: *const core::ffi::c_void,
-    ) -> windows_core::Result<f32> {
-        Ok(168.0 / 96.0)
-    }
-
-    fn IsPixelSnappingDisabled(
-        &self,
-        clientdrawingcontext: *const core::ffi::c_void,
-    ) -> windows_core::Result<windows_core::BOOL> {
-        Ok(BOOL(0))
-    }
-}
-#[cfg(windows)]
-impl IDWriteTextRenderer_Impl for AtlasTextRenderer_Impl {
-    fn DrawGlyphRun(
-        &self,
-        clientdrawingcontext: *const core::ffi::c_void,
-        mut baselineoriginx: f32,
-        baselineoriginy: f32,
-        measuringmode: windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE,
-        glyphrun: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN,
-        glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
-        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-    ) -> windows_core::Result<()> {
-        let dip_to_pixels_scaling = 168.0f32 / 96.0;
-
-        let glyphrun = unsafe { &*glyphrun };
-        println!(
-            "DrawGlyphRun {baselineoriginx} {baselineoriginy} {measuringmode:?} {:?}",
-            glyphrun.fontFace
-        );
-        let font_face = glyphrun.fontFace.as_ref().expect("no font face");
-        let mut font_metrics = core::mem::MaybeUninit::uninit();
-        unsafe { font_face.GetMetrics(font_metrics.as_mut_ptr()) };
-        let font_metrics = unsafe { font_metrics.assume_init_ref() };
-        let design_unit = font_metrics.designUnitsPerEm;
-        let mut glyph_metrics: Vec<DWRITE_GLYPH_METRICS> =
-            Vec::with_capacity(glyphrun.glyphCount as _);
-        unsafe {
-            font_face
-                .GetDesignGlyphMetrics(
-                    glyphrun.glyphIndices,
-                    glyphrun.glyphCount,
-                    glyph_metrics.spare_capacity_mut().as_mut_ptr() as _,
-                    glyphrun.isSideways.as_bool(),
-                )
-                .expect("GetDesignGlyphMetrics");
-            glyph_metrics.set_len(glyphrun.glyphCount as _);
-        }
-        for n in 0..glyphrun.glyphCount as usize {
-            let glyph_width = (glyph_metrics[n].advanceWidth as i32
-                - glyph_metrics[n].leftSideBearing
-                - glyph_metrics[n].rightSideBearing) as f32
-                * glyphrun.fontEmSize
-                * dip_to_pixels_scaling
-                / design_unit as f32;
-            let glyph_height = (glyph_metrics[n].advanceHeight as i32
-                - glyph_metrics[n].topSideBearing
-                - glyph_metrics[n].bottomSideBearing) as f32
-                * glyphrun.fontEmSize
-                * dip_to_pixels_scaling
-                / design_unit as f32;
-
-            let (r, is_new) = unsafe {
-                (*self.atlas).acquire(
-                    (FontID::UIDefault as _, *glyphrun.glyphIndices.add(n)),
-                    glyph_width.ceil() as _,
-                    glyph_height.ceil() as _,
-                )
-            };
-            println!(
-                "DrawGlyphRun.Glyph {} {} {:?} {:?} {glyph_width} {glyph_height} {r:?} {is_new}",
-                unsafe { *glyphrun.glyphAdvances.add(n) },
-                unsafe { *glyphrun.glyphIndices.add(n) },
-                unsafe { *glyphrun.glyphOffsets.add(n) },
-                glyph_metrics[n],
-            );
-
-            unsafe {
-                (*self.box_instances).push(BoxInstance {
-                    posst: [
-                        glyph_width,
-                        glyph_height,
-                        (baselineoriginx
-                            + glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize
-                                / design_unit as f32)
-                            * dip_to_pixels_scaling,
-                        (baselineoriginy
-                            - (glyph_metrics[n].verticalOriginY as f32
-                                - glyph_metrics[n].topSideBearing as f32)
-                                * glyphrun.fontEmSize
-                                / design_unit as f32)
-                            * dip_to_pixels_scaling,
-                    ],
-                    uvst: [
-                        r.width as f32 / (*self.atlas).space_mgr.max.width as f32,
-                        r.height as f32 / (*self.atlas).space_mgr.max.height as f32,
-                        r.left as f32 / (*self.atlas).space_mgr.max.width as f32,
-                        r.top as f32 / (*self.atlas).space_mgr.max.height as f32,
-                    ],
-                });
-            }
-            if is_new {
-                // render font here
-                let mut current_figure_state = None;
-                let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
-                    translate: windows_numerics::Vector2 {
-                        X: r.left as f32
-                            - glyph_metrics[n].leftSideBearing as f32
-                                * glyphrun.fontEmSize
-                                * dip_to_pixels_scaling
-                                / design_unit as f32,
-                        Y: r.top as f32
-                            - (glyph_metrics[n].verticalOriginY as f32
-                                - glyph_metrics[n].topSideBearing as f32)
-                                * glyphrun.fontEmSize
-                                * dip_to_pixels_scaling
-                                / design_unit as f32,
-                    },
-                    dip_to_pixels_scale: dip_to_pixels_scaling,
-                    current_figure_state: &mut current_figure_state,
-                    filltri_points: self.new_filltri_points,
-                    filltri_indices: self.new_filltri_indices,
-                    curve_triangles: self.new_curve_triangles,
-                });
-                unsafe {
-                    font_face
-                        .GetGlyphRunOutline(
-                            glyphrun.fontEmSize,
-                            glyphrun.glyphIndices.add(n),
-                            None,
-                            None,
-                            1,
-                            glyphrun.isSideways.as_bool(),
-                            false,
-                            &sink,
-                        )
-                        .expect("GetGlyphRunOutline");
-                }
-                assert!(current_figure_state.is_none());
-            }
-
-            baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) };
-        }
-
-        Ok(())
-    }
-
-    fn DrawInlineObject(
-        &self,
-        clientdrawingcontext: *const core::ffi::c_void,
-        originx: f32,
-        originy: f32,
-        inlineobject: windows_core::Ref<windows::Win32::Graphics::DirectWrite::IDWriteInlineObject>,
-        issideways: windows_core::BOOL,
-        isrighttoleft: windows_core::BOOL,
-        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-    ) -> windows_core::Result<()> {
-        unimplemented!();
-    }
-
-    fn DrawStrikethrough(
-        &self,
-        clientdrawingcontext: *const core::ffi::c_void,
-        baselineoriginx: f32,
-        baselineoriginy: f32,
-        strikethrough: *const windows::Win32::Graphics::DirectWrite::DWRITE_STRIKETHROUGH,
-        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-    ) -> windows_core::Result<()> {
-        unimplemented!();
-    }
-
-    fn DrawUnderline(
-        &self,
-        clientdrawingcontext: *const core::ffi::c_void,
-        baselineoriginx: f32,
-        baselineoriginy: f32,
-        underline: *const windows::Win32::Graphics::DirectWrite::DWRITE_UNDERLINE,
-        clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-    ) -> windows_core::Result<()> {
-        unimplemented!();
-    }
-}
-
-#[cfg(windows)]
-#[implement(ID2D1SimplifiedGeometrySink)]
-struct GlyphOutlineSink {
-    translate: windows_numerics::Vector2,
-    dip_to_pixels_scale: f32,
-    current_figure_state: *mut Option<(windows_numerics::Vector2, u16)>,
-    filltri_points: *mut Vec<[f32; 2]>,
-    filltri_indices: *mut Vec<u16>,
-    curve_triangles: *mut Vec<[f32; 4]>,
-}
-#[cfg(windows)]
-impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
-    fn BeginFigure(
-        &self,
-        startpoint: &windows_numerics::Vector2,
-        figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
-    ) {
-        assert_eq!(figurebegin, D2D1_FIGURE_BEGIN_FILLED, "not filled figure");
-
-        unsafe {
-            (*self.current_figure_state) = Some((*startpoint, (*self.filltri_points).len() as _));
-            (*self.filltri_points).push([
-                startpoint.X * self.dip_to_pixels_scale + self.translate.X,
-                -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y,
-            ]);
-        }
-    }
-
-    fn EndFigure(&self, figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END) {
-        let (start_point, filltri_index0) = unsafe {
-            (*self.current_figure_state)
-                .take()
-                .expect("no figure started?")
-        };
-
-        if figureend == D2D1_FIGURE_END_CLOSED {
-            // line to start
-            unsafe {
-                let filltri_point1 = (*self.filltri_points).len() - 1;
-                (*self.filltri_points).push([
-                    start_point.X * self.dip_to_pixels_scale + self.translate.X,
-                    -start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
-                ]);
-                (*self.filltri_indices).extend([
-                    filltri_index0,
-                    filltri_point1 as u16,
-                    (*self.filltri_points).len() as u16 - 1,
-                ]);
-            }
-        }
-    }
-
-    fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
-        let &(_, filltri_index0) = unsafe {
-            (*self.current_figure_state)
-                .as_ref()
-                .expect("no figure started?")
-        };
-
-        for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
-            unsafe {
-                let filltri_point1 = (*self.filltri_points).len() - 1;
-                (*self.filltri_points).push([
-                    p.X * self.dip_to_pixels_scale + self.translate.X,
-                    -p.Y * self.dip_to_pixels_scale + self.translate.Y,
-                ]);
-                (*self.filltri_indices).extend([
-                    filltri_index0,
-                    filltri_point1 as u16,
-                    (*self.filltri_points).len() as u16 - 1,
-                ]);
-            }
-        }
-    }
-
-    fn AddBeziers(
-        &self,
-        beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
-        bezierscount: u32,
-    ) {
-        let &(_, filltri_index0) = unsafe {
-            (*self.current_figure_state)
-                .as_ref()
-                .expect("no figure started?")
-        };
-
-        for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
-            let from_p = unsafe { (*self.filltri_points).last().expect("no points emitted") };
-            let bez = lyon_geom::CubicBezierSegment {
-                from: lyon_geom::point(from_p[0], from_p[1]),
-                ctrl1: lyon_geom::point(
-                    p.point1.X * self.dip_to_pixels_scale + self.translate.X,
-                    -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y,
-                ),
-                ctrl2: lyon_geom::point(
-                    p.point2.X * self.dip_to_pixels_scale + self.translate.X,
-                    -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y,
-                ),
-                to: lyon_geom::point(
-                    p.point3.X * self.dip_to_pixels_scale + self.translate.X,
-                    -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y,
-                ),
-            };
-
-            bez.for_each_quadratic_bezier(0.1, &mut |q| unsafe {
-                let filltri_point1 = (*self.filltri_points).len() - 1;
-                (*self.filltri_points).push([q.to.x, q.to.y]);
-                (*self.filltri_indices).extend([
-                    filltri_index0,
-                    filltri_point1 as u16,
-                    (*self.filltri_points).len() as u16 - 1,
-                ]);
-
-                (*self.curve_triangles).extend([
-                    [q.from.x, q.from.y, 0.0, 0.0],
-                    [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
-                    [q.to.x, q.to.y, 1.0, 1.0],
-                ]);
-            });
-        }
-    }
-
-    fn Close(&self) -> windows_core::Result<()> {
-        let &(ref start_point, filltri_index0) = unsafe {
-            (*self.current_figure_state)
-                .as_ref()
-                .expect("no figure started?")
-        };
-
-        // line to start
-        unsafe {
-            let filltri_point1 = (*self.filltri_points).len() - 1;
-            (*self.filltri_points).push([
-                start_point.X * self.dip_to_pixels_scale + self.translate.X,
-                start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
-            ]);
-            (*self.filltri_indices).extend([
-                filltri_index0,
-                filltri_point1 as u16,
-                (*self.filltri_points).len() as u16 - 1,
-            ]);
-        }
-
-        Ok(())
-    }
-
-    fn SetFillMode(&self, fillmode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE) {
-        if fillmode != D2D1_FILL_MODE_WINDING {
-            tracing::warn!("not winding fill mode specified");
-        }
-    }
-
-    fn SetSegmentFlags(
-        &self,
-        vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
-    ) {
-        unimplemented!("SetSegmentFlags {vertexflags:?}")
-    }
-}
-
 struct LocalImageView<'d, Device: br::Device + ?Sized + 'd> {
     handle: br::vk::VkImageView,
     device: &'d Device,
@@ -3647,6 +3265,7 @@ enum DragPreviewPopoverBuffer {
         buf: wl::Owned<wl::Buffer>,
     },
 }
+#[cfg(feature = "wayland")]
 impl DragPreviewPopoverBuffer {
     #[inline(always)]
     pub fn buffer(&self) -> &wl::Buffer {
@@ -3808,15 +3427,15 @@ impl DragPreviewPopoverHandle {
     pub fn show(&mut self, rect: &DesktopRect) {
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::{
-                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+                SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
             };
 
             // 影のぶんだけ余分に設定する
             SetWindowPos(
                 self.w,
                 None,
-                rect.left - 16,
-                rect.top - 16,
+                rect.left - 32,
+                rect.top - 32,
                 (rect.width + 32) as _,
                 (rect.height + 32) as _,
                 SWP_NOZORDER | SWP_NOACTIVATE,
@@ -4402,14 +4021,16 @@ pub enum Event {
     PointerDown {
         #[cfg(feature = "wayland")]
         root_window: core::ptr::NonNull<wl::XdgSurface>,
+        #[cfg(windows)]
+        active_window: HWND,
         client_x: f32,
         client_y: f32,
     },
     PointerUp,
 }
-#[cfg(feature = "wayland")]
+#[cfg(any(feature = "wayland", windows))]
 unsafe impl Sync for Event {}
-#[cfg(feature = "wayland")]
+#[cfg(any(feature = "wayland", windows))]
 unsafe impl Send for Event {}
 
 struct EventQueue {
@@ -4448,12 +4069,31 @@ async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopov
             Event::PointerDown {
                 #[cfg(feature = "wayland")]
                 root_window,
-                client_x,
-                client_y,
+                #[cfg(windows)]
+                active_window,
+                mut client_x,
+                mut client_y,
             } => {
                 #[cfg(feature = "wayland")]
                 {
                     drag_preview_popover.root_window = root_window.as_ptr();
+                }
+                #[cfg(windows)]
+                {
+                    // Windowsはグローバル座標を渡す必要があるのでここで変換する
+                    let mut p = [windows::Win32::Foundation::POINT {
+                        x: client_x as _,
+                        y: client_y as _,
+                    }];
+                    unsafe {
+                        windows::Win32::Graphics::Gdi::MapWindowPoints(
+                            Some(active_window),
+                            None,
+                            &mut p,
+                        );
+                    }
+                    client_x = p[0].x as _;
+                    client_y = p[0].y as _;
                 }
                 drag_preview_popover.show(&DesktopRect {
                     left: client_x as _,
@@ -4491,11 +4131,18 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCCALCSIZE, WM_NCHITTEST,
     };
 
-    let app_future = unsafe { GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)) };
+    let app_future = unsafe {
+        core::ptr::with_exposed_provenance_mut::<AppFuture>(
+            GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
+        )
+    };
     let event_store = unsafe {
-        GetWindowLongPtrW(
-            hwnd,
-            WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
+        core::ptr::with_exposed_provenance_mut::<Option<Event>>(
+            GetWindowLongPtrW(
+                hwnd,
+                WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
+            )
+            .cast_unsigned(),
         )
     };
 
@@ -4598,51 +4245,36 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     }
 
     if msg == WM_LBUTTONDOWN {
-        use windows::Win32::Graphics::Gdi::MapWindowPoints;
-
         unsafe {
             use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
             SetCapture(hwnd);
         }
 
-        let x = (lparam.0 & 0xffff) as i16;
-        let y = ((lparam.0 >> 16) & 0xffff) as i16;
-        let mut p = [windows::Win32::Foundation::POINT {
-            x: x as _,
-            y: y as _,
-        }];
         unsafe {
-            MapWindowPoints(Some(hwnd), None, &mut p);
+            *event_store = Some(Event::PointerDown {
+                active_window: hwnd,
+                client_x: (lparam.0 & 0xffff) as i16 as _,
+                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            });
+            let _ = core::pin::Pin::new_unchecked(&mut *app_future).poll(
+                &mut core::task::Context::from_waker(&core::task::Waker::new(
+                    &(),
+                    &APP_WAKER_VTABLE,
+                )),
+            );
         }
-
-        let drag_preview_window = unsafe {
-            &mut *core::ptr::with_exposed_provenance_mut::<WindowsDragPreviewPopupHandle>(
-                GetWindowLongPtrW(
-                    hwnd,
-                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-                ) as _,
-            )
-        };
-
-        drag_preview_window.show(&DesktopRect {
-            left: p[0].x,
-            top: p[0].y,
-            width: 128,
-            height: 128,
-        });
     }
 
     if msg == WM_LBUTTONUP {
-        let drag_preview_window = unsafe {
-            &mut *core::ptr::with_exposed_provenance_mut::<WindowsDragPreviewPopupHandle>(
-                GetWindowLongPtrW(
-                    hwnd,
-                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-                ) as _,
-            )
-        };
-
-        drag_preview_window.hide();
+        unsafe {
+            *event_store = Some(Event::PointerUp);
+            let _ = core::pin::Pin::new_unchecked(&mut *app_future).poll(
+                &mut core::task::Context::from_waker(&core::task::Waker::new(
+                    &(),
+                    &APP_WAKER_VTABLE,
+                )),
+            );
+        }
 
         unsafe {
             use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
