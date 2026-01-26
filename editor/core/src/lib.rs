@@ -90,6 +90,7 @@ mod composite;
 mod graphics;
 mod helper_types;
 mod mathext;
+mod platform;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |data| core::task::RawWaker::new(data, &APP_WAKER_VTABLE),
@@ -176,6 +177,43 @@ pub fn launch() {
         move |drag_preview_popover| run(event_queue, drag_preview_popover),
         event_store,
     );
+}
+
+struct Color32 {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+impl Color32 {
+    pub const fn premultiplied(&self) -> Self {
+        Self {
+            r: (self.r as f32 * self.a as f32 / 255.0).round() as u8,
+            g: (self.g as f32 * self.a as f32 / 255.0).round() as u8,
+            b: (self.b as f32 * self.a as f32 / 255.0).round() as u8,
+            a: self.a,
+        }
+    }
+
+    pub const fn argb8888(&self) -> u32 {
+        ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
+    }
+
+    pub const fn r_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.r as f32 / 255.0).min(1.0)) as u32
+    }
+
+    pub const fn g_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.g as f32 / 255.0).min(1.0)) as u32
+    }
+
+    pub const fn b_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.b as f32 / 255.0).min(1.0)) as u32
+    }
+
+    pub const fn a_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.a as f32 / 255.0).min(1.0)) as u32
+    }
 }
 
 fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
@@ -542,112 +580,50 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let zxdg_decoration_manager = rl.zxdg_decoration_manager;
 
     #[cfg(feature = "wayland")]
-    #[allow(dead_code)]
-    enum PopupBuffer {
-        SinglePixel(wl::Owned<wl::Buffer>),
-        Shm {
-            shm_name: Vec<u8>,
-            fd: core::ffi::c_int,
-            mapped_addr: *mut core::ffi::c_void,
-            shm_pool: wl::Owned<wl::ShmPool>,
-            buf: wl::Owned<wl::Buffer>,
-        },
-    }
-    #[cfg(feature = "wayland")]
-    impl Drop for PopupBuffer {
-        fn drop(&mut self) {
-            match self {
-                &mut Self::SinglePixel(_) => (),
-                &mut Self::Shm {
-                    ref shm_name,
-                    fd,
-                    mapped_addr,
-                    ..
-                } => unsafe {
-                    libc::munmap(mapped_addr, 4);
-                    libc::close(fd);
-                    libc::shm_unlink(shm_name.as_ptr().cast());
-                },
-            }
-        }
-    }
-    #[cfg(feature = "wayland")]
-    let (popup_buf, _popup_buf_resources) = if let Some(ref spb) = single_pixel_buffer_manager {
-        let popup_buf = spb
-            .create_u32_rgba_buffer(0x00, 0x00, 0x00, 0x80000000)
+    let popover_buf = if let Some(ref spb) = single_pixel_buffer_manager {
+        let c = DragPreviewPopoverHandle::BG_COLOR.premultiplied();
+        let b = spb
+            .create_u32_rgba_buffer(c.r_u32(), c.g_u32(), c.b_u32(), c.a_u32())
             .expect("popup_buf.create.single_pixel_buffer");
 
-        (popup_buf.as_ptr(), PopupBuffer::SinglePixel(popup_buf))
+        DragPreviewPopoverBuffer::SinglePixel(b)
     } else {
         // traditional shm-based single pixel buffer
-        let mut shm_name = b"/pme_shm-000000\x00".to_vec();
-        let fd = loop {
-            let mut ts = core::mem::MaybeUninit::uninit();
-            unsafe {
-                libc::clock_gettime(libc::CLOCK_REALTIME, ts.as_mut_ptr());
-            }
-            let mut r = unsafe { ts.assume_init_ref().tv_nsec };
-            for n in 0..6 {
-                shm_name[9 + n] = (b'A' as i64 + (r & 15) + (r & 16) * 2) as _;
-                r >>= 5;
-            }
-
-            let fd = unsafe {
-                libc::shm_open(
-                    shm_name.as_ptr().cast(),
-                    libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
-                    0o0600,
-                )
-            };
-            if fd < 0 {
-                let err = std::io::Error::last_os_error();
-                tracing::warn!(reason = %err, "shm_open failed, retrying");
-            }
-
-            break fd;
-        };
-
-        if unsafe { libc::ftruncate(fd, 4) } < 0 {
-            let err = std::io::Error::last_os_error();
-            tracing::error!(reason = %err, "ftruncate failed");
-            std::process::abort();
-        }
-
-        let addr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                4,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            )
-        };
-        if addr == libc::MAP_FAILED {
-            let err = std::io::Error::last_os_error();
-            tracing::error!(reason = %err, "mmap failed");
-            std::process::abort();
-        }
-
+        let shm_region =
+            platform::linux::TemporalSharedMemory::new_unique(c"/pme_shm", libc::O_RDWR, 0o0600)
+                .expect("buf.shm.create")
+                .expect("buf.shm.create.non_unique");
         unsafe {
-            core::ptr::write(addr.cast::<u32>(), 0x80000000);
+            platform::linux::ftruncate(&shm_region, 4).expect("buf.shm.resize");
         }
 
-        let shmp = shm.create_pool(&fd, 4).expect("shmp.create.popup");
+        let mapped = platform::linux::MappedMemory::new(
+            None,
+            4,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            &shm_region,
+            0,
+        )
+        .expect("buf.mmap");
+        unsafe {
+            core::ptr::write(
+                mapped.as_ptr().cast::<u32>(),
+                DragPreviewPopoverHandle::BG_COLOR.argb8888(),
+            );
+        }
+
+        let shmp = shm.create_pool(&shm_region, 4).expect("shmp.create.popup");
         let buf = shmp
             .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
             .expect("buf.create.popup");
 
-        (
-            buf.as_ptr(),
-            PopupBuffer::Shm {
-                shm_name,
-                fd,
-                mapped_addr: addr,
-                shm_pool: shmp,
-                buf,
-            },
-        )
+        DragPreviewPopoverBuffer::Shm {
+            shm_region,
+            mapped,
+            shm_pool: shmp,
+            buf,
+        }
     };
 
     #[cfg(feature = "wayland")]
@@ -658,7 +634,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         kde_blur_manager: kde_blur_manager.as_ref().map(wl::Owned::as_ptr),
         wm_base: xdg_wm_base.as_ptr(),
         root_window: core::ptr::null_mut(),
-        popup_buf,
+        buf: popover_buf,
         popup: None,
     };
 
@@ -686,7 +662,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     let appmenu = if let Some(ref am) = kde_appmenu_manager {
         let a = am.create(&wl_surface).expect("appmenu.create");
-        a.set_address(dbus.unique_name().expect("no name"), c"/AppMenu")
+        a.set_address(dbus.unique_name().expect("no name"), WL_APPMENU_OBJECT_PATH)
             .expect("appmenu.set_address");
 
         Some(a)
@@ -717,6 +693,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         surface: wl_surface,
         xdg_surface: wl_xdg_surface,
         xdg_toplevel: wl_xdg_toplevel,
+        _appmenu: appmenu,
         deco,
         state: Box::new(WaylandWindowState {
             pending_configure_size: None,
@@ -2323,13 +2300,15 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 break 'app;
             }
 
+            #[cfg(target_os = "linux")]
             if dbus_signal {
                 while let Some(m) = dbus.pop_message() {
                     let span = tracing::info_span!(target: "dbus::loop", "dbus message recv", r#type = ?m.r#type(), path = ?m.path(), interface = ?m.interface(), member = ?m.member());
                     let _enter = span.enter();
                     match m.r#type() {
                         dbus::MessageType::MethodCall
-                            if m.interface() == Some(c"com.canonical.dbusmenu")
+                            if m.path().is_some_and(|x| x == WL_APPMENU_OBJECT_PATH)
+                                && m.interface() == Some(c"com.canonical.dbusmenu")
                                 && m.member() == Some(c"GetLayout") =>
                         {
                             let mut args_iter = m.iter();
@@ -2597,7 +2576,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             }
                         }
                         dbus::MessageType::MethodCall
-                            if m.interface() == Some(c"com.canonical.dbusmenu")
+                            if m.path().is_some_and(|x| x == WL_APPMENU_OBJECT_PATH)
+                                && m.interface() == Some(c"com.canonical.dbusmenu")
                                 && m.member() == Some(c"Event") =>
                         {
                             let mut args_iter = m.iter();
@@ -2624,7 +2604,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                             }
                         }
                         dbus::MessageType::MethodCall
-                            if m.interface() == Some(c"com.canonical.dbusmenu")
+                            if m.path().is_some_and(|x| x == WL_APPMENU_OBJECT_PATH)
+                                && m.interface() == Some(c"com.canonical.dbusmenu")
                                 && m.member() == Some(c"AboutToShow") =>
                         {
                             let mut args_iter = m.iter();
@@ -3779,6 +3760,27 @@ pub struct DesktopRect {
 }
 
 #[cfg(feature = "wayland")]
+#[allow(dead_code)]
+enum DragPreviewPopoverBuffer {
+    SinglePixel(wl::Owned<wl::Buffer>),
+    Shm {
+        shm_region: platform::linux::TemporalSharedMemory,
+        mapped: platform::linux::MappedMemory,
+        shm_pool: wl::Owned<wl::ShmPool>,
+        buf: wl::Owned<wl::Buffer>,
+    },
+}
+impl DragPreviewPopoverBuffer {
+    #[inline(always)]
+    pub fn buffer(&self) -> &wl::Buffer {
+        match self {
+            Self::SinglePixel(x) => x,
+            Self::Shm { buf, .. } => buf,
+        }
+    }
+}
+
+#[cfg(feature = "wayland")]
 struct DragPreviewPopoverHandle {
     pub display: *mut wl::Display,
     pub compositor: *mut wl::Compositor,
@@ -3786,7 +3788,7 @@ struct DragPreviewPopoverHandle {
     pub kde_blur_manager: Option<*mut wl::OrgKdeKwinBlurManager>,
     pub wm_base: *mut wl::XdgWmBase,
     pub root_window: *mut wl::XdgSurface,
-    pub popup_buf: *mut wl::Buffer,
+    pub buf: DragPreviewPopoverBuffer,
     pub popup: Option<(
         Option<wl::Owned<wl::OrgKdeKwinBlur>>,
         wl::Owned<wl::XdgPopup>,
@@ -3843,7 +3845,7 @@ impl DragPreviewPopoverHandle {
         }
 
         wl_popup_surface
-            .attach(Some(unsafe { &*self.popup_buf }), 0, 0)
+            .attach(Some(self.buf.buffer()), 0, 0)
             .expect("wl_popup_surface.attach");
         wl_popup_surface
             .damage(0, 0, -1, -1)
@@ -3949,6 +3951,18 @@ impl DragPreviewPopoverHandle {
     }
 }
 
+// platform-dependent constants
+impl DragPreviewPopoverHandle {
+    pub const BG_COLOR: Color32 = Color32 {
+        r: 16,
+        g: 176,
+        b: 255,
+        a: 16,
+    };
+}
+
+#[cfg(feature = "wayland")]
+const WL_APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 #[cfg(feature = "wayland")]
 struct WaylandGlobalMessaging<AppFuture: core::future::Future<Output = ()>> {
     pub pointer: Option<wl::Owned<wl::Pointer>>,
@@ -4162,6 +4176,7 @@ pub struct WaylandWindow {
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
+    _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
     state: Box<WaylandWindowState>,
 }
 #[cfg(feature = "wayland")]
