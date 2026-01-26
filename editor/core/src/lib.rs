@@ -279,29 +279,31 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .expect("register_class.drag")
     };
     #[cfg(windows)]
-    let drag_preview_window = Win32Window(unsafe {
-        use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
+    let mut drag_preview_window = WindowsDragPreviewPopupHandle {
+        w: unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
 
-        CreateWindowExW(
-            WS_EX_TRANSPARENT
-                | WS_EX_LAYERED
-                | WS_EX_NOACTIVATE
-                | WS_EX_TOPMOST
-                | WS_EX_NOREDIRECTIONBITMAP,
-            PCWSTR(core::ptr::without_provenance(atom_drag_floating as _)),
-            w!(""),
-            WS_POPUP,
-            100,
-            100,
-            128,
-            128,
-            None,
-            None,
-            Some(hinstance),
-            None,
-        )
-        .expect("CreateWindowExW")
-    });
+            CreateWindowExW(
+                WS_EX_TRANSPARENT
+                    | WS_EX_LAYERED
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_TOPMOST
+                    | WS_EX_NOREDIRECTIONBITMAP,
+                PCWSTR(core::ptr::without_provenance(atom_drag_floating as _)),
+                w!(""),
+                WS_POPUP,
+                100,
+                100,
+                128,
+                128,
+                None,
+                None,
+                Some(hinstance),
+                None,
+            )
+            .expect("CreateWindowExW")
+        },
+    };
 
     #[cfg(windows)]
     let fx = GaussianBlurEffect::new().expect("drag.fx.create");
@@ -401,7 +403,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         native_compositor
             .cast::<ICompositorDesktopInterop>()
             .expect("native_compositor.cast.desktop_interop")
-            .CreateDesktopWindowTarget(drag_preview_window.0, true)
+            .CreateDesktopWindowTarget(drag_preview_window.w, true)
             .expect("drag.composition_target.create")
     };
     #[cfg(windows)]
@@ -425,7 +427,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         );
         w.set_long_ptr(
             WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            &drag_preview_window as *const _ as _,
+            &mut drag_preview_window as *mut _ as _,
         );
     }
 
@@ -3885,6 +3887,64 @@ impl WaylandDragPreviewPopupHandle {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub struct MacDragPreviewPopupHandle;
+#[cfg(target_os = "macos")]
+impl MacDragPreviewPopupHandle {
+    pub fn show(&mut self, rect: &DesktopRect) {
+        unsafe {
+            ni_show_drag_preview();
+            // macはleft,bottomが0,0なのでその分を考慮して計算してleft,topを合わせる
+            ni_move_drag_preview(
+                rect.left as _,
+                (rect.top - rect.height as i32) as _,
+                rect.width as _,
+                rect.height as _,
+            );
+        }
+    }
+
+    pub fn hide(&mut self) {
+        unsafe {
+            ni_hide_drag_preview();
+        }
+    }
+}
+
+#[cfg(windows)]
+pub struct WindowsDragPreviewPopupHandle {
+    w: HWND,
+}
+#[cfg(windows)]
+impl WindowsDragPreviewPopupHandle {
+    pub fn show(&mut self, rect: &DesktopRect) {
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+            };
+
+            // 影のぶんだけ余分に設定する
+            SetWindowPos(
+                self.w,
+                None,
+                rect.left - 16,
+                rect.top - 16,
+                (rect.width + 32) as _,
+                (rect.height + 32) as _,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .expect("setwindowpos");
+            let _ = ShowWindow(self.w, SW_SHOWNOACTIVATE);
+        }
+    }
+
+    pub fn hide(&mut self) {
+        unsafe {
+            let _ = ShowWindow(self.w, SW_HIDE);
+        }
+    }
+}
+
 #[cfg(feature = "wayland")]
 struct WaylandGlobalMessaging {
     pub pointer: Option<wl::Owned<wl::Pointer>>,
@@ -4454,40 +4514,33 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         }
 
         let drag_preview_window = unsafe {
-            &*core::ptr::with_exposed_provenance::<Win32Window>(GetWindowLongPtrW(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            ) as _)
+            &mut *core::ptr::with_exposed_provenance_mut::<WindowsDragPreviewPopupHandle>(
+                GetWindowLongPtrW(
+                    hwnd,
+                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+                ) as _,
+            )
         };
 
-        unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
-            };
-
-            SetWindowPos(
-                drag_preview_window.0,
-                None,
-                p[0].x - 16,
-                p[0].y - 16,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-            )
-            .expect("setwindowpos");
-        }
-        drag_preview_window.show(SW_SHOWNOACTIVATE);
+        drag_preview_window.show(&DesktopRect {
+            left: p[0].x,
+            top: p[0].y,
+            width: 128,
+            height: 128,
+        });
     }
 
     if msg == WM_LBUTTONUP {
         let drag_preview_window = unsafe {
-            &*core::ptr::with_exposed_provenance::<Win32Window>(GetWindowLongPtrW(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            ) as _)
+            &mut *core::ptr::with_exposed_provenance_mut::<WindowsDragPreviewPopupHandle>(
+                GetWindowLongPtrW(
+                    hwnd,
+                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+                ) as _,
+            )
         };
 
-        drag_preview_window.show(SW_HIDE);
+        drag_preview_window.hide();
 
         unsafe {
             use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
@@ -4526,6 +4579,8 @@ impl MacWindow {
     pub fn new() -> Self {
         let native_ptr = unsafe { ni_create_window() };
         let mut state = Box::pin(MacWindowState {
+            wlink: native_ptr,
+            drag_preview: MacDragPreviewPopupHandle,
             swapchain_externally_invalidation_signal: std::sync::Arc::new(
                 std::sync::atomic::AtomicBool::new(false),
             ),
@@ -4533,6 +4588,8 @@ impl MacWindow {
         });
         let callbacks: &'static WindowLinkCallbacks = &WindowLinkCallbacks {
             on_resize: MacWindowState::on_resize,
+            on_pointer_down: MacWindowState::on_pointer_down,
+            on_pointer_up: MacWindowState::on_pointer_up,
         };
         unsafe {
             ni_set_window_callbacks(
@@ -4567,9 +4624,15 @@ impl MacWindow {
 
 #[cfg(target_os = "macos")]
 struct MacWindowState {
+    wlink: *mut core::ffi::c_void,
+    drag_preview: MacDragPreviewPopupHandle,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     active_rt_size: std::sync::Mutex<(u32, u32)>,
 }
+#[cfg(target_os = "macos")]
+unsafe impl Sync for MacWindowState {}
+#[cfg(target_os = "macos")]
+unsafe impl Send for MacWindowState {}
 #[cfg(target_os = "macos")]
 impl MacWindowState {
     extern "C" fn on_resize(caller_context: *mut core::ffi::c_void, width: u32, height: u32) {
@@ -4582,12 +4645,36 @@ impl MacWindowState {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
+
+    extern "C" fn on_pointer_down(caller_context: *mut core::ffi::c_void, mut x: f64, mut y: f64) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        tracing::info!(x, y, "pointer down");
+        unsafe {
+            ni_convert_point_to_screen(this.wlink, &mut x, &mut y);
+        }
+        this.drag_preview.show(&DesktopRect {
+            left: x as _,
+            top: y as _,
+            width: 128,
+            height: 128,
+        });
+    }
+
+    extern "C" fn on_pointer_up(caller_context: *mut core::ffi::c_void) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        tracing::info!("pointer up");
+        this.drag_preview.hide();
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
 pub struct WindowLinkCallbacks {
     pub on_resize: extern "C" fn(caller_context: *mut core::ffi::c_void, width: u32, height: u32),
+    pub on_pointer_down: extern "C" fn(caller_context: *mut core::ffi::c_void, x: f64, y: f64),
+    pub on_pointer_up: extern "C" fn(caller_context: *mut core::ffi::c_void),
 }
 
 #[cfg(target_os = "macos")]
@@ -4604,6 +4691,20 @@ unsafe extern "C" {
     );
     fn ni_unset_window_callbacks(window_link: *mut core::ffi::c_void);
     fn ni_get_metal_layer(window_link: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
+    fn ni_convert_point_to_screen(
+        window_link: *mut core::ffi::c_void,
+        x: *mut core::ffi::c_double,
+        y: *mut core::ffi::c_double,
+    );
+
+    fn ni_show_drag_preview();
+    fn ni_hide_drag_preview();
+    fn ni_move_drag_preview(
+        x: core::ffi::c_double,
+        y: core::ffi::c_double,
+        width: core::ffi::c_double,
+        height: core::ffi::c_double,
+    );
 
     fn manual_capture_begin(window_link: *mut core::ffi::c_void);
     fn manual_capture_end();

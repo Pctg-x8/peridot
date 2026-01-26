@@ -26,4 +26,12 @@ final class MainView : NSView {
             return self.layer! as! CAMetalLayer
         }
     }
+    
+    override func mouseDown(with event: NSEvent) {
+        self.windowLinkCallbacks?.notifyPointerDown(Double(event.locationInWindow.x), Double(event.locationInWindow.y))
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        self.windowLinkCallbacks?.notifyPointerUp()
+    }
 }

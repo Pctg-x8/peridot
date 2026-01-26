@@ -41,7 +41,7 @@
 				4B4CC2222F03996D00B80F44 /* libperidot_marble_editor.a */,
 			);
 			name = "rust-artifact";
-			path = ../../../target/debug;
+			path = ../target/debug;
 			sourceTree = SOURCE_ROOT;
 		};
 		4BCE80182F03951B0063E63C = {
@@ -146,7 +146,7 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
-				"$(PROJECT_DIR)/../../../target/debug/libperidot_marble_editor.a",
+				"$(PROJECT_DIR)/../target/debug/libperidot_marble_editor.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -324,7 +324,7 @@
 					"@executable_path/../Frameworks",
 					/usr/local/lib,
 				);
-				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/../../../target/debug";
+				LIBRARY_SEARCH_PATHS = "$(PROJECT_DIR)/../target/debug";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "io.ct2.peridot.marble-editor";
