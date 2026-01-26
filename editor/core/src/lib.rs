@@ -23,7 +23,7 @@ use std::os::fd::AsRawFd;
 use windows::{
     UI::Composition::CompositionEffectSourceParameter,
     Win32::{
-        Foundation::{FreeLibrary, HINSTANCE, HMODULE, HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
             DirectWrite::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
@@ -31,12 +31,8 @@ use windows::{
             },
             Gdi::HBRUSH,
         },
-        Storage::Packaging::Appx::PACKAGE_VERSION,
         System::{
-            LibraryLoader::{
-                GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_FLAGS, LoadLibraryExA,
-                LoadLibraryExW,
-            },
+            LibraryLoader::GetModuleHandleW,
             WinRT::{
                 Composition::{ICompositorDesktopInterop, ICompositorInterop},
                 CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
@@ -170,7 +166,7 @@ pub fn launch() {
     );
 }
 
-struct Color32 {
+pub struct Color32 {
     r: u8,
     g: u8,
     b: u8,
@@ -235,7 +231,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     };
 
     #[cfg(windows)]
-    let app_runtime = WindowsAppRuntimeBootstrap::init();
+    let app_runtime = platform::windows::WindowsAppRuntimeBootstrap::init();
     #[cfg(windows)]
     let _dispatcher_queue = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
@@ -297,156 +293,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     let mut w = Win32Window(w);
 
     #[cfg(windows)]
-    let atom_drag_floating = unsafe {
-        register_class(&WNDCLASSEXW {
-            cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
-            style: WNDCLASS_STYLES(0),
-            cbClsExtra: 0,
-            cbWndExtra: 0,
-            lpfnWndProc: Some(wndproc_drag),
-            hInstance: hinstance,
-            hIcon: HICON(core::ptr::null_mut()),
-            hCursor: HCURSOR(core::ptr::null_mut()),
-            hbrBackground: HBRUSH(core::ptr::null_mut()),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: w!("DragFloatingWindow"),
-            hIconSm: HICON(core::ptr::null_mut()),
-        })
-        .expect("register_class.drag")
-    };
-    #[cfg(windows)]
-    let drag_preview_popover = DragPreviewPopoverHandle {
-        w: unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
-
-            CreateWindowExW(
-                WS_EX_TRANSPARENT
-                    | WS_EX_LAYERED
-                    | WS_EX_NOACTIVATE
-                    | WS_EX_TOPMOST
-                    | WS_EX_NOREDIRECTIONBITMAP,
-                PCWSTR(core::ptr::without_provenance(atom_drag_floating as _)),
-                w!(""),
-                WS_POPUP,
-                100,
-                100,
-                128,
-                128,
-                None,
-                None,
-                Some(hinstance),
-                None,
-            )
-            .expect("CreateWindowExW")
-        },
-    };
-
-    #[cfg(windows)]
-    let fx = GaussianBlurEffect::new().expect("drag.fx.create");
-    #[cfg(windows)]
-    fx.SetSource(
-        &CompositionEffectSourceParameter::Create(h!("source"))
-            .expect("compositioneffectsourceparameter.create"),
-    )
-    .expect("drag.fx.set_source");
-    #[cfg(windows)]
-    fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
-    #[cfg(windows)]
-    fx.SetOptimization(EffectOptimization::Speed)
-        .expect("drag.fx.set_optimization");
-    #[cfg(windows)]
-    let effect_factory = native_compositor
-        .CreateEffectFactory(&fx)
-        .expect("drag.fx.create_factory");
-    #[cfg(windows)]
-    let backdrop_brush = native_compositor
-        .CreateBackdropBrush()
-        .expect("drag.backdrop_brush.create");
-    #[cfg(windows)]
-    let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
-    #[cfg(windows)]
-    blur_brush
-        .SetSourceParameter(h!("Source"), &backdrop_brush)
-        .expect("drag.fx.set_blur_source");
-    #[cfg(windows)]
-    let blur_visual = native_compositor
-        .CreateSpriteVisual()
-        .expect("drag.visual.blur.create");
-    #[cfg(windows)]
-    blur_visual
-        .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
-        .expect("drag.visual.blur.set_center_point");
-    #[cfg(windows)]
-    blur_visual
-        .SetAnchorPoint(Vector2::new(0.5, 0.5))
-        .expect("drag.visual.blur.set_anchor_point");
-    #[cfg(windows)]
-    blur_visual
-        .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
-        .expect("drag.visual.blur.set_relative_offset_adjustment");
-    #[cfg(windows)]
-    blur_visual
-        .SetBrush(&blur_brush)
-        .expect("drag.visual.blur.set_brush");
-    #[cfg(windows)]
-    blur_visual
-        .SetShadow(&{
-            let x = native_compositor
-                .CreateDropShadow()
-                .expect("drag.visual.shadow.create");
-            x.SetBlurRadius(32.0)
-                .expect("drag.visual.shadow.set_blur_radius");
-            x.SetOffset(Vector3::new(0.0, 16.0, 0.0))
-                .expect("drag.visual.shadow.set_offset");
-            x.SetOpacity(0.3).expect("drag.visual.shadow.set_opacity");
-            x
-        })
-        .expect("drag.visual.set_shadow");
-    #[cfg(windows)]
-    let color_tint_visual = native_compositor
-        .CreateSpriteVisual()
-        .expect("drag.visual.color_tint.create");
-    #[cfg(windows)]
-    color_tint_visual
-        .SetBrush(
-            &native_compositor
-                .CreateColorBrushWithColor(
-                    DragPreviewPopoverHandle::BG_COLOR.windows_native_color(),
-                )
-                .expect("drag.visual.color_tint.brush.create"),
-        )
-        .expect("drag.visual.color_tint.set_brush");
-    #[cfg(windows)]
-    color_tint_visual
-        .SetRelativeOffsetAdjustment(Vector3::zero())
-        .expect("drag.visual.color_tint.set_relative_offset_adjustment");
-    #[cfg(windows)]
-    color_tint_visual
-        .SetRelativeSizeAdjustment(Vector2::one())
-        .expect("drag.visual.color_tint.set_relative_size_adjustment");
-    #[cfg(windows)]
-    blur_visual
-        .Children()
-        .expect("drag.visual.get_children")
-        .InsertAtTop(&color_tint_visual)
-        .expect("drag.visual.add_child");
-
-    #[cfg(windows)]
-    let drag_preview_composite_target = unsafe {
-        native_compositor
-            .cast::<ICompositorDesktopInterop>()
-            .expect("native_compositor.cast.desktop_interop")
-            .CreateDesktopWindowTarget(drag_preview_popover.w, true)
-            .expect("drag.composition_target.create")
-    };
-    #[cfg(windows)]
-    drag_preview_composite_target
-        .SetRoot(&blur_visual)
-        .expect("drag.visual.set_root");
-    #[cfg(windows)]
-    blur_visual
-        .SetSize(Vector2::new(128.0 - 32.0, 128.0 - 32.0))
-        .expect("drag.visual.set_size");
+    let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
 
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
@@ -3064,78 +2911,6 @@ impl<Device: br::Device + ?Sized> br::VkHandle for LocalImageView<'_, Device> {
 impl<Device: br::Device + ?Sized> br::ImageView for LocalImageView<'_, Device> {}
 
 #[cfg(windows)]
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub enum MddBootstrapInitializeOptions {
-    ShowUI = 0x08,
-}
-// copy from WindowsAppSDK-VersionInfo.h
-#[cfg(windows)]
-pub const APP_SDK_VERSION_U64: u64 = 0;
-#[cfg(windows)]
-pub type FPMddBootstrapInitialize2 = unsafe extern "system" fn(
-    majorMinorVersion: u32,
-    versionTag: PCWSTR,
-    minVersion: PACKAGE_VERSION,
-    options: MddBootstrapInitializeOptions,
-) -> HRESULT;
-#[cfg(windows)]
-pub type FPMddBootstrapShutdown = unsafe extern "system" fn();
-
-#[cfg(windows)]
-pub struct WindowsAppRuntimeBootstrap {
-    lib: HMODULE,
-    shutdown: FPMddBootstrapShutdown,
-}
-#[cfg(windows)]
-impl Drop for WindowsAppRuntimeBootstrap {
-    #[inline(always)]
-    fn drop(&mut self) {
-        unsafe {
-            if let Err(e) = FreeLibrary(self.lib) {
-                tracing::error!(reason = %e, "freelibrary");
-            }
-        }
-    }
-}
-#[cfg(windows)]
-impl WindowsAppRuntimeBootstrap {
-    pub fn init() -> Self {
-        let lib = unsafe {
-            LoadLibraryExW(
-                w!("Microsoft.WindowsAppRuntime.Bootstrap.dll"),
-                None,
-                LOAD_LIBRARY_FLAGS(0),
-            )
-            .expect("loadlibrary")
-        };
-        let initialize: FPMddBootstrapInitialize2 =
-            unsafe { core::mem::transmute(GetProcAddress(lib, s!("MddBootstrapInitialize2"))) };
-        let shutdown: FPMddBootstrapShutdown =
-            unsafe { core::mem::transmute(GetProcAddress(lib, s!("MddBootstrapShutdown"))) };
-
-        unsafe {
-            initialize(
-                0x00010008,
-                w!(""),
-                core::mem::transmute(APP_SDK_VERSION_U64),
-                MddBootstrapInitializeOptions::ShowUI,
-            )
-            .ok()
-            .expect("windowsappruntime.bootstrap.initialize");
-        }
-        Self { lib, shutdown }
-    }
-
-    #[inline(always)]
-    pub fn shutdown(self) {
-        unsafe {
-            (self.shutdown)();
-        }
-    }
-}
-
-#[cfg(windows)]
 #[repr(transparent)]
 pub struct Win32Window(HWND);
 #[cfg(windows)]
@@ -3421,9 +3196,155 @@ impl DragPreviewPopoverHandle {
 #[cfg(windows)]
 pub struct DragPreviewPopoverHandle {
     w: HWND,
+    _composition_target: windows::UI::Composition::Desktop::DesktopWindowTarget,
+}
+#[cfg(windows)]
+impl Drop for DragPreviewPopoverHandle {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if let Err(e) = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.w) } {
+            tracing::error!(reason = %e, "dragPreviewPopover.destroyNative");
+        }
+    }
 }
 #[cfg(windows)]
 impl DragPreviewPopoverHandle {
+    pub fn new(
+        hinstance: HINSTANCE,
+        native_compositor: &windows::UI::Composition::Compositor,
+    ) -> Self {
+        let atom_drag_floating = unsafe {
+            register_class(&WNDCLASSEXW {
+                cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
+                style: WNDCLASS_STYLES(0),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                lpfnWndProc: Some(Self::wndproc),
+                hInstance: hinstance,
+                hIcon: HICON(core::ptr::null_mut()),
+                hCursor: HCURSOR(core::ptr::null_mut()),
+                hbrBackground: HBRUSH(core::ptr::null_mut()),
+                lpszMenuName: PCWSTR::null(),
+                lpszClassName: w!("DragFloatingWindow"),
+                hIconSm: HICON(core::ptr::null_mut()),
+            })
+            .expect("register_class.drag")
+        };
+        let w = unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::WS_EX_LAYERED;
+
+            CreateWindowExW(
+                WS_EX_TRANSPARENT
+                    | WS_EX_LAYERED
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_TOPMOST
+                    | WS_EX_NOREDIRECTIONBITMAP,
+                PCWSTR(core::ptr::without_provenance(atom_drag_floating as _)),
+                w!(""),
+                WS_POPUP,
+                100,
+                100,
+                128,
+                128,
+                None,
+                None,
+                Some(hinstance),
+                None,
+            )
+            .expect("CreateWindowExW")
+        };
+
+        let fx = GaussianBlurEffect::new().expect("drag.fx.create");
+        fx.SetSource(
+            &CompositionEffectSourceParameter::Create(h!("source"))
+                .expect("compositioneffectsourceparameter.create"),
+        )
+        .expect("drag.fx.set_source");
+        fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
+        fx.SetOptimization(EffectOptimization::Speed)
+            .expect("drag.fx.set_optimization");
+        let effect_factory = native_compositor
+            .CreateEffectFactory(&fx)
+            .expect("drag.fx.create_factory");
+        let backdrop_brush = native_compositor
+            .CreateBackdropBrush()
+            .expect("drag.backdrop_brush.create");
+        let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
+        blur_brush
+            .SetSourceParameter(h!("Source"), &backdrop_brush)
+            .expect("drag.fx.set_blur_source");
+        let blur_visual = native_compositor
+            .CreateSpriteVisual()
+            .expect("drag.visual.blur.create");
+        blur_visual
+            .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
+            .expect("drag.visual.blur.set_center_point");
+        blur_visual
+            .SetAnchorPoint(Vector2::new(0.5, 0.5))
+            .expect("drag.visual.blur.set_anchor_point");
+        blur_visual
+            .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
+            .expect("drag.visual.blur.set_relative_offset_adjustment");
+        blur_visual
+            .SetBrush(&blur_brush)
+            .expect("drag.visual.blur.set_brush");
+        blur_visual
+            .SetShadow(&{
+                let x = native_compositor
+                    .CreateDropShadow()
+                    .expect("drag.visual.shadow.create");
+                x.SetBlurRadius(32.0)
+                    .expect("drag.visual.shadow.set_blur_radius");
+                x.SetOffset(Vector3::new(0.0, 16.0, 0.0))
+                    .expect("drag.visual.shadow.set_offset");
+                x.SetOpacity(0.3).expect("drag.visual.shadow.set_opacity");
+                x
+            })
+            .expect("drag.visual.set_shadow");
+        let color_tint_visual = native_compositor
+            .CreateSpriteVisual()
+            .expect("drag.visual.color_tint.create");
+        color_tint_visual
+            .SetBrush(
+                &native_compositor
+                    .CreateColorBrushWithColor(
+                        DragPreviewPopoverHandle::BG_COLOR.windows_native_color(),
+                    )
+                    .expect("drag.visual.color_tint.brush.create"),
+            )
+            .expect("drag.visual.color_tint.set_brush");
+        color_tint_visual
+            .SetRelativeOffsetAdjustment(Vector3::zero())
+            .expect("drag.visual.color_tint.set_relative_offset_adjustment");
+        color_tint_visual
+            .SetRelativeSizeAdjustment(Vector2::one())
+            .expect("drag.visual.color_tint.set_relative_size_adjustment");
+        blur_visual
+            .Children()
+            .expect("drag.visual.get_children")
+            .InsertAtTop(&color_tint_visual)
+            .expect("drag.visual.add_child");
+
+        let composition_target = unsafe {
+            native_compositor
+                .cast::<ICompositorDesktopInterop>()
+                .expect("native_compositor.cast.desktop_interop")
+                .CreateDesktopWindowTarget(w, true)
+                .expect("drag.composition_target.create")
+        };
+        composition_target
+            .SetRoot(&blur_visual)
+            .expect("drag.visual.set_root");
+        blur_visual
+            .SetSize(Vector2::new(128.0 - 32.0, 128.0 - 32.0))
+            .expect("drag.visual.set_size");
+
+        Self {
+            w,
+            _composition_target: composition_target,
+        }
+    }
+
     pub fn show(&mut self, rect: &DesktopRect) {
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::{
@@ -3449,6 +3370,10 @@ impl DragPreviewPopoverHandle {
         unsafe {
             let _ = ShowWindow(self.w, SW_HIDE);
         }
+    }
+
+    extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
 }
 
@@ -4282,11 +4207,6 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         }
     }
 
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-}
-
-#[cfg(windows)]
-extern "system" fn wndproc_drag(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
