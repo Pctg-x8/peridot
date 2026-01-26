@@ -169,14 +169,17 @@ pub fn launch() {
         .init();
 
     let mut event_store = core::pin::pin!(None);
-    let mut app = core::pin::pin!(run(EventQueue {
+    let event_queue = EventQueue {
         event_store: event_store.as_mut().get_mut(),
-    }));
-    main_wrapper(app.as_mut(), event_store);
+    };
+    main_wrapper(
+        move |drag_preview_popover| run(event_queue, drag_preview_popover),
+        event_store,
+    );
 }
 
 fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
-    mut app: Pin<&mut AppFuture>,
+    run_app: impl FnOnce(DragPreviewPopoverHandle) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
 ) {
     let global_time_base = std::time::Instant::now();
@@ -212,12 +215,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
     #[cfg(feature = "freetype")]
     let ft = FreeType::init().expect("FreeType.init");
-
-    let _ = app
-        .as_mut()
-        .poll(&mut core::task::Context::from_waker(&unsafe {
-            core::task::Waker::new(&(), &APP_WAKER_VTABLE)
-        }));
 
     #[cfg(windows)]
     let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
@@ -654,36 +651,23 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     };
 
     #[cfg(feature = "wayland")]
-    let mut wl_global_msg = WaylandGlobalMessaging {
-        pointer: None,
-        pointer_pos: (0.0, 0.0),
-        drag_preview_popup: WaylandDragPreviewPopupHandle {
-            display: &mut wl_display,
-            compositor: wl_compositor.as_ptr(),
-            viewporter: viewporter.as_ptr(),
-            kde_blur_manager: kde_blur_manager.as_ref().map(wl::Owned::as_ptr),
-            wm_base: xdg_wm_base.as_ptr(),
-            root_window: core::ptr::null_mut(),
-            popup_buf,
-            popup: None,
-        },
-        surface_to_xdg_surface: HashMap::new(),
-        _pinned: core::marker::PhantomPinned,
+    let drag_preview_popover = DragPreviewPopoverHandle {
+        display: &mut wl_display,
+        compositor: wl_compositor.as_ptr(),
+        viewporter: viewporter.as_ptr(),
+        kde_blur_manager: kde_blur_manager.as_ref().map(wl::Owned::as_ptr),
+        wm_base: xdg_wm_base.as_ptr(),
+        root_window: core::ptr::null_mut(),
+        popup_buf,
+        popup: None,
     };
-    #[cfg(feature = "wayland")]
-    xdg_wm_base
-        .set_listener(&mut wl_global_msg)
-        .into_result()
-        .expect("xdg_wm_base set_listener");
-    #[cfg(feature = "wayland")]
-    seat.set_listener(&mut wl_global_msg)
-        .into_result()
-        .expect("seat set_listener");
 
     #[cfg(feature = "wayland")]
-    let mut wl_surface = wl_compositor.create_surface().expect("wl_surface create");
+    let mut surface_to_xdg_surface = HashMap::new();
     #[cfg(feature = "wayland")]
-    let mut wl_xdg_surface = xdg_wm_base
+    let wl_surface = wl_compositor.create_surface().expect("wl_surface create");
+    #[cfg(feature = "wayland")]
+    let wl_xdg_surface = xdg_wm_base
         .get_xdg_surface(&wl_surface)
         .expect("xdg_surface create");
     #[cfg(feature = "wayland")]
@@ -697,9 +681,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         .set_window_geometry(0, 0, 640, 480)
         .expect("xdg_surface.set_window_geometry");
     #[cfg(feature = "wayland")]
-    wl_global_msg
-        .surface_to_xdg_surface
-        .insert(wl_surface.as_ptr(), wl_xdg_surface.as_ptr());
+    surface_to_xdg_surface.insert(wl_surface.as_ptr(), wl_xdg_surface.as_ptr());
 
     #[cfg(feature = "wayland")]
     let appmenu = if let Some(ref am) = kde_appmenu_manager {
@@ -750,8 +732,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     w.initialize();
     #[cfg(feature = "wayland")]
     w.surface.commit().expect("wl_surface.commit");
-    #[cfg(feature = "wayland")]
-    wl_display.roundtrip().expect("roundtrip");
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new();
@@ -861,6 +841,35 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         ..Default::default()
     });
     composite_tree.add_child(CompositeTree::ROOT, app_title);
+
+    let mut app = core::pin::pin!(run_app(drag_preview_popover));
+    let _ = app
+        .as_mut()
+        .poll(&mut core::task::Context::from_waker(&unsafe {
+            core::task::Waker::new(&(), &APP_WAKER_VTABLE)
+        }));
+    #[cfg(feature = "wayland")]
+    let mut wl_global_msg = core::pin::pin!(WaylandGlobalMessaging {
+        pointer: None,
+        pointer_pos: (0.0, 0.0),
+        pointer_active_surface: None,
+        surface_to_xdg_surface,
+        app_future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
+        event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        _pinned: core::marker::PhantomPinned,
+    });
+    #[cfg(feature = "wayland")]
+    xdg_wm_base
+        .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
+        .into_result()
+        .expect("xdg_wm_base set_listener");
+    #[cfg(feature = "wayland")]
+    seat.set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
+        .into_result()
+        .expect("seat set_listener");
+
+    #[cfg(feature = "wayland")]
+    wl_display.roundtrip().expect("roundtrip");
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -3035,11 +3044,6 @@ impl FontSet {
     }
 }
 
-struct BoxInstance {
-    posst: [f32; 4],
-    uvst: [f32; 4],
-}
-
 #[derive(Debug, Clone)]
 pub struct GlyphRect {
     pub left: u32,
@@ -3775,7 +3779,7 @@ pub struct DesktopRect {
 }
 
 #[cfg(feature = "wayland")]
-struct WaylandDragPreviewPopupHandle {
+struct DragPreviewPopoverHandle {
     pub display: *mut wl::Display,
     pub compositor: *mut wl::Compositor,
     pub viewporter: *mut wl::WpViewporter,
@@ -3793,7 +3797,7 @@ struct WaylandDragPreviewPopupHandle {
     )>,
 }
 #[cfg(feature = "wayland")]
-impl WaylandDragPreviewPopupHandle {
+impl DragPreviewPopoverHandle {
     pub fn show(&mut self, rect: &DesktopRect) {
         let wl_popup_surface = unsafe {
             (*self.compositor)
@@ -3888,9 +3892,9 @@ impl WaylandDragPreviewPopupHandle {
 }
 
 #[cfg(target_os = "macos")]
-pub struct MacDragPreviewPopupHandle;
+pub struct DragPreviewPopoverHandle;
 #[cfg(target_os = "macos")]
-impl MacDragPreviewPopupHandle {
+impl DragPreviewPopoverHandle {
     pub fn show(&mut self, rect: &DesktopRect) {
         unsafe {
             ni_show_drag_preview();
@@ -3912,11 +3916,11 @@ impl MacDragPreviewPopupHandle {
 }
 
 #[cfg(windows)]
-pub struct WindowsDragPreviewPopupHandle {
+pub struct DragPreviewPopoverHandle {
     w: HWND,
 }
 #[cfg(windows)]
-impl WindowsDragPreviewPopupHandle {
+impl DragPreviewPopoverHandle {
     pub fn show(&mut self, rect: &DesktopRect) {
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::{
@@ -3946,22 +3950,28 @@ impl WindowsDragPreviewPopupHandle {
 }
 
 #[cfg(feature = "wayland")]
-struct WaylandGlobalMessaging {
+struct WaylandGlobalMessaging<AppFuture: core::future::Future<Output = ()>> {
     pub pointer: Option<wl::Owned<wl::Pointer>>,
     pub pointer_pos: (f32, f32),
-    pub drag_preview_popup: WaylandDragPreviewPopupHandle,
+    pub pointer_active_surface: Option<core::ptr::NonNull<wl::XdgSurface>>,
     pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
+    pub app_future: *mut AppFuture,
+    pub event_store: *mut Option<Event>,
     _pinned: core::marker::PhantomPinned,
 }
 #[cfg(feature = "wayland")]
-impl wl::XdgWmBaseEventListener for WaylandGlobalMessaging {
+impl<AppFuture: core::future::Future<Output = ()>> wl::XdgWmBaseEventListener
+    for WaylandGlobalMessaging<AppFuture>
+{
     #[inline(always)]
     fn ping(&mut self, sender: &mut peridot_tp_wayland::XdgWmBase, serial: u32) {
         sender.pong(serial).expect("xdg_wm_base pong");
     }
 }
 #[cfg(feature = "wayland")]
-impl wl::SeatEventListener for WaylandGlobalMessaging {
+impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
+    for WaylandGlobalMessaging<AppFuture>
+{
     fn capabilities(&mut self, seat: &mut peridot_tp_wayland::Seat, capabilities: u32) {
         tracing::trace!(capabilities, "seat::capabilities");
 
@@ -3984,7 +3994,9 @@ impl wl::SeatEventListener for WaylandGlobalMessaging {
     }
 }
 #[cfg(feature = "wayland")]
-impl wl::PointerEventListener for WaylandGlobalMessaging {
+impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
+    for WaylandGlobalMessaging<AppFuture>
+{
     #[tracing::instrument(skip(self, _pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn enter(
         &mut self,
@@ -3994,22 +4006,20 @@ impl wl::PointerEventListener for WaylandGlobalMessaging {
         surface_x: peridot_tp_wayland::Fixed,
         surface_y: peridot_tp_wayland::Fixed,
     ) {
-        tracing::trace!("pointer.enter");
-
-        self.drag_preview_popup.root_window = self.surface_to_xdg_surface[&(surface as *mut _)];
+        self.pointer_active_surface = Some(unsafe {
+            core::ptr::NonNull::new_unchecked(self.surface_to_xdg_surface[&(surface as *mut _)])
+        });
         self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
     }
 
-    #[tracing::instrument(skip(self, _pointer, surface))]
+    #[tracing::instrument(skip(self, _pointer, _surface))]
     fn leave(
         &mut self,
         _pointer: &mut peridot_tp_wayland::Pointer,
         serial: u32,
-        surface: &mut peridot_tp_wayland::Surface,
+        _surface: &mut peridot_tp_wayland::Surface,
     ) {
-        tracing::trace!("pointer.leave");
-
-        self.drag_preview_popup.root_window = core::ptr::null_mut();
+        self.pointer_active_surface = None;
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
@@ -4034,17 +4044,35 @@ impl wl::PointerEventListener for WaylandGlobalMessaging {
         button: u32,
         state: peridot_tp_wayland::PointerButtonState,
     ) {
+        let Some(pointer_active_surface) = self.pointer_active_surface else {
+            return;
+        };
         tracing::trace!("pointer.button");
 
         if state == wl::PointerButtonState::Pressed {
-            self.drag_preview_popup.show(&DesktopRect {
-                left: self.pointer_pos.0 as _,
-                top: self.pointer_pos.1 as _,
-                width: 128,
-                height: 128,
-            });
+            unsafe {
+                (*self.event_store) = Some(Event::PointerDown {
+                    root_window: pointer_active_surface,
+                    client_x: self.pointer_pos.0,
+                    client_y: self.pointer_pos.1,
+                });
+                let _ = core::pin::Pin::new_unchecked(&mut *self.app_future).poll(
+                    &mut core::task::Context::from_waker(&core::task::Waker::new(
+                        &(),
+                        &APP_WAKER_VTABLE,
+                    )),
+                );
+            }
         } else if state == wl::PointerButtonState::Released {
-            self.drag_preview_popup.hide();
+            unsafe {
+                (*self.event_store) = Some(Event::PointerUp);
+                let _ = core::pin::Pin::new_unchecked(&mut *self.app_future).poll(
+                    &mut core::task::Context::from_waker(&core::task::Waker::new(
+                        &(),
+                        &APP_WAKER_VTABLE,
+                    )),
+                );
+            }
         }
     }
 
@@ -4105,7 +4133,9 @@ impl wl::PointerEventListener for WaylandGlobalMessaging {
     }
 }
 #[cfg(feature = "wayland")]
-impl wl::ZwlrLayerSurfaceV1EventListener for WaylandGlobalMessaging {
+impl<AppFuture: core::future::Future<Output = ()>> wl::ZwlrLayerSurfaceV1EventListener
+    for WaylandGlobalMessaging<AppFuture>
+{
     #[tracing::instrument(skip(self, sender))]
     fn configure(
         &mut self,
@@ -4329,7 +4359,18 @@ impl wl::ZxdgToplevelDecorationV1EventListener for WaylandWindowState {
 
 pub enum Event {
     Quit,
+    PointerDown {
+        #[cfg(feature = "wayland")]
+        root_window: core::ptr::NonNull<wl::XdgSurface>,
+        client_x: f32,
+        client_y: f32,
+    },
+    PointerUp,
 }
+#[cfg(feature = "wayland")]
+unsafe impl Sync for Event {}
+#[cfg(feature = "wayland")]
+unsafe impl Send for Event {}
 
 struct EventQueue {
     event_store: *mut Option<Event>,
@@ -4357,12 +4398,33 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
-async fn run(event_queue: EventQueue) {
+#[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
+async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopoverHandle) {
     tracing::info!("app start");
 
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
+            Event::PointerDown {
+                #[cfg(feature = "wayland")]
+                root_window,
+                client_x,
+                client_y,
+            } => {
+                #[cfg(feature = "wayland")]
+                {
+                    drag_preview_popover.root_window = root_window.as_ptr();
+                }
+                drag_preview_popover.show(&DesktopRect {
+                    left: client_x as _,
+                    top: client_y as _,
+                    width: 128,
+                    height: 128,
+                });
+            }
+            Event::PointerUp => {
+                drag_preview_popover.hide();
+            }
         }
     }
 
