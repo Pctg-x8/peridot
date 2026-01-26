@@ -609,7 +609,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         unsafe {
             core::ptr::write(
                 mapped.as_ptr().cast::<u32>(),
-                DragPreviewPopoverHandle::BG_COLOR.argb8888(),
+                DragPreviewPopoverHandle::BG_COLOR.premultiplied().argb8888(),
             );
         }
 
@@ -2142,77 +2142,6 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 tracing::info!("RenderThread terminated");
             })
             .expect("render_thread spawn");
-
-        #[cfg(target_os = "linux")]
-        struct DBusWatcher<'e> {
-            epoll: &'e Epoll,
-            last_poll_id: u64,
-            fd_to_poll_id: HashMap<core::ffi::c_int, u64>,
-            poll_id_to_watch_ref: &'e core::cell::UnsafeCell<HashMap<u64, *mut dbus::WatchRef>>,
-        }
-        #[cfg(target_os = "linux")]
-        impl dbus::WatchFunction for DBusWatcher<'_> {
-            fn add(&mut self, watch: &mut dbus::WatchRef) -> bool {
-                if watch.enabled() {
-                    tracing::trace!(target: "dbus", fd = watch.as_raw_fd(), "add watch");
-
-                    let mut event_type = EpollEventBits::empty();
-                    let flags = watch.flags();
-                    if flags.contains(dbus::WatchFlags::READABLE) {
-                        event_type |= EpollEventBits::IN;
-                    }
-                    if flags.contains(dbus::WatchFlags::WRITABLE) {
-                        event_type |= EpollEventBits::OUT;
-                    }
-
-                    let poll_id = self.last_poll_id;
-                    self.last_poll_id += 1;
-                    self.fd_to_poll_id.insert(watch.as_raw_fd(), poll_id);
-                    unsafe {
-                        (*self.poll_id_to_watch_ref.get()).insert(poll_id, watch);
-                    }
-                    if let Err(e) = self.epoll.add(watch, event_type, poll_id) {
-                        tracing::error!(reason = %e, "dbus.watcher.epolll.add");
-                    }
-                }
-
-                true
-            }
-
-            fn remove(&mut self, watch: &mut dbus::WatchRef) {
-                let Some(poll_id) = self.fd_to_poll_id.remove(&watch.as_raw_fd()) else {
-                    // not added?
-                    return;
-                };
-
-                tracing::trace!(target: "dbus", fd = watch.as_raw_fd(), poll_id, "remove watch");
-
-                unsafe {
-                    (*self.poll_id_to_watch_ref.get()).remove(&poll_id);
-                }
-                if poll_id == self.last_poll_id - 1 {
-                    // できるだけ再利用する
-                    self.last_poll_id -= 1;
-                }
-
-                match self.epoll.del(&watch.as_raw_fd()) {
-                    // ENOENTは無視
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        tracing::error!(reason = %e, "dbus.watcher.epoll.del");
-                    }
-                    Ok(_) => (),
-                }
-            }
-
-            fn toggled(&mut self, watch: &mut dbus::WatchRef) {
-                if watch.enabled() {
-                    self.add(watch);
-                } else {
-                    self.remove(watch);
-                }
-            }
-        }
 
         #[cfg(target_os = "linux")]
         let epoll = Epoll::new(0).expect("epoll.new");
@@ -4369,6 +4298,77 @@ impl wl::ZxdgToplevelDecorationV1EventListener for WaylandWindowState {
         mode: peridot_tp_wayland::ZxdgToplevelDecorationV1Mode,
     ) {
         tracing::warn!(?mode, "TODO: client side decoration impl");
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct DBusWatcher<'e> {
+    epoll: &'e Epoll,
+    last_poll_id: u64,
+    fd_to_poll_id: HashMap<core::ffi::c_int, u64>,
+    poll_id_to_watch_ref: &'e core::cell::UnsafeCell<HashMap<u64, *mut dbus::WatchRef>>,
+}
+#[cfg(target_os = "linux")]
+impl dbus::WatchFunction for DBusWatcher<'_> {
+    fn add(&mut self, watch: &mut dbus::WatchRef) -> bool {
+        if watch.enabled() {
+            tracing::trace!(target: "dbus", fd = watch.as_raw_fd(), "add watch");
+
+            let mut event_type = EpollEventBits::empty();
+            let flags = watch.flags();
+            if flags.contains(dbus::WatchFlags::READABLE) {
+                event_type |= EpollEventBits::IN;
+            }
+            if flags.contains(dbus::WatchFlags::WRITABLE) {
+                event_type |= EpollEventBits::OUT;
+            }
+
+            let poll_id = self.last_poll_id;
+            self.last_poll_id += 1;
+            self.fd_to_poll_id.insert(watch.as_raw_fd(), poll_id);
+            unsafe {
+                (*self.poll_id_to_watch_ref.get()).insert(poll_id, watch);
+            }
+            if let Err(e) = self.epoll.add(watch, event_type, poll_id) {
+                tracing::error!(reason = %e, "dbus.watcher.epolll.add");
+            }
+        }
+
+        true
+    }
+
+    fn remove(&mut self, watch: &mut dbus::WatchRef) {
+        let Some(poll_id) = self.fd_to_poll_id.remove(&watch.as_raw_fd()) else {
+            // not added?
+            return;
+        };
+
+        tracing::trace!(target: "dbus", fd = watch.as_raw_fd(), poll_id, "remove watch");
+
+        unsafe {
+            (*self.poll_id_to_watch_ref.get()).remove(&poll_id);
+        }
+        if poll_id == self.last_poll_id - 1 {
+            // できるだけ再利用する
+            self.last_poll_id -= 1;
+        }
+
+        match self.epoll.del(&watch.as_raw_fd()) {
+            // ENOENTは無視
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::error!(reason = %e, "dbus.watcher.epoll.del");
+            }
+            Ok(_) => (),
+        }
+    }
+
+    fn toggled(&mut self, watch: &mut dbus::WatchRef) {
+        if watch.enabled() {
+            self.add(watch);
+        } else {
+            self.remove(watch);
+        }
     }
 }
 
