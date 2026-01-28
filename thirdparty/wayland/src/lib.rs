@@ -750,6 +750,9 @@ unsafe impl Interface for Seat {
     unsafe fn destruct(&mut self) {
         if self.0.version() < 5 {
             // no destruction method implemented
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
             return;
         }
 
@@ -766,6 +769,11 @@ impl Seat {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
+    #[inline]
+    pub fn get_keyboard(&self) -> Result<Owned<Keyboard>> {
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
+    }
+
     pub fn set_listener<'l, L: SeatEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
@@ -773,7 +781,7 @@ impl Seat {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: SeatEventListener {
-                    capabilities(capabilities: u32 => capabilities),
+                    capabilities(capabilities: u32 => SeatCapability::from_bits_retain(capabilities)),
                     name(name: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(name) })
                 }) as *const _ as _,
                 listener as *mut _ as _
@@ -783,15 +791,39 @@ impl Seat {
 }
 
 pub trait SeatEventListener {
-    fn capabilities(&mut self, seat: &mut Seat, capabilities: u32);
+    fn capabilities(&mut self, seat: &mut Seat, capabilities: SeatCapability);
     // v2
     fn name(&mut self, seat: &mut Seat, name: &core::ffi::CStr);
+}
+
+bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct SeatCapability : u32 {
+        const POINTER = 1;
+        const KEYBOARD = 2;
+        const TOUCH = 4;
+    }
 }
 
 #[repr(transparent)]
 pub struct Pointer(Proxy);
 unsafe impl Interface for Pointer {
     const DEF: *const ffi::Interface = unsafe { &wl_pointer_interface };
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Pointer as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        if self.0.version() < 3 {
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
+            return;
+        }
+
+        self.0.call_simple_dtor(1);
+    }
 }
 impl Pointer {
     pub fn set_listener<'l, L: PointerEventListener + 'l>(
@@ -868,6 +900,97 @@ pub trait PointerEventListener {
 pub enum PointerButtonState {
     Released = 0,
     Pressed = 1,
+}
+
+#[repr(transparent)]
+pub struct Keyboard(Proxy);
+unsafe impl Interface for Keyboard {
+    const DEF: *const ffi::Interface = unsafe { &wl_keyboard_interface };
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Keyboard as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        if self.0.version() < 3 {
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
+            return;
+        }
+
+        self.0.call_simple_dtor(0);
+    }
+}
+impl Keyboard {
+    pub fn set_listener<'l, L: KeyboardEventListener + 'l>(
+        &'l mut self,
+        listener: &'l mut L,
+    ) -> SetListenerResult {
+        unsafe {
+            self.0.set_listener(
+                EventFnTable!(for L: KeyboardEventListener {
+                    keymap(format: KeyboardKeymapFormat => format, fd: i32 => fd, size: u32 => size),
+                    enter(
+                        serial: u32 => serial,
+                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) },
+                        keys: *mut ffi::Array => unsafe { (*keys).as_slice::<u32>() }
+                    ),
+                    leave(serial: u32 => serial, surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) }),
+                    key(serial: u32 => serial, time: u32 => time, key: u32 => key, state: KeyboardKeyState => state),
+                    modifiers(
+                        serial: u32 => serial,
+                        mods_depressed: u32 => mods_depressed,
+                        mods_latched: u32 => mods_latched,
+                        mods_locked: u32 => mods_locked,
+                        group: u32 => group
+                    ),
+                    repeat_info(delay: i32 => delay, rate: i32 => rate),
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
+        }
+    }
+}
+
+pub trait KeyboardEventListener {
+    fn keymap(&mut self, sender: &mut Keyboard, format: KeyboardKeymapFormat, fd: i32, size: u32);
+    fn enter(&mut self, sender: &mut Keyboard, serial: u32, surface: &mut Surface, keys: &[u32]);
+    fn leave(&mut self, sender: &mut Keyboard, serial: u32, surface: &mut Surface);
+    fn key(
+        &mut self,
+        sender: &mut Keyboard,
+        serial: u32,
+        time: u32,
+        key: u32,
+        state: KeyboardKeyState,
+    );
+    fn modifiers(
+        &mut self,
+        sender: &mut Keyboard,
+        serial: u32,
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    );
+    // v4
+    fn repeat_info(&mut self, sender: &mut Keyboard, rate: i32, delay: i32);
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardKeymapFormat {
+    NoKeymap = 0,
+    XkbV1 = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardKeyState {
+    Released = 0,
+    Pressed = 1,
+    Repeated = 2,
 }
 
 #[repr(u32)]
@@ -1098,6 +1221,9 @@ unsafe impl Interface for DataDevice {
     unsafe fn destruct(&mut self) {
         if self.0.version() < 2 {
             // no destructor
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
             return;
         }
 
@@ -1241,6 +1367,7 @@ unsafe extern "C" {
     static wl_output_interface: ffi::Interface;
     static wl_callback_interface: ffi::Interface;
     static wl_pointer_interface: ffi::Interface;
+    static wl_keyboard_interface: ffi::Interface;
     static wl_data_device_manager_interface: ffi::Interface;
     static wl_data_device_interface: ffi::Interface;
     static wl_data_source_interface: ffi::Interface;
