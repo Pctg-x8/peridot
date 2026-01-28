@@ -2408,8 +2408,6 @@ async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopov
                 });
             }
             Event::PointerMove { client_x, client_y } => {
-                tracing::trace!(client_x, client_y, "pointer move");
-
                 drag_preview_popover.r#move(client_x as _, client_y as _);
             }
             Event::PointerUp => {
