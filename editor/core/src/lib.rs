@@ -2297,6 +2297,110 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     });
 }
 
+pub enum Event {
+    Quit,
+    PointerDown {
+        #[cfg(feature = "wayland")]
+        root_window: core::ptr::NonNull<wl::XdgSurface>,
+        #[cfg(windows)]
+        active_window: HWND,
+        client_x: f32,
+        client_y: f32,
+    },
+    PointerMove {
+        client_x: f32,
+        client_y: f32,
+    },
+    PointerUp,
+}
+#[cfg(any(feature = "wayland", windows))]
+unsafe impl Sync for Event {}
+#[cfg(any(feature = "wayland", windows))]
+unsafe impl Send for Event {}
+
+struct EventQueue {
+    event_store: *mut Option<Event>,
+}
+impl EventQueue {
+    pub async fn next_event(&self) -> Event {
+        EventQueueNextEventAwaiter { q: self }.await
+    }
+}
+
+struct EventQueueNextEventAwaiter<'e> {
+    q: &'e EventQueue,
+}
+impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
+    type Output = Event;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match unsafe { (&mut *self.get_mut().q.event_store).take() } {
+            None => core::task::Poll::Pending,
+            Some(x) => core::task::Poll::Ready(x),
+        }
+    }
+}
+
+#[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
+async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopoverHandle) {
+    tracing::info!("app start");
+
+    loop {
+        match event_queue.next_event().await {
+            Event::Quit => break,
+            Event::PointerDown {
+                #[cfg(feature = "wayland")]
+                root_window,
+                #[cfg(windows)]
+                active_window,
+                mut client_x,
+                mut client_y,
+            } => {
+                #[cfg(feature = "wayland")]
+                {
+                    drag_preview_popover.root_window = root_window.as_ptr();
+                }
+                #[cfg(windows)]
+                {
+                    // Windowsはグローバル座標を渡す必要があるのでここで変換する
+                    let mut p = [windows::Win32::Foundation::POINT {
+                        x: client_x as _,
+                        y: client_y as _,
+                    }];
+                    unsafe {
+                        windows::Win32::Graphics::Gdi::MapWindowPoints(
+                            Some(active_window),
+                            None,
+                            &mut p,
+                        );
+                    }
+                    client_x = p[0].x as _;
+                    client_y = p[0].y as _;
+                }
+                drag_preview_popover.show(&DesktopRect {
+                    left: client_x as _,
+                    top: client_y as _,
+                    width: 128,
+                    height: 128,
+                });
+            }
+            Event::PointerMove { client_x, client_y } => {
+                tracing::trace!(client_x, client_y, "pointer move");
+
+                drag_preview_popover.r#move(client_x as _, client_y as _);
+            }
+            Event::PointerUp => {
+                drag_preview_popover.hide();
+            }
+        }
+    }
+
+    tracing::info!("app finish");
+}
+
 struct Surface<'d> {
     handle: br::vk::VkSurfaceKHR,
     device: &'d VulkanDevice,
@@ -3164,6 +3268,21 @@ impl DragPreviewPopoverHandle {
         ));
     }
 
+    pub fn r#move(&mut self, x: i32, y: i32) {
+        let Some((_, ref pp, _, _, _, _)) = self.popup else {
+            return;
+        };
+
+        let pos = unsafe {
+            (*self.wl_interfaces)
+                .xdg_wm_base
+                .create_positioner()
+                .expect("pos.create")
+        };
+        pos.set_offset(x as _, y as _).expect("pos.set_offset");
+        pp.reposition(&pos, 0).expect("pp.reposition");
+    }
+
     pub fn hide(&mut self) {
         self.popup = None;
     }
@@ -3470,9 +3589,19 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         surface_x: peridot_tp_wayland::Fixed,
         surface_y: peridot_tp_wayland::Fixed,
     ) {
-        tracing::trace!("pointer.motion");
-
         self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
+        unsafe {
+            (*self.event_store) = Some(Event::PointerMove {
+                client_x: self.pointer_pos.0,
+                client_y: self.pointer_pos.1,
+            });
+            let _ = core::pin::Pin::new_unchecked(&mut *self.app_future).poll(
+                &mut core::task::Context::from_waker(&core::task::Waker::new(
+                    &(),
+                    &APP_WAKER_VTABLE,
+                )),
+            );
+        }
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(state = state as u32))]
@@ -3487,7 +3616,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         let Some(pointer_active_surface) = self.pointer_active_surface else {
             return;
         };
-        tracing::trace!("pointer.button");
 
         if state == wl::PointerButtonState::Pressed {
             unsafe {
@@ -3601,7 +3729,7 @@ pub struct WaylandWindow {
     surface: wl::Owned<wl::Surface>,
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
-    deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
+    _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
     state: Box<WaylandWindowState>,
 }
@@ -3689,7 +3817,7 @@ impl WaylandWindow {
             xdg_surface,
             xdg_toplevel,
             _appmenu: appmenu,
-            deco,
+            _deco: deco,
             state,
         }
     }
@@ -3939,101 +4067,6 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
             self.remove(watch);
         }
     }
-}
-
-pub enum Event {
-    Quit,
-    PointerDown {
-        #[cfg(feature = "wayland")]
-        root_window: core::ptr::NonNull<wl::XdgSurface>,
-        #[cfg(windows)]
-        active_window: HWND,
-        client_x: f32,
-        client_y: f32,
-    },
-    PointerUp,
-}
-#[cfg(any(feature = "wayland", windows))]
-unsafe impl Sync for Event {}
-#[cfg(any(feature = "wayland", windows))]
-unsafe impl Send for Event {}
-
-struct EventQueue {
-    event_store: *mut Option<Event>,
-}
-impl EventQueue {
-    pub async fn next_event(&self) -> Event {
-        EventQueueNextEventAwaiter { q: self }.await
-    }
-}
-
-struct EventQueueNextEventAwaiter<'e> {
-    q: &'e EventQueue,
-}
-impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
-    type Output = Event;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        match unsafe { (&mut *self.get_mut().q.event_store).take() } {
-            None => core::task::Poll::Pending,
-            Some(x) => core::task::Poll::Ready(x),
-        }
-    }
-}
-
-#[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
-async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopoverHandle) {
-    tracing::info!("app start");
-
-    loop {
-        match event_queue.next_event().await {
-            Event::Quit => break,
-            Event::PointerDown {
-                #[cfg(feature = "wayland")]
-                root_window,
-                #[cfg(windows)]
-                active_window,
-                mut client_x,
-                mut client_y,
-            } => {
-                #[cfg(feature = "wayland")]
-                {
-                    drag_preview_popover.root_window = root_window.as_ptr();
-                }
-                #[cfg(windows)]
-                {
-                    // Windowsはグローバル座標を渡す必要があるのでここで変換する
-                    let mut p = [windows::Win32::Foundation::POINT {
-                        x: client_x as _,
-                        y: client_y as _,
-                    }];
-                    unsafe {
-                        windows::Win32::Graphics::Gdi::MapWindowPoints(
-                            Some(active_window),
-                            None,
-                            &mut p,
-                        );
-                    }
-                    client_x = p[0].x as _;
-                    client_y = p[0].y as _;
-                }
-                drag_preview_popover.show(&DesktopRect {
-                    left: client_x as _,
-                    top: client_y as _,
-                    width: 128,
-                    height: 128,
-                });
-            }
-            Event::PointerUp => {
-                drag_preview_popover.hide();
-            }
-        }
-    }
-
-    tracing::info!("app finish");
 }
 
 #[cfg(windows)]
