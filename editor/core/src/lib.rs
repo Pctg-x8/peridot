@@ -519,8 +519,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         pointer_pos: (0.0, 0.0),
         pointer_active_surface: None,
         surface_to_xdg_surface,
-        app_future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
-        event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        event_dispatcher: LogicFiberEventDispatcher {
+            event_store: event_store.as_mut().get_mut() as *mut _ as _,
+            future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ }
+        },
         _pinned: core::marker::PhantomPinned,
     });
     #[cfg(feature = "wayland")]
@@ -2327,6 +2329,24 @@ impl EventQueue {
     }
 }
 
+struct LogicFiberEventDispatcher<AppFuture> {
+    event_store: *mut Option<Event>,
+    future: *mut AppFuture,
+}
+impl<AppFuture: core::future::Future> LogicFiberEventDispatcher<AppFuture> {
+    pub fn dispatch(&self, e: Event) {
+        unsafe {
+            (*self.event_store) = Some(e);
+            let _ = core::pin::Pin::new_unchecked(&mut *self.future).poll(
+                &mut core::task::Context::from_waker(&core::task::Waker::new(
+                    &(),
+                    &APP_WAKER_VTABLE,
+                )),
+            );
+        }
+    }
+}
+
 struct EventQueueNextEventAwaiter<'e> {
     q: &'e EventQueue,
 }
@@ -3514,8 +3534,7 @@ struct WaylandGlobalMessaging<AppFuture: core::future::Future<Output = ()>> {
     pub pointer_pos: (f32, f32),
     pub pointer_active_surface: Option<core::ptr::NonNull<wl::XdgSurface>>,
     pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
-    pub app_future: *mut AppFuture,
-    pub event_store: *mut Option<Event>,
+    pub event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
     _pinned: core::marker::PhantomPinned,
 }
 #[cfg(feature = "wayland")]
@@ -3590,18 +3609,10 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         surface_y: peridot_tp_wayland::Fixed,
     ) {
         self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
-        unsafe {
-            (*self.event_store) = Some(Event::PointerMove {
-                client_x: self.pointer_pos.0,
-                client_y: self.pointer_pos.1,
-            });
-            let _ = core::pin::Pin::new_unchecked(&mut *self.app_future).poll(
-                &mut core::task::Context::from_waker(&core::task::Waker::new(
-                    &(),
-                    &APP_WAKER_VTABLE,
-                )),
-            );
-        }
+        self.event_dispatcher.dispatch(Event::PointerMove {
+            client_x: self.pointer_pos.0,
+            client_y: self.pointer_pos.1,
+        });
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(state = state as u32))]
@@ -3618,29 +3629,13 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         };
 
         if state == wl::PointerButtonState::Pressed {
-            unsafe {
-                (*self.event_store) = Some(Event::PointerDown {
-                    root_window: pointer_active_surface,
-                    client_x: self.pointer_pos.0,
-                    client_y: self.pointer_pos.1,
-                });
-                let _ = core::pin::Pin::new_unchecked(&mut *self.app_future).poll(
-                    &mut core::task::Context::from_waker(&core::task::Waker::new(
-                        &(),
-                        &APP_WAKER_VTABLE,
-                    )),
-                );
-            }
+            self.event_dispatcher.dispatch(Event::PointerDown {
+                root_window: pointer_active_surface,
+                client_x: self.pointer_pos.0,
+                client_y: self.pointer_pos.1,
+            });
         } else if state == wl::PointerButtonState::Released {
-            unsafe {
-                (*self.event_store) = Some(Event::PointerUp);
-                let _ = core::pin::Pin::new_unchecked(&mut *self.app_future).poll(
-                    &mut core::task::Context::from_waker(&core::task::Waker::new(
-                        &(),
-                        &APP_WAKER_VTABLE,
-                    )),
-                );
-            }
+            self.event_dispatcher.dispatch(Event::PointerUp);
         }
     }
 
