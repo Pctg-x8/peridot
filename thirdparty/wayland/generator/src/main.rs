@@ -592,6 +592,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "unsafe {{ core::ffi::CStr::from_ptr({arg_name}) }},"
                         );
                     }
+                    (None, None, WlWireFormatType::String, true) => {
+                        let _ =
+                            write!(listener_trait_args, "{arg_name}: Option<&core::ffi::CStr>,");
+                        let _ = write!(
+                            listener_arg_conversions,
+                            "if {arg_name}.is_null() {{ None }} else {{ Some(unsafe {{ core::ffi::CStr::from_ptr({arg_name}) }}) }},"
+                        );
+                    }
                     (None, None, WlWireFormatType::Fixed, false) => {
                         let _ = write!(listener_trait_args, "{arg_name}: crate::Fixed,");
                         let _ = write!(listener_arg_conversions, "{arg_name},");

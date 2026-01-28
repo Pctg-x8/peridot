@@ -1300,6 +1300,7 @@ Ext!("single-pixel-buffer-v1", single_pixel_buffer);
 // unstable
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
 Ext!("xdg-foreign-unstable-v2", xdg_foreign);
+Ext!("text-input-unstable-v3", text_input);
 Ext!("wlr-layer-shell-unstable-v1", layer_shell);
 Ext!("kde-blur", kde_blur);
 Ext!("kde-appmenu", kde_appmenu);

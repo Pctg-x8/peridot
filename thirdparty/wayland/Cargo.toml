@@ -25,6 +25,7 @@ single-pixel-buffer-v1 = []
 # unstable
 xdg-decoration-unstable-v1 = []
 xdg-foreign-unstable-v2 = []
+text-input-unstable-v3 = []
 wlr-layer-shell-unstable-v1 = ["xdg-shell"]
 kde-blur = []
 kde-appmenu = []
