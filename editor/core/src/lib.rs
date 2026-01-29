@@ -2296,6 +2296,8 @@ pub enum Event {
         client_y: f32,
     },
     PointerMove {
+        #[cfg(windows)]
+        active_window: HWND,
         client_x: f32,
         client_y: f32,
     },
@@ -2393,7 +2395,30 @@ async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopov
                     height: 128,
                 });
             }
-            Event::PointerMove { client_x, client_y } => {
+            Event::PointerMove {
+                #[cfg(windows)]
+                active_window,
+                mut client_x,
+                mut client_y,
+            } => {
+                #[cfg(windows)]
+                {
+                    // Windowsはグローバル座標を渡す必要があるのでここで変換する
+                    let mut p = [windows::Win32::Foundation::POINT {
+                        x: client_x as _,
+                        y: client_y as _,
+                    }];
+                    unsafe {
+                        windows::Win32::Graphics::Gdi::MapWindowPoints(
+                            Some(active_window),
+                            None,
+                            &mut p,
+                        );
+                    }
+                    client_x = p[0].x as _;
+                    client_y = p[0].y as _;
+                }
+
                 drag_preview_popover.r#move(client_x as _, client_y as _);
             }
             Event::PointerUp => {
@@ -3523,6 +3548,26 @@ impl DragPreviewPopoverHandle {
         }
     }
 
+    pub fn r#move(&mut self, x: i32, y: i32) {
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+            };
+
+            // 影のぶんだけずらして設定する
+            SetWindowPos(
+                self.w,
+                None,
+                x - 32,
+                y - 32,
+                0,
+                0,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE,
+            )
+            .expect("setwindowpos");
+        }
+    }
+
     pub fn hide(&mut self) {
         unsafe {
             let _ = ShowWindow(self.w, SW_HIDE);
@@ -4316,7 +4361,7 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
     lparam: LPARAM,
 ) -> LRESULT {
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NCCALCSIZE, WM_NCHITTEST,
+        WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
     };
 
     let app_future = unsafe {
@@ -4451,6 +4496,26 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
                 )),
             );
         }
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_MOUSEMOVE {
+        unsafe {
+            *event_store = Some(Event::PointerMove {
+                active_window: hwnd,
+                client_x: (lparam.0 & 0xffff) as i16 as _,
+                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            });
+            let _ = core::pin::Pin::new_unchecked(&mut *app_future).poll(
+                &mut core::task::Context::from_waker(&core::task::Waker::new(
+                    &(),
+                    &APP_WAKER_VTABLE,
+                )),
+            );
+        }
+
+        return LRESULT(0);
     }
 
     if msg == WM_LBUTTONUP {
@@ -4468,6 +4533,8 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
             use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
             ReleaseCapture().expect("releasecapture");
         }
+
+        return LRESULT(0);
     }
 
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
