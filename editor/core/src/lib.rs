@@ -528,14 +528,15 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     wl_display.roundtrip().expect("roundtrip");
 
     #[cfg(windows)]
+    let event_dispatcher = core::pin::pin!(LogicFiberEventDispatcher {
+        event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ }
+    });
+    #[cfg(windows)]
     unsafe {
         w.set_long_ptr(
             WINDOW_LONG_PTR_INDEX(0),
-            app.as_mut().get_unchecked_mut() as *mut _ as _,
-        );
-        w.set_long_ptr(
-            WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
-            event_store.as_mut().get_mut() as *mut _ as _,
+            event_dispatcher.as_ref().get_ref() as *const _ as _,
         );
     }
 
@@ -4364,18 +4365,9 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
     };
 
-    let app_future = unsafe {
-        core::ptr::with_exposed_provenance_mut::<AppFuture>(
+    let event_dispatcher = unsafe {
+        core::ptr::with_exposed_provenance::<LogicFiberEventDispatcher<AppFuture>>(
             GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
-        )
-    };
-    let event_store = unsafe {
-        core::ptr::with_exposed_provenance_mut::<Option<Event>>(
-            GetWindowLongPtrW(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _),
-            )
-            .cast_unsigned(),
         )
     };
 
@@ -4484,17 +4476,11 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
         }
 
         unsafe {
-            *event_store = Some(Event::PointerDown {
+            (*event_dispatcher).dispatch(Event::PointerDown {
                 active_window: hwnd,
                 client_x: (lparam.0 & 0xffff) as i16 as _,
                 client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
             });
-            let _ = core::pin::Pin::new_unchecked(&mut *app_future).poll(
-                &mut core::task::Context::from_waker(&core::task::Waker::new(
-                    &(),
-                    &APP_WAKER_VTABLE,
-                )),
-            );
         }
 
         return LRESULT(0);
@@ -4502,17 +4488,11 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
 
     if msg == WM_MOUSEMOVE {
         unsafe {
-            *event_store = Some(Event::PointerMove {
+            (*event_dispatcher).dispatch(Event::PointerMove {
                 active_window: hwnd,
                 client_x: (lparam.0 & 0xffff) as i16 as _,
                 client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
             });
-            let _ = core::pin::Pin::new_unchecked(&mut *app_future).poll(
-                &mut core::task::Context::from_waker(&core::task::Waker::new(
-                    &(),
-                    &APP_WAKER_VTABLE,
-                )),
-            );
         }
 
         return LRESULT(0);
@@ -4520,13 +4500,7 @@ extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
 
     if msg == WM_LBUTTONUP {
         unsafe {
-            *event_store = Some(Event::PointerUp);
-            let _ = core::pin::Pin::new_unchecked(&mut *app_future).poll(
-                &mut core::task::Context::from_waker(&core::task::Waker::new(
-                    &(),
-                    &APP_WAKER_VTABLE,
-                )),
-            );
+            (*event_dispatcher).dispatch(Event::PointerUp);
         }
 
         unsafe {
