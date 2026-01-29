@@ -58,13 +58,14 @@ windows-numerics = "*"
 [dependencies.peridot-tp-wayland]
 path = "../../thirdparty/wayland"
 optional = true
-features = ["tracing", "xdg-shell", "wlr-layer-shell-unstable-v1", "single-pixel-buffer-v1", "viewporter", "kde-blur", "kde-appmenu", "xdg-decoration-unstable-v1"]
+features = ["tracing", "xdg-shell", "wlr-layer-shell-unstable-v1", "single-pixel-buffer-v1", "viewporter", "kde-blur", "kde-appmenu", "xdg-decoration-unstable-v1", "text-input-unstable-v3"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-eventfd = { path = "../../platform/linux/eventfd" }
 linux-epoll = { path = "../../platform/linux/epoll" }
 libc = "0.2"
 peridot-tp-dbus = { path = "../../thirdparty/dbus" }
+peridot-tp-xkbcommon = { path = "../../thirdparty/xkbcommon" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }

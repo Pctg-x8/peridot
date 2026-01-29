@@ -37,6 +37,7 @@
         pkgs.freetype
         pkgs.harfbuzz
         pkgs.dbus
+        pkgs.libxkbcommon
         # required for some asset processing
         pkgs.shaderc
         # required for workflow generator(also included in githooks)

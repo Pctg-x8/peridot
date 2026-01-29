@@ -16,6 +16,8 @@ use peridot_tp_fontconfig as fc;
 use peridot_tp_freetype as ft;
 #[cfg(feature = "wayland")]
 use peridot_tp_wayland as wl;
+#[cfg(target_os = "linux")]
+use peridot_tp_xkbcommon as xkbcommon;
 use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
@@ -303,31 +305,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     #[cfg(feature = "wayland")]
     let mut wl_display = wl::Display::connect().expect("wl_display connect");
     #[cfg(feature = "wayland")]
-    let mut wl_registry = wl_display.get_registry().expect("wl_registry get");
-    #[cfg(feature = "wayland")]
-    let mut rl = RegistryListener::default();
-    #[cfg(feature = "wayland")]
-    wl_registry
-        .set_listener(&mut rl)
-        .into_result()
-        .expect("wl_registry set_listener");
-    #[cfg(feature = "wayland")]
-    wl_display.roundtrip().expect("wl_display roundtrip");
-    #[cfg(feature = "wayland")]
-    drop(wl_registry);
-    #[cfg(feature = "wayland")]
-    let mut wl_interfaces = WaylandGlobalInterfaces {
-        outputs: rl.outputs,
-        compositor: rl.compositor.expect("no compositor"),
-        xdg_wm_base: rl.xdg_wm_base.expect("no xdg-shell"),
-        seat: rl.seat.expect("no seat"),
-        shm: rl.shm.expect("no shm"),
-        viewporter: rl.viewporter.expect("no viewporter"),
-        single_pixel_buffer_manager: rl.single_pixel_buffer_manager,
-        kde_blur_manager: rl.kde_blur_manager,
-        kde_appmenu_manager: rl.kde_appmenu_manager,
-        zxdg_decoration_manager: rl.zxdg_decoration_manager,
-    };
+    let mut wl_interfaces =
+        WaylandGlobalInterfaces::collect_sync(&wl_display).expect("wl_interfaces.collect_sync");
 
     #[cfg(feature = "wayland")]
     let popover_buf = if let Some(ref spb) = wl_interfaces.single_pixel_buffer_manager {
@@ -515,6 +494,13 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         }));
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(WaylandGlobalMessaging {
+        text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
+        text_input: None,
+        keyboard: None,
+        xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
+            .expect("xkb_context.create"),
+        xkb_keymap: None,
+        xkb_state: None,
         pointer: None,
         pointer_pos: (0.0, 0.0),
         pointer_active_surface: None,
@@ -3077,11 +3063,38 @@ struct WaylandGlobalInterfaces {
     seat: wl::Owned<wl::Seat>,
     shm: wl::Owned<wl::Shm>,
     viewporter: wl::Owned<wl::WpViewporter>,
+    text_input_manager: wl::Owned<wl::ZwpTextInputManagerV3>,
     // optional requirements
     single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
     kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
+}
+#[cfg(feature = "wayland")]
+impl WaylandGlobalInterfaces {
+    pub fn collect_sync(display: &wl::Display) -> std::io::Result<Self> {
+        let mut wl_registry = display.get_registry()?;
+        let mut rl = RegistryListener::default();
+        wl_registry
+            .set_listener(&mut rl)
+            .into_result()
+            .expect("wl_registry.set_listener");
+        display.roundtrip()?;
+
+        Ok(Self {
+            outputs: rl.outputs,
+            compositor: rl.compositor.expect("no compositor"),
+            xdg_wm_base: rl.xdg_wm_base.expect("no xdg-shell"),
+            seat: rl.seat.expect("no seat"),
+            shm: rl.shm.expect("no shm"),
+            viewporter: rl.viewporter.expect("no viewporter"),
+            text_input_manager: rl.text_input_manager.expect("no text-input"),
+            single_pixel_buffer_manager: rl.single_pixel_buffer_manager,
+            kde_blur_manager: rl.kde_blur_manager,
+            kde_appmenu_manager: rl.kde_appmenu_manager,
+            zxdg_decoration_manager: rl.zxdg_decoration_manager,
+        })
+    }
 }
 #[cfg(feature = "wayland")]
 #[derive(Default)]
@@ -3092,6 +3105,7 @@ struct RegistryListener {
     seat: Option<wl::Owned<wl::Seat>>,
     shm: Option<wl::Owned<wl::Shm>>,
     viewporter: Option<wl::Owned<wl::WpViewporter>>,
+    text_input_manager: Option<wl::Owned<wl::ZwpTextInputManagerV3>>,
     single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
     kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
@@ -3142,6 +3156,12 @@ impl wl::RegistryListener for RegistryListener {
                 registry
                     .bind(name, version)
                     .expect("bind zxdg_decoration_manager"),
+            );
+        } else if interface == c"zwp_text_input_manager_v3" {
+            self.text_input_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind text_input_manager"),
             );
         }
     }
@@ -3528,6 +3548,12 @@ impl DragPreviewPopoverHandle {
 const WL_APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 #[cfg(feature = "wayland")]
 struct WaylandGlobalMessaging<AppFuture: core::future::Future<Output = ()>> {
+    pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
+    pub text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
+    pub keyboard: Option<wl::Owned<wl::Keyboard>>,
+    pub xkb_context: xkbcommon::Context,
+    pub xkb_keymap: Option<xkbcommon::Keymap>,
+    pub xkb_state: Option<xkbcommon::State>,
     pub pointer: Option<wl::Owned<wl::Pointer>>,
     pub pointer_pos: (f32, f32),
     pub pointer_active_surface: Option<core::ptr::NonNull<wl::XdgSurface>>,
@@ -3548,10 +3574,14 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgWmBaseEventListener
 impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
     for WaylandGlobalMessaging<AppFuture>
 {
-    fn capabilities(&mut self, seat: &mut peridot_tp_wayland::Seat, capabilities: u32) {
-        tracing::trace!(capabilities, "seat::capabilities");
+    fn capabilities(
+        &mut self,
+        seat: &mut peridot_tp_wayland::Seat,
+        capabilities: wl::SeatCapability,
+    ) {
+        tracing::trace!(?capabilities, "seat::capabilities");
 
-        if (capabilities & 0x01) != 0 {
+        if capabilities.contains(wl::SeatCapability::POINTER) {
             // pointer
             let mut p = seat.get_pointer().expect("seat.get_pointer");
             p.set_listener(self)
@@ -3562,6 +3592,24 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
         } else {
             // no pointer
             self.pointer = None;
+        }
+
+        if capabilities.contains(wl::SeatCapability::KEYBOARD) {
+            let mut k = seat.get_keyboard().expect("seat.get_keyboard");
+            k.set_listener(self)
+                .into_result()
+                .expect("keyboard.set_listener");
+            let mut ti = unsafe {
+                (*self.text_input_manager)
+                    .get_text_input(seat)
+                    .expect("text_input_manager.get_text_input")
+            };
+            ti.set_listener(self)
+                .into_result()
+                .expect("text_input.set_listener");
+
+            self.keyboard = Some(k);
+            self.text_input = Some(ti);
         }
     }
 
@@ -3650,7 +3698,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 
     #[tracing::instrument(skip(self, _pointer))]
     fn frame(&mut self, _pointer: &mut peridot_tp_wayland::Pointer) {
-        tracing::trace!("pointer.frame");
+        // tracing::trace!("pointer.frame");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
@@ -3691,6 +3739,195 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         direction: u32,
     ) {
         tracing::trace!("pointer.axis_relative_direction");
+    }
+}
+#[cfg(feature = "wayland")]
+impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
+    for WaylandGlobalMessaging<AppFuture>
+{
+    #[tracing::instrument(skip(self, sender))]
+    fn keymap(
+        &mut self,
+        sender: &mut peridot_tp_wayland::Keyboard,
+        format: peridot_tp_wayland::KeyboardKeymapFormat,
+        fd: i32,
+        size: u32,
+    ) {
+        if format != wl::KeyboardKeymapFormat::XkbV1 {
+            unimplemented!("unknown keymap format: {format:?}");
+        }
+
+        let mapped = platform::linux::MappedMemory::new(
+            None,
+            size as _,
+            libc::PROT_READ,
+            libc::MAP_PRIVATE,
+            &fd,
+            0,
+        )
+        .expect("keyboard.keymap.mmap");
+        let content = unsafe {
+            core::ffi::CStr::from_bytes_with_nul(core::slice::from_raw_parts(
+                mapped.as_ptr().cast::<u8>(),
+                size as _,
+            ))
+            .expect("invalid content")
+            .to_str()
+            .expect("invalid content")
+        };
+        let keymap = xkbcommon::Keymap::from_buffer(
+            &self.xkb_context,
+            unsafe { core::slice::from_raw_parts(content.as_ptr(), size as _) },
+            xkbcommon::KeymapFormat::TextV1,
+            xkbcommon::KeymapCompileFlags::NO_FLAGS,
+        )
+        .expect("xkb_keymap.create");
+        let state = xkbcommon::State::new(&keymap).expect("xkb_state.create");
+
+        tracing::trace!("keyboard::keymap\n{content}");
+        self.xkb_keymap = Some(keymap);
+        self.xkb_state = Some(state);
+    }
+
+    #[tracing::instrument(skip(self, sender, surface))]
+    fn enter(
+        &mut self,
+        sender: &mut peridot_tp_wayland::Keyboard,
+        serial: u32,
+        surface: &mut peridot_tp_wayland::Surface,
+        keys: &[u32],
+    ) {
+        tracing::trace!("keyboard::enter");
+    }
+
+    #[tracing::instrument(skip(self, sender, surface))]
+    fn leave(
+        &mut self,
+        sender: &mut peridot_tp_wayland::Keyboard,
+        serial: u32,
+        surface: &mut peridot_tp_wayland::Surface,
+    ) {
+        tracing::trace!("keyboard::leave");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn key(
+        &mut self,
+        sender: &mut peridot_tp_wayland::Keyboard,
+        serial: u32,
+        time: u32,
+        key: u32,
+        state: peridot_tp_wayland::KeyboardKeyState,
+    ) {
+        tracing::trace!("keyboard::key");
+
+        if let Some(ref mut x) = self.xkb_state {
+            let mut buf = Vec::with_capacity(32);
+            // evdevのスキャンコードでくるので、xkbのスキャンコードにする(8を足せばいいらしい: https://wayland-book.com/seat/keyboard.html)
+            let mut alen = x.key_get_utf8(key + 8, buf.spare_capacity_mut());
+            if alen > buf.capacity() {
+                buf.reserve(alen - buf.capacity());
+                alen = x.key_get_utf8(key + 8, buf.spare_capacity_mut());
+            }
+            unsafe {
+                buf.set_len(alen);
+            }
+            tracing::trace!(
+                alen,
+                text = unsafe { core::str::from_utf8_unchecked(&buf) },
+                "keyboard translated"
+            );
+        }
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn modifiers(
+        &mut self,
+        sender: &mut peridot_tp_wayland::Keyboard,
+        serial: u32,
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    ) {
+        tracing::trace!("keyboard::modifiers");
+
+        if let Some(ref mut x) = self.xkb_state {
+            x.update_mask(
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+                group,
+                group,
+            );
+        }
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn repeat_info(&mut self, sender: &mut peridot_tp_wayland::Keyboard, rate: i32, delay: i32) {
+        tracing::trace!("keyboard::repeat_info");
+    }
+}
+#[cfg(feature = "wayland")]
+impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListener
+    for WaylandGlobalMessaging<AppFuture>
+{
+    #[tracing::instrument(skip(self, sender, surface))]
+    fn enter(
+        &mut self,
+        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
+        surface: &mut peridot_tp_wayland::Surface,
+    ) {
+        tracing::trace!("textinputv3::enter");
+        sender.enable().expect("text_input.enable");
+        sender.commit().expect("text_input.commit");
+    }
+
+    #[tracing::instrument(skip(self, sender, surface))]
+    fn leave(
+        &mut self,
+        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
+        surface: &mut peridot_tp_wayland::Surface,
+    ) {
+        tracing::trace!("textinputv3::leave");
+        sender.disable().expect("text_input.disable");
+        sender.commit().expect("text_input.commit");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn preedit_string(
+        &mut self,
+        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
+        text: Option<&core::ffi::CStr>,
+        cursor_begin: i32,
+        cursor_end: i32,
+    ) {
+        tracing::trace!("textinputv3::preedit_string");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn commit_string(
+        &mut self,
+        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
+        text: Option<&core::ffi::CStr>,
+    ) {
+        tracing::trace!("textinputv3::commit_string");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn delete_surrounding_text(
+        &mut self,
+        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
+        before_length: u32,
+        after_length: u32,
+    ) {
+        tracing::trace!("textinputv3::delete_surrounding_text");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn done(&mut self, sender: &mut peridot_tp_wayland::ZwpTextInputV3, serial: u32) {
+        tracing::trace!("textinputv3::done");
     }
 }
 #[cfg(feature = "wayland")]
