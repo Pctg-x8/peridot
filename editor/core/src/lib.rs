@@ -23,7 +23,10 @@ use std::collections::{HashMap, VecDeque};
 use std::os::fd::AsRawFd;
 #[cfg(windows)]
 use windows::{
-    UI::Composition::CompositionEffectSourceParameter,
+    UI::{
+        Composition::CompositionEffectSourceParameter,
+        Text::Core::{CoreTextEditContext, CoreTextServicesManager},
+    },
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
         Graphics::{
@@ -45,10 +48,10 @@ use windows::{
             CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
             GetMessageW, GetWindowLongPtrW, HCURSOR, HICON, IDI_APPLICATION, LoadIconW,
             PostQuitMessage, RegisterClassExW, SHOW_WINDOW_CMD, SW_HIDE, SW_SHOW,
-            SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX,
-            WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
-            WS_POPUP,
+            SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+            WINDOW_LONG_PTR_INDEX, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
+            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+            WS_OVERLAPPEDWINDOW, WS_POPUP,
         },
     },
 };
@@ -101,12 +104,15 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for WindowsDebugOutputWriter {
 #[cfg(windows)]
 impl std::io::Write for &'_ WindowsDebugOutputWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut zero_terminated = Vec::with_capacity(buf.len() + 1);
-        zero_terminated.extend(buf);
-        zero_terminated.push(0);
+        let zero_terminated = unsafe {
+            core::str::from_utf8_unchecked(buf)
+                .encode_utf16()
+                .chain(core::iter::once(0))
+                .collect::<Vec<_>>()
+        };
 
         unsafe {
-            windows::Win32::System::Diagnostics::Debug::OutputDebugStringA(windows::core::PCSTR(
+            windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(windows::core::PCWSTR(
                 zero_terminated.as_ptr(),
             ));
         }
@@ -262,7 +268,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             style: WNDCLASS_STYLES(0),
             cbClsExtra: 0,
             cbWndExtra: core::mem::size_of::<[usize; 2]>() as _,
-            lpfnWndProc: Some(wndproc::<AppFuture>),
+            lpfnWndProc: Some(WindowState::<AppFuture>::handle_messages),
             hInstance: hinstance,
             hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
             hCursor: HCURSOR(core::ptr::null_mut()),
@@ -528,15 +534,17 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     wl_display.roundtrip().expect("roundtrip");
 
     #[cfg(windows)]
-    let event_dispatcher = core::pin::pin!(LogicFiberEventDispatcher {
-        event_store: event_store.as_mut().get_mut() as *mut _ as _,
-        future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ }
-    });
-    #[cfg(windows)]
     unsafe {
         w.set_long_ptr(
             WINDOW_LONG_PTR_INDEX(0),
-            event_dispatcher.as_ref().get_ref() as *const _ as _,
+            Box::into_raw(Box::new(WindowState {
+                event_dispatcher: LogicFiberEventDispatcher {
+                    event_store: event_store.as_mut().get_mut() as *mut _ as _,
+                    future: app.as_mut().get_unchecked_mut() as *mut _ as _,
+                },
+                text_services_mgr: None,
+                edit_context: None,
+            })) as _,
         );
     }
 
@@ -2259,6 +2267,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
                 BOOL(-1) => Err::<(), _>(std::io::Error::last_os_error()).expect("GetMessageW"),
                 _ => unsafe {
                     let msg = msg.assume_init_ref();
+                    TranslateMessage(msg);
                     DispatchMessageW(msg);
                 },
             }
@@ -4355,163 +4364,411 @@ unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
 }
 
 #[cfg(windows)]
-extern "system" fn wndproc<AppFuture: core::future::Future<Output = ()>>(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        WM_CREATE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
-    };
+struct WindowState<AppFuture: core::future::Future<Output = ()>> {
+    event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    text_services_mgr: Option<CoreTextServicesManager>,
+    edit_context: Option<CoreTextEditContext>,
+}
+#[cfg(windows)]
+impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
+    extern "system" fn handle_messages(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CHAR, WM_CREATE, WM_KILLFOCUS,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_SETFOCUS,
+        };
 
-    let event_dispatcher = unsafe {
-        core::ptr::with_exposed_provenance::<LogicFiberEventDispatcher<AppFuture>>(
-            GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
-        )
-    };
-
-    if msg == WM_DESTROY {
-        unsafe {
-            PostQuitMessage(0);
-        }
-
-        return LRESULT(0);
-    }
-
-    if msg == WM_CREATE {
-        unsafe {
-            // notify frame change
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
-            };
-
-            SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+        let state = unsafe {
+            core::ptr::with_exposed_provenance_mut::<Self>(
+                GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
             )
-            .expect("create.swp.framechange");
-        }
+        };
 
-        return LRESULT(0);
-    }
-
-    if msg == WM_NCCALCSIZE {
-        if wparam.0 == 1 {
-            // remove non-client area
-
-            let params = unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::NCCALCSIZE_PARAMS;
-
-                &mut *core::ptr::without_provenance_mut::<NCCALCSIZE_PARAMS>(
-                    lparam.0.cast_unsigned(),
-                )
-            };
-            let w = unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSIZEFRAME};
-                GetSystemMetrics(SM_CXSIZEFRAME)
-            };
-            let h = unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
-                GetSystemMetrics(SM_CYSIZEFRAME)
-            };
-            params.rgrc[0].left += w;
-            params.rgrc[0].right -= w;
-            params.rgrc[0].bottom -= h;
-            // topはいじらない（topいじるともとのタイトルバーが一部表示される 他アプリもそんな感じなのでtopは自前で当たり判定組んでリサイズ判定する）
+        if msg == WM_DESTROY {
+            unsafe {
+                drop(Box::from_raw(state));
+                PostQuitMessage(0);
+            }
 
             return LRESULT(0);
         }
+
+        if msg == WM_CREATE {
+            unsafe {
+                // notify frame change
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                    SetWindowPos,
+                };
+
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+                )
+                .expect("create.swp.framechange");
+            }
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_ACTIVATE && (wparam.0 == WA_ACTIVE as _ || wparam.0 == WA_CLICKACTIVE as _) {
+            if unsafe { (*state).text_services_mgr.is_none() } {
+                // first time activation
+                use windows::{
+                    Foundation::TypedEventHandler,
+                    UI::Text::Core::{
+                        CoreTextCompositionCompletedEventArgs, CoreTextCompositionStartedEventArgs,
+                        CoreTextFormatUpdatingEventArgs, CoreTextLayoutRequestedEventArgs,
+                        CoreTextSelectionRequestedEventArgs, CoreTextSelectionUpdatingEventArgs,
+                        CoreTextServicesManager, CoreTextTextRequestedEventArgs,
+                        CoreTextTextUpdatingEventArgs,
+                    },
+                };
+
+                let text_services_mgr = CoreTextServicesManager::GetForCurrentView()
+                    .expect("coretextservicesmanager.get");
+                let edit_context = text_services_mgr
+                    .CreateEditContext()
+                    .expect("edit_context.create");
+                edit_context
+                    .LayoutRequested(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        CoreTextLayoutRequestedEventArgs,
+                    >::new(|sender, e| {
+                        let e = e.ok().expect("event_args.null");
+                        let req = e.Request().expect("layout_requested.event_args.request");
+                        tracing::trace!(
+                            req.is_canceled = ?req.IsCanceled(),
+                            req.range = ?req.Range(),
+                            "edit_context.layout_requested"
+                        );
+
+                        req.LayoutBounds()
+                        .expect("layout_requested.event_args.request.layout_bounds")
+                        .SetControlBounds(windows::Foundation::Rect {
+                            X: 0.0,
+                            Y: 0.0,
+                            Width: 100.0,
+                            Height: 20.0,
+                        })
+                        .expect(
+                            "layout_requested.event_args.request.layout_bounds.set_control_bounds",
+                        );
+                        req.LayoutBounds()
+                            .expect("layout_requested.event_args.request.layout_bounds")
+                            .SetTextBounds(windows::Foundation::Rect {
+                                X: 0.0,
+                                Y: 0.0,
+                                Width: 100.0,
+                                Height: 20.0,
+                            })
+                            .expect(
+                                "layout_requested.event_args.request.layout_bounds.set_text_bounds",
+                            );
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.layout_requested");
+                edit_context
+                    .TextRequested(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        CoreTextTextRequestedEventArgs,
+                    >::new(|sender, e| {
+                        let e = e.ok().expect("event_args.null");
+                        let req = e.Request().expect("text_requested.event_args.request");
+                        tracing::trace!(
+                            req.is_canceled = ?req.IsCanceled(),
+                            req.range = ?req.Range(),
+                            req.text = ?req.Text(),
+                            "edit_context.text_requested"
+                        );
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.text_requested");
+                edit_context
+                    .TextUpdating(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        CoreTextTextUpdatingEventArgs,
+                    >::new(|sender, e| {
+                        let e = e.ok().expect("event_args.null");
+                        tracing::trace!(
+                            input_language = ?e.InputLanguage(),
+                            is_canceled = ?e.IsCanceled(),
+                            new_selection = ?e.NewSelection(),
+                            range = ?e.Range(),
+                            text = ?e.Text().map(|x| x.to_string_lossy()),
+                            "edit_context.text_updating"
+                        );
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.text_updating");
+                edit_context
+                    .CompositionStarted(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        CoreTextCompositionStartedEventArgs,
+                    >::new(|sender, e| {
+                        tracing::trace!("composition_started");
+                        let e = e.ok().expect("event_args.null");
+                        tracing::trace!(
+                            is_canceled = ?e.IsCanceled(),
+                            "edit_context.composition_started"
+                        );
+                        Ok(())
+                    }))
+                    .expect("edit_context.composition_started");
+                edit_context.CompositionCompleted(&TypedEventHandler::<
+                    CoreTextEditContext,
+                    CoreTextCompositionCompletedEventArgs,
+                >::new(move |sender, e| {
+                    let e = e.ok().expect("event_args.null");
+                    tracing::trace!(
+                        composition_segments = ?e.CompositionSegments(),
+                        composition_segments.len = ?e.CompositionSegments().and_then(|x| x.Size()),
+                        is_canceled = ?e.IsCanceled(),
+                        "edit_context.composition_completed"
+                    );
+
+                    for segment in e.CompositionSegments().expect("edit_context.composition_copmleted.composition_segments") {
+                        tracing::trace!(
+                            preconversion_string = ?segment.PreconversionString().map(|x| x.to_string_lossy()),
+                            range = ?segment.Range(),
+                            "edit_context.composition_completed.segment"
+                        );
+                    }
+
+                    Ok(())
+                }))
+                .expect("edit_context.composition_completed");
+                edit_context
+                    .FormatUpdating(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        CoreTextFormatUpdatingEventArgs,
+                    >::new(|sender, e| {
+                        let e = e.ok().expect("event_args.null");
+                        tracing::trace!(
+                            background_color = ?e.BackgroundColor(),
+                            is_canceled = ?e.IsCanceled(),
+                            range = ?e.Range(),
+                            reason = ?e.Reason(),
+                            text_color = ?e.TextColor(),
+                            underline_color = ?e.UnderlineColor(),
+                            underline_type = ?e.UnderlineType(),
+                            "edit_context.format_updating"
+                        );
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.format_updating");
+                edit_context
+                    .FocusRemoved(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        windows_core::IInspectable,
+                    >::new(|sender, e| {
+                        tracing::trace!(e = ?e.ok(), "edit_context.focus_removed");
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.focus_removed");
+                edit_context
+                    .NotifyFocusLeaveCompleted(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        windows_core::IInspectable,
+                    >::new(|sender, e| {
+                        tracing::trace!(e = ?e.ok(), "edit_context.notify_focus_leave_completed");
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.notify_focus_leave_completed");
+                edit_context
+                    .SelectionRequested(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        CoreTextSelectionRequestedEventArgs,
+                    >::new(|sender, e| {
+                        let e = e.ok().expect("event_args.null");
+                        let req = e
+                            .Request()
+                            .expect("edit_context.selection_requested.event_args.request");
+                        tracing::trace!(
+                            req.is_canceled = ?req.IsCanceled(),
+                            req.selection = ?req.Selection(),
+                            "edit_context.selection_requested"
+                        );
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.selection_requested");
+                edit_context
+                    .SelectionUpdating(&TypedEventHandler::<
+                        CoreTextEditContext,
+                        CoreTextSelectionUpdatingEventArgs,
+                    >::new(|sender, e| {
+                        let e = e.ok().expect("event_args.null");
+                        tracing::trace!(
+                            is_canceled = ?e.IsCanceled(),
+                            selection = ?e.Selection(),
+                            "edit_context.selection_updating"
+                        );
+
+                        Ok(())
+                    }))
+                    .expect("edit_context.selection_updating");
+
+                unsafe {
+                    (*state).text_services_mgr = Some(text_services_mgr);
+                    (*state).edit_context = Some(edit_context);
+                }
+            }
+        }
+
+        if msg == WM_SETFOCUS {
+            unsafe { (*state).edit_context.as_ref().expect("not activated?") }
+                .NotifyFocusEnter()
+                .expect("edit_context.notify_focus_enter");
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_KILLFOCUS {
+            unsafe { (*state).edit_context.as_ref().expect("not activated?") }
+                .NotifyFocusLeave()
+                .expect("edit_context.notify_focus_leave");
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_CHAR {
+            tracing::trace!(keycode = wparam.0, "char input");
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_NCCALCSIZE {
+            if wparam.0 == 1 {
+                // remove non-client area
+
+                let params = unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::NCCALCSIZE_PARAMS;
+
+                    &mut *core::ptr::without_provenance_mut::<NCCALCSIZE_PARAMS>(
+                        lparam.0.cast_unsigned(),
+                    )
+                };
+                let w = unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        GetSystemMetrics, SM_CXSIZEFRAME,
+                    };
+                    GetSystemMetrics(SM_CXSIZEFRAME)
+                };
+                let h = unsafe {
+                    use windows::Win32::UI::WindowsAndMessaging::{
+                        GetSystemMetrics, SM_CYSIZEFRAME,
+                    };
+                    GetSystemMetrics(SM_CYSIZEFRAME)
+                };
+                params.rgrc[0].left += w;
+                params.rgrc[0].right -= w;
+                params.rgrc[0].bottom -= h;
+                // topはいじらない（topいじるともとのタイトルバーが一部表示される 他アプリもそんな感じなのでtopは自前で当たり判定組んでリサイズ判定する）
+
+                return LRESULT(0);
+            }
+        }
+
+        if msg == WM_NCHITTEST {
+            let x = (lparam.0 & 0xffff) as i16;
+            let y = ((lparam.0 >> 16) & 0xffff) as i16;
+            let mut p = [windows::Win32::Foundation::POINT {
+                x: x as _,
+                y: y as _,
+            }];
+            unsafe {
+                use windows::Win32::Graphics::Gdi::MapWindowPoints;
+                MapWindowPoints(None, Some(hwnd), &mut p);
+            }
+            let [windows::Win32::Foundation::POINT { x, y }] = p;
+
+            let mut client_size = core::mem::MaybeUninit::uninit();
+            unsafe {
+                GetClientRect(hwnd, client_size.as_mut_ptr()).expect("getclientsize");
+            }
+            let client_size = unsafe { client_size.assume_init() };
+
+            if 0 > x || x > client_size.right || 0 > y || y > client_size.bottom {
+                // ウィンドウ範囲外はシステムにおまかせ
+                return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+            }
+
+            let resize_h = unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
+                GetSystemMetrics(SM_CYSIZEFRAME)
+            };
+            if y < resize_h {
+                return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTTOP as _);
+            }
+
+            // TODO: 仮 本来はViewのヒットテストの仕組みを別で作る
+            if y < 24 {
+                return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCAPTION as _);
+            }
+
+            return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCLIENT as _);
+        }
+
+        if msg == WM_LBUTTONDOWN {
+            unsafe {
+                use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
+                SetCapture(hwnd);
+            }
+
+            unsafe {
+                (*state).event_dispatcher.dispatch(Event::PointerDown {
+                    active_window: hwnd,
+                    client_x: (lparam.0 & 0xffff) as i16 as _,
+                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                });
+            }
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_MOUSEMOVE {
+            unsafe {
+                (*state).event_dispatcher.dispatch(Event::PointerMove {
+                    active_window: hwnd,
+                    client_x: (lparam.0 & 0xffff) as i16 as _,
+                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                });
+            }
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_LBUTTONUP {
+            unsafe {
+                (*state).event_dispatcher.dispatch(Event::PointerUp);
+            }
+
+            unsafe {
+                use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
+                ReleaseCapture().expect("releasecapture");
+            }
+
+            return LRESULT(0);
+        }
+
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
     }
-
-    if msg == WM_NCHITTEST {
-        let x = (lparam.0 & 0xffff) as i16;
-        let y = ((lparam.0 >> 16) & 0xffff) as i16;
-        let mut p = [windows::Win32::Foundation::POINT {
-            x: x as _,
-            y: y as _,
-        }];
-        unsafe {
-            use windows::Win32::Graphics::Gdi::MapWindowPoints;
-            MapWindowPoints(None, Some(hwnd), &mut p);
-        }
-        let [windows::Win32::Foundation::POINT { x, y }] = p;
-
-        let mut client_size = core::mem::MaybeUninit::uninit();
-        unsafe {
-            GetClientRect(hwnd, client_size.as_mut_ptr()).expect("getclientsize");
-        }
-        let client_size = unsafe { client_size.assume_init() };
-
-        if 0 > x || x > client_size.right || 0 > y || y > client_size.bottom {
-            // ウィンドウ範囲外はシステムにおまかせ
-            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-        }
-
-        let resize_h = unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
-            GetSystemMetrics(SM_CYSIZEFRAME)
-        };
-        if y < resize_h {
-            return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTTOP as _);
-        }
-
-        // TODO: 仮 本来はViewのヒットテストの仕組みを別で作る
-        if y < 24 {
-            return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCAPTION as _);
-        }
-
-        return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCLIENT as _);
-    }
-
-    if msg == WM_LBUTTONDOWN {
-        unsafe {
-            use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
-            SetCapture(hwnd);
-        }
-
-        unsafe {
-            (*event_dispatcher).dispatch(Event::PointerDown {
-                active_window: hwnd,
-                client_x: (lparam.0 & 0xffff) as i16 as _,
-                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
-            });
-        }
-
-        return LRESULT(0);
-    }
-
-    if msg == WM_MOUSEMOVE {
-        unsafe {
-            (*event_dispatcher).dispatch(Event::PointerMove {
-                active_window: hwnd,
-                client_x: (lparam.0 & 0xffff) as i16 as _,
-                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
-            });
-        }
-
-        return LRESULT(0);
-    }
-
-    if msg == WM_LBUTTONUP {
-        unsafe {
-            (*event_dispatcher).dispatch(Event::PointerUp);
-        }
-
-        unsafe {
-            use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-            ReleaseCapture().expect("releasecapture");
-        }
-
-        return LRESULT(0);
-    }
-
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 #[cfg(target_os = "macos")]

@@ -46,9 +46,12 @@ features = [
     "Win32_Globalization",
     "Win32_System_WinRT_Composition",
     "System",
+    "Globalization",
     "Graphics_Effects",
     "UI_Composition",
-    "UI_Composition_Desktop"
+    "UI_Composition_Desktop",
+    "UI_Text_Core",
+    "UI_ViewManagement",
 ]
 
 [target.'cfg(windows)'.dependencies]
@@ -58,7 +61,17 @@ windows-numerics = "*"
 [dependencies.peridot-tp-wayland]
 path = "../../thirdparty/wayland"
 optional = true
-features = ["tracing", "xdg-shell", "wlr-layer-shell-unstable-v1", "single-pixel-buffer-v1", "viewporter", "kde-blur", "kde-appmenu", "xdg-decoration-unstable-v1", "text-input-unstable-v3"]
+features = [
+    "tracing",
+    "xdg-shell",
+    "wlr-layer-shell-unstable-v1",
+    "single-pixel-buffer-v1",
+    "viewporter",
+    "kde-blur",
+    "kde-appmenu",
+    "xdg-decoration-unstable-v1",
+    "text-input-unstable-v3",
+]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-eventfd = { path = "../../platform/linux/eventfd" }
