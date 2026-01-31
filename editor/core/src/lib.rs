@@ -535,16 +535,16 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
     #[cfg(windows)]
     unsafe {
-        w.set_long_ptr(
-            WINDOW_LONG_PTR_INDEX(0),
-            Box::into_raw(Box::new(WindowState {
+        WindowState::set_for_window(
+            &w,
+            Box::new(WindowState {
                 event_dispatcher: LogicFiberEventDispatcher {
                     event_store: event_store.as_mut().get_mut() as *mut _ as _,
                     future: app.as_mut().get_unchecked_mut() as *mut _ as _,
                 },
                 text_services_mgr: None,
                 edit_context: None,
-            })) as _,
+            }),
         );
     }
 
@@ -4371,6 +4371,26 @@ struct WindowState<AppFuture: core::future::Future<Output = ()>> {
 }
 #[cfg(windows)]
 impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
+    #[inline(always)]
+    fn set_for_window(w: &Win32Window, this: Box<Self>) {
+        unsafe {
+            SetWindowLongPtrW(
+                w.0,
+                WINDOW_LONG_PTR_INDEX(0),
+                Box::into_raw(this) as *mut _ as _,
+            );
+        }
+    }
+
+    #[inline(always)]
+    fn get_for_window<'a>(w: HWND) -> &'a mut Self {
+        unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut::<Self>(
+                GetWindowLongPtrW(w, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
+            )
+        }
+    }
+
     extern "system" fn handle_messages(
         hwnd: HWND,
         msg: u32,
@@ -4382,15 +4402,9 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_SETFOCUS,
         };
 
-        let state = unsafe {
-            core::ptr::with_exposed_provenance_mut::<Self>(
-                GetWindowLongPtrW(hwnd, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
-            )
-        };
-
         if msg == WM_DESTROY {
             unsafe {
-                drop(Box::from_raw(state));
+                drop(Box::from_raw(Self::get_for_window(hwnd)));
                 PostQuitMessage(0);
             }
 
@@ -4421,7 +4435,9 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_ACTIVATE && (wparam.0 == WA_ACTIVE as _ || wparam.0 == WA_CLICKACTIVE as _) {
-            if unsafe { (*state).text_services_mgr.is_none() } {
+            let state = Self::get_for_window(hwnd);
+
+            if state.text_services_mgr.is_none() {
                 // first time activation
                 use windows::{
                     Foundation::TypedEventHandler,
@@ -4624,15 +4640,18 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
                     }))
                     .expect("edit_context.selection_updating");
 
-                unsafe {
-                    (*state).text_services_mgr = Some(text_services_mgr);
-                    (*state).edit_context = Some(edit_context);
-                }
+                state.text_services_mgr = Some(text_services_mgr);
+                state.edit_context = Some(edit_context);
             }
         }
 
         if msg == WM_SETFOCUS {
-            unsafe { (*state).edit_context.as_ref().expect("not activated?") }
+            let state = Self::get_for_window(hwnd);
+
+            state
+                .edit_context
+                .as_ref()
+                .expect("not activated?")
                 .NotifyFocusEnter()
                 .expect("edit_context.notify_focus_enter");
 
@@ -4640,7 +4659,12 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_KILLFOCUS {
-            unsafe { (*state).edit_context.as_ref().expect("not activated?") }
+            let state = Self::get_for_window(hwnd);
+
+            state
+                .edit_context
+                .as_ref()
+                .expect("not activated?")
                 .NotifyFocusLeave()
                 .expect("edit_context.notify_focus_leave");
 
@@ -4726,38 +4750,38 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_LBUTTONDOWN {
+            let state = Self::get_for_window(hwnd);
+
             unsafe {
                 use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
                 SetCapture(hwnd);
             }
 
-            unsafe {
-                (*state).event_dispatcher.dispatch(Event::PointerDown {
-                    active_window: hwnd,
-                    client_x: (lparam.0 & 0xffff) as i16 as _,
-                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                });
-            }
+            state.event_dispatcher.dispatch(Event::PointerDown {
+                active_window: hwnd,
+                client_x: (lparam.0 & 0xffff) as i16 as _,
+                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            });
 
             return LRESULT(0);
         }
 
         if msg == WM_MOUSEMOVE {
-            unsafe {
-                (*state).event_dispatcher.dispatch(Event::PointerMove {
-                    active_window: hwnd,
-                    client_x: (lparam.0 & 0xffff) as i16 as _,
-                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                });
-            }
+            let state = Self::get_for_window(hwnd);
+
+            state.event_dispatcher.dispatch(Event::PointerMove {
+                active_window: hwnd,
+                client_x: (lparam.0 & 0xffff) as i16 as _,
+                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            });
 
             return LRESULT(0);
         }
 
         if msg == WM_LBUTTONUP {
-            unsafe {
-                (*state).event_dispatcher.dispatch(Event::PointerUp);
-            }
+            let state = Self::get_for_window(hwnd);
+
+            state.event_dispatcher.dispatch(Event::PointerUp);
 
             unsafe {
                 use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
