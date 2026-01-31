@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use bitflags::bitflags;
+
 use crate::input::{EventContinueControl, FocusTargetToken};
 
 pub struct HitTestTreeData<'h> {
@@ -11,6 +13,8 @@ pub struct HitTestTreeData<'h> {
     pub height: f32,
     pub width_adjustment_factor: f32,
     pub height_adjustment_factor: f32,
+    pub role: Option<Role>,
+    pub active: bool,
     pub action_handler: Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>>,
 }
 impl Default for HitTestTreeData<'_> {
@@ -25,6 +29,8 @@ impl Default for HitTestTreeData<'_> {
             height: 0.0,
             width_adjustment_factor: 0.0,
             height_adjustment_factor: 0.0,
+            role: None,
+            active: true,
             action_handler: None,
         }
     }
@@ -72,6 +78,8 @@ impl<'h> HitTestTreeManager<'h> {
             height: 0.0,
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
+            role: None,
+            active: true,
             action_handler: None,
         });
 
@@ -231,29 +239,26 @@ impl<'h> HitTestTreeManager<'h> {
         root: HitTestTreeRef,
         global_x: f32,
         global_y: f32,
-        parent_global_left: f32,
-        parent_global_top: f32,
-        parent_effective_width: f32,
-        parent_effective_height: f32,
+        parent_effective_global_rect: Rect,
+        options: HitTestOptions,
     ) -> Option<HitTestTreeRef> {
         let d = &self.data[root.0];
-        if d.action_handler
-            .as_ref()
-            .and_then(std::rc::Weak::upgrade)
-            .is_some_and(|x| !x.hit_active(root))
-        {
+        if !d.active {
             // hit disabled
             return None;
         }
 
-        let effective_width = parent_effective_width * d.width_adjustment_factor + d.width;
-        let effective_height = parent_effective_height * d.height_adjustment_factor + d.height;
-        let global_left =
-            parent_global_left + parent_effective_width * d.left_adjustment_factor + d.left;
-        let global_top =
-            parent_global_top + parent_effective_height * d.top_adjustment_factor + d.top;
-        let global_right = global_left + effective_width;
-        let global_bottom = global_top + effective_height;
+        // グローバル座標での実際の自身のジオメトリを計算
+        let effective_global_rect = Rect {
+            left: parent_effective_global_rect.left
+                + parent_effective_global_rect.width * d.left_adjustment_factor
+                + d.left,
+            top: parent_effective_global_rect.top
+                + parent_effective_global_rect.height * d.top_adjustment_factor
+                + d.top,
+            width: parent_effective_global_rect.width * d.width_adjustment_factor + d.width,
+            height: parent_effective_global_rect.height * d.height_adjustment_factor + d.height,
+        };
 
         // 後ろにあるほうが上なので優先して見る
         if let Some(t) = self.relations[root.0].children.iter().rev().find_map(|&c| {
@@ -261,28 +266,58 @@ impl<'h> HitTestTreeManager<'h> {
                 HitTestTreeRef(c),
                 global_x,
                 global_y,
-                global_left,
-                global_top,
-                effective_width,
-                effective_height,
+                effective_global_rect.clone(),
+                options,
             )
         }) {
             // 子にヒット
             return Some(t);
         }
 
-        if global_left <= global_x
-            && global_x <= global_right
-            && global_top <= global_y
-            && global_y <= global_bottom
-            && d.action_handler.is_some()
-        {
-            // 自分にヒット ただしaction handlerが設定されていない場合は透過とみなす(うしろにあるHitTestTreeにあたってほしい)
-            return Some(root);
+        if effective_global_rect.point_in_inclusive(global_x, global_y) {
+            // 自分にヒット
+            // ただしフラグが設定されている場合はaction handlerが設定されていない場合は透過とみなす(うしろにあるHitTestTreeにあたってほしい)
+            let is_opaque = !options.contains(HitTestOptions::ONLY_ACTION_HANDLED)
+                || d.action_handler.is_some();
+
+            if is_opaque {
+                return Some(root);
+            }
         }
 
         // なににもヒットしなかった
         None
+    }
+}
+
+bitflags! {
+    #[derive(Clone, Copy, Debug)]
+    pub struct HitTestOptions : u8 {
+        const ONLY_ACTION_HANDLED = 1 << 0;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Rect {
+    pub left: f32,
+    pub top: f32,
+    pub width: f32,
+    pub height: f32,
+}
+impl Rect {
+    #[inline(always)]
+    pub const fn right(&self) -> f32 {
+        self.left + self.width
+    }
+
+    #[inline(always)]
+    pub const fn bottom(&self) -> f32 {
+        self.top + self.height
+    }
+
+    #[inline(always)]
+    pub const fn point_in_inclusive(&self, x: f32, y: f32) -> bool {
+        self.left <= x && x <= self.right() && self.top <= y && y <= self.bottom()
     }
 }
 
@@ -313,20 +348,7 @@ pub enum Role {
 
 pub struct HitTestEventContext {}
 
-// 将来的にはAppUpdateContextへの直接依存を剥がしたいが、associated typeに局所的なlifetime与える方法がない
 pub trait HitTestTreeActionHandler {
-    #[allow(unused_variables)]
-    #[inline]
-    fn role(&self, sender: HitTestTreeRef) -> Option<Role> {
-        None
-    }
-
-    #[allow(unused_variables)]
-    #[inline]
-    fn hit_active(&self, sender: HitTestTreeRef) -> bool {
-        true
-    }
-
     #[allow(unused_variables)]
     #[inline]
     fn cursor_shape(

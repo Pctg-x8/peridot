@@ -78,7 +78,7 @@ use crate::{
         VectorRasterizationState,
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
-    hittest::HitTestTreeManager,
+    hittest::{HitTestTreeData, HitTestTreeManager},
 };
 
 mod atlas;
@@ -242,7 +242,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
             style: WNDCLASS_STYLES(0),
             cbClsExtra: 0,
-            cbWndExtra: core::mem::size_of::<[usize; 2]>() as _,
+            cbWndExtra: core::mem::size_of::<[usize; 3]>() as _,
             lpfnWndProc: Some(WindowState::<AppFuture>::handle_messages),
             hInstance: hinstance,
             hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
@@ -273,7 +273,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .expect("CreateWindowExW")
     };
     #[cfg(windows)]
-    let mut w = Win32Window(w);
+    let w = Win32Window(w);
 
     #[cfg(windows)]
     let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
@@ -2258,6 +2258,10 @@ pub enum Event {
         client_y: f32,
     },
     PointerUp,
+    WindowResize {
+        new_width: u32,
+        new_height: u32,
+    },
 }
 #[cfg(any(feature = "wayland", windows))]
 unsafe impl Sync for Event {}
@@ -2325,13 +2329,28 @@ async fn run<'sys>(
 
     let mut ht_manager = HitTestTreeManager::new();
     let mut composite_tree = CompositeTree::new();
+    #[cfg(windows)]
+    unsafe {
+        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
+        SetWindowLongPtrW(
+            main_window.hwnd,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
+            &pointer_input_manager as *const _ as _,
+        );
+        SetWindowLongPtrW(
+            main_window.hwnd,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            &ht_manager as *const _ as _,
+        );
+    }
+
     composite_tree.get_mut(CompositeTree::ROOT).composite_mode =
         CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
     composite_tree.get_mut(CompositeTree::ROOT).has_bitmap = true;
     composite_tree.mark_dirty(CompositeTree::ROOT);
 
     // app title view
-    let app_title = composite_tree.register(CompositeRect {
+    let app_title = composite_tree.create(CompositeRect {
         has_bitmap: true,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
         relative_size_adjustment: [1.0, 0.0],
@@ -2363,11 +2382,26 @@ async fn run<'sys>(
         ..Default::default()
     });
     composite_tree.add_child(CompositeTree::ROOT, app_title);
+    let ht_caption_bar = ht_manager.create(HitTestTreeData {
+        width_adjustment_factor: 1.0,
+        height: 24.0 * 2.0,
+        role: Some(crate::hittest::Role::TitleBar),
+        ..Default::default()
+    });
+    ht_manager.add_child(HitTestTreeManager::ROOT, ht_caption_bar);
+
     composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
+    ht_manager.dump(HitTestTreeManager::ROOT);
 
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
+            Event::WindowResize {
+                new_width,
+                new_height,
+            } => {
+                pointer_input_manager.set_client_size(new_width as _, new_height as _);
+            }
             Event::PointerDown {
                 #[cfg(feature = "wayland")]
                 root_window,
@@ -2460,6 +2494,19 @@ async fn run<'sys>(
     }
 
     tracing::info!("app finish");
+    #[cfg(windows)]
+    unsafe {
+        SetWindowLongPtrW(
+            main_window.hwnd,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
+            0,
+        );
+        SetWindowLongPtrW(
+            main_window.hwnd,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            0,
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -4519,6 +4566,16 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
     }
 
+    #[inline(always)]
+    fn try_get_for_window<'a>(w: HWND) -> Option<&'a mut Self> {
+        unsafe {
+            core::ptr::with_exposed_provenance_mut::<Self>(
+                GetWindowLongPtrW(w, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
+            )
+            .as_mut()
+        }
+    }
+
     extern "system" fn handle_messages(
         hwnd: HWND,
         msg: u32,
@@ -4843,10 +4900,21 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             let h = ((lparam.0 >> 16) & 0xffff) as u16;
             tracing::trace!(w, h, "WM_SIZE");
 
+            if let Some(state) = Self::try_get_for_window(hwnd) {
+                state.event_dispatcher.dispatch(Event::WindowResize {
+                    new_width: w as _,
+                    new_height: h as _,
+                });
+            }
+
             return LRESULT(0);
         }
 
         if msg == WM_NCHITTEST {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
+            };
+
             let x = (lparam.0 & 0xffff) as i16;
             let y = ((lparam.0 >> 16) & 0xffff) as i16;
             let mut p = [windows::Win32::Foundation::POINT {
@@ -4878,17 +4946,47 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
                 return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTTOP as _);
             }
 
-            // TODO: 仮 本来はViewのヒットテストの仕組みを別で作る
-            if y < 24 {
-                return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCAPTION as _);
+            let pointer_input_manager_ptr = unsafe {
+                core::ptr::with_exposed_provenance_mut::<PointerInputManager>(GetWindowLongPtrW(
+                    hwnd,
+                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
+                )
+                    as _)
+            };
+            let ht_manager_ptr = unsafe {
+                core::ptr::with_exposed_provenance_mut::<HitTestTreeManager>(GetWindowLongPtrW(
+                    hwnd,
+                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+                ) as _)
+            };
+
+            if pointer_input_manager_ptr.is_null() {
+                // unlinked from logic fiber
+                return LRESULT(HTCLIENT as _);
             }
 
-            return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTCLIENT as _);
+            let pointer_input_manager = unsafe { &*pointer_input_manager_ptr };
+            let ui_scale_factor = 1.0; // TODO: dpi
+            return match pointer_input_manager.role(
+                x as f32 / ui_scale_factor,
+                y as f32 / ui_scale_factor,
+                (client_size.right - client_size.left) as f32 / ui_scale_factor,
+                (client_size.bottom - client_size.top) as f32 / ui_scale_factor,
+                unsafe { &*ht_manager_ptr },
+                HitTestTreeManager::ROOT,
+            ) {
+                None => LRESULT(HTCLIENT as _),
+                Some(crate::hittest::Role::TitleBar) => LRESULT(HTCAPTION as _),
+                Some(crate::hittest::Role::ForceClient) => LRESULT(HTCLIENT as _),
+                Some(crate::hittest::Role::CloseButton) => LRESULT(HTCLOSE as _),
+                Some(crate::hittest::Role::MaximizeButton) => LRESULT(HTMAXBUTTON as _),
+                Some(crate::hittest::Role::MinimizeButton) => LRESULT(HTMINBUTTON as _),
+                // Windowsだと同じ位置にあるので同じものを返す
+                Some(crate::hittest::Role::RestoreButton) => LRESULT(HTMAXBUTTON as _),
+            };
         }
 
         if msg == WM_LBUTTONDOWN {
-            use crate::hittest::HitTestTreeManager;
-
             let state = Self::get_for_window(hwnd);
 
             unsafe {

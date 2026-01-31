@@ -3258,7 +3258,7 @@ impl CompositeTree {
         }
     }
 
-    pub fn register(&mut self, data: CompositeRect) -> CompositeTreeRef {
+    pub fn create(&mut self, data: CompositeRect) -> CompositeTreeRef {
         if let Some(x) = self.unused.pop_first() {
             self.rects[x] = data;
             self.dirty_rects.insert(x, DirtyRect::Modified);

@@ -3,7 +3,8 @@ use std::collections::BTreeSet;
 use bitflags::bitflags;
 
 use crate::hittest::{
-    CursorShape, HitTestEventContext, HitTestTreeManager, HitTestTreeRef, PointerActionArgs, Role,
+    CursorShape, HitTestEventContext, HitTestOptions, HitTestTreeManager, HitTestTreeRef,
+    PointerActionArgs, Role,
 };
 
 bitflags! {
@@ -257,10 +258,13 @@ impl PointerInputManager {
             ht_root,
             client_x,
             client_y,
-            0.0,
-            0.0,
-            client_width,
-            client_height,
+            crate::hittest::Rect {
+                left: 0.0,
+                top: 0.0,
+                width: client_width,
+                height: client_height,
+            },
+            HitTestOptions::ONLY_ACTION_HANDLED,
         );
         let (new_leave, new_enter) = match (&self.pointer_focus, new_hit) {
             // in capturing, this routine is never called
@@ -641,18 +645,12 @@ impl PointerInputManager {
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref) => {
                 // キャプチャ中の要素があればそれだけを見る
-                ht.get_data(ht_ref)
-                    .action_handler()
-                    .and_then(|x| x.role(ht_ref))
+                ht.get_data(ht_ref).role
             }
             PointerFocusState::Entering(ht_ref) => {
                 let mut p = Some(ht_ref);
                 while let Some(ht_ref) = p {
-                    if let Some(role) = ht
-                        .get_data(ht_ref)
-                        .action_handler()
-                        .and_then(|h| h.role(ht_ref))
-                    {
+                    if let Some(role) = ht.get_data(ht_ref).role {
                         return Some(role);
                     }
 
@@ -677,10 +675,7 @@ impl PointerInputManager {
     ) -> Option<Role> {
         if let PointerFocusState::Capturing(ht_ref) = self.pointer_focus {
             // キャプチャ中の要素があればそれだけを見る
-            return ht
-                .get_data(ht_ref)
-                .action_handler()
-                .and_then(|x| x.role(ht_ref));
+            return ht.get_data(ht_ref).role;
         }
 
         // roleの検査(WM_NCHITTEST)ではEnter/Leaveの更新をしないので直接testを呼ぶ
@@ -688,10 +683,14 @@ impl PointerInputManager {
             ht_root,
             client_x,
             client_y,
-            0.0,
-            0.0,
-            client_width,
-            client_height,
+            crate::hittest::Rect {
+                left: 0.0,
+                top: 0.0,
+                width: client_width,
+                height: client_height,
+            },
+            // roleの判定ではaction_handlerの有無を見ない
+            HitTestOptions::empty(),
         ) else {
             // なにもヒットしなかった
             return None;
@@ -699,11 +698,7 @@ impl PointerInputManager {
 
         let mut p = Some(hit);
         while let Some(ht_ref) = p {
-            if let Some(role) = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .and_then(|h| h.role(ht_ref))
-            {
+            if let Some(role) = ht.get_data(ht_ref).role {
                 return Some(role);
             }
 
