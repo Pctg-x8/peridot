@@ -79,6 +79,7 @@ use crate::{
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
     hittest::{HitTestTreeData, HitTestTreeManager},
+    input::ShellPointerActions,
 };
 
 mod atlas;
@@ -2418,6 +2419,9 @@ async fn run<'sys>(
                     &mut keyboard_focus_manager,
                 );
 
+                // DragPreviewの動作確認用のダミー処理
+                main_window.capture_pointer();
+
                 #[cfg(feature = "wayland")]
                 {
                     drag_preview_popover.root_window = root_window.as_ptr();
@@ -2460,6 +2464,7 @@ async fn run<'sys>(
                     HitTestTreeManager::ROOT,
                 );
 
+                // DragPreviewの動作確認用のダミー処理
                 #[cfg(windows)]
                 {
                     // Windowsはグローバル座標を渡す必要があるのでここで変換する
@@ -2488,7 +2493,9 @@ async fn run<'sys>(
                     HitTestTreeManager::ROOT,
                 );
 
+                // DragPreviewの動作確認用のダミー処理
                 drag_preview_popover.hide();
+                main_window.release_pointer();
             }
         }
     }
@@ -4987,43 +4994,33 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_LBUTTONDOWN {
-            let state = Self::get_for_window(hwnd);
-
-            unsafe {
-                use windows::Win32::UI::Input::KeyboardAndMouse::SetCapture;
-                SetCapture(hwnd);
-            }
-
-            state.event_dispatcher.dispatch(Event::PointerDown {
-                active_window: hwnd,
-                client_x: (lparam.0 & 0xffff) as i16 as _,
-                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
-            });
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::PointerDown {
+                    active_window: hwnd,
+                    client_x: (lparam.0 & 0xffff) as i16 as _,
+                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                });
 
             return LRESULT(0);
         }
 
         if msg == WM_MOUSEMOVE {
-            let state = Self::get_for_window(hwnd);
-
-            state.event_dispatcher.dispatch(Event::PointerMove {
-                active_window: hwnd,
-                client_x: (lparam.0 & 0xffff) as i16 as _,
-                client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
-            });
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::PointerMove {
+                    active_window: hwnd,
+                    client_x: (lparam.0 & 0xffff) as i16 as _,
+                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                });
 
             return LRESULT(0);
         }
 
         if msg == WM_LBUTTONUP {
-            let state = Self::get_for_window(hwnd);
-
-            state.event_dispatcher.dispatch(Event::PointerUp);
-
-            unsafe {
-                use windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-                ReleaseCapture().expect("releasecapture");
-            }
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::PointerUp);
 
             return LRESULT(0);
         }
