@@ -62,8 +62,9 @@ use windows_core::*;
 use windows_numerics::{Vector2, Vector3};
 
 #[cfg(windows)]
-use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
-    EffectOptimization, GaussianBlurEffect,
+use crate::{
+    bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
+    input::{KeyboardFocusManager, PointerInputManager},
 };
 use crate::{
     composite::{
@@ -73,6 +74,7 @@ use crate::{
         CompositeTree, FontID, VectorRasterizationState,
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
+    hittest::HitTestTreeManager,
 };
 
 mod atlas;
@@ -81,6 +83,8 @@ mod bindgen;
 mod composite;
 mod graphics;
 mod helper_types;
+mod hittest;
+mod input;
 mod mathext;
 mod platform;
 
@@ -169,60 +173,15 @@ pub fn launch() {
         event_store: event_store.as_mut().get_mut(),
     };
     main_wrapper(
-        move |drag_preview_popover| run(event_queue, drag_preview_popover),
+        move |main_window, drag_preview_popover| {
+            run(event_queue, main_window, drag_preview_popover)
+        },
         event_store,
     );
 }
 
-pub struct Color32 {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-impl Color32 {
-    pub const fn premultiplied(&self) -> Self {
-        Self {
-            r: (self.r as f32 * self.a as f32 / 255.0).round() as u8,
-            g: (self.g as f32 * self.a as f32 / 255.0).round() as u8,
-            b: (self.b as f32 * self.a as f32 / 255.0).round() as u8,
-            a: self.a,
-        }
-    }
-
-    pub const fn argb8888(&self) -> u32 {
-        ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
-    }
-
-    pub const fn r_u32(&self) -> u32 {
-        (0xffffffffu32 as f32 * (self.r as f32 / 255.0).min(1.0)) as u32
-    }
-
-    pub const fn g_u32(&self) -> u32 {
-        (0xffffffffu32 as f32 * (self.g as f32 / 255.0).min(1.0)) as u32
-    }
-
-    pub const fn b_u32(&self) -> u32 {
-        (0xffffffffu32 as f32 * (self.b as f32 / 255.0).min(1.0)) as u32
-    }
-
-    pub const fn a_u32(&self) -> u32 {
-        (0xffffffffu32 as f32 * (self.a as f32 / 255.0).min(1.0)) as u32
-    }
-
-    #[cfg(windows)]
-    pub const fn windows_native_color(&self) -> windows::UI::Color {
-        windows::UI::Color {
-            A: self.a,
-            R: self.r,
-            G: self.g,
-            B: self.b,
-        }
-    }
-}
-
 fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
-    run_app: impl FnOnce(DragPreviewPopoverHandle) -> AppFuture,
+    run_app: impl FnOnce(WindowHandle, DragPreviewPopoverHandle) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
 ) {
     let global_time_base = std::time::Instant::now();
@@ -492,7 +451,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     });
     composite_tree.add_child(CompositeTree::ROOT, app_title);
 
-    let mut app = core::pin::pin!(run_app(drag_preview_popover));
+    let mut app = core::pin::pin!(run_app(WindowHandle { hwnd: w.0 }, drag_preview_popover));
     let _ = app
         .as_mut()
         .poll(&mut core::task::Context::from_waker(&unsafe {
@@ -2363,8 +2322,20 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
-async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopoverHandle) {
+async fn run(
+    event_queue: EventQueue,
+    main_window: WindowHandle,
+    mut drag_preview_popover: DragPreviewPopoverHandle,
+) {
     tracing::info!("app start");
+
+    // TODO: マルチウィンドウ対応
+    let main_client_size = main_window.client_size();
+    let mut keyboard_focus_manager = KeyboardFocusManager::new();
+    let mut pointer_input_manager =
+        PointerInputManager::new(main_client_size.0 as _, main_client_size.1 as _);
+
+    let mut ht_manager = HitTestTreeManager::new();
 
     loop {
         match event_queue.next_event().await {
@@ -2377,6 +2348,14 @@ async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopov
                 mut client_x,
                 mut client_y,
             } => {
+                pointer_input_manager.handle_mouse_left_down(
+                    &main_window,
+                    &mut ht_manager,
+                    &mut crate::hittest::HitTestEventContext {},
+                    HitTestTreeManager::ROOT,
+                    &mut keyboard_focus_manager,
+                );
+
                 #[cfg(feature = "wayland")]
                 {
                     drag_preview_popover.root_window = root_window.as_ptr();
@@ -2411,6 +2390,14 @@ async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopov
                 mut client_x,
                 mut client_y,
             } => {
+                pointer_input_manager.handle_mouse_move(
+                    client_x as _,
+                    client_y as _,
+                    &mut ht_manager,
+                    &mut crate::hittest::HitTestEventContext {},
+                    HitTestTreeManager::ROOT,
+                );
+
                 #[cfg(windows)]
                 {
                     // Windowsはグローバル座標を渡す必要があるのでここで変換する
@@ -2432,12 +2419,57 @@ async fn run(event_queue: EventQueue, mut drag_preview_popover: DragPreviewPopov
                 drag_preview_popover.r#move(client_x as _, client_y as _);
             }
             Event::PointerUp => {
+                pointer_input_manager.handle_mouse_left_up(
+                    &main_window,
+                    &mut ht_manager,
+                    &mut crate::hittest::HitTestEventContext {},
+                    HitTestTreeManager::ROOT,
+                );
+
                 drag_preview_popover.hide();
             }
         }
     }
 
     tracing::info!("app finish");
+}
+
+#[derive(Clone, Copy)]
+#[cfg(windows)]
+pub struct WindowHandle {
+    hwnd: windows::Win32::Foundation::HWND,
+}
+#[cfg(windows)]
+impl WindowHandle {
+    #[inline(always)]
+    pub fn client_size(&self) -> (u32, u32) {
+        let mut rc = core::mem::MaybeUninit::uninit();
+        if let Err(e) = unsafe {
+            windows::Win32::UI::WindowsAndMessaging::GetClientRect(self.hwnd, rc.as_mut_ptr())
+        } {
+            tracing::error!(reason = %e, "get_client_rect");
+            return (0, 0);
+        }
+
+        let rc = unsafe { rc.assume_init_ref() };
+        (rc.right as _, rc.bottom as _)
+    }
+}
+#[cfg(windows)]
+impl crate::input::ShellPointerActions for WindowHandle {
+    #[inline(always)]
+    fn capture_pointer(&self) {
+        unsafe {
+            windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.hwnd);
+        }
+    }
+
+    #[inline(always)]
+    fn release_pointer(&self) {
+        if let Err(e) = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture() } {
+            tracing::error!(reason = %e, "release_capture");
+        }
+    }
 }
 
 struct Surface<'d> {
@@ -3599,6 +3631,53 @@ impl DragPreviewPopoverHandle {
     };
 }
 
+pub struct Color32 {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+impl Color32 {
+    pub const fn premultiplied(&self) -> Self {
+        Self {
+            r: (self.r as f32 * self.a as f32 / 255.0).round() as u8,
+            g: (self.g as f32 * self.a as f32 / 255.0).round() as u8,
+            b: (self.b as f32 * self.a as f32 / 255.0).round() as u8,
+            a: self.a,
+        }
+    }
+
+    pub const fn argb8888(&self) -> u32 {
+        ((self.a as u32) << 24) | ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
+    }
+
+    pub const fn r_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.r as f32 / 255.0).min(1.0)) as u32
+    }
+
+    pub const fn g_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.g as f32 / 255.0).min(1.0)) as u32
+    }
+
+    pub const fn b_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.b as f32 / 255.0).min(1.0)) as u32
+    }
+
+    pub const fn a_u32(&self) -> u32 {
+        (0xffffffffu32 as f32 * (self.a as f32 / 255.0).min(1.0)) as u32
+    }
+
+    #[cfg(windows)]
+    pub const fn windows_native_color(&self) -> windows::UI::Color {
+        windows::UI::Color {
+            A: self.a,
+            R: self.r,
+            G: self.g,
+            B: self.b,
+        }
+    }
+}
+
 #[cfg(feature = "wayland")]
 const WL_APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 #[cfg(feature = "wayland")]
@@ -4364,6 +4443,27 @@ unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
 }
 
 #[cfg(windows)]
+pub struct WindowMessageHandlingContext {
+    hwnd: HWND,
+}
+#[cfg(windows)]
+impl crate::input::ShellPointerActions for WindowMessageHandlingContext {
+    #[inline(always)]
+    fn capture_pointer(&self) {
+        unsafe {
+            windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.hwnd);
+        }
+    }
+
+    #[inline(always)]
+    fn release_pointer(&self) {
+        if let Err(e) = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture() } {
+            tracing::error!(reason = %e, "release_capture");
+        }
+    }
+}
+
+#[cfg(windows)]
 struct WindowState<AppFuture: core::future::Future<Output = ()>> {
     event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
     text_services_mgr: Option<CoreTextServicesManager>,
@@ -4400,6 +4500,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         use windows::Win32::UI::WindowsAndMessaging::{
             WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CHAR, WM_CREATE, WM_KILLFOCUS,
             WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_SETFOCUS,
+            WM_SIZE,
         };
 
         if msg == WM_DESTROY {
@@ -4709,6 +4810,14 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             }
         }
 
+        if msg == WM_SIZE {
+            let w = (lparam.0 & 0xffff) as u16;
+            let h = ((lparam.0 >> 16) & 0xffff) as u16;
+            tracing::trace!(w, h, "WM_SIZE");
+
+            return LRESULT(0);
+        }
+
         if msg == WM_NCHITTEST {
             let x = (lparam.0 & 0xffff) as i16;
             let y = ((lparam.0 >> 16) & 0xffff) as i16;
@@ -4750,6 +4859,8 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_LBUTTONDOWN {
+            use crate::hittest::HitTestTreeManager;
+
             let state = Self::get_for_window(hwnd);
 
             unsafe {
