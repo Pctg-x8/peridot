@@ -18,9 +18,12 @@ use peridot_tp_freetype as ft;
 use peridot_tp_wayland as wl;
 #[cfg(target_os = "linux")]
 use peridot_tp_xkbcommon as xkbcommon;
-use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+};
 #[cfg(windows)]
 use windows::{
     UI::{
@@ -71,7 +74,8 @@ use crate::{
         AnimatableColor, AnimatableFloat, BoundCompositeRenderer, CompositeMode, CompositeRect,
         CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
         CompositeRectTextVerticalAlignment, CompositeRenderingData, CompositeStreamingData,
-        CompositeTree, FontID, VectorRasterizationState,
+        CompositeTree, CompositeTreeRender, CompositeTreeSyncBuffer, FontID,
+        VectorRasterizationState,
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
     hittest::HitTestTreeManager,
@@ -172,17 +176,29 @@ pub fn launch() {
     let event_queue = EventQueue {
         event_store: event_store.as_mut().get_mut(),
     };
+    let composite_sync_buffer = Mutex::new(CompositeTreeSyncBuffer::new());
     main_wrapper(
-        move |main_window, drag_preview_popover| {
-            run(event_queue, main_window, drag_preview_popover)
+        move |composite_tree_sync_buffer, main_window, drag_preview_popover| {
+            run(
+                event_queue,
+                composite_tree_sync_buffer,
+                main_window,
+                drag_preview_popover,
+            )
         },
         event_store,
+        &composite_sync_buffer,
     );
 }
 
-fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
-    run_app: impl FnOnce(WindowHandle, DragPreviewPopoverHandle) -> AppFuture,
+fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
+    run_app: impl FnOnce(
+        &'sys Mutex<CompositeTreeSyncBuffer>,
+        WindowHandle,
+        DragPreviewPopoverHandle,
+    ) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
+    composite_sync_buffer: &'sys Mutex<CompositeTreeSyncBuffer>,
 ) {
     let global_time_base = std::time::Instant::now();
     let events = AppEventBus {
@@ -411,47 +427,11 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
         Err(e) => Err(e).expect("surface_support"),
     };
 
-    let mut composite_tree = CompositeTree::new();
-    composite_tree.get_mut(CompositeTree::ROOT).composite_mode =
-        CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
-    composite_tree.get_mut(CompositeTree::ROOT).has_bitmap = true;
-    composite_tree.mark_dirty(CompositeTree::ROOT);
-
-    // app title view
-    let app_title = composite_tree.register(CompositeRect {
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
-        relative_size_adjustment: [1.0, 0.0],
-        size: [
-            AnimatableFloat::Value(0.0),
-            AnimatableFloat::Value(24.0 * 2.0),
-        ],
-        text: Some(CompositeRectText {
-            runs: vec![
-                CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: "Peridot Marble Editor".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                },
-                CompositeRectTextRun {
-                    font_id: FontID::UITitleProjectName,
-                    content: "New Project".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    spacing_inline_start: 4.0,
-                    ..Default::default()
-                },
-            ],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            layout_dirty: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-    composite_tree.add_child(CompositeTree::ROOT, app_title);
-
-    let mut app = core::pin::pin!(run_app(WindowHandle { hwnd: w.0 }, drag_preview_popover));
+    let mut app = core::pin::pin!(run_app(
+        &composite_sync_buffer,
+        WindowHandle { hwnd: w.0 },
+        drag_preview_popover
+    ));
     let _ = app
         .as_mut()
         .poll(&mut core::task::Context::from_waker(&unsafe {
@@ -514,6 +494,8 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
             .spawn_scoped(thread_scope, || {
                 tracing::info!("Starting RenderThread...");
                 let mut render_queue = vk_device.queue(vk_device.present_queue_family_index(), 0);
+
+                let mut composite_tree = CompositeTreeRender::new();
 
                 #[cfg(windows)]
                 let dw_factory: IDWriteFactory = unsafe {
@@ -1282,6 +1264,10 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
 
                     let current_t = global_time_base.elapsed();
                     vector_raster_state.clear();
+                    composite_sync_buffer
+                        .lock()
+                        .expect("poisoned")
+                        .clean(&mut composite_tree);
                     let composite_render_data = composite_renderer.update(
                         &vk_device,
                         &mut composite_tree,
@@ -2254,6 +2240,7 @@ fn main_wrapper<AppFuture: core::future::Future<Output = ()>>(
     });
 }
 
+#[derive(Clone)]
 pub enum Event {
     Quit,
     PointerDown {
@@ -2322,8 +2309,9 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
-async fn run(
+async fn run<'sys>(
     event_queue: EventQueue,
+    composite_tree_sync_buffer: &'sys Mutex<CompositeTreeSyncBuffer>,
     main_window: WindowHandle,
     mut drag_preview_popover: DragPreviewPopoverHandle,
 ) {
@@ -2336,6 +2324,46 @@ async fn run(
         PointerInputManager::new(main_client_size.0 as _, main_client_size.1 as _);
 
     let mut ht_manager = HitTestTreeManager::new();
+    let mut composite_tree = CompositeTree::new();
+    composite_tree.get_mut(CompositeTree::ROOT).composite_mode =
+        CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
+    composite_tree.get_mut(CompositeTree::ROOT).has_bitmap = true;
+    composite_tree.mark_dirty(CompositeTree::ROOT);
+
+    // app title view
+    let app_title = composite_tree.register(CompositeRect {
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
+        relative_size_adjustment: [1.0, 0.0],
+        size: [
+            AnimatableFloat::Value(0.0),
+            AnimatableFloat::Value(24.0 * 2.0),
+        ],
+        text: Some(CompositeRectText {
+            runs: vec![
+                CompositeRectTextRun {
+                    font_id: FontID::UIDefault,
+                    content: "Peridot Marble Editor".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                },
+                CompositeRectTextRun {
+                    font_id: FontID::UITitleProjectName,
+                    content: "New Project".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    spacing_inline_start: 4.0,
+                    ..Default::default()
+                },
+            ],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+            layout_dirty: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    composite_tree.add_child(CompositeTree::ROOT, app_title);
+    composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
 
     loop {
         match event_queue.next_event().await {

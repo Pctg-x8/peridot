@@ -1,6 +1,9 @@
 //! UI Rect Compositioning
 
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, Image, ImageChild, MemoryBound,
@@ -82,6 +85,7 @@ pub struct CompositeStreamingData {
     pub current_sec: f32,
 }
 
+#[derive(Clone)]
 pub enum CompositeMode {
     DirectSourceOver,
     ColorTint(AnimatableColor),
@@ -142,9 +146,10 @@ impl FloatParameter {
     }
 }
 
+#[derive(Clone)]
 pub enum AnimatableFloat {
     Value(f32),
-    Expression(Box<dyn Fn(&CompositeTreeParameterStore) -> f32 + Sync + Send>),
+    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender) -> f32 + Sync + Send>),
     Animated {
         start_sec: f32,
         end_sec: f32,
@@ -155,7 +160,11 @@ pub enum AnimatableFloat {
     },
 }
 impl AnimatableFloat {
-    pub fn evaluate(&self, current_sec: f32, parameter_store: &CompositeTreeParameterStore) -> f32 {
+    pub fn evaluate(
+        &self,
+        current_sec: f32,
+        parameter_store: &CompositeTreeParameterStoreRender,
+    ) -> f32 {
         match self {
             &Self::Value(x) => x,
             &Self::Expression(ref x) => x(parameter_store),
@@ -189,9 +198,10 @@ impl AnimatableFloat {
     }
 }
 
+#[derive(Clone)]
 pub enum AnimatableColor {
     Value([f32; 4]),
-    Expression(Box<dyn Fn(&CompositeTreeParameterStore) -> [f32; 4] + Sync + Send>),
+    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender) -> [f32; 4] + Sync + Send>),
     Animated {
         start_sec: f32,
         end_sec: f32,
@@ -205,7 +215,7 @@ impl AnimatableColor {
     pub fn evaluate(
         &self,
         current_sec: f32,
-        parameter_store: &CompositeTreeParameterStore,
+        parameter_store: &CompositeTreeParameterStoreRender,
     ) -> [f32; 4] {
         match self {
             &Self::Value(x) => x,
@@ -446,6 +456,7 @@ pub enum CompositeRectTextVerticalAlignment {
     End,
 }
 
+#[derive(Clone)]
 pub struct CompositeRectTextRun {
     pub font_id: FontID,
     pub content: String,
@@ -463,7 +474,7 @@ impl Default for CompositeRectTextRun {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CompositeRectText {
     pub runs: Vec<CompositeRectTextRun>,
     pub layout_dirty: bool,
@@ -471,6 +482,7 @@ pub struct CompositeRectText {
     pub vertical_alignment: CompositeRectTextVerticalAlignment,
 }
 
+#[derive(Clone)]
 pub struct CompositeRect {
     pub has_bitmap: bool,
     pub base_scale_factor: f32,
@@ -772,7 +784,7 @@ impl CompositeInstanceMappedStreamingMemory<'_, '_> {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompositeTreeRef(usize);
 impl CompositeTreeRef {
     #[inline(always)]
@@ -801,31 +813,16 @@ impl CompositeTreeRef {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CompositeTreeFloatParameterRef(usize);
 
-pub struct CompositeTreeParameterStore {
+enum DirtyFloatParameter {
+    Modified(FloatParameter),
+    Deleted,
+}
+
+pub struct CompositeTreeParameterStoreRender {
     float_parameters: Vec<FloatParameter>,
     float_values: Vec<f32>,
-    unused_float_parameters: BTreeSet<usize>,
 }
-impl CompositeTreeParameterStore {
-    pub fn alloc_float(&mut self, init: FloatParameter) -> CompositeTreeFloatParameterRef {
-        if let Some(x) = self.unused_float_parameters.pop_first() {
-            self.float_parameters[x] = init;
-            return CompositeTreeFloatParameterRef(x);
-        }
-
-        self.float_parameters.push(init);
-        self.float_values.push(0.0);
-        CompositeTreeFloatParameterRef(self.float_parameters.len() - 1)
-    }
-
-    pub fn free_float(&mut self, r: CompositeTreeFloatParameterRef) {
-        self.unused_float_parameters.insert(r.0);
-    }
-
-    pub fn set_float(&mut self, r: CompositeTreeFloatParameterRef, a: FloatParameter) {
-        self.float_parameters[r.0] = a;
-    }
-
+impl CompositeTreeParameterStoreRender {
     pub fn evaluate_float(&self, r: CompositeTreeFloatParameterRef, current_sec: f32) -> f32 {
         self.float_parameters[r.0].evaluate(current_sec)
     }
@@ -842,6 +839,70 @@ impl CompositeTreeParameterStore {
         {
             *v = p.evaluate(current_sec);
         }
+    }
+}
+
+struct CompositeTreeParameterStoreSyncBuffer {
+    dirty_float_parameters: Vec<(usize, DirtyFloatParameter)>,
+    push_float_parameters: Vec<FloatParameter>,
+}
+impl CompositeTreeParameterStoreSyncBuffer {
+    pub fn clean(&mut self, render: &mut CompositeTreeParameterStoreRender) {
+        for x in self.push_float_parameters.drain(..) {
+            render.float_parameters.push(x);
+            render.float_values.push(0.0);
+        }
+
+        for (n, x) in self.dirty_float_parameters.drain(..) {
+            match x {
+                DirtyFloatParameter::Modified(x) => {
+                    render.float_parameters[n] = x;
+                    render.float_values[n] = 0.0;
+                }
+                DirtyFloatParameter::Deleted => {
+                    // TODO: 削除が明示的に必要になったら書く
+                }
+            }
+        }
+    }
+}
+
+pub struct CompositeTreeParameterStore {
+    dirty_float_parameters: HashMap<usize, DirtyFloatParameter>,
+    push_float_parameters: Vec<FloatParameter>,
+    unused_float_parameters: BTreeSet<usize>,
+    float_parameter_store_size: usize,
+}
+impl CompositeTreeParameterStore {
+    pub fn alloc_float(&mut self, init: FloatParameter) -> CompositeTreeFloatParameterRef {
+        if let Some(x) = self.unused_float_parameters.pop_first() {
+            self.dirty_float_parameters
+                .insert(x, DirtyFloatParameter::Modified(init));
+            return CompositeTreeFloatParameterRef(x);
+        }
+
+        let id = CompositeTreeFloatParameterRef(self.float_parameter_store_size);
+        self.float_parameter_store_size += 1;
+        self.push_float_parameters.push(init);
+        id
+    }
+
+    pub fn free_float(&mut self, r: CompositeTreeFloatParameterRef) {
+        self.unused_float_parameters.insert(r.0);
+        self.dirty_float_parameters
+            .insert(r.0, DirtyFloatParameter::Deleted);
+    }
+
+    pub fn set_float(&mut self, r: CompositeTreeFloatParameterRef, a: FloatParameter) {
+        self.dirty_float_parameters
+            .insert(r.0, DirtyFloatParameter::Modified(a));
+    }
+
+    fn commit(&mut self, sync: &mut CompositeTreeParameterStoreSyncBuffer) {
+        sync.push_float_parameters
+            .extend(self.push_float_parameters.drain(..));
+        sync.dirty_float_parameters
+            .extend(self.dirty_float_parameters.drain());
     }
 }
 
@@ -1209,23 +1270,27 @@ impl VectorRasterizationState {
     }
 }
 
-pub struct CompositeTree {
+enum DirtyRect {
+    Modified,
+    Deleted,
+}
+
+enum DirtyRectSync {
+    Modified(CompositeRect),
+    Deleted,
+}
+
+pub struct CompositeTreeRender {
     rects: Vec<CompositeRect>,
     caches: Vec<CompositeRectCache>,
-    unused: BTreeSet<usize>,
-    dirty: bool,
-    parameter_store: CompositeTreeParameterStore,
-    custom_render_unused: BTreeSet<usize>,
-    custom_render_last_id: usize,
+    parameter_store: CompositeTreeParameterStoreRender,
 }
-impl CompositeTree {
-    /// ルートノード
-    pub const ROOT: CompositeTreeRef = CompositeTreeRef(0);
-
+impl CompositeTreeRender {
     pub fn new() -> Self {
         let mut rects = Vec::new();
         let mut caches = Vec::new();
         // root is filling rect
+        // CompositeTree側とあらかじめ同じ値で初期化しておくことでsync量を削減する
         rects.push(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
@@ -1235,87 +1300,11 @@ impl CompositeTree {
         Self {
             rects,
             caches,
-            unused: BTreeSet::new(),
-            dirty: false,
-            parameter_store: CompositeTreeParameterStore {
+            parameter_store: CompositeTreeParameterStoreRender {
                 float_parameters: Vec::new(),
                 float_values: Vec::new(),
-                unused_float_parameters: BTreeSet::new(),
             },
-            custom_render_unused: BTreeSet::new(),
-            custom_render_last_id: 0,
         }
-    }
-
-    pub fn register(&mut self, data: CompositeRect) -> CompositeTreeRef {
-        if let Some(x) = self.unused.pop_first() {
-            self.rects[x] = data;
-            return CompositeTreeRef(x);
-        }
-
-        self.rects.push(data);
-        self.caches.push(CompositeRectCache::new());
-        CompositeTreeRef(self.rects.len() - 1)
-    }
-
-    pub fn free(&mut self, index: CompositeTreeRef) {
-        self.unused.insert(index.0);
-    }
-
-    pub fn acquire_custom_render_token(&mut self) -> CustomRenderToken {
-        if let Some(x) = self.custom_render_unused.pop_first() {
-            return CustomRenderToken(x);
-        }
-
-        let t = CustomRenderToken(self.custom_render_last_id);
-        self.custom_render_last_id += 1;
-        t
-    }
-
-    pub fn release_custom_render_token(&mut self, token: CustomRenderToken) {
-        self.custom_render_unused.insert(token.0);
-    }
-
-    pub fn get(&self, index: CompositeTreeRef) -> &CompositeRect {
-        &self.rects[index.0]
-    }
-
-    pub fn get_mut(&mut self, index: CompositeTreeRef) -> &mut CompositeRect {
-        &mut self.rects[index.0]
-    }
-
-    pub fn mark_dirty(&mut self, index: CompositeTreeRef) {
-        self.rects[index.0].dirty = true;
-        self.dirty = true;
-    }
-
-    pub fn take_dirty(&mut self) -> bool {
-        core::mem::replace(&mut self.dirty, false)
-    }
-
-    pub fn add_child(&mut self, parent: CompositeTreeRef, child: CompositeTreeRef) {
-        if let Some(p) = self.rects[child.0].parent.replace(parent.0) {
-            // unlink from old parent
-            self.rects[p].children.retain(|&x| x != child.0);
-        }
-
-        self.rects[parent.0].children.push(child.0);
-        self.dirty = true;
-    }
-
-    pub fn remove_child(&mut self, child: CompositeTreeRef) {
-        if let Some(p) = self.rects[child.0].parent.take() {
-            self.rects[p].children.retain(|&x| x != child.0);
-            self.dirty = true;
-        }
-    }
-
-    pub const fn parameter_store(&self) -> &CompositeTreeParameterStore {
-        &self.parameter_store
-    }
-
-    pub const fn parameter_store_mut(&mut self) -> &mut CompositeTreeParameterStore {
-        &mut self.parameter_store
     }
 
     /// return: bitmap count
@@ -3190,6 +3179,176 @@ impl CompositeTree {
     }
 }
 
+pub struct CompositeTreeSyncBuffer {
+    pushed_rects: Vec<CompositeRect>,
+    dirty_rects: Vec<(usize, DirtyRectSync)>,
+    parameter_store: CompositeTreeParameterStoreSyncBuffer,
+}
+impl CompositeTreeSyncBuffer {
+    pub fn new() -> Self {
+        Self {
+            pushed_rects: Vec::new(),
+            dirty_rects: Vec::new(),
+            parameter_store: CompositeTreeParameterStoreSyncBuffer {
+                push_float_parameters: Vec::new(),
+                dirty_float_parameters: Vec::new(),
+            },
+        }
+    }
+
+    pub fn clean(&mut self, render: &mut CompositeTreeRender) {
+        let _ = render.rects.try_reserve(self.pushed_rects.len());
+        let _ = render.caches.try_reserve(self.pushed_rects.len());
+        for x in self.pushed_rects.drain(..) {
+            render.rects.push(x);
+            render.caches.push(CompositeRectCache::new());
+        }
+
+        for (n, x) in self.dirty_rects.drain(..) {
+            match x {
+                DirtyRectSync::Modified(new) => {
+                    render.rects[n] = new;
+                }
+                DirtyRectSync::Deleted => {
+                    // TODO: 今はすることがない そのうちCompositeRectに有効無効のフラグもたせるかも
+                }
+            }
+        }
+
+        self.parameter_store.clean(&mut render.parameter_store);
+    }
+}
+
+pub struct CompositeTree {
+    rects: Vec<CompositeRect>,
+    pushed_rects: Vec<usize>,
+    dirty_rects: HashMap<usize, DirtyRect>,
+    unused: BTreeSet<usize>,
+    dirty: bool,
+    parameter_store: CompositeTreeParameterStore,
+    custom_render_unused: BTreeSet<usize>,
+    custom_render_last_id: usize,
+}
+impl CompositeTree {
+    /// ルートノード
+    pub const ROOT: CompositeTreeRef = CompositeTreeRef(0);
+
+    pub fn new() -> Self {
+        let mut rects = Vec::new();
+        // root is filling rect
+        rects.push(CompositeRect {
+            relative_size_adjustment: [1.0, 1.0],
+            ..Default::default()
+        });
+
+        Self {
+            rects,
+            pushed_rects: Vec::new(),
+            dirty_rects: HashMap::new(),
+            unused: BTreeSet::new(),
+            dirty: false,
+            parameter_store: CompositeTreeParameterStore {
+                push_float_parameters: Vec::new(),
+                dirty_float_parameters: HashMap::new(),
+                unused_float_parameters: BTreeSet::new(),
+                float_parameter_store_size: 0,
+            },
+            custom_render_unused: BTreeSet::new(),
+            custom_render_last_id: 0,
+        }
+    }
+
+    pub fn register(&mut self, data: CompositeRect) -> CompositeTreeRef {
+        if let Some(x) = self.unused.pop_first() {
+            self.rects[x] = data;
+            self.dirty_rects.insert(x, DirtyRect::Modified);
+            return CompositeTreeRef(x);
+        }
+
+        let id = CompositeTreeRef(self.rects.len());
+        self.rects.push(data);
+        self.pushed_rects.push(id.0);
+        id
+    }
+
+    pub fn free(&mut self, index: CompositeTreeRef) {
+        self.unused.insert(index.0);
+        self.dirty_rects.insert(index.0, DirtyRect::Deleted);
+    }
+
+    pub fn acquire_custom_render_token(&mut self) -> CustomRenderToken {
+        if let Some(x) = self.custom_render_unused.pop_first() {
+            return CustomRenderToken(x);
+        }
+
+        let t = CustomRenderToken(self.custom_render_last_id);
+        self.custom_render_last_id += 1;
+        t
+    }
+
+    pub fn release_custom_render_token(&mut self, token: CustomRenderToken) {
+        self.custom_render_unused.insert(token.0);
+    }
+
+    pub fn get(&self, index: CompositeTreeRef) -> &CompositeRect {
+        &self.rects[index.0]
+    }
+
+    pub fn get_mut(&mut self, index: CompositeTreeRef) -> &mut CompositeRect {
+        &mut self.rects[index.0]
+    }
+
+    pub fn mark_dirty(&mut self, index: CompositeTreeRef) {
+        self.rects[index.0].dirty = true;
+        self.dirty_rects.insert(index.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn commit(&mut self, sync_buffer: &mut CompositeTreeSyncBuffer) {
+        sync_buffer
+            .pushed_rects
+            .extend(self.pushed_rects.drain(..).map(|n| self.rects[n].clone()));
+        sync_buffer
+            .dirty_rects
+            .extend(self.dirty_rects.drain().map(|(n, x)| match x {
+                DirtyRect::Modified => (n, DirtyRectSync::Modified(self.rects[n].clone())),
+                DirtyRect::Deleted => (n, DirtyRectSync::Deleted),
+            }));
+        self.parameter_store
+            .commit(&mut sync_buffer.parameter_store);
+
+        self.dirty = false;
+    }
+
+    pub fn add_child(&mut self, parent: CompositeTreeRef, child: CompositeTreeRef) {
+        if let Some(p) = self.rects[child.0].parent.replace(parent.0) {
+            // unlink from old parent
+            self.rects[p].children.retain(|&x| x != child.0);
+            self.dirty_rects.insert(p, DirtyRect::Modified);
+        }
+
+        self.rects[parent.0].children.push(child.0);
+        self.dirty_rects.insert(parent.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn remove_child(&mut self, child: CompositeTreeRef) {
+        if let Some(p) = self.rects[child.0].parent.take() {
+            self.rects[p].children.retain(|&x| x != child.0);
+            self.dirty_rects.insert(p, DirtyRect::Modified);
+            self.dirty = true;
+        }
+    }
+
+    pub const fn parameter_store(&self) -> &CompositeTreeParameterStore {
+        &self.parameter_store
+    }
+
+    pub const fn parameter_store_mut(&mut self) -> &mut CompositeTreeParameterStore {
+        &mut self.parameter_store
+    }
+}
+
 struct CompositeDescriptorSet {}
 impl CompositeDescriptorSet {
     pub const BINDINGS: &[br::DescriptorSetLayoutBinding<'static>] = &[
@@ -3788,7 +3947,7 @@ impl CompositeRenderer {
     pub fn update(
         &mut self,
         gfx: &VulkanDevice,
-        tree: &mut CompositeTree,
+        tree: &mut CompositeTreeRender,
         rt_size: br::Extent2D,
         font_set: &FontSet,
         mask_atlas: &mut GlyphAtlas,
