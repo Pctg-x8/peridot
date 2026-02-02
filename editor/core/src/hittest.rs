@@ -105,12 +105,12 @@ impl<'h> HitTestTreeManager<'h> {
     }
 
     #[inline]
-    pub fn get_data(&self, r: HitTestTreeRef) -> &HitTestTreeData {
+    pub fn get_data<'d>(&'d self, r: HitTestTreeRef) -> &'d HitTestTreeData<'h> {
         &self.data[r.0]
     }
 
     #[inline]
-    pub fn get_data_mut(&mut self, r: HitTestTreeRef) -> &mut HitTestTreeData<'h> {
+    pub fn get_data_mut<'d>(&'d mut self, r: HitTestTreeRef) -> &'d mut HitTestTreeData<'h> {
         &mut self.data[r.0]
     }
 
