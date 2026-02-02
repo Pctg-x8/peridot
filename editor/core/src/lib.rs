@@ -65,9 +65,8 @@ use windows_core::*;
 use windows_numerics::{Vector2, Vector3};
 
 #[cfg(windows)]
-use crate::{
-    bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
-    input::{KeyboardFocusManager, PointerInputManager},
+use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
+    EffectOptimization, GaussianBlurEffect,
 };
 use crate::{
     composite::{
@@ -79,7 +78,7 @@ use crate::{
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
     hittest::{HitTestTreeData, HitTestTreeManager},
-    input::ShellPointerActions,
+    input::{KeyboardFocusManager, PointerInputManager, ShellPointerActions},
 };
 
 mod atlas;
@@ -430,7 +429,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     let mut app = core::pin::pin!(run_app(
         &composite_sync_buffer,
+        #[cfg(windows)]
         WindowHandle { hwnd: w.0 },
+        #[cfg(feature = "wayland")]
+        WindowHandle {
+            window_state: w.state.as_ref() as *const _
+        },
         drag_preview_popover
     ));
     let _ = app
@@ -2551,6 +2555,31 @@ impl crate::input::ShellPointerActions for WindowHandle {
         if let Err(e) = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture() } {
             tracing::error!(reason = %e, "release_capture");
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "wayland")]
+pub struct WindowHandle {
+    window_state: *const WaylandWindowState,
+}
+#[cfg(feature = "wayland")]
+impl WindowHandle {
+    #[inline(always)]
+    pub fn client_size(&self) -> (u32, u32) {
+        unsafe { (*self.window_state).active_size }
+    }
+}
+#[cfg(feature = "wayland")]
+impl crate::input::ShellPointerActions for WindowHandle {
+    #[inline(always)]
+    fn capture_pointer(&self) {
+        // Waylandはなし(勝手にキャプチャ状態になってるらしい)
+    }
+
+    #[inline(always)]
+    fn release_pointer(&self) {
+        // Waylandはなし(勝手にキャプチャ状態になってるらしい)
     }
 }
 
