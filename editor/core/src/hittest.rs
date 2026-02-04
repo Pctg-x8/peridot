@@ -131,7 +131,7 @@ impl<'h> HitTestTreeManager<'h> {
     pub const fn iter_ascending_from<'d>(
         &'d self,
         r: HitTestTreeRef,
-    ) -> impl Iterator<Item = &'d HitTestTreeData<'h>> {
+    ) -> impl Iterator<Item = HitTestTreeRef> {
         AscendingIterator {
             ht_manager: self,
             pointing: Some(r),
@@ -348,14 +348,14 @@ pub struct AscendingIterator<'ht, 'h> {
     pointing: Option<HitTestTreeRef>,
 }
 impl<'ht, 'h> Iterator for AscendingIterator<'ht, 'h> {
-    type Item = &'ht HitTestTreeData<'h>;
+    type Item = HitTestTreeRef;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.pointing {
             None => None,
             Some(p) => {
                 self.pointing = self.ht_manager.parent_of(p);
-                Some(self.ht_manager.get_data(p))
+                Some(p)
             }
         }
     }

@@ -57,8 +57,7 @@ impl PointerInputManager {
         action_context: &mut HitTestEventContext,
         ht_target: HitTestTreeRef,
     ) {
-        let mut p = Some(ht_target);
-        while let Some(ht_ref) = p {
+        for ht_ref in ht.iter_ascending_from(ht_target) {
             let flags = ht
                 .get_data(ht_ref)
                 .action_handler()
@@ -68,8 +67,6 @@ impl PointerInputManager {
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
-
-            p = ht.parent_of(ht_ref);
         }
     }
 
@@ -80,8 +77,7 @@ impl PointerInputManager {
         action_context: &mut HitTestEventContext,
         ht_target: HitTestTreeRef,
     ) {
-        let mut p = Some(ht_target);
-        while let Some(ht_ref) = p {
+        for ht_ref in ht.iter_ascending_from(ht_target) {
             let flags = ht
                 .get_data(ht_ref)
                 .action_handler()
@@ -91,8 +87,6 @@ impl PointerInputManager {
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
-
-            p = ht.parent_of(ht_ref);
         }
     }
 
@@ -108,8 +102,7 @@ impl PointerInputManager {
         let mut needs_recompute_pointer_enter = false;
         let mut new_captured = None;
 
-        let mut p = Some(ht_target);
-        while let Some(ht_ref) = p {
+        for ht_ref in ht.iter_ascending_from(ht_target) {
             let flags = ht
                 .get_data(ht_ref)
                 .action_handler()
@@ -136,8 +129,6 @@ impl PointerInputManager {
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
-
-            p = ht.parent_of(ht_ref);
         }
 
         (needs_recompute_pointer_enter, new_captured)
@@ -151,8 +142,8 @@ impl PointerInputManager {
         ht_target: HitTestTreeRef,
     ) -> bool {
         let mut needs_recompute_pointer_enter = false;
-        let mut p = Some(ht_target);
-        while let Some(ht_ref) = p {
+
+        for ht_ref in ht.iter_ascending_from(ht_target) {
             let flags = ht
                 .get_data(ht_ref)
                 .action_handler()
@@ -165,8 +156,6 @@ impl PointerInputManager {
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
-
-            p = ht.parent_of(ht_ref);
         }
 
         needs_recompute_pointer_enter
@@ -183,8 +172,7 @@ impl PointerInputManager {
         let mut needs_recompute_pointer_enter = false;
         let mut new_captured = None;
 
-        let mut p = Some(ht_target);
-        while let Some(ht_ref) = p {
+        for ht_ref in ht.iter_ascending_from(ht_target) {
             let flags = ht
                 .get_data(ht_ref)
                 .action_handler()
@@ -201,8 +189,6 @@ impl PointerInputManager {
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
-
-            p = ht.parent_of(ht_ref);
         }
 
         (needs_recompute_pointer_enter, new_captured)
@@ -219,8 +205,7 @@ impl PointerInputManager {
         let mut needs_recompute_pointer_enter = false;
         let mut new_captured = None;
 
-        let mut p = Some(ht_target);
-        while let Some(ht_ref) = p {
+        for ht_ref in ht.iter_ascending_from(ht_target) {
             let flags = ht
                 .get_data(ht_ref)
                 .action_handler()
@@ -237,8 +222,6 @@ impl PointerInputManager {
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
-
-            p = ht.parent_of(ht_ref);
         }
 
         (needs_recompute_pointer_enter, new_captured)
@@ -613,6 +596,7 @@ impl PointerInputManager {
             PointerFocusState::Capturing(ht_ref) => ht.get_data(ht_ref).cursor_shape,
             PointerFocusState::Entering(ht_ref) => ht
                 .iter_ascending_from(ht_ref)
+                .map(|hr| ht.get_data(hr))
                 .find(|x| x.opaque)
                 .map_or(CursorShape::Default, |h| h.cursor_shape),
             PointerFocusState::None => CursorShape::Default,
@@ -625,9 +609,9 @@ impl PointerInputManager {
                 // キャプチャ中の要素があればそれだけを見る
                 ht.get_data(ht_ref).role
             }
-            PointerFocusState::Entering(ht_ref) => {
-                ht.iter_ascending_from(ht_ref).find_map(|x| x.role)
-            }
+            PointerFocusState::Entering(ht_ref) => ht
+                .iter_ascending_from(ht_ref)
+                .find_map(|x| ht.get_data(x).role),
             PointerFocusState::None => None,
         }
     }
@@ -664,7 +648,8 @@ impl PointerInputManager {
             return None;
         };
 
-        ht.iter_ascending_from(hit).find_map(|x| x.role)
+        ht.iter_ascending_from(hit)
+            .find_map(|x| ht.get_data(x).role)
     }
 }
 
