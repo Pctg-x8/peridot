@@ -85,7 +85,7 @@ pub struct CompositeStreamingData {
     pub current_sec: f32,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum CompositeMode {
     DirectSourceOver,
     ColorTint(AnimatableColor),
@@ -159,6 +159,33 @@ pub enum AnimatableFloat {
         event_on_complete: Option<Event>,
     },
 }
+impl core::fmt::Debug for AnimatableFloat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(x) => f.debug_tuple("AnimatableFloat::Value").field(x).finish(),
+            Self::Expression(_) => f
+                .debug_tuple("AnimatableFloat::Expression")
+                .field(&"<fn>")
+                .finish(),
+            Self::Animated {
+                start_sec,
+                end_sec,
+                from_value,
+                to_value,
+                curve,
+                event_on_complete,
+            } => f
+                .debug_struct("AnimatableFloat::Animated")
+                .field("start_sec", start_sec)
+                .field("end_sec", end_sec)
+                .field("from_value", from_value)
+                .field("to_value", to_value)
+                .field("curve", curve)
+                .field("event_on_complete", &"<event>")
+                .finish(),
+        }
+    }
+}
 impl AnimatableFloat {
     pub fn evaluate(
         &self,
@@ -211,6 +238,33 @@ pub enum AnimatableColor {
         event_on_complete: Option<Event>,
     },
 }
+impl core::fmt::Debug for AnimatableColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(x) => f.debug_tuple("AnimatableColor::Value").field(x).finish(),
+            Self::Expression(_) => f
+                .debug_tuple("AnimatableColor::Expression")
+                .field(&"<fn>")
+                .finish(),
+            Self::Animated {
+                start_sec,
+                end_sec,
+                from_value,
+                to_value,
+                curve,
+                event_on_complete,
+            } => f
+                .debug_struct("AnimatableColor::Animated")
+                .field("start_sec", start_sec)
+                .field("end_sec", end_sec)
+                .field("from_value", from_value)
+                .field("to_value", to_value)
+                .field("curve", curve)
+                .field("event_on_complete", &"<event>")
+                .finish(),
+        }
+    }
+}
 impl AnimatableColor {
     pub fn evaluate(
         &self,
@@ -250,7 +304,7 @@ impl AnimatableColor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum AnimationCurve {
     Linear,
     CubicBezier { p1: (f32, f32), p2: (f32, f32) },
@@ -420,7 +474,7 @@ fn interpolate_cubic_bezier(t: f32, p1: (f32, f32), p2: (f32, f32)) -> f32 {
         + p1.1 * 3.0 * t0
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ClipConfig {
     pub left_softness: SafeF32,
     pub top_softness: SafeF32,
@@ -456,7 +510,7 @@ pub enum CompositeRectTextVerticalAlignment {
     End,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CompositeRectTextRun {
     pub font_id: FontID,
     pub content: String,
@@ -474,7 +528,7 @@ impl Default for CompositeRectTextRun {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct CompositeRectText {
     pub runs: Vec<CompositeRectTextRun>,
     pub layout_dirty: bool,
@@ -482,7 +536,7 @@ pub struct CompositeRectText {
     pub vertical_alignment: CompositeRectTextVerticalAlignment,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CompositeRect {
     pub has_bitmap: bool,
     pub base_scale_factor: f32,

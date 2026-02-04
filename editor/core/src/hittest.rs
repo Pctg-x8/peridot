@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 
-use crate::input::{EventContinueControl, FocusTargetToken};
+use crate::{
+    composite::CompositeTree,
+    input::{EventContinueControl, FocusTargetToken},
+};
 
 pub struct HitTestTreeData<'h> {
     pub active: bool,
@@ -377,7 +380,10 @@ pub enum Role {
     RestoreButton,
 }
 
-pub struct HitTestEventContext {}
+pub struct HitTestEventContext {
+    pub current_sec: f32,
+    pub composite_tree: CompositeTree,
+}
 
 pub trait HitTestTreeActionHandler {
     #[allow(unused_variables)]
