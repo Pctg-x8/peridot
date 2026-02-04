@@ -3,8 +3,7 @@ use std::collections::BTreeSet;
 use bitflags::bitflags;
 
 use crate::hittest::{
-    CursorShape, HitTestEventContext, HitTestOptions, HitTestTreeManager, HitTestTreeRef,
-    PointerActionArgs, Role,
+    CursorShape, HitTestEventContext, HitTestTreeManager, HitTestTreeRef, PointerActionArgs, Role,
 };
 
 bitflags! {
@@ -247,7 +246,6 @@ impl PointerInputManager {
                 width: client_width,
                 height: client_height,
             },
-            HitTestOptions::ONLY_ACTION_HANDLED,
         );
         let (new_leave, new_enter) = match (&self.pointer_focus, new_hit) {
             // in capturing, this routine is never called
@@ -641,8 +639,6 @@ impl PointerInputManager {
                 width: client_width,
                 height: client_height,
             },
-            // roleの判定ではaction_handlerの有無を見ない
-            HitTestOptions::empty(),
         ) else {
             // なにもヒットしなかった
             return None;

@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
 
-use bitflags::bitflags;
-
 use crate::input::{EventContinueControl, FocusTargetToken};
 
 pub struct HitTestTreeData<'h> {
@@ -259,7 +257,6 @@ impl<'h> HitTestTreeManager<'h> {
         global_x: f32,
         global_y: f32,
         parent_effective_global_rect: Rect,
-        options: HitTestOptions,
     ) -> Option<HitTestTreeRef> {
         let d = &self.data[root.0];
         if !d.active {
@@ -286,36 +283,19 @@ impl<'h> HitTestTreeManager<'h> {
                 global_x,
                 global_y,
                 effective_global_rect.clone(),
-                options,
             )
         }) {
             // 子にヒット
             return Some(t);
         }
 
-        if effective_global_rect.point_in_inclusive(global_x, global_y) {
-            // 自分にヒット
-            // ただしフラグが設定されている場合はaction handlerが設定されていない場合は透過とみなす(うしろにあるHitTestTreeにあたってほしい)
-            let is_opaque = if options.contains(HitTestOptions::ONLY_ACTION_HANDLED) {
-                d.action_handler.is_some()
-            } else {
-                d.opaque
-            };
-
-            if is_opaque {
-                return Some(root);
-            }
+        if d.opaque && effective_global_rect.point_in_inclusive(global_x, global_y) {
+            // 自分にヒット(不透明の場合のみ 透過で指定されている場合はヒットしてない扱いにする)
+            return Some(root);
         }
 
         // なににもヒットしなかった
         None
-    }
-}
-
-bitflags! {
-    #[derive(Clone, Copy, Debug)]
-    pub struct HitTestOptions : u8 {
-        const ONLY_ACTION_HANDLED = 1 << 0;
     }
 }
 
