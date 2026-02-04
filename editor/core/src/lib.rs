@@ -359,12 +359,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
 
     #[cfg(feature = "wayland")]
-    let mut surface_to_xdg_surface = HashMap::new();
-
-    #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(&wl_interfaces, &dbus);
-    #[cfg(feature = "wayland")]
-    surface_to_xdg_surface.insert(w.surface.as_ptr(), w.xdg_surface.as_ptr());
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new();
@@ -441,6 +436,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let mut wl_global_msg = core::pin::pin!(WaylandGlobalMessaging {
         surface_states: &surface_states,
         xdg_surface_to_surface: HashMap::new(),
+        surface_to_xdg_surface: HashMap::new(),
         xdg_toplevel_to_surface: HashMap::new(),
         text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
         text_input: None,
@@ -450,16 +446,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         xkb_keymap: None,
         xkb_state: None,
         pointer: None,
-        pointer_on_surface: None,
-        pointer_enter_serial: None,
         cursor_shape_manager: wl_interfaces
             .cursor_shape_manager
             .as_ref()
             .map(|x| x.as_ptr()),
-        cursor: None,
-        pointer_pos: (0.0, 0.0),
-        pointer_active_surface: None,
-        surface_to_xdg_surface,
         event_dispatcher: LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
             future: core::ptr::null_mut()
@@ -3930,10 +3920,27 @@ impl DragPreviewPopoverHandle {
 
 #[cfg(feature = "wayland")]
 const WL_APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
+
+#[cfg(feature = "wayland")]
+struct WaylandPointerEnterState {
+    pub surface: *mut wl::Surface,
+    pub xdg_surface: *mut wl::XdgSurface,
+    pub serial: u32,
+}
+
+#[cfg(feature = "wayland")]
+struct WaylandPointerState {
+    _wl_object: wl::Owned<wl::Pointer>,
+    cursor: Option<wl::Owned<wl::WpCursorShapeDeviceV1>>,
+    pos: (f32, f32),
+    enter_state: Option<WaylandPointerEnterState>,
+}
+
 #[cfg(feature = "wayland")]
 struct WaylandGlobalMessaging<'sys, AppFuture: core::future::Future<Output = ()>> {
     pub surface_states: &'sys Mutex<HashMap<WaylandSurfaceKey, WaylandWindowState>>,
     pub xdg_surface_to_surface: HashMap<*mut wl::XdgSurface, *mut wl::Surface>,
+    pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
     pub xdg_toplevel_to_surface: HashMap<*mut wl::XdgToplevel, *mut wl::Surface>,
     pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
     pub text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
@@ -3941,14 +3948,8 @@ struct WaylandGlobalMessaging<'sys, AppFuture: core::future::Future<Output = ()>
     pub xkb_context: xkbcommon::Context,
     pub xkb_keymap: Option<xkbcommon::Keymap>,
     pub xkb_state: Option<xkbcommon::State>,
-    pub pointer: Option<wl::Owned<wl::Pointer>>,
-    pub pointer_on_surface: Option<*mut wl::Surface>,
-    pub pointer_enter_serial: Option<u32>,
+    pub pointer: Option<WaylandPointerState>,
     pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
-    pub cursor: Option<wl::Owned<wl::WpCursorShapeDeviceV1>>,
-    pub pointer_pos: (f32, f32),
-    pub pointer_active_surface: Option<core::ptr::NonNull<wl::XdgSurface>>,
-    pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
     pub event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
     _pinned: core::marker::PhantomPinned,
 }
@@ -3988,12 +3989,15 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
                 None
             };
 
-            self.pointer = Some(p);
-            self.cursor = c;
+            self.pointer = Some(WaylandPointerState {
+                _wl_object: p,
+                cursor: c,
+                pos: (0.0, 0.0),
+                enter_state: None,
+            });
         } else {
-            // no pointer
+            // remove pointer
             self.pointer = None;
-            self.cursor = None;
         }
 
         if capabilities.contains(wl::SeatCapability::KEYBOARD) {
@@ -4012,6 +4016,10 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
 
             self.keyboard = Some(k);
             self.text_input = Some(ti);
+        } else {
+            // remove keyboard
+            self.keyboard = None;
+            self.text_input = None;
         }
     }
 
@@ -4026,97 +4034,98 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
     #[tracing::instrument(skip(self, _pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn enter(
         &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
+        _pointer: &mut wl::Pointer,
         serial: u32,
-        surface: &mut peridot_tp_wayland::Surface,
-        surface_x: peridot_tp_wayland::Fixed,
-        surface_y: peridot_tp_wayland::Fixed,
+        surface: &mut wl::Surface,
+        surface_x: wl::Fixed,
+        surface_y: wl::Fixed,
     ) {
+        let state = self.pointer.as_mut().expect("no pointer state initialized");
         let buffer_scale = self.surface_states.lock().expect("poisoned")
             [&WaylandSurfaceKey(surface as *mut _)]
             .active_buffer_scale;
 
-        self.pointer_on_surface = Some(surface as *mut _);
-        self.pointer_active_surface = Some(unsafe {
-            core::ptr::NonNull::new_unchecked(self.surface_to_xdg_surface[&(surface as *mut _)])
+        state.enter_state = Some(WaylandPointerEnterState {
+            surface: surface as *mut _,
+            xdg_surface: self.surface_to_xdg_surface[&(surface as *mut _)],
+            serial,
         });
-        self.pointer_pos = (
+        state.pos = (
             surface_x.to_f32() * buffer_scale,
             surface_y.to_f32() * buffer_scale,
         );
-        self.pointer_enter_serial = Some(serial);
 
         self.event_dispatcher.dispatch(Event::PointerMove {
-            cursor_shaping_info: match (&self.cursor, self.pointer_enter_serial) {
-                (Some(cursor), Some(serial)) => Some((serial, cursor.as_ptr())),
+            cursor_shaping_info: match state.cursor {
+                Some(ref cursor) => Some((serial, cursor.as_ptr())),
                 _ => None,
             },
             buffer_scale,
-            client_x: self.pointer_pos.0,
-            client_y: self.pointer_pos.1,
+            client_x: state.pos.0,
+            client_y: state.pos.1,
         });
     }
 
     #[tracing::instrument(skip(self, _pointer, _surface))]
-    fn leave(
-        &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
-        serial: u32,
-        _surface: &mut peridot_tp_wayland::Surface,
-    ) {
-        self.pointer_on_surface = None;
-        self.pointer_active_surface = None;
-        self.pointer_enter_serial = None;
+    fn leave(&mut self, _pointer: &mut wl::Pointer, serial: u32, _surface: &mut wl::Surface) {
+        let state = self.pointer.as_mut().expect("no pointer state initialized");
+
+        state.enter_state = None;
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn motion(
         &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
+        _pointer: &mut wl::Pointer,
         time: u32,
-        surface_x: peridot_tp_wayland::Fixed,
-        surface_y: peridot_tp_wayland::Fixed,
+        surface_x: wl::Fixed,
+        surface_y: wl::Fixed,
     ) {
+        let state = self.pointer.as_mut().expect("no pointer state initialized");
+        let Some(ref mut enter_state) = state.enter_state else {
+            return;
+        };
         let buffer_scale = self.surface_states.lock().expect("poisoned")
-            [&WaylandSurfaceKey(self.pointer_on_surface.expect("no pointer on surface"))]
+            [&WaylandSurfaceKey(enter_state.surface)]
             .active_buffer_scale;
 
-        self.pointer_pos = (
+        state.pos = (
             surface_x.to_f32() * buffer_scale,
             surface_y.to_f32() * buffer_scale,
         );
         self.event_dispatcher.dispatch(Event::PointerMove {
-            cursor_shaping_info: match (&self.cursor, self.pointer_enter_serial) {
-                (Some(cursor), Some(serial)) => Some((serial, cursor.as_ptr())),
+            cursor_shaping_info: match state.cursor {
+                Some(ref cursor) => Some((enter_state.serial, cursor.as_ptr())),
                 _ => None,
             },
             buffer_scale,
-            client_x: self.pointer_pos.0,
-            client_y: self.pointer_pos.1,
+            client_x: state.pos.0,
+            client_y: state.pos.1,
         });
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(state = state as u32))]
     fn button(
         &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
+        _pointer: &mut wl::Pointer,
         serial: u32,
         time: u32,
         button: u32,
-        state: peridot_tp_wayland::PointerButtonState,
+        state: wl::PointerButtonState,
     ) {
-        let Some(pointer_active_surface) = self.pointer_active_surface else {
+        let pointer_state = self.pointer.as_ref().expect("no pointer state initialized");
+        let Some(ref enter_state) = pointer_state.enter_state else {
             return;
         };
 
         if state == wl::PointerButtonState::Pressed {
             self.event_dispatcher.dispatch(Event::PointerDown {
-                root_window: pointer_active_surface,
+                root_window: unsafe { core::ptr::NonNull::new_unchecked(enter_state.xdg_surface) },
                 buffer_scale: self.surface_states.lock().expect("poisoned")
-                    [&WaylandSurfaceKey(self.pointer_on_surface.expect("no pointer on surface"))]
+                    [&WaylandSurfaceKey(enter_state.surface)]
                     .active_buffer_scale,
-                client_x: self.pointer_pos.0,
-                client_y: self.pointer_pos.1,
+                client_x: pointer_state.pos.0,
+                client_y: pointer_state.pos.1,
             });
         } else if state == wl::PointerButtonState::Released {
             self.event_dispatcher.dispatch(Event::PointerUp);
@@ -4124,58 +4133,37 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
     }
 
     #[tracing::instrument(skip(self, _pointer))]
-    fn axis(
-        &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
-        time: u32,
-        axis: u32,
-        value: peridot_tp_wayland::Fixed,
-    ) {
+    fn axis(&mut self, _pointer: &mut wl::Pointer, time: u32, axis: u32, value: wl::Fixed) {
         tracing::trace!("pointer.axis");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
-    fn frame(&mut self, _pointer: &mut peridot_tp_wayland::Pointer) {
+    fn frame(&mut self, _pointer: &mut wl::Pointer) {
         // tracing::trace!("pointer.frame");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
-    fn axis_source(&mut self, _pointer: &mut peridot_tp_wayland::Pointer, axis_source: u32) {
+    fn axis_source(&mut self, _pointer: &mut wl::Pointer, axis_source: u32) {
         tracing::trace!("pointer.axis_source");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
-    fn axis_stop(&mut self, _pointer: &mut peridot_tp_wayland::Pointer, time: u32, axis: u32) {
+    fn axis_stop(&mut self, _pointer: &mut wl::Pointer, time: u32, axis: u32) {
         tracing::trace!("pointer.axis_stop");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
-    fn axis_discrete(
-        &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
-        axis: u32,
-        discrete: i32,
-    ) {
+    fn axis_discrete(&mut self, _pointer: &mut wl::Pointer, axis: u32, discrete: i32) {
         tracing::trace!("pointer.axis_discrete");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
-    fn axis_value120(
-        &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
-        axis: u32,
-        value120: i32,
-    ) {
+    fn axis_value120(&mut self, _pointer: &mut wl::Pointer, axis: u32, value120: i32) {
         tracing::trace!("pointer.axis_value120");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
-    fn axis_relative_direction(
-        &mut self,
-        _pointer: &mut peridot_tp_wayland::Pointer,
-        axis: u32,
-        direction: u32,
-    ) {
+    fn axis_relative_direction(&mut self, _pointer: &mut wl::Pointer, axis: u32, direction: u32) {
         tracing::trace!("pointer.axis_relative_direction");
     }
 }
@@ -4633,6 +4621,9 @@ impl WaylandWindow {
         unsafe { global_messaging.as_mut().get_unchecked_mut() }
             .xdg_surface_to_surface
             .insert(self.xdg_surface.as_ptr(), self.surface.as_ptr());
+        unsafe { global_messaging.as_mut().get_unchecked_mut() }
+            .surface_to_xdg_surface
+            .insert(self.surface.as_ptr(), self.xdg_surface.as_ptr());
         unsafe { global_messaging.as_mut().get_unchecked_mut() }
             .xdg_toplevel_to_surface
             .insert(self.xdg_toplevel.as_ptr(), self.surface.as_ptr());
