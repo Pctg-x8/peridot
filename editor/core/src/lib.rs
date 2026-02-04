@@ -3878,6 +3878,15 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         });
         self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
         self.pointer_enter_serial = Some(serial);
+
+        self.event_dispatcher.dispatch(Event::PointerMove {
+            cursor_shaping_info: match (&self.cursor, self.pointer_enter_serial) {
+                (Some(cursor), Some(serial)) => Some((serial, cursor.as_ptr())),
+                _ => None,
+            },
+            client_x: self.pointer_pos.0,
+            client_y: self.pointer_pos.1,
+        });
     }
 
     #[tracing::instrument(skip(self, _pointer, _surface))]
