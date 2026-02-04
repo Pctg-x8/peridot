@@ -5,6 +5,8 @@ use bitflags::bitflags;
 use crate::input::{EventContinueControl, FocusTargetToken};
 
 pub struct HitTestTreeData<'h> {
+    pub active: bool,
+    pub opaque: bool,
     pub left: f32,
     pub top: f32,
     pub left_adjustment_factor: f32,
@@ -14,13 +16,15 @@ pub struct HitTestTreeData<'h> {
     pub width_adjustment_factor: f32,
     pub height_adjustment_factor: f32,
     pub role: Option<Role>,
-    pub active: bool,
+    pub cursor_shape: CursorShape,
     pub action_handler: Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>>,
 }
 impl Default for HitTestTreeData<'_> {
     #[inline]
     fn default() -> Self {
         Self {
+            active: true,
+            opaque: true,
             left: 0.0,
             top: 0.0,
             left_adjustment_factor: 0.0,
@@ -30,7 +34,7 @@ impl Default for HitTestTreeData<'_> {
             width_adjustment_factor: 0.0,
             height_adjustment_factor: 0.0,
             role: None,
-            active: true,
+            cursor_shape: CursorShape::Default,
             action_handler: None,
         }
     }
@@ -70,17 +74,9 @@ impl<'h> HitTestTreeManager<'h> {
 
         // root(simply fits to client_width/client_height)
         this.create(HitTestTreeData {
-            left: 0.0,
-            top: 0.0,
-            left_adjustment_factor: 0.0,
-            top_adjustment_factor: 0.0,
-            width: 0.0,
-            height: 0.0,
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
-            role: None,
-            active: true,
-            action_handler: None,
+            ..Default::default()
         });
 
         this
@@ -131,6 +127,17 @@ impl<'h> HitTestTreeManager<'h> {
             .map(HitTestTreeRef)
     }
 
+    #[inline(always)]
+    pub const fn iter_ascending_from<'d>(
+        &'d self,
+        r: HitTestTreeRef,
+    ) -> impl Iterator<Item = &'d HitTestTreeData<'h>> {
+        AscendingIterator {
+            ht_manager: self,
+            pointing: Some(r),
+        }
+    }
+
     pub fn add_child(&mut self, parent: HitTestTreeRef, child: HitTestTreeRef) {
         if let Some(old_parent) = self.relations[child.0].parent.replace(parent.0) {
             // 古い親から外す
@@ -160,6 +167,8 @@ impl<'h> HitTestTreeManager<'h> {
             }
 
             let HitTestTreeData {
+                active,
+                opaque,
                 left,
                 top,
                 left_adjustment_factor,
@@ -170,9 +179,19 @@ impl<'h> HitTestTreeManager<'h> {
                 height_adjustment_factor,
                 ..
             } = this.data[r];
+
+            let mut flags = Vec::with_capacity(2);
+            if active {
+                flags.push("active");
+            }
+            if opaque {
+                flags.push("opaque");
+            }
+
             let _ = writeln!(
                 sink,
-                "#{r}: (x{left_adjustment_factor}+{left}, x{top_adjustment_factor}+{top}) size (x{width_adjustment_factor}+{width}, x{height_adjustment_factor}+{height})"
+                "#{r}: (x{left_adjustment_factor}+{left}, x{top_adjustment_factor}+{top}) size (x{width_adjustment_factor}+{width}, x{height_adjustment_factor}+{height}) {flags}",
+                flags = flags.join("/")
             );
 
             for &c in &this.relations[r].children {
@@ -277,8 +296,11 @@ impl<'h> HitTestTreeManager<'h> {
         if effective_global_rect.point_in_inclusive(global_x, global_y) {
             // 自分にヒット
             // ただしフラグが設定されている場合はaction handlerが設定されていない場合は透過とみなす(うしろにあるHitTestTreeにあたってほしい)
-            let is_opaque = !options.contains(HitTestOptions::ONLY_ACTION_HANDLED)
-                || d.action_handler.is_some();
+            let is_opaque = if options.contains(HitTestOptions::ONLY_ACTION_HANDLED) {
+                d.action_handler.is_some()
+            } else {
+                d.opaque
+            };
 
             if is_opaque {
                 return Some(root);
@@ -321,12 +343,41 @@ impl Rect {
     }
 }
 
+pub struct AscendingIterator<'ht, 'h> {
+    ht_manager: &'ht HitTestTreeManager<'h>,
+    pointing: Option<HitTestTreeRef>,
+}
+impl<'ht, 'h> Iterator for AscendingIterator<'ht, 'h> {
+    type Item = &'ht HitTestTreeData<'h>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.pointing {
+            None => None,
+            Some(p) => {
+                self.pointing = self.ht_manager.parent_of(p);
+                Some(self.ht_manager.get_data(p))
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum CursorShape {
     Default,
     Pointer,
     IBeam,
     ResizeHorizontal,
+}
+impl CursorShape {
+    #[cfg(feature = "wayland")]
+    pub const fn as_wayland(&self) -> peridot_tp_wayland::WpCursorShapeDeviceV1Shape {
+        match self {
+            Self::Default => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::Default,
+            Self::Pointer => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::Pointer,
+            Self::IBeam => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::Text,
+            Self::ResizeHorizontal => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::EwResize,
+        }
+    }
 }
 
 pub struct PointerActionArgs {
@@ -349,16 +400,6 @@ pub enum Role {
 pub struct HitTestEventContext {}
 
 pub trait HitTestTreeActionHandler {
-    #[allow(unused_variables)]
-    #[inline]
-    fn cursor_shape(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
-    ) -> CursorShape {
-        CursorShape::Default
-    }
-
     #[allow(unused_variables)]
     #[inline]
     fn keyboard_focus(&self, sender: HitTestTreeRef) -> Option<FocusTargetToken> {

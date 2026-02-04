@@ -72,6 +72,7 @@ features = [
     "kde-appmenu",
     "xdg-decoration-unstable-v1",
     "text-input-unstable-v3",
+    "cursor-shape-v1"
 ]
 
 [target.'cfg(target_os = "linux")'.dependencies]

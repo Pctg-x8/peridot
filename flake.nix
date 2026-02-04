@@ -45,6 +45,7 @@
         # helper scripts
         build-tools
         # debugging
+        pkgs.lldb
         pkgs.vulkan-validation-layers
       ];
       nativeDeps = [ pkgs.pkg-config ];

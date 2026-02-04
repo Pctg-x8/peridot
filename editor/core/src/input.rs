@@ -608,35 +608,13 @@ impl PointerInputManager {
         self.handle_mouse_enter_leave(last_client_x, last_client_y, ht, action_context, ht_root);
     }
 
-    pub fn cursor_shape(
-        &self,
-        ht: &mut HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
-    ) -> CursorShape {
+    pub fn cursor_shape(&self, ht: &HitTestTreeManager) -> CursorShape {
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(CursorShape::Default, |h| {
-                    h.cursor_shape(ht_ref, action_context)
-                }),
-            PointerFocusState::Entering(ht_ref) => {
-                let mut p = Some(ht_ref);
-                while let Some(ht_ref) = p {
-                    if let Some(cursor_shape) = ht
-                        .get_data(ht_ref)
-                        .action_handler()
-                        .map(|h| h.cursor_shape(ht_ref, action_context))
-                    {
-                        return cursor_shape;
-                    }
-
-                    p = ht.parent_of(ht_ref);
-                }
-
-                // fallback
-                CursorShape::Default
-            }
+            PointerFocusState::Capturing(ht_ref) => ht.get_data(ht_ref).cursor_shape,
+            PointerFocusState::Entering(ht_ref) => ht
+                .iter_ascending_from(ht_ref)
+                .find(|x| x.opaque)
+                .map_or(CursorShape::Default, |h| h.cursor_shape),
             PointerFocusState::None => CursorShape::Default,
         }
     }
@@ -648,17 +626,7 @@ impl PointerInputManager {
                 ht.get_data(ht_ref).role
             }
             PointerFocusState::Entering(ht_ref) => {
-                let mut p = Some(ht_ref);
-                while let Some(ht_ref) = p {
-                    if let Some(role) = ht.get_data(ht_ref).role {
-                        return Some(role);
-                    }
-
-                    p = ht.parent_of(ht_ref);
-                }
-
-                // fallback
-                None
+                ht.iter_ascending_from(ht_ref).find_map(|x| x.role)
             }
             PointerFocusState::None => None,
         }
@@ -696,17 +664,7 @@ impl PointerInputManager {
             return None;
         };
 
-        let mut p = Some(hit);
-        while let Some(ht_ref) = p {
-            if let Some(role) = ht.get_data(ht_ref).role {
-                return Some(role);
-            }
-
-            p = ht.parent_of(ht_ref);
-        }
-
-        // fallback
-        None
+        ht.iter_ascending_from(hit).find_map(|x| x.role)
     }
 }
 

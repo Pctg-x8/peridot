@@ -454,6 +454,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         xkb_keymap: None,
         xkb_state: None,
         pointer: None,
+        pointer_enter_serial: None,
+        cursor_shape_manager: wl_interfaces
+            .cursor_shape_manager
+            .as_ref()
+            .map(|x| x.as_ptr()),
+        cursor: None,
         pointer_pos: (0.0, 0.0),
         pointer_active_surface: None,
         surface_to_xdg_surface,
@@ -2259,6 +2265,8 @@ pub enum Event {
         client_y: f32,
     },
     PointerMove {
+        #[cfg(feature = "wayland")]
+        cursor_shaping_info: Option<(u32, *mut wl::WpCursorShapeDeviceV1)>, // 暫定的にここで送る
         #[cfg(windows)]
         active_window: HWND,
         client_x: f32,
@@ -2457,6 +2465,8 @@ async fn run<'sys>(
                 });
             }
             Event::PointerMove {
+                #[cfg(feature = "wayland")]
+                cursor_shaping_info,
                 #[cfg(windows)]
                 active_window,
                 mut client_x,
@@ -2469,6 +2479,16 @@ async fn run<'sys>(
                     &mut crate::hittest::HitTestEventContext {},
                     HitTestTreeManager::ROOT,
                 );
+                let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
+
+                #[cfg(feature = "wayland")]
+                if let Some((serial, cursor_shape_device)) = cursor_shaping_info {
+                    unsafe {
+                        (*cursor_shape_device)
+                            .set_shape(serial, cursor_shape.as_wayland())
+                            .expect("cursor_shape_device.set_cursor");
+                    }
+                }
 
                 // DragPreviewの動作確認用のダミー処理
                 #[cfg(windows)]
@@ -3249,6 +3269,7 @@ struct WaylandGlobalInterfaces {
     kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
+    cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
 }
 #[cfg(feature = "wayland")]
 impl WaylandGlobalInterfaces {
@@ -3273,6 +3294,7 @@ impl WaylandGlobalInterfaces {
             kde_blur_manager: rl.kde_blur_manager,
             kde_appmenu_manager: rl.kde_appmenu_manager,
             zxdg_decoration_manager: rl.zxdg_decoration_manager,
+            cursor_shape_manager: rl.cursor_shape_manager,
         })
     }
 }
@@ -3290,6 +3312,7 @@ struct RegistryListener {
     kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
+    cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
 }
 #[cfg(feature = "wayland")]
 impl wl::RegistryListener for RegistryListener {
@@ -3300,7 +3323,7 @@ impl wl::RegistryListener for RegistryListener {
         interface: &core::ffi::CStr,
         version: u32,
     ) {
-        tracing::info!(target: "wl::diag", name, ?interface, version, "wl interface");
+        tracing::info!(target: "wl::diag::global_interface", name, ?interface, version);
 
         if interface == c"wl_compositor" {
             self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
@@ -3342,6 +3365,12 @@ impl wl::RegistryListener for RegistryListener {
                 registry
                     .bind(name, version)
                     .expect("bind text_input_manager"),
+            );
+        } else if interface == c"wp_cursor_shape_manager_v1" {
+            self.cursor_shape_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind cursor_shape_manager"),
             );
         }
     }
@@ -3755,6 +3784,9 @@ struct WaylandGlobalMessaging<AppFuture: core::future::Future<Output = ()>> {
     pub xkb_keymap: Option<xkbcommon::Keymap>,
     pub xkb_state: Option<xkbcommon::State>,
     pub pointer: Option<wl::Owned<wl::Pointer>>,
+    pub pointer_enter_serial: Option<u32>,
+    pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
+    pub cursor: Option<wl::Owned<wl::WpCursorShapeDeviceV1>>,
     pub pointer_pos: (f32, f32),
     pub pointer_active_surface: Option<core::ptr::NonNull<wl::XdgSurface>>,
     pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
@@ -3787,11 +3819,22 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
             p.set_listener(self)
                 .into_result()
                 .expect("pointer.set_listener");
+            let c = if let Some(mgr) = self.cursor_shape_manager {
+                Some(unsafe {
+                    (*mgr)
+                        .get_pointer(&p)
+                        .expect("cursor_shape_manager.get_pointer")
+                })
+            } else {
+                None
+            };
 
             self.pointer = Some(p);
+            self.cursor = c;
         } else {
             // no pointer
             self.pointer = None;
+            self.cursor = None;
         }
 
         if capabilities.contains(wl::SeatCapability::KEYBOARD) {
@@ -3834,6 +3877,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
             core::ptr::NonNull::new_unchecked(self.surface_to_xdg_surface[&(surface as *mut _)])
         });
         self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
+        self.pointer_enter_serial = Some(serial);
     }
 
     #[tracing::instrument(skip(self, _pointer, _surface))]
@@ -3844,6 +3888,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         _surface: &mut peridot_tp_wayland::Surface,
     ) {
         self.pointer_active_surface = None;
+        self.pointer_enter_serial = None;
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
@@ -3856,6 +3901,10 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
     ) {
         self.pointer_pos = (surface_x.to_f32(), surface_y.to_f32());
         self.event_dispatcher.dispatch(Event::PointerMove {
+            cursor_shaping_info: match (&self.cursor, self.pointer_enter_serial) {
+                (Some(cursor), Some(serial)) => Some((serial, cursor.as_ptr())),
+                _ => None,
+            },
             client_x: self.pointer_pos.0,
             client_y: self.pointer_pos.1,
         });
