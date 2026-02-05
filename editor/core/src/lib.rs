@@ -440,12 +440,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         xdg_toplevel_to_surface: HashMap::new(),
         fractional_scale_to_surface: HashMap::new(),
         text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
-        text_input: None,
-        keyboard: None,
         xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
             .expect("xkb_context.create"),
-        xkb_keymap: None,
-        xkb_state: None,
+        keyboard: None,
         pointer: None,
         cursor_shape_manager: wl_interfaces
             .cursor_shape_manager
@@ -3959,6 +3956,14 @@ struct WaylandPointerState {
 }
 
 #[cfg(feature = "wayland")]
+struct WaylandKeyboardState {
+    _wl_object: wl::Owned<wl::Keyboard>,
+    xkb_keymap: Option<xkbcommon::Keymap>,
+    xkb_state: Option<xkbcommon::State>,
+    _text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
+}
+
+#[cfg(feature = "wayland")]
 struct WaylandGlobalMessaging<'sys, AppFuture: core::future::Future<Output = ()>> {
     pub surface_states: &'sys Mutex<HashMap<WaylandSurfaceKey, WaylandWindowState>>,
     pub xdg_surface_to_surface: HashMap<*mut wl::XdgSurface, *mut wl::Surface>,
@@ -3966,11 +3971,8 @@ struct WaylandGlobalMessaging<'sys, AppFuture: core::future::Future<Output = ()>
     pub xdg_toplevel_to_surface: HashMap<*mut wl::XdgToplevel, *mut wl::Surface>,
     pub fractional_scale_to_surface: HashMap<*mut wl::WpFractionalScaleV1, *mut wl::Surface>,
     pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
-    pub text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
-    pub keyboard: Option<wl::Owned<wl::Keyboard>>,
     pub xkb_context: xkbcommon::Context,
-    pub xkb_keymap: Option<xkbcommon::Keymap>,
-    pub xkb_state: Option<xkbcommon::State>,
+    pub keyboard: Option<WaylandKeyboardState>,
     pub pointer: Option<WaylandPointerState>,
     pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
     pub event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
@@ -4038,12 +4040,15 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
                 .into_result()
                 .expect("text_input.set_listener");
 
-            self.keyboard = Some(k);
-            self.text_input = Some(ti);
+            self.keyboard = Some(WaylandKeyboardState {
+                _wl_object: k,
+                xkb_keymap: None,
+                xkb_state: None,
+                _text_input: Some(ti),
+            });
         } else {
             // remove keyboard
             self.keyboard = None;
-            self.text_input = None;
         }
     }
 
@@ -4195,14 +4200,15 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
     for WaylandGlobalMessaging<'_, AppFuture>
 {
-    #[tracing::instrument(skip(self, sender))]
+    #[tracing::instrument(skip(self, _sender))]
     fn keymap(
         &mut self,
-        sender: &mut peridot_tp_wayland::Keyboard,
-        format: peridot_tp_wayland::KeyboardKeymapFormat,
+        _sender: &mut wl::Keyboard,
+        format: wl::KeyboardKeymapFormat,
         fd: i32,
         size: u32,
     ) {
+        let state = self.keyboard.as_mut().expect("keyboard_state.uninit");
         if format != wl::KeyboardKeymapFormat::XkbV1 {
             unimplemented!("unknown keymap format: {format:?}");
         }
@@ -4232,41 +4238,42 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
             xkbcommon::KeymapCompileFlags::NO_FLAGS,
         )
         .expect("xkb_keymap.create");
-        let state = xkbcommon::State::new(&keymap).expect("xkb_state.create");
+        let xkb_state = xkbcommon::State::new(&keymap).expect("xkb_state.create");
 
         tracing::trace!("keyboard::keymap\n{content}");
-        self.xkb_keymap = Some(keymap);
-        self.xkb_state = Some(state);
+        state.xkb_keymap = Some(keymap);
+        state.xkb_state = Some(xkb_state);
     }
 
-    #[tracing::instrument(skip(self, sender, surface))]
+    #[tracing::instrument(skip(self, _sender, _surface))]
     fn enter(
         &mut self,
-        sender: &mut wl::Keyboard,
+        _sender: &mut wl::Keyboard,
         serial: u32,
-        surface: &mut wl::Surface,
+        _surface: &mut wl::Surface,
         keys: &[u32],
     ) {
         tracing::trace!("keyboard::enter");
     }
 
-    #[tracing::instrument(skip(self, sender, surface))]
-    fn leave(&mut self, sender: &mut wl::Keyboard, serial: u32, surface: &mut wl::Surface) {
+    #[tracing::instrument(skip(self, _sender, _surface))]
+    fn leave(&mut self, _sender: &mut wl::Keyboard, serial: u32, _surface: &mut wl::Surface) {
         tracing::trace!("keyboard::leave");
     }
 
-    #[tracing::instrument(skip(self, sender))]
+    #[tracing::instrument(skip(self, _sender))]
     fn key(
         &mut self,
-        sender: &mut wl::Keyboard,
+        _sender: &mut wl::Keyboard,
         serial: u32,
         time: u32,
         key: u32,
         state: wl::KeyboardKeyState,
     ) {
+        let state = self.keyboard.as_mut().expect("keyboard_state.uninit");
         tracing::trace!("keyboard::key");
 
-        if let Some(ref mut x) = self.xkb_state {
+        if let Some(ref mut x) = state.xkb_state {
             let mut buf = Vec::with_capacity(32);
             // evdevのスキャンコードでくるので、xkbのスキャンコードにする(8を足せばいいらしい: https://wayland-book.com/seat/keyboard.html)
             let mut alen = x.key_get_utf8(key + 8, buf.spare_capacity_mut());
@@ -4285,19 +4292,20 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
         }
     }
 
-    #[tracing::instrument(skip(self, sender))]
+    #[tracing::instrument(skip(self, _sender))]
     fn modifiers(
         &mut self,
-        sender: &mut wl::Keyboard,
+        _sender: &mut wl::Keyboard,
         serial: u32,
         mods_depressed: u32,
         mods_latched: u32,
         mods_locked: u32,
         group: u32,
     ) {
+        let state = self.keyboard.as_mut().expect("keyboard_state.uninit");
         tracing::trace!("keyboard::modifiers");
 
-        if let Some(ref mut x) = self.xkb_state {
+        if let Some(ref mut x) = state.xkb_state {
             x.update_mask(
                 mods_depressed,
                 mods_latched,
@@ -4309,8 +4317,8 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
         }
     }
 
-    #[tracing::instrument(skip(self, sender))]
-    fn repeat_info(&mut self, sender: &mut wl::Keyboard, rate: i32, delay: i32) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn repeat_info(&mut self, _sender: &mut wl::Keyboard, rate: i32, delay: i32) {
         tracing::trace!("keyboard::repeat_info");
     }
 }
@@ -4318,24 +4326,24 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
 impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListener
     for WaylandGlobalMessaging<'_, AppFuture>
 {
-    #[tracing::instrument(skip(self, sender, surface))]
-    fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, surface: &mut wl::Surface) {
+    #[tracing::instrument(skip(self, sender, _surface))]
+    fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: &mut wl::Surface) {
         tracing::trace!("textinputv3::enter");
         sender.enable().expect("text_input.enable");
         sender.commit().expect("text_input.commit");
     }
 
-    #[tracing::instrument(skip(self, sender, surface))]
-    fn leave(&mut self, sender: &mut wl::ZwpTextInputV3, surface: &mut wl::Surface) {
+    #[tracing::instrument(skip(self, sender, _surface))]
+    fn leave(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: &mut wl::Surface) {
         tracing::trace!("textinputv3::leave");
         sender.disable().expect("text_input.disable");
         sender.commit().expect("text_input.commit");
     }
 
-    #[tracing::instrument(skip(self, sender))]
+    #[tracing::instrument(skip(self, _sender))]
     fn preedit_string(
         &mut self,
-        sender: &mut wl::ZwpTextInputV3,
+        _sender: &mut wl::ZwpTextInputV3,
         text: Option<&core::ffi::CStr>,
         cursor_begin: i32,
         cursor_end: i32,
@@ -4343,23 +4351,23 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListen
         tracing::trace!("textinputv3::preedit_string");
     }
 
-    #[tracing::instrument(skip(self, sender))]
-    fn commit_string(&mut self, sender: &mut wl::ZwpTextInputV3, text: Option<&core::ffi::CStr>) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn commit_string(&mut self, _sender: &mut wl::ZwpTextInputV3, text: Option<&core::ffi::CStr>) {
         tracing::trace!("textinputv3::commit_string");
     }
 
-    #[tracing::instrument(skip(self, sender))]
+    #[tracing::instrument(skip(self, _sender))]
     fn delete_surrounding_text(
         &mut self,
-        sender: &mut wl::ZwpTextInputV3,
+        _sender: &mut wl::ZwpTextInputV3,
         before_length: u32,
         after_length: u32,
     ) {
         tracing::trace!("textinputv3::delete_surrounding_text");
     }
 
-    #[tracing::instrument(skip(self, sender))]
-    fn done(&mut self, sender: &mut wl::ZwpTextInputV3, serial: u32) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn done(&mut self, _sender: &mut wl::ZwpTextInputV3, serial: u32) {
         tracing::trace!("textinputv3::done");
     }
 }
