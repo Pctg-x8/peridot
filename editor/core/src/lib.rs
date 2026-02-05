@@ -438,6 +438,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         xdg_surface_to_surface: HashMap::new(),
         surface_to_xdg_surface: HashMap::new(),
         xdg_toplevel_to_surface: HashMap::new(),
+        fractional_scale_to_surface: HashMap::new(),
         text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
         text_input: None,
         keyboard: None,
@@ -450,6 +451,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .cursor_shape_manager
             .as_ref()
             .map(|x| x.as_ptr()),
+        has_fractional_scale_support: wl_interfaces.fractional_scale_manager.is_some(),
         event_dispatcher: LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
             future: core::ptr::null_mut()
@@ -499,6 +501,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             core::task::Waker::new(&(), &APP_WAKER_VTABLE)
         }));
 
+    #[cfg(feature = "wayland")]
+    w.commit();
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
@@ -583,6 +587,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     .find(|&&x| x == br::PresentMode::FIFO)
                     .copied()
                     .expect("no suitable present mode");
+                tracing::trace!(?surface_ext, "swapchain.create");
                 let mut vk_swapchain = br::SwapchainBuilder::new(
                     &vk_surface,
                     surface_caps.minImageCount.max(2),
@@ -668,7 +673,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     })
                     .collect::<Vec<_>>();
 
-                let dpi = 168;
+                let dpi = 108;
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device);
                 #[cfg(feature = "freetype")]
                 let font_set = FontSet::new(&ft, dpi);
@@ -1206,6 +1211,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                             surface_caps.currentExtent
                         };
 
+                        tracing::trace!(?surface_ext, "swapchain.create");
                         vk_swapchain = br::SwapchainBuilder::new(
                             &vk_surface,
                             surface_caps.minImageCount.max(2),
@@ -2305,6 +2311,9 @@ pub enum Event {
         new_width: u32,
         new_height: u32,
     },
+    WindowRescaleUI {
+        new_scale: f32,
+    },
 }
 #[cfg(any(feature = "wayland", windows))]
 unsafe impl Sync for Event {}
@@ -2398,10 +2407,7 @@ async fn run<'sys>(
         has_bitmap: true,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
         relative_size_adjustment: [1.0, 0.0],
-        size: [
-            AnimatableFloat::Value(0.0),
-            AnimatableFloat::Value(24.0 * 2.0),
-        ],
+        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(24.0)],
         text: Some(CompositeRectText {
             runs: vec![
                 CompositeRectTextRun {
@@ -2525,6 +2531,13 @@ async fn run<'sys>(
                 new_height,
             } => {
                 pointer_input_manager.set_client_size(new_width as _, new_height as _);
+            }
+            Event::WindowRescaleUI { new_scale } => {
+                composite_tree.get_mut(app_title).size[1] =
+                    AnimatableFloat::Value(24.0 * new_scale);
+                composite_tree.mark_dirty(app_title);
+
+                composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
             }
             Event::PointerDown {
                 #[cfg(feature = "wayland")]
@@ -3415,6 +3428,7 @@ struct WaylandGlobalInterfaces {
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
+    fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
 }
 #[cfg(feature = "wayland")]
 impl WaylandGlobalInterfaces {
@@ -3440,6 +3454,7 @@ impl WaylandGlobalInterfaces {
             kde_appmenu_manager: rl.kde_appmenu_manager,
             zxdg_decoration_manager: rl.zxdg_decoration_manager,
             cursor_shape_manager: rl.cursor_shape_manager,
+            fractional_scale_manager: rl.fractional_scale_manager,
         })
     }
 }
@@ -3458,6 +3473,7 @@ struct RegistryListener {
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
+    fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
 }
 #[cfg(feature = "wayland")]
 impl wl::RegistryListener for RegistryListener {
@@ -3516,6 +3532,12 @@ impl wl::RegistryListener for RegistryListener {
                 registry
                     .bind(name, version)
                     .expect("bind cursor_shape_manager"),
+            );
+        } else if interface == c"wp_fractional_scale_manager_v1" {
+            self.fractional_scale_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind fractional_scale_manager"),
             );
         }
     }
@@ -3942,6 +3964,7 @@ struct WaylandGlobalMessaging<'sys, AppFuture: core::future::Future<Output = ()>
     pub xdg_surface_to_surface: HashMap<*mut wl::XdgSurface, *mut wl::Surface>,
     pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
     pub xdg_toplevel_to_surface: HashMap<*mut wl::XdgToplevel, *mut wl::Surface>,
+    pub fractional_scale_to_surface: HashMap<*mut wl::WpFractionalScaleV1, *mut wl::Surface>,
     pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
     pub text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
     pub keyboard: Option<wl::Owned<wl::Keyboard>>,
@@ -3951,6 +3974,7 @@ struct WaylandGlobalMessaging<'sys, AppFuture: core::future::Future<Output = ()>
     pub pointer: Option<WaylandPointerState>,
     pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
     pub event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    pub has_fractional_scale_support: bool,
     _pinned: core::marker::PhantomPinned,
 }
 #[cfg(feature = "wayland")]
@@ -4218,32 +4242,27 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
     #[tracing::instrument(skip(self, sender, surface))]
     fn enter(
         &mut self,
-        sender: &mut peridot_tp_wayland::Keyboard,
+        sender: &mut wl::Keyboard,
         serial: u32,
-        surface: &mut peridot_tp_wayland::Surface,
+        surface: &mut wl::Surface,
         keys: &[u32],
     ) {
         tracing::trace!("keyboard::enter");
     }
 
     #[tracing::instrument(skip(self, sender, surface))]
-    fn leave(
-        &mut self,
-        sender: &mut peridot_tp_wayland::Keyboard,
-        serial: u32,
-        surface: &mut peridot_tp_wayland::Surface,
-    ) {
+    fn leave(&mut self, sender: &mut wl::Keyboard, serial: u32, surface: &mut wl::Surface) {
         tracing::trace!("keyboard::leave");
     }
 
     #[tracing::instrument(skip(self, sender))]
     fn key(
         &mut self,
-        sender: &mut peridot_tp_wayland::Keyboard,
+        sender: &mut wl::Keyboard,
         serial: u32,
         time: u32,
         key: u32,
-        state: peridot_tp_wayland::KeyboardKeyState,
+        state: wl::KeyboardKeyState,
     ) {
         tracing::trace!("keyboard::key");
 
@@ -4269,7 +4288,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
     #[tracing::instrument(skip(self, sender))]
     fn modifiers(
         &mut self,
-        sender: &mut peridot_tp_wayland::Keyboard,
+        sender: &mut wl::Keyboard,
         serial: u32,
         mods_depressed: u32,
         mods_latched: u32,
@@ -4291,7 +4310,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
     }
 
     #[tracing::instrument(skip(self, sender))]
-    fn repeat_info(&mut self, sender: &mut peridot_tp_wayland::Keyboard, rate: i32, delay: i32) {
+    fn repeat_info(&mut self, sender: &mut wl::Keyboard, rate: i32, delay: i32) {
         tracing::trace!("keyboard::repeat_info");
     }
 }
@@ -4300,22 +4319,14 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListen
     for WaylandGlobalMessaging<'_, AppFuture>
 {
     #[tracing::instrument(skip(self, sender, surface))]
-    fn enter(
-        &mut self,
-        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
-        surface: &mut peridot_tp_wayland::Surface,
-    ) {
+    fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, surface: &mut wl::Surface) {
         tracing::trace!("textinputv3::enter");
         sender.enable().expect("text_input.enable");
         sender.commit().expect("text_input.commit");
     }
 
     #[tracing::instrument(skip(self, sender, surface))]
-    fn leave(
-        &mut self,
-        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
-        surface: &mut peridot_tp_wayland::Surface,
-    ) {
+    fn leave(&mut self, sender: &mut wl::ZwpTextInputV3, surface: &mut wl::Surface) {
         tracing::trace!("textinputv3::leave");
         sender.disable().expect("text_input.disable");
         sender.commit().expect("text_input.commit");
@@ -4324,7 +4335,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListen
     #[tracing::instrument(skip(self, sender))]
     fn preedit_string(
         &mut self,
-        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
+        sender: &mut wl::ZwpTextInputV3,
         text: Option<&core::ffi::CStr>,
         cursor_begin: i32,
         cursor_end: i32,
@@ -4333,18 +4344,14 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListen
     }
 
     #[tracing::instrument(skip(self, sender))]
-    fn commit_string(
-        &mut self,
-        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
-        text: Option<&core::ffi::CStr>,
-    ) {
+    fn commit_string(&mut self, sender: &mut wl::ZwpTextInputV3, text: Option<&core::ffi::CStr>) {
         tracing::trace!("textinputv3::commit_string");
     }
 
     #[tracing::instrument(skip(self, sender))]
     fn delete_surrounding_text(
         &mut self,
-        sender: &mut peridot_tp_wayland::ZwpTextInputV3,
+        sender: &mut wl::ZwpTextInputV3,
         before_length: u32,
         after_length: u32,
     ) {
@@ -4352,7 +4359,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListen
     }
 
     #[tracing::instrument(skip(self, sender))]
-    fn done(&mut self, sender: &mut peridot_tp_wayland::ZwpTextInputV3, serial: u32) {
+    fn done(&mut self, sender: &mut wl::ZwpTextInputV3, serial: u32) {
         tracing::trace!("textinputv3::done");
     }
 }
@@ -4391,16 +4398,19 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
 
     #[tracing::instrument(skip(self, surface))]
     fn preferred_buffer_scale(&mut self, surface: &mut wl::Surface, factor: i32) {
-        tracing::trace!("perferred buffer scale");
+        tracing::trace!(
+            has_fractional_scale = self.has_fractional_scale_support,
+            "perferred buffer scale"
+        );
+        if self.has_fractional_scale_support {
+            // fractional_scaleがある場合はこっちは処理しなくていい
+            return;
+        }
+
         surface
             .set_buffer_scale(factor)
             .expect("wl_surface set_buffer_scale");
-        self.surface_states
-            .lock()
-            .expect("poisoned")
-            .get_mut(&&WaylandSurfaceKey(surface as *mut _))
-            .expect("no surface registered")
-            .active_buffer_scale = factor as _;
+        self.set_scale(WaylandSurfaceKey(surface as *mut _), factor as _);
     }
 
     #[tracing::instrument(skip(self, surface))]
@@ -4517,6 +4527,36 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZxdgToplevelDecorationV1E
         }
     }
 }
+#[cfg(feature = "wayland")]
+impl<AppFuture: core::future::Future<Output = ()>> wl::WpFractionalScaleV1EventListener
+    for WaylandGlobalMessaging<'_, AppFuture>
+{
+    #[tracing::instrument(skip(self, sender))]
+    fn preferred_scale(&mut self, sender: &mut wl::WpFractionalScaleV1, scale: u32) {
+        tracing::trace!("fractional scale");
+        // fractional scaleでは1固定にする必要がある
+        unsafe { &*self.fractional_scale_to_surface[&(sender as *mut _)] }
+            .set_buffer_scale(1)
+            .expect("wl_surface.set_buffer_scale");
+        self.set_scale(
+            WaylandSurfaceKey(self.fractional_scale_to_surface[&(sender as *mut _)]),
+            scale as f32 / 120.0,
+        );
+    }
+}
+#[cfg(feature = "wayland")]
+impl<AppFuture: core::future::Future<Output = ()>> WaylandGlobalMessaging<'_, AppFuture> {
+    fn set_scale(&self, surface: WaylandSurfaceKey, scale: f32) {
+        self.surface_states
+            .lock()
+            .expect("poisoned")
+            .get_mut(&surface)
+            .expect("surface_states.none")
+            .active_buffer_scale = scale;
+        self.event_dispatcher
+            .dispatch(Event::WindowRescaleUI { new_scale: scale });
+    }
+}
 
 #[cfg(feature = "wayland")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -4532,6 +4572,7 @@ pub struct WaylandWindow {
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
+    fractional_scale: Option<wl::Owned<wl::WpFractionalScaleV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
 }
 #[cfg(feature = "wayland")]
@@ -4579,6 +4620,16 @@ impl WaylandWindow {
             None
         };
 
+        let fractional_scale = if let Some(ref fs) = wl_interfaces.fractional_scale_manager {
+            let f = fs
+                .get_fractional_scale(&surface)
+                .expect("fractional_scale.create");
+
+            Some(f)
+        } else {
+            None
+        };
+
         // commits initial state
         surface.commit().expect("wl_surface.commit");
 
@@ -4588,6 +4639,7 @@ impl WaylandWindow {
             xdg_toplevel,
             _appmenu: appmenu,
             deco,
+            fractional_scale,
         }
     }
 
@@ -4627,6 +4679,11 @@ impl WaylandWindow {
         unsafe { global_messaging.as_mut().get_unchecked_mut() }
             .xdg_toplevel_to_surface
             .insert(self.xdg_toplevel.as_ptr(), self.surface.as_ptr());
+        if let Some(ref f) = self.fractional_scale {
+            unsafe { global_messaging.as_mut().get_unchecked_mut() }
+                .fractional_scale_to_surface
+                .insert(f.as_ptr(), self.surface.as_ptr());
+        }
 
         self.surface
             .set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
@@ -4644,6 +4701,11 @@ impl WaylandWindow {
             x.set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
                 .into_result()
                 .expect("zxdg_toplevel_decoration_v1.set_listener");
+        }
+        if let Some(ref mut x) = self.fractional_scale {
+            x.set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
+                .into_result()
+                .expect("wp_fractional_scale_v1.set_listener");
         }
     }
 
