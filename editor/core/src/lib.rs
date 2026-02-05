@@ -2468,8 +2468,6 @@ async fn run<'sys>(
             context: &mut hittest::HitTestEventContext,
             args: &hittest::PointerActionArgs,
         ) -> input::EventContinueControl {
-            tracing::debug!(current_sec = context.current_sec, "tab pointer enter");
-
             context.composite_tree.get_mut(self.ct).composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Animated {
                     start_sec: context.current_sec,
@@ -2490,8 +2488,6 @@ async fn run<'sys>(
             context: &mut hittest::HitTestEventContext,
             args: &hittest::PointerActionArgs,
         ) -> input::EventContinueControl {
-            tracing::debug!("tab pointer leave");
-
             context.composite_tree.get_mut(self.ct).composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Animated {
                     start_sec: context.current_sec,
@@ -2530,9 +2526,10 @@ async fn run<'sys>(
                 pointer_input_manager.set_client_size(new_width as _, new_height as _);
             }
             Event::WindowRescaleUI { new_scale } => {
-                composite_tree.get_mut(app_title).size[1] =
-                    AnimatableFloat::Value(24.0 * new_scale);
+                composite_tree.get_mut(app_title).base_scale_factor = new_scale;
                 composite_tree.mark_dirty(app_title);
+                composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
+                composite_tree.mark_dirty(tab_main);
 
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
             }

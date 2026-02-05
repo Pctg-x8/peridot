@@ -3359,15 +3359,37 @@ impl CompositeTree {
     }
 
     pub fn commit(&mut self, sync_buffer: &mut CompositeTreeSyncBuffer) {
-        sync_buffer
+        let _ = sync_buffer
             .pushed_rects
-            .extend(self.pushed_rects.drain(..).map(|n| self.rects[n].clone()));
-        sync_buffer
-            .dirty_rects
-            .extend(self.dirty_rects.drain().map(|(n, x)| match x {
-                DirtyRect::Modified => (n, DirtyRectSync::Modified(self.rects[n].clone())),
-                DirtyRect::Deleted => (n, DirtyRectSync::Deleted),
-            }));
+            .try_reserve(self.pushed_rects.len());
+        for n in self.pushed_rects.drain(..) {
+            sync_buffer.pushed_rects.push(self.rects[n].clone());
+            // dirtyをおとす(他におちるタイミングがないため)
+            self.rects[n].dirty = false;
+            if let Some(ref mut x) = self.rects[n].text {
+                x.layout_dirty = false;
+            }
+        }
+
+        let _ = sync_buffer.dirty_rects.try_reserve(self.dirty_rects.len());
+        for (n, x) in self.dirty_rects.drain() {
+            match x {
+                DirtyRect::Modified => {
+                    sync_buffer
+                        .dirty_rects
+                        .push((n, DirtyRectSync::Modified(self.rects[n].clone())));
+                    // dirtyをおとす(他におちるタイミングがないため)
+                    self.rects[n].dirty = false;
+                    if let Some(ref mut x) = self.rects[n].text {
+                        x.layout_dirty = false;
+                    }
+                }
+                DirtyRect::Deleted => {
+                    sync_buffer.dirty_rects.push((n, DirtyRectSync::Deleted));
+                }
+            }
+        }
+
         self.parameter_store
             .commit(&mut sync_buffer.parameter_store);
 
