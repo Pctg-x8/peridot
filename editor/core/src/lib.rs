@@ -2252,7 +2252,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 BOOL(-1) => Err::<(), _>(std::io::Error::last_os_error()).expect("GetMessageW"),
                 _ => unsafe {
                     let msg = msg.assume_init_ref();
-                    TranslateMessage(msg);
+                    let _ = TranslateMessage(msg);
                     DispatchMessageW(msg);
                 },
             }
@@ -2382,6 +2382,8 @@ async fn run<'sys>(
         );
     }
 
+    let init_scale = main_window.ui_scale_factor();
+
     composite_tree.get_mut(CompositeTree::ROOT).composite_mode =
         CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
     composite_tree.get_mut(CompositeTree::ROOT).has_bitmap = true;
@@ -2390,6 +2392,7 @@ async fn run<'sys>(
     // app title view
     let app_title = composite_tree.create(CompositeRect {
         has_bitmap: true,
+        base_scale_factor: init_scale,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
         relative_size_adjustment: [1.0, 0.0],
         size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(24.0)],
@@ -2428,6 +2431,7 @@ async fn run<'sys>(
     // tab view
     let tab_main = composite_tree.create(CompositeRect {
         has_bitmap: true,
+        base_scale_factor: init_scale,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
         size: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(36.0)],
         offset: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(100.0)],
@@ -2708,9 +2712,14 @@ impl WindowHandle {
             windows::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd) as f32 / 96.0
         })
     }
+
+    #[inline(always)]
+    pub fn ui_scale_factor(&self) -> f32 {
+        unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd) as f32 / 96.0 }
+    }
 }
 #[cfg(windows)]
-impl crate::input::ShellPointerActions for WindowHandle {
+impl ShellPointerActions for WindowHandle {
     #[inline(always)]
     fn capture_pointer(&self) {
         unsafe {
@@ -2740,6 +2749,15 @@ impl WindowHandle {
         let state = &wl_surface_to_state[&WaylandSurfaceKey(self.wl_surface)];
 
         state.active_size.to_logical(state.active_buffer_scale)
+    }
+
+    #[inline(always)]
+    pub fn ui_scale_factor(&self) -> f32 {
+        unsafe {
+            (*self.wl_surface_to_state).lock().expect("poisoned")
+                [&WaylandSurfaceKey(self.wl_surface)]
+                .active_buffer_scale
+        }
     }
 }
 #[cfg(feature = "wayland")]
