@@ -2606,6 +2606,10 @@ async fn run<'sys>(
                 {
                     drag_preview_popover.root_window = root_window.as_ptr();
                 }
+                #[cfg(windows)]
+                {
+                    drag_preview_popover.base_window_handle = active_window;
+                }
 
                 pointer_input_manager.handle_mouse_left_down(
                     &main_window,
@@ -3724,6 +3728,7 @@ pub struct DragPreviewPopoverHandle {
     w: HWND,
     base_window_handle: HWND,
     _composition_target: windows::UI::Composition::Desktop::DesktopWindowTarget,
+    root_visual: windows::UI::Composition::SpriteVisual,
 }
 #[cfg(windows)]
 impl Drop for DragPreviewPopoverHandle {
@@ -3870,6 +3875,7 @@ impl DragPreviewPopoverHandle {
             w,
             base_window_handle: HWND(core::ptr::null_mut()),
             _composition_target: composition_target,
+            root_visual: blur_visual,
         }
     }
 
@@ -3898,11 +3904,14 @@ impl DragPreviewPopoverHandle {
                 None,
                 x - 32,
                 y - 32,
-                (size.width + 32) as _,
-                (size.height + 32) as _,
+                (size.width + 64) as _,
+                (size.height + 64) as _,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             )
             .expect("setwindowpos");
+            self.root_visual
+                .SetSize(Vector2::new(size.width as _, size.height as _))
+                .expect("drag.visual.set_size");
             let _ = ShowWindow(self.w, SW_SHOWNOACTIVATE);
         }
     }
@@ -4919,9 +4928,9 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         lparam: LPARAM,
     ) -> LRESULT {
         use windows::Win32::UI::WindowsAndMessaging::{
-            WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CHAR, WM_CREATE, WM_KILLFOCUS,
-            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_SETFOCUS,
-            WM_SIZE,
+            WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CHAR, WM_CREATE, WM_DPICHANGED,
+            WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
+            WM_SETFOCUS, WM_SIZE,
         };
 
         if msg == WM_DESTROY {
@@ -5165,6 +5174,39 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
                 state.text_services_mgr = Some(text_services_mgr);
                 state.edit_context = Some(edit_context);
             }
+        }
+
+        if msg == WM_DPICHANGED {
+            let new_scale = (wparam.0 & 0xffff) as u16 as f32 / 96.0;
+            let new_rect = unsafe {
+                &*core::ptr::without_provenance::<windows::Win32::Foundation::RECT>(
+                    lparam.0.cast_unsigned(),
+                )
+            };
+            tracing::trace!(new_scale, "dpi changed");
+
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER;
+
+                if let Err(e) = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
+                    hwnd,
+                    None,
+                    new_rect.left,
+                    new_rect.top,
+                    new_rect.right - new_rect.left,
+                    new_rect.bottom - new_rect.top,
+                    SWP_NOZORDER,
+                ) {
+                    tracing::error!(reason = %e, "dpi_changed.set_window_pos");
+                }
+            }
+
+            let state = Self::get_for_window(hwnd);
+            state
+                .event_dispatcher
+                .dispatch(Event::WindowRescaleUI { new_scale });
+
+            return LRESULT(0);
         }
 
         if msg == WM_SETFOCUS {
