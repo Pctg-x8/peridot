@@ -2450,6 +2450,16 @@ async fn run<'sys>(
         ..Default::default()
     });
     composite_tree.add_child(CompositeTree::ROOT, tab_main);
+    let ht_tab_main = ht_manager.create(HitTestTreeData {
+        left: 100.0,
+        top: 100.0,
+        width: 100.0,
+        height: 36.0,
+        cursor_shape: hittest::CursorShape::Pointer,
+        ..Default::default()
+    });
+    ht_manager.add_child(HitTestTreeManager::ROOT, ht_tab_main);
+
     struct TabHitAction {
         ct: CompositeTreeRef,
     }
@@ -2532,16 +2542,7 @@ async fn run<'sys>(
         }
     }
     let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
-    let ht_tab_main = ht_manager.create(HitTestTreeData {
-        left: 100.0,
-        top: 100.0,
-        width: 100.0,
-        height: 36.0,
-        action_handler: Some(std::rc::Rc::downgrade(&ht_action_handler) as _),
-        cursor_shape: hittest::CursorShape::Pointer,
-        ..Default::default()
-    });
-    ht_manager.add_child(HitTestTreeManager::ROOT, ht_tab_main);
+    ht_manager.set_action_handler(ht_tab_main, &ht_action_handler);
 
     composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
     ht_manager.dump(HitTestTreeManager::ROOT);
