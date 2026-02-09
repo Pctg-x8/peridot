@@ -2382,12 +2382,12 @@ async fn run<'sys>(
         );
     }
 
-    let init_scale = main_window.ui_scale_factor();
-
     composite_tree.get_mut(CompositeTree::ROOT).composite_mode =
         CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
     composite_tree.get_mut(CompositeTree::ROOT).has_bitmap = true;
     composite_tree.mark_dirty(CompositeTree::ROOT);
+
+    let init_scale = main_window.ui_scale_factor();
 
     // app title view
     let app_title = composite_tree.create(CompositeRect {
@@ -2500,25 +2500,6 @@ async fn run<'sys>(
             context: &mut hittest::HitTestEventContext,
             args: &hittest::PointerActionArgs,
         ) -> input::EventContinueControl {
-            tracing::debug!(args.client_pos.x, args.client_pos.y, "tab main drag start");
-
-            /*#[cfg(windows)]
-            {
-                // Windowsはグローバル座標を渡す必要があるのでここで変換する
-                let mut p = [windows::Win32::Foundation::POINT {
-                    x: client_x as _,
-                    y: client_y as _,
-                }];
-                unsafe {
-                    windows::Win32::Graphics::Gdi::MapWindowPoints(
-                        Some(active_window),
-                        None,
-                        &mut p,
-                    );
-                }
-                client_x = p[0].x as _;
-                client_y = p[0].y as _;
-            }*/
             context
                 .drag_preview
                 .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
@@ -2533,25 +2514,6 @@ async fn run<'sys>(
             context: &mut hittest::HitTestEventContext,
             args: &hittest::PointerActionArgs,
         ) -> input::EventContinueControl {
-            // DragPreviewの動作確認用のダミー処理
-            /*#[cfg(windows)]
-            {
-                // Windowsはグローバル座標を渡す必要があるのでここで変換する
-                let mut p = [windows::Win32::Foundation::POINT {
-                    x: client_x as _,
-                    y: client_y as _,
-                }];
-                unsafe {
-                    windows::Win32::Graphics::Gdi::MapWindowPoints(
-                        Some(active_window),
-                        None,
-                        &mut p,
-                    );
-                }
-                client_x = p[0].x as _;
-                client_y = p[0].y as _;
-            }*/
-
             context.drag_preview.r#move(&args.client_pos);
 
             input::EventContinueControl::STOP_PROPAGATION
@@ -2563,9 +2525,6 @@ async fn run<'sys>(
             context: &mut hittest::HitTestEventContext,
             args: &hittest::PointerActionArgs,
         ) -> input::EventContinueControl {
-            tracing::debug!("tab main drag end");
-
-            // DragPreviewの動作確認用のダミー処理
             context.drag_preview.hide();
 
             input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
@@ -2579,6 +2538,7 @@ async fn run<'sys>(
         width: 100.0,
         height: 36.0,
         action_handler: Some(std::rc::Rc::downgrade(&ht_action_handler) as _),
+        cursor_shape: hittest::CursorShape::Pointer,
         ..Default::default()
     });
     ht_manager.add_child(HitTestTreeManager::ROOT, ht_tab_main);
@@ -2656,6 +2616,41 @@ async fn run<'sys>(
                             .set_shape(serial, cursor_shape.as_wayland())
                             .expect("cursor_shape_device.set_cursor");
                     }
+                }
+
+                #[cfg(windows)]
+                unsafe {
+                    // TODO: 必要そうならキャッシュする
+                    windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor_shape {
+                        hittest::CursorShape::Default => Some(
+                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                                None,
+                                windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
+                            )
+                            .expect("load_cursor.default"),
+                        ),
+                        hittest::CursorShape::Pointer => Some(
+                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                                None,
+                                windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
+                            )
+                            .expect("load_cursor.default"),
+                        ),
+                        hittest::CursorShape::IBeam => Some(
+                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                                None,
+                                windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
+                            )
+                            .expect("load_cursor.default"),
+                        ),
+                        hittest::CursorShape::ResizeHorizontal => Some(
+                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                                None,
+                                windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
+                            )
+                            .expect("load_cursor.default"),
+                        ),
+                    });
                 }
             }
             Event::PointerUp => {
