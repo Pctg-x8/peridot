@@ -70,8 +70,6 @@ use windows_numerics::{Vector2, Vector3};
 use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
     EffectOptimization, GaussianBlurEffect,
 };
-#[cfg(feature = "wayland")]
-use crate::utils::{LogicalUnit, PixelsUnit, Size};
 use crate::{
     composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, BoundCompositeRenderer, CompositeMode,
@@ -83,7 +81,7 @@ use crate::{
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
     hittest::{HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
-    utils::{Color32, Point},
+    utils::{Color32, LogicalUnit, PixelsUnit, Point, Size},
 };
 
 mod atlas;
@@ -551,7 +549,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     || surface_caps.currentExtent.height == 0xffffffff
                 {
                     #[cfg(windows)]
-                    let (cw, ch) = w.client_size();
+                    let client_size = w.pixels_client_size();
                     #[cfg(feature = "wayland")]
                     let client_size =
                         surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
@@ -1187,7 +1185,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                             || surface_caps.currentExtent.height == 0xffffffff
                         {
                             #[cfg(windows)]
-                            let (cw, ch) = w.client_size();
+                            let client_size = w.pixels_client_size();
                             #[cfg(feature = "wayland")]
                             let client_size =
                                 surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
@@ -2692,17 +2690,19 @@ pub struct WindowHandle {
 #[cfg(windows)]
 impl WindowHandle {
     #[inline(always)]
-    pub fn client_size(&self) -> (u32, u32) {
+    pub fn client_size(&self) -> Size<LogicalUnit> {
         let mut rc = core::mem::MaybeUninit::uninit();
         if let Err(e) = unsafe {
             windows::Win32::UI::WindowsAndMessaging::GetClientRect(self.hwnd, rc.as_mut_ptr())
         } {
             tracing::error!(reason = %e, "get_client_rect");
-            return (0, 0);
+            return Size::new_logical(0.0, 0.0);
         }
 
         let rc = unsafe { rc.assume_init_ref() };
-        (rc.right as _, rc.bottom as _)
+        Size::new_pixels(rc.right as _, rc.bottom as _).to_logical(unsafe {
+            windows::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd) as f32 / 96.0
+        })
     }
 }
 #[cfg(windows)]
@@ -3374,13 +3374,19 @@ unsafe impl Send for Win32Window {}
 #[cfg(windows)]
 impl Win32Window {
     #[inline(always)]
-    pub fn client_size(&self) -> (u32, u32) {
+    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
         let mut rect = core::mem::MaybeUninit::uninit();
         unsafe {
             GetClientRect(self.0, rect.as_mut_ptr()).expect("GetClientRect");
         }
         let rect = unsafe { rect.assume_init_ref() };
-        (rect.right as _, rect.bottom as _)
+        Size::new_pixels(rect.right as _, rect.bottom as _)
+    }
+
+    #[inline(always)]
+    pub fn client_size(&self) -> Size<LogicalUnit> {
+        self.pixels_client_size()
+            .to_logical(unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.0) as f32 / 96.0 })
     }
 
     #[inline(always)]
@@ -3716,6 +3722,7 @@ impl DragPreviewPopoverHandle {
 #[cfg(windows)]
 pub struct DragPreviewPopoverHandle {
     w: HWND,
+    base_window_handle: HWND,
     _composition_target: windows::UI::Composition::Desktop::DesktopWindowTarget,
 }
 #[cfg(windows)]
@@ -3861,24 +3868,38 @@ impl DragPreviewPopoverHandle {
 
         Self {
             w,
+            base_window_handle: HWND(core::ptr::null_mut()),
             _composition_target: composition_target,
         }
     }
 
-    pub fn show(&mut self, rect: &DesktopRect) {
+    pub fn show(&mut self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
         unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
+            use windows::Win32::{
+                Foundation::POINT,
+                Graphics::Gdi::MapWindowPoints,
+                UI::{
+                    HiDpi::GetDpiForWindow,
+                    WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos},
+                },
             };
+
+            // デスクトップ座標で指定になるので置き換え
+            let scale = GetDpiForWindow(self.base_window_handle) as f32 / 96.0;
+            let pos = pos.to_pixels_round(scale);
+            let size = size.to_pixels_ceil(scale);
+            let mut p = [POINT { x: pos.x, y: pos.y }];
+            MapWindowPoints(Some(self.base_window_handle), None, &mut p);
+            let [POINT { x, y }] = p;
 
             // 影のぶんだけ余分に設定する
             SetWindowPos(
                 self.w,
                 None,
-                rect.left - 32,
-                rect.top - 32,
-                (rect.width + 32) as _,
-                (rect.height + 32) as _,
+                x - 32,
+                y - 32,
+                (size.width + 32) as _,
+                (size.height + 32) as _,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             )
             .expect("setwindowpos");
@@ -3886,11 +3907,23 @@ impl DragPreviewPopoverHandle {
         }
     }
 
-    pub fn r#move(&mut self, x: i32, y: i32) {
+    pub fn r#move(&mut self, pos: &Point<PointerInputUnit>) {
         unsafe {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+            use windows::Win32::{
+                Foundation::POINT,
+                Graphics::Gdi::MapWindowPoints,
+                UI::{
+                    HiDpi::GetDpiForWindow,
+                    WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos},
+                },
             };
+
+            // デスクトップ座標で指定になるので置き換え
+            let scale = GetDpiForWindow(self.base_window_handle) as f32 / 96.0;
+            let pos = pos.to_pixels_round(scale);
+            let mut p = [POINT { x: pos.x, y: pos.y }];
+            MapWindowPoints(Some(self.base_window_handle), None, &mut p);
+            let [POINT { x, y }] = p;
 
             // 影のぶんだけずらして設定する
             SetWindowPos(
@@ -5204,10 +5237,11 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             tracing::trace!(w, h, "WM_SIZE");
 
             if let Some(state) = Self::try_get_for_window(hwnd) {
-                state.event_dispatcher.dispatch(Event::WindowResize {
-                    new_width: w as _,
-                    new_height: h as _,
-                });
+                state.event_dispatcher.dispatch(Event::WindowResize(
+                    Size::new_pixels(w as _, h as _).to_logical(unsafe {
+                        windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as f32 / 96.0
+                    }),
+                ));
             }
 
             return LRESULT(0);
@@ -5271,10 +5305,12 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             let pointer_input_manager = unsafe { &*pointer_input_manager_ptr };
             let ui_scale_factor = 1.0; // TODO: dpi
             return match pointer_input_manager.role(
-                x as f32 / ui_scale_factor,
-                y as f32 / ui_scale_factor,
-                (client_size.right - client_size.left) as f32 / ui_scale_factor,
-                (client_size.bottom - client_size.top) as f32 / ui_scale_factor,
+                &Point::new_pixels(x, y).to_logical(ui_scale_factor),
+                &Size::new_pixels(
+                    (client_size.right - client_size.left) as _,
+                    (client_size.bottom - client_size.top) as _,
+                )
+                .to_logical(ui_scale_factor),
                 unsafe { &*ht_manager_ptr },
                 HitTestTreeManager::ROOT,
             ) {
@@ -5290,12 +5326,23 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_LBUTTONDOWN {
+            // move then down
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::PointerMove {
+                    active_window: hwnd,
+                    client_pos: Point::new_pixels(
+                        (lparam.0 & 0xffff) as i16 as _,
+                        ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                    )
+                    .to_logical(unsafe {
+                        windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as f32 / 96.0
+                    }),
+                });
             Self::get_for_window(hwnd)
                 .event_dispatcher
                 .dispatch(Event::PointerDown {
                     active_window: hwnd,
-                    client_x: (lparam.0 & 0xffff) as i16 as _,
-                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
                 });
 
             return LRESULT(0);
@@ -5306,8 +5353,13 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
                 .event_dispatcher
                 .dispatch(Event::PointerMove {
                     active_window: hwnd,
-                    client_x: (lparam.0 & 0xffff) as i16 as _,
-                    client_y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                    client_pos: Point::new_pixels(
+                        (lparam.0 & 0xffff) as i16 as _,
+                        ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                    )
+                    .to_logical(unsafe {
+                        windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as f32 / 96.0
+                    }),
                 });
 
             return LRESULT(0);

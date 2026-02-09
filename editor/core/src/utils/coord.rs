@@ -1,19 +1,22 @@
 use std::marker::PhantomData;
 
+pub trait Unit {
+    type UnsignedValueType: Copy;
+    type SignedValueType: Copy;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LogicalUnit {}
 impl Unit for LogicalUnit {
-    type ValueType = f32;
+    type UnsignedValueType = f32;
+    type SignedValueType = f32;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PixelsUnit {}
 impl Unit for PixelsUnit {
-    type ValueType = u32;
-}
-
-pub trait Unit {
-    type ValueType: Copy;
+    type UnsignedValueType = u32;
+    type SignedValueType = i32;
 }
 
 pub trait Zero {
@@ -25,11 +28,14 @@ impl Zero for f32 {
 impl Zero for u32 {
     const ZERO: u32 = 0;
 }
+impl Zero for i32 {
+    const ZERO: i32 = 0;
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point<U: Unit> {
-    pub x: U::ValueType,
-    pub y: U::ValueType,
+    pub x: U::SignedValueType,
+    pub y: U::SignedValueType,
     _marker: PhantomData<U>,
 }
 impl Point<LogicalUnit> {
@@ -49,15 +55,41 @@ impl Point<LogicalUnit> {
         self.y * scale
     }
 
+    pub const fn to_pixels_round(&self, scale: f32) -> Point<PixelsUnit> {
+        Point {
+            x: (self.x * scale).round() as _,
+            y: (self.y * scale).round() as _,
+            _marker: PhantomData,
+        }
+    }
+
     pub const fn distance_sq(&self, other: &Self) -> f32 {
         (self.x - other.x) * (self.x - other.x) + (self.y - other.y) * (self.y - other.y)
+    }
+}
+impl Point<PixelsUnit> {
+    pub const fn new_pixels(x: i32, y: i32) -> Self {
+        Self {
+            x,
+            y,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn to_logical(&self, scale: f32) -> Point<LogicalUnit> {
+        Point {
+            x: self.x as f32 / scale,
+            y: self.y as f32 / scale,
+            _marker: PhantomData,
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Size<U: Unit> {
-    pub width: U::ValueType,
-    pub height: U::ValueType,
+    pub width: U::UnsignedValueType,
+    pub height: U::UnsignedValueType,
     _marker: PhantomData<U>,
 }
 impl Size<LogicalUnit> {
@@ -78,6 +110,15 @@ impl Size<LogicalUnit> {
     #[inline(always)]
     pub const fn height_pixels(&self, scale: f32) -> f32 {
         self.height * scale
+    }
+
+    #[inline(always)]
+    pub const fn to_pixels_ceil(&self, scale: f32) -> Size<PixelsUnit> {
+        Size {
+            width: (self.width * scale).ceil() as _,
+            height: (self.height * scale).ceil() as _,
+            _marker: PhantomData,
+        }
     }
 }
 impl Size<PixelsUnit> {
@@ -102,10 +143,10 @@ impl Size<PixelsUnit> {
 
 #[derive(Debug, Clone)]
 pub struct Rect<U: Unit> {
-    pub left: U::ValueType,
-    pub top: U::ValueType,
-    pub width: U::ValueType,
-    pub height: U::ValueType,
+    pub left: U::SignedValueType,
+    pub top: U::SignedValueType,
+    pub width: U::UnsignedValueType,
+    pub height: U::UnsignedValueType,
     _marker: PhantomData<U>,
 }
 impl<U: Unit> Rect<U> {
@@ -120,17 +161,17 @@ impl<U: Unit> Rect<U> {
     }
 
     #[inline(always)]
-    pub fn right(&self) -> <U::ValueType as core::ops::Add>::Output
+    pub fn right(&self) -> <U::SignedValueType as core::ops::Add<U::UnsignedValueType>>::Output
     where
-        U::ValueType: core::ops::Add,
+        U::SignedValueType: core::ops::Add<U::UnsignedValueType>,
     {
         self.left + self.width
     }
 
     #[inline(always)]
-    pub fn bottom(&self) -> <U::ValueType as core::ops::Add>::Output
+    pub fn bottom(&self) -> <U::SignedValueType as core::ops::Add<U::UnsignedValueType>>::Output
     where
-        U::ValueType: core::ops::Add,
+        U::SignedValueType: core::ops::Add<U::UnsignedValueType>,
     {
         self.top + self.height
     }
@@ -138,23 +179,24 @@ impl<U: Unit> Rect<U> {
     #[inline(always)]
     pub fn point_in_inclusive(&self, p: &Point<U>) -> bool
     where
-        U::ValueType: core::ops::Add<Output = U::ValueType> + core::cmp::PartialOrd,
+        U::SignedValueType: core::ops::Add<U::UnsignedValueType, Output = U::SignedValueType>
+            + core::cmp::PartialOrd,
     {
         self.left <= p.x && p.x <= self.right() && self.top <= p.y && p.y <= self.bottom()
     }
 }
-impl<U: Unit<ValueType: Zero>> From<Size<U>> for Rect<U> {
+impl<U: Unit<SignedValueType: Zero>> From<Size<U>> for Rect<U> {
     #[inline(always)]
     fn from(size: Size<U>) -> Self {
         Self::from(&size)
     }
 }
-impl<U: Unit<ValueType: Zero>> From<&'_ Size<U>> for Rect<U> {
+impl<U: Unit<SignedValueType: Zero>> From<&'_ Size<U>> for Rect<U> {
     #[inline(always)]
     fn from(size: &Size<U>) -> Self {
         Self {
-            left: <U::ValueType as Zero>::ZERO,
-            top: <U::ValueType as Zero>::ZERO,
+            left: <U::SignedValueType as Zero>::ZERO,
+            top: <U::SignedValueType as Zero>::ZERO,
             width: size.width,
             height: size.height,
             _marker: PhantomData,
