@@ -2288,17 +2288,12 @@ pub enum Event {
     PointerDown {
         #[cfg(feature = "wayland")]
         root_window: core::ptr::NonNull<wl::XdgSurface>,
-        #[cfg(feature = "wayland")]
-        buffer_scale: f32,
         #[cfg(windows)]
         active_window: HWND,
-        client_pos: Point<PointerInputUnit>,
     },
     PointerMove {
         #[cfg(feature = "wayland")]
         cursor_shaping_info: Option<(u32, *mut wl::WpCursorShapeDeviceV1)>, // 暫定的にここで送る
-        #[cfg(feature = "wayland")]
-        buffer_scale: f32,
         #[cfg(windows)]
         active_window: HWND,
         client_pos: Point<PointerInputUnit>,
@@ -2606,54 +2601,45 @@ async fn run<'sys>(
             Event::PointerDown {
                 #[cfg(feature = "wayland")]
                 root_window,
-                #[cfg(feature = "wayland")]
-                buffer_scale,
                 #[cfg(windows)]
                 active_window,
-                client_pos,
             } => {
                 #[cfg(feature = "wayland")]
                 {
                     drag_preview_popover.root_window = root_window.as_ptr();
                 }
 
-                let mut htctx = crate::hittest::HitTestEventContext {
-                    composite_tree,
-                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                    drag_preview: &mut drag_preview_popover,
-                };
                 pointer_input_manager.handle_mouse_left_down(
                     &main_window,
                     &mut ht_manager,
-                    &mut htctx,
+                    &mut crate::hittest::HitTestEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: &mut drag_preview_popover,
+                    },
                     HitTestTreeManager::ROOT,
                     &mut keyboard_focus_manager,
                 );
-                composite_tree = htctx.composite_tree;
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
             }
             Event::PointerMove {
                 #[cfg(feature = "wayland")]
                 cursor_shaping_info,
-                #[cfg(feature = "wayland")]
-                buffer_scale,
                 #[cfg(windows)]
                 active_window,
                 client_pos,
             } => {
-                let mut htctx = crate::hittest::HitTestEventContext {
-                    composite_tree,
-                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                    drag_preview: &mut drag_preview_popover,
-                };
                 pointer_input_manager.handle_mouse_move(
                     client_pos,
                     &main_window,
                     &mut ht_manager,
-                    &mut htctx,
+                    &mut crate::hittest::HitTestEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: &mut drag_preview_popover,
+                    },
                     HitTestTreeManager::ROOT,
                 );
-                composite_tree = htctx.composite_tree;
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
 
@@ -2667,18 +2653,16 @@ async fn run<'sys>(
                 }
             }
             Event::PointerUp => {
-                let mut htctx = crate::hittest::HitTestEventContext {
-                    composite_tree,
-                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                    drag_preview: &mut drag_preview_popover,
-                };
                 pointer_input_manager.handle_mouse_left_up(
                     &main_window,
                     &mut ht_manager,
-                    &mut htctx,
+                    &mut crate::hittest::HitTestEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: &mut drag_preview_popover,
+                    },
                     HitTestTreeManager::ROOT,
                 );
-                composite_tree = htctx.composite_tree;
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
             }
         }
@@ -4076,9 +4060,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         surface_y: wl::Fixed,
     ) {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
-        let buffer_scale = self.surface_states.lock().expect("poisoned")
-            [&WaylandSurfaceKey(surface as *mut _)]
-            .active_buffer_scale;
 
         state.enter_state = Some(WaylandPointerEnterState {
             surface: surface as *mut _,
@@ -4092,7 +4073,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
                 Some(ref cursor) => Some((serial, cursor.as_ptr())),
                 _ => None,
             },
-            buffer_scale,
             client_pos: state.pos,
         });
     }
@@ -4116,9 +4096,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         let Some(ref mut enter_state) = state.enter_state else {
             return;
         };
-        let buffer_scale = self.surface_states.lock().expect("poisoned")
-            [&WaylandSurfaceKey(enter_state.surface)]
-            .active_buffer_scale;
 
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
         self.event_dispatcher.dispatch(Event::PointerMove {
@@ -4126,7 +4103,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
                 Some(ref cursor) => Some((enter_state.serial, cursor.as_ptr())),
                 _ => None,
             },
-            buffer_scale,
             client_pos: state.pos,
         });
     }
@@ -4148,10 +4124,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         if state == wl::PointerButtonState::Pressed {
             self.event_dispatcher.dispatch(Event::PointerDown {
                 root_window: unsafe { core::ptr::NonNull::new_unchecked(enter_state.xdg_surface) },
-                buffer_scale: self.surface_states.lock().expect("poisoned")
-                    [&WaylandSurfaceKey(enter_state.surface)]
-                    .active_buffer_scale,
-                client_pos: pointer_state.pos,
             });
         } else if state == wl::PointerButtonState::Released {
             self.event_dispatcher.dispatch(Event::PointerUp);

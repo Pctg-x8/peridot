@@ -359,7 +359,7 @@ pub enum Role {
 
 pub struct HitTestEventContext<'h> {
     pub current_sec: f32,
-    pub composite_tree: CompositeTree,
+    pub composite_tree: &'h mut CompositeTree,
     pub drag_preview: &'h mut DragPreviewPopoverHandle,
 }
 
