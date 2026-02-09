@@ -4,6 +4,7 @@ use crate::{
     DragPreviewPopoverHandle,
     composite::CompositeTree,
     input::{EventContinueControl, FocusTargetToken},
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct HitTestTreeData<'h> {
@@ -258,9 +259,8 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn test(
         &self,
         root: HitTestTreeRef,
-        global_x: f32,
-        global_y: f32,
-        parent_effective_global_rect: Rect,
+        global_pos: &Point<LogicalUnit>,
+        parent_effective_global_rect: &Rect<LogicalUnit>,
     ) -> Option<HitTestTreeRef> {
         let d = &self.data[root.0];
         if !d.active {
@@ -269,61 +269,39 @@ impl<'h> HitTestTreeManager<'h> {
         }
 
         // グローバル座標での実際の自身のジオメトリを計算
-        let effective_global_rect = Rect {
-            left: parent_effective_global_rect.left
-                + parent_effective_global_rect.width * d.left_adjustment_factor
-                + d.left,
-            top: parent_effective_global_rect.top
-                + parent_effective_global_rect.height * d.top_adjustment_factor
-                + d.top,
-            width: parent_effective_global_rect.width * d.width_adjustment_factor + d.width,
-            height: parent_effective_global_rect.height * d.height_adjustment_factor + d.height,
-        };
+        let effective_global_rect = Rect::from_lt_size(
+            Point::new_logical(
+                parent_effective_global_rect.left
+                    + parent_effective_global_rect.width * d.left_adjustment_factor
+                    + d.left,
+                parent_effective_global_rect.top
+                    + parent_effective_global_rect.height * d.top_adjustment_factor
+                    + d.top,
+            ),
+            Size::new_logical(
+                parent_effective_global_rect.width * d.width_adjustment_factor + d.width,
+                parent_effective_global_rect.height * d.height_adjustment_factor + d.height,
+            ),
+        );
 
         // 後ろにあるほうが上なので優先して見る
-        if let Some(t) = self.relations[root.0].children.iter().rev().find_map(|&c| {
-            self.test(
-                HitTestTreeRef(c),
-                global_x,
-                global_y,
-                effective_global_rect.clone(),
-            )
-        }) {
+        if let Some(t) = self.relations[root.0]
+            .children
+            .iter()
+            .rev()
+            .find_map(|&c| self.test(HitTestTreeRef(c), global_pos, &effective_global_rect))
+        {
             // 子にヒット
             return Some(t);
         }
 
-        if d.opaque && effective_global_rect.point_in_inclusive(global_x, global_y) {
+        if d.opaque && effective_global_rect.point_in_inclusive(global_pos) {
             // 自分にヒット(不透明の場合のみ 透過で指定されている場合はヒットしてない扱いにする)
             return Some(root);
         }
 
         // なににもヒットしなかった
         None
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Rect {
-    pub left: f32,
-    pub top: f32,
-    pub width: f32,
-    pub height: f32,
-}
-impl Rect {
-    #[inline(always)]
-    pub const fn right(&self) -> f32 {
-        self.left + self.width
-    }
-
-    #[inline(always)]
-    pub const fn bottom(&self) -> f32 {
-        self.top + self.height
-    }
-
-    #[inline(always)]
-    pub const fn point_in_inclusive(&self, x: f32, y: f32) -> bool {
-        self.left <= x && x <= self.right() && self.top <= y && y <= self.bottom()
     }
 }
 
@@ -365,10 +343,8 @@ impl CursorShape {
 }
 
 pub struct PointerActionArgs {
-    pub client_x: f32,
-    pub client_y: f32,
-    pub client_width: f32,
-    pub client_height: f32,
+    pub client_pos: Point<LogicalUnit>,
+    pub client_size: Size<LogicalUnit>,
 }
 
 #[derive(Debug, Clone, Copy)]

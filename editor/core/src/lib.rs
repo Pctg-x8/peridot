@@ -70,6 +70,8 @@ use windows_numerics::{Vector2, Vector3};
 use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
     EffectOptimization, GaussianBlurEffect,
 };
+#[cfg(feature = "wayland")]
+use crate::utils::{LogicalUnit, PixelsUnit, Size};
 use crate::{
     composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, BoundCompositeRenderer, CompositeMode,
@@ -80,8 +82,8 @@ use crate::{
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
     hittest::{HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
-    input::{KeyboardFocusManager, PointerInputManager, ShellPointerActions},
-    utils::Color32,
+    input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
+    utils::{Color32, Point},
 };
 
 mod atlas;
@@ -551,19 +553,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     #[cfg(windows)]
                     let (cw, ch) = w.client_size();
                     #[cfg(feature = "wayland")]
-                    let (cw, ch) =
+                    let client_size =
                         surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
                     #[cfg(target_os = "macos")]
                     let (cw, ch) = *w.state.active_rt_size.lock().expect("poisoned");
 
                     br::Extent2D {
                         width: if surface_caps.currentExtent.width == 0xffffffff {
-                            cw
+                            client_size.width
                         } else {
                             surface_caps.currentExtent.width
                         },
                         height: if surface_caps.currentExtent.height == 0xffffffff {
-                            ch
+                            client_size.height
                         } else {
                             surface_caps.currentExtent.height
                         },
@@ -1187,19 +1189,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                             #[cfg(windows)]
                             let (cw, ch) = w.client_size();
                             #[cfg(feature = "wayland")]
-                            let (cw, ch) =
+                            let client_size =
                                 surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
                             #[cfg(target_os = "macos")]
                             let (cw, ch) = *w.state.active_rt_size.lock().expect("poisoned");
 
                             br::Extent2D {
                                 width: if surface_caps.currentExtent.width == 0xffffffff {
-                                    cw
+                                    client_size.width
                                 } else {
                                     surface_caps.currentExtent.width
                                 },
                                 height: if surface_caps.currentExtent.height == 0xffffffff {
-                                    ch
+                                    client_size.height
                                 } else {
                                     surface_caps.currentExtent.height
                                 },
@@ -2290,8 +2292,7 @@ pub enum Event {
         buffer_scale: f32,
         #[cfg(windows)]
         active_window: HWND,
-        client_x: f32,
-        client_y: f32,
+        client_pos: Point<PointerInputUnit>,
     },
     PointerMove {
         #[cfg(feature = "wayland")]
@@ -2300,14 +2301,10 @@ pub enum Event {
         buffer_scale: f32,
         #[cfg(windows)]
         active_window: HWND,
-        client_x: f32,
-        client_y: f32,
+        client_pos: Point<PointerInputUnit>,
     },
     PointerUp,
-    WindowResize {
-        new_width: u32,
-        new_height: u32,
-    },
+    WindowResize(Size<PointerInputUnit>),
     WindowRescaleUI {
         new_scale: f32,
     },
@@ -2371,11 +2368,9 @@ async fn run<'sys>(
 ) {
     tracing::info!("app start");
 
-    // TODO: マルチウィンドウ対応
-    let main_client_size = main_window.client_size();
     let mut keyboard_focus_manager = KeyboardFocusManager::new();
-    let mut pointer_input_manager =
-        PointerInputManager::new(main_client_size.0 as _, main_client_size.1 as _);
+    // TODO: マルチウィンドウ対応
+    let mut pointer_input_manager = PointerInputManager::new(main_window.client_size());
 
     let mut ht_manager = HitTestTreeManager::new();
     let mut composite_tree = CompositeTree::new();
@@ -2508,7 +2503,7 @@ async fn run<'sys>(
             context: &mut hittest::HitTestEventContext,
             args: &hittest::PointerActionArgs,
         ) -> input::EventContinueControl {
-            tracing::debug!(args.client_x, args.client_y, "tab main drag start");
+            tracing::debug!(args.client_pos.x, args.client_pos.y, "tab main drag start");
 
             /*#[cfg(feature = "wayland")]
             {
@@ -2533,12 +2528,9 @@ async fn run<'sys>(
                 client_x = p[0].x as _;
                 client_y = p[0].y as _;
             }*/
-            context.drag_preview.show(&DesktopRect {
-                left: args.client_x as _,
-                top: args.client_y as _,
-                width: 128,
-                height: 128,
-            });
+            context
+                .drag_preview
+                .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
 
             input::EventContinueControl::CAPTURE_ELEMENT
                 | input::EventContinueControl::STOP_PROPAGATION
@@ -2575,9 +2567,7 @@ async fn run<'sys>(
                 client_y = p[0].y as _;
             }*/
 
-            context
-                .drag_preview
-                .r#move(args.client_x as _, args.client_y as _);
+            context.drag_preview.r#move(&args.client_pos);
 
             input::EventContinueControl::STOP_PROPAGATION
         }
@@ -2614,11 +2604,8 @@ async fn run<'sys>(
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
-            Event::WindowResize {
-                new_width,
-                new_height,
-            } => {
-                pointer_input_manager.set_client_size(new_width as _, new_height as _);
+            Event::WindowResize(new) => {
+                pointer_input_manager.set_client_size(new);
             }
             Event::WindowRescaleUI { new_scale } => {
                 composite_tree.get_mut(app_title).base_scale_factor = new_scale;
@@ -2635,8 +2622,7 @@ async fn run<'sys>(
                 buffer_scale,
                 #[cfg(windows)]
                 active_window,
-                mut client_x,
-                mut client_y,
+                client_pos,
             } => {
                 #[cfg(feature = "wayland")]
                 {
@@ -2665,8 +2651,7 @@ async fn run<'sys>(
                 buffer_scale,
                 #[cfg(windows)]
                 active_window,
-                mut client_x,
-                mut client_y,
+                client_pos,
             } => {
                 let mut htctx = crate::hittest::HitTestEventContext {
                     composite_tree,
@@ -2674,8 +2659,7 @@ async fn run<'sys>(
                     drag_preview: &mut drag_preview_popover,
                 };
                 pointer_input_manager.handle_mouse_move(
-                    client_x as _,
-                    client_y as _,
+                    client_pos,
                     &main_window,
                     &mut ht_manager,
                     &mut htctx,
@@ -2775,12 +2759,11 @@ pub struct WindowHandle {
 #[cfg(feature = "wayland")]
 impl WindowHandle {
     #[inline(always)]
-    pub fn client_size(&self) -> (u32, u32) {
-        unsafe {
-            (*self.wl_surface_to_state).lock().expect("poisoned")
-                [&WaylandSurfaceKey(self.wl_surface)]
-                .active_size
-        }
+    pub fn client_size(&self) -> Size<LogicalUnit> {
+        let wl_surface_to_state = unsafe { (*self.wl_surface_to_state).lock().expect("poisoned") };
+        let state = &wl_surface_to_state[&WaylandSurfaceKey(self.wl_surface)];
+
+        state.active_size.to_logical(state.active_buffer_scale)
     }
 }
 #[cfg(feature = "wayland")]
@@ -3439,13 +3422,6 @@ impl Win32Window {
     }
 }
 
-pub struct DesktopRect {
-    pub left: i32,
-    pub top: i32,
-    pub width: u32,
-    pub height: u32,
-}
-
 #[cfg(feature = "wayland")]
 struct WaylandGlobalInterfaces {
     outputs: Vec<wl::Owned<wl::Output>>,
@@ -3619,7 +3595,7 @@ struct DragPreviewPopoverHandle {
 }
 #[cfg(feature = "wayland")]
 impl DragPreviewPopoverHandle {
-    pub fn show(&mut self, rect: &DesktopRect) {
+    pub fn show(&mut self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
         let wl_popup_surface = unsafe {
             (*self.wl_interfaces)
                 .compositor
@@ -3633,27 +3609,33 @@ impl DragPreviewPopoverHandle {
                 .expect("xdg_popup_surface.create")
         };
 
-        let pos = unsafe {
+        let positioner = unsafe {
             (*self.wl_interfaces)
                 .xdg_wm_base
                 .create_positioner()
                 .expect("pos.create")
         };
-        pos.set_size(rect.width as _, rect.height as _)
+        positioner
+            .set_size(size.width as _, size.height as _)
             .expect("pos.set_size");
-        pos.set_offset(rect.left as _, rect.top as _)
+        positioner
+            .set_offset(pos.x as _, pos.y as _)
             .expect("pos.set_offset");
-        pos.set_anchor(wl::XdgPositionerAnchor::TopLeft)
+        positioner
+            .set_anchor(wl::XdgPositionerAnchor::TopLeft)
             .expect("pos.set_anchor");
-        pos.set_anchor_rect(0, 0, 1, 1)
+        positioner
+            .set_anchor_rect(0, 0, 1, 1)
             .expect("pos.set_anchor_rect");
-        pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
+        positioner
+            .set_gravity(wl::XdgPositionerGravity::BottomRight)
             .expect("pos.set_gravity");
-        pos.set_constraint_adjustment(wl::XdgPositionerConstraintAdjustment::None)
+        positioner
+            .set_constraint_adjustment(wl::XdgPositionerConstraintAdjustment::None)
             .expect("pos.set_constraint_adjustment");
         let mut pp = unsafe {
             xdg_popup_surface
-                .get_popup(Some(&*self.root_window), &pos)
+                .get_popup(Some(&*self.root_window), &positioner)
                 .expect("pop.create")
         };
         let mut popup_state = Box::new(WaylandPopupState {});
@@ -3691,7 +3673,7 @@ impl DragPreviewPopoverHandle {
             )
             .expect("viewport.set_source");
         viewport
-            .set_destination(rect.width as _, rect.height as _)
+            .set_destination(size.width as _, size.height as _)
             .expect("viewport.set_destination");
 
         let blur = if let Some(bm) = unsafe { (*self.wl_interfaces).kde_blur_manager.as_ref() } {
@@ -3715,7 +3697,7 @@ impl DragPreviewPopoverHandle {
         ));
     }
 
-    pub fn r#move(&mut self, x: i32, y: i32) {
+    pub fn r#move(&mut self, p: &Point<PointerInputUnit>) {
         let Some((_, ref pp, _, _, _, _)) = self.popup else {
             return;
         };
@@ -3726,7 +3708,7 @@ impl DragPreviewPopoverHandle {
                 .create_positioner()
                 .expect("pos.create")
         };
-        pos.set_offset(x as _, y as _).expect("pos.set_offset");
+        pos.set_offset(p.x as _, p.y as _).expect("pos.set_offset");
         pp.reposition(&pos, 0).expect("pp.reposition");
     }
 
@@ -3987,7 +3969,7 @@ struct WaylandPointerEnterState {
 struct WaylandPointerState {
     _wl_object: wl::Owned<wl::Pointer>,
     cursor: Option<wl::Owned<wl::WpCursorShapeDeviceV1>>,
-    pos: (f32, f32),
+    pos: Point<LogicalUnit>,
     enter_state: Option<WaylandPointerEnterState>,
 }
 
@@ -4054,7 +4036,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
             self.pointer = Some(WaylandPointerState {
                 _wl_object: p,
                 cursor: c,
-                pos: (0.0, 0.0),
+                pos: Point::new_logical(0.0, 0.0),
                 enter_state: None,
             });
         } else {
@@ -4115,10 +4097,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
             xdg_surface: self.surface_to_xdg_surface[&(surface as *mut _)],
             serial,
         });
-        state.pos = (
-            surface_x.to_f32() * buffer_scale,
-            surface_y.to_f32() * buffer_scale,
-        );
+        state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
 
         self.event_dispatcher.dispatch(Event::PointerMove {
             cursor_shaping_info: match state.cursor {
@@ -4126,8 +4105,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
                 _ => None,
             },
             buffer_scale,
-            client_x: state.pos.0,
-            client_y: state.pos.1,
+            client_pos: state.pos,
         });
     }
 
@@ -4154,18 +4132,14 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
             [&WaylandSurfaceKey(enter_state.surface)]
             .active_buffer_scale;
 
-        state.pos = (
-            surface_x.to_f32() * buffer_scale,
-            surface_y.to_f32() * buffer_scale,
-        );
+        state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
         self.event_dispatcher.dispatch(Event::PointerMove {
             cursor_shaping_info: match state.cursor {
                 Some(ref cursor) => Some((enter_state.serial, cursor.as_ptr())),
                 _ => None,
             },
             buffer_scale,
-            client_x: state.pos.0,
-            client_y: state.pos.1,
+            client_pos: state.pos,
         });
     }
 
@@ -4189,8 +4163,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
                 buffer_scale: self.surface_states.lock().expect("poisoned")
                     [&WaylandSurfaceKey(enter_state.surface)]
                     .active_buffer_scale,
-                client_x: pointer_state.pos.0,
-                client_y: pointer_state.pos.1,
+                client_pos: pointer_state.pos,
             });
         } else if state == wl::PointerButtonState::Released {
             self.event_dispatcher.dispatch(Event::PointerUp);
@@ -4478,14 +4451,17 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgSurfaceEventListener
             .expect("no surface registered");
 
         if let Some((w, h)) = state.pending_configure_size.take() {
+            self.event_dispatcher
+                .dispatch(Event::WindowResize(Size::new_logical(w as _, h as _)));
+
             let w: u32 = (u32::try_from(w).expect("negative window size") as f32
                 * state.active_buffer_scale)
                 .ceil() as _;
             let h: u32 = (u32::try_from(h).expect("negative window size") as f32
                 * state.active_buffer_scale)
                 .ceil() as _;
-            if w != state.active_size.0 || h != state.active_size.1 {
-                state.active_size = (w, h);
+            if w != state.active_size.width || h != state.active_size.height {
+                state.active_size = Size::new_pixels(w, h);
                 state
                     .swapchain_externally_invalidation_signal
                     .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -4535,12 +4511,12 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgToplevelEventListener
 
         state.pending_configure_size = Some((
             if width == 0 {
-                state.active_size.0 as _
+                state.active_size.width as _
             } else {
                 width
             },
             if height == 0 {
-                state.active_size.1 as _
+                state.active_size.height as _
             } else {
                 height
             },
@@ -4707,7 +4683,7 @@ impl WaylandWindow {
                 WaylandWindowState {
                     pending_configure_size: None,
                     active_buffer_scale: 1.0,
-                    active_size: (640, 480),
+                    active_size: Size::new_pixels(640, 480),
                     swapchain_externally_invalidation_signal: std::sync::Arc::new(
                         std::sync::atomic::AtomicBool::new(false),
                     ),
@@ -4797,7 +4773,7 @@ impl wl::XdgPopupEventListener for WaylandPopupState {
 struct WaylandWindowState {
     pending_configure_size: Option<(i32, i32)>,
     active_buffer_scale: f32,
-    active_size: (u32, u32),
+    active_size: Size<PixelsUnit>,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     terminate_event: std::sync::Arc<EventFD>,
 }
