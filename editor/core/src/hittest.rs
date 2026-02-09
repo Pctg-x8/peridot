@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
+    DragPreviewPopoverHandle,
     composite::CompositeTree,
     input::{EventContinueControl, FocusTargetToken},
 };
@@ -50,7 +51,7 @@ impl<'h> HitTestTreeData<'h> {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HitTestTreeRef(usize);
 
 struct HitTestTreeRelationData {
@@ -380,9 +381,10 @@ pub enum Role {
     RestoreButton,
 }
 
-pub struct HitTestEventContext {
+pub struct HitTestEventContext<'h> {
     pub current_sec: f32,
     pub composite_tree: CompositeTree,
+    pub drag_preview: &'h mut DragPreviewPopoverHandle,
 }
 
 pub trait HitTestTreeActionHandler {
@@ -444,6 +446,36 @@ pub trait HitTestTreeActionHandler {
 
     #[allow(unused_variables)]
     fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::empty()
+    }
+
+    #[allow(unused_variables)]
+    fn on_drag_start(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::empty()
+    }
+
+    #[allow(unused_variables)]
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::empty()
+    }
+
+    #[allow(unused_variables)]
+    fn on_drag_end(
         &self,
         sender: HitTestTreeRef,
         context: &mut HitTestEventContext,

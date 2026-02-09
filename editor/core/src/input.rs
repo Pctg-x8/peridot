@@ -22,6 +22,21 @@ enum PointerFocusState {
     Capturing(HitTestTreeRef),
 }
 
+enum PointerDownGestureState {
+    None,
+    Click { base_client_pos: (f32, f32) },
+    Drag,
+}
+impl PointerDownGestureState {
+    const fn is_dragging(&self) -> bool {
+        matches!(self, Self::Drag)
+    }
+
+    const fn is_click(&self) -> bool {
+        matches!(self, Self::Click { .. })
+    }
+}
+
 pub trait ShellPointerActions {
     fn capture_pointer(&self);
     fn release_pointer(&self);
@@ -30,7 +45,7 @@ pub trait ShellPointerActions {
 pub struct PointerInputManager {
     last_client_pointer_pos: Option<(f32, f32)>,
     pointer_focus: PointerFocusState,
-    click_base_client_pointer_pos: Option<(f32, f32)>,
+    down_gesture: PointerDownGestureState,
     client_size: (f32, f32),
 }
 impl PointerInputManager {
@@ -40,7 +55,7 @@ impl PointerInputManager {
         PointerInputManager {
             last_client_pointer_pos: None,
             pointer_focus: PointerFocusState::None,
-            click_base_client_pointer_pos: None,
+            down_gesture: PointerDownGestureState::None,
             client_size: (client_width, client_height),
         }
     }
@@ -226,6 +241,106 @@ impl PointerInputManager {
         (needs_recompute_pointer_enter, new_captured)
     }
 
+    fn begin_drag(
+        &mut self,
+        ht: &HitTestTreeManager,
+        action_context: &mut HitTestEventContext,
+        action_args: &PointerActionArgs,
+        shell: &(impl ShellPointerActions + ?Sized),
+    ) {
+        self.down_gesture = PointerDownGestureState::Drag;
+
+        match self.pointer_focus {
+            PointerFocusState::None => unreachable!("drag started without focus?"),
+            PointerFocusState::Capturing(e) => {
+                let _ = ht
+                    .get_data(e)
+                    .action_handler()
+                    .map_or(EventContinueControl::empty(), |h| {
+                        h.on_drag_start(e, action_context, action_args)
+                    });
+                // TODO: begin_dragでなんらかのフラグを処理する必要があるか？
+            }
+            PointerFocusState::Entering(e) => {
+                for ht_ref in ht.iter_ascending_from(e) {
+                    let flags = ht
+                        .get_data(ht_ref)
+                        .action_handler()
+                        .map_or(EventContinueControl::empty(), |h| {
+                            h.on_drag_start(ht_ref, action_context, action_args)
+                        });
+                    if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
+                        self.pointer_focus = PointerFocusState::Capturing(ht_ref);
+                        shell.capture_pointer();
+                    }
+                    if flags.contains(EventContinueControl::STOP_PROPAGATION) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    fn dispatch_drag_move(
+        &self,
+        action_args: &PointerActionArgs,
+        ht: &HitTestTreeManager,
+        action_context: &mut HitTestEventContext,
+        ht_target: HitTestTreeRef,
+    ) -> bool {
+        let mut needs_recompute_pointer_enter = false;
+
+        for ht_ref in ht.iter_ascending_from(ht_target) {
+            let flags = ht
+                .get_data(ht_ref)
+                .action_handler()
+                .map_or(EventContinueControl::empty(), |h| {
+                    h.on_drag_move(ht_ref, action_context, action_args)
+                });
+            if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
+                needs_recompute_pointer_enter = true;
+            }
+            if flags.contains(EventContinueControl::STOP_PROPAGATION) {
+                break;
+            }
+        }
+
+        needs_recompute_pointer_enter
+    }
+
+    fn dispatch_drag_end(
+        &self,
+        sh: &(impl ShellPointerActions + ?Sized),
+        action_args: &PointerActionArgs,
+        ht: &HitTestTreeManager,
+        action_context: &mut HitTestEventContext,
+        ht_target: HitTestTreeRef,
+    ) -> (bool, Option<HitTestTreeRef>) {
+        let mut needs_recompute_pointer_enter = false;
+        let mut new_captured = None;
+
+        for ht_ref in ht.iter_ascending_from(ht_target) {
+            let flags = ht
+                .get_data(ht_ref)
+                .action_handler()
+                .map_or(EventContinueControl::empty(), |h| {
+                    h.on_drag_end(ht_ref, action_context, action_args)
+                });
+            if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
+                needs_recompute_pointer_enter = true;
+            }
+            if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
+                new_captured = Some(ht_ref);
+                sh.capture_pointer();
+            }
+            if flags.contains(EventContinueControl::STOP_PROPAGATION) {
+                break;
+            }
+        }
+
+        (needs_recompute_pointer_enter, new_captured)
+    }
+
     fn handle_mouse_enter_leave(
         &mut self,
         client_x: f32,
@@ -284,8 +399,8 @@ impl PointerInputManager {
                 ht_ref,
             );
 
-            // leaveしたときはclick状態もなかったことにする
-            self.click_base_client_pointer_pos = None;
+            // leaveしたときはジェスチャもなかったことにする
+            self.down_gesture = PointerDownGestureState::None;
         }
 
         self.pointer_focus = match new_hit {
@@ -312,6 +427,7 @@ impl PointerInputManager {
         &mut self,
         client_x: f32,
         client_y: f32,
+        sh: &(impl ShellPointerActions + ?Sized),
         ht: &mut HitTestTreeManager,
         action_context: &mut HitTestEventContext,
         ht_root: HitTestTreeRef,
@@ -319,28 +435,56 @@ impl PointerInputManager {
         let (client_width, client_height) = self.client_size;
         self.last_client_pointer_pos = Some((client_x, client_y));
 
-        if let Some((cbx, cby)) = self.click_base_client_pointer_pos {
-            let d_sq = (client_x - cbx).powi(2) + (client_y - cby).powi(2);
+        match self.down_gesture {
+            PointerDownGestureState::None => (),
+            PointerDownGestureState::Click { base_client_pos } => {
+                let d_sq =
+                    (client_x - base_client_pos.0).powi(2) + (client_y - base_client_pos.1).powi(2);
 
-            if d_sq >= Self::CLICK_DETECTION_MAX_DISTANCE.powi(2) {
-                // 動きすぎたのでクリック状態を解除
-                self.click_base_client_pointer_pos = None;
+                if d_sq >= Self::CLICK_DETECTION_MAX_DISTANCE.powi(2) {
+                    // 動きすぎたのでドラッグ化を解除
+                    self.begin_drag(
+                        ht,
+                        action_context,
+                        &PointerActionArgs {
+                            client_x,
+                            client_y,
+                            client_width,
+                            client_height,
+                        },
+                        sh,
+                    );
+                }
             }
-        }
+            PointerDownGestureState::Drag => (),
+        };
 
         if let PointerFocusState::Capturing(ht_ref) = self.pointer_focus {
             // キャプチャ中の要素があればそれにだけ流す
             if let Some(h) = ht.get_data(ht_ref).action_handler() {
-                h.on_pointer_move(
-                    ht_ref,
-                    action_context,
-                    &PointerActionArgs {
-                        client_x,
-                        client_y,
-                        client_width,
-                        client_height,
-                    },
-                );
+                if self.down_gesture.is_dragging() {
+                    h.on_drag_move(
+                        ht_ref,
+                        action_context,
+                        &PointerActionArgs {
+                            client_x,
+                            client_y,
+                            client_width,
+                            client_height,
+                        },
+                    );
+                } else {
+                    h.on_pointer_move(
+                        ht_ref,
+                        action_context,
+                        &PointerActionArgs {
+                            client_x,
+                            client_y,
+                            client_width,
+                            client_height,
+                        },
+                    );
+                }
             }
 
             return;
@@ -349,17 +493,31 @@ impl PointerInputManager {
         self.handle_mouse_enter_leave(client_x, client_y, ht, action_context, ht_root);
 
         if let PointerFocusState::Entering(ht_ref) = self.pointer_focus {
-            let needs_recompute_pointer_enter = self.dispatch_pointer_move(
-                &PointerActionArgs {
-                    client_x,
-                    client_y,
-                    client_width,
-                    client_height,
-                },
-                ht,
-                action_context,
-                ht_ref,
-            );
+            let needs_recompute_pointer_enter = if self.down_gesture.is_dragging() {
+                self.dispatch_drag_move(
+                    &PointerActionArgs {
+                        client_x,
+                        client_y,
+                        client_width,
+                        client_height,
+                    },
+                    ht,
+                    action_context,
+                    ht_ref,
+                )
+            } else {
+                self.dispatch_pointer_move(
+                    &PointerActionArgs {
+                        client_x,
+                        client_y,
+                        client_width,
+                        client_height,
+                    },
+                    ht,
+                    action_context,
+                    ht_ref,
+                )
+            };
 
             if needs_recompute_pointer_enter {
                 self.handle_mouse_enter_leave(client_x, client_y, ht, action_context, ht_root);
@@ -381,7 +539,9 @@ impl PointerInputManager {
         };
         let (client_width, client_height) = self.client_size;
 
-        self.click_base_client_pointer_pos = Some((client_x, client_y));
+        self.down_gesture = PointerDownGestureState::Click {
+            base_client_pos: (client_x, client_y),
+        };
 
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref) => {
@@ -456,6 +616,76 @@ impl PointerInputManager {
         };
         let (client_width, client_height) = self.client_size;
 
+        if self.down_gesture.is_dragging() {
+            // ドラッグ状態だった場合はここでendする
+            match self.pointer_focus {
+                PointerFocusState::Capturing(ht_ref) => {
+                    let flags = ht.get_data(ht_ref).action_handler().map_or(
+                        EventContinueControl::empty(),
+                        |h| {
+                            h.on_drag_end(
+                                ht_ref,
+                                action_context,
+                                &PointerActionArgs {
+                                    client_x,
+                                    client_y,
+                                    client_width,
+                                    client_height,
+                                },
+                            )
+                        },
+                    );
+                    if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
+                        self.handle_mouse_enter_leave(
+                            client_x,
+                            client_y,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
+                    }
+                    if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
+                        sh.release_pointer();
+                        self.pointer_focus = PointerFocusState::Entering(ht_ref);
+                        self.handle_mouse_enter_leave(
+                            client_x,
+                            client_y,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
+                    }
+                }
+                PointerFocusState::Entering(ht_ref) => {
+                    let (needs_recompute_pointer_enter, new_captured) = self.dispatch_drag_end(
+                        sh,
+                        &PointerActionArgs {
+                            client_x,
+                            client_y,
+                            client_width,
+                            client_height,
+                        },
+                        ht,
+                        action_context,
+                        ht_ref,
+                    );
+
+                    if let Some(h) = new_captured {
+                        self.pointer_focus = PointerFocusState::Capturing(h);
+                    } else if needs_recompute_pointer_enter {
+                        self.handle_mouse_enter_leave(
+                            client_x,
+                            client_y,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
+                    }
+                }
+                PointerFocusState::None => (),
+            }
+        }
+
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref) => {
                 let flags = ht.get_data(ht_ref).action_handler().map_or(
@@ -505,7 +735,7 @@ impl PointerInputManager {
             PointerFocusState::None => (),
         }
 
-        if self.click_base_client_pointer_pos.take().is_some() {
+        if self.down_gesture.is_click() {
             // クリック判定持続してた
             match self.pointer_focus {
                 PointerFocusState::Capturing(ht_ref) => {
@@ -574,6 +804,8 @@ impl PointerInputManager {
                 PointerFocusState::None => (),
             }
         }
+
+        self.down_gesture = PointerDownGestureState::None;
     }
 
     pub fn recompute_enter_leave(

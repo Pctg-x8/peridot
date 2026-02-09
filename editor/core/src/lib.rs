@@ -2501,6 +2501,101 @@ async fn run<'sys>(
 
             input::EventContinueControl::STOP_PROPAGATION
         }
+
+        fn on_drag_start(
+            &self,
+            sender: hittest::HitTestTreeRef,
+            context: &mut hittest::HitTestEventContext,
+            args: &hittest::PointerActionArgs,
+        ) -> input::EventContinueControl {
+            tracing::debug!(args.client_x, args.client_y, "tab main drag start");
+
+            /*#[cfg(feature = "wayland")]
+            {
+                // waylandで指定するのは論理座標
+                client_x = client_x / buffer_scale;
+                client_y = client_y / buffer_scale;
+            }
+            #[cfg(windows)]
+            {
+                // Windowsはグローバル座標を渡す必要があるのでここで変換する
+                let mut p = [windows::Win32::Foundation::POINT {
+                    x: client_x as _,
+                    y: client_y as _,
+                }];
+                unsafe {
+                    windows::Win32::Graphics::Gdi::MapWindowPoints(
+                        Some(active_window),
+                        None,
+                        &mut p,
+                    );
+                }
+                client_x = p[0].x as _;
+                client_y = p[0].y as _;
+            }*/
+            context.drag_preview.show(&DesktopRect {
+                left: args.client_x as _,
+                top: args.client_y as _,
+                width: 128,
+                height: 128,
+            });
+
+            input::EventContinueControl::CAPTURE_ELEMENT
+                | input::EventContinueControl::STOP_PROPAGATION
+        }
+
+        fn on_drag_move(
+            &self,
+            sender: hittest::HitTestTreeRef,
+            context: &mut hittest::HitTestEventContext,
+            args: &hittest::PointerActionArgs,
+        ) -> input::EventContinueControl {
+            // DragPreviewの動作確認用のダミー処理
+            /*#[cfg(feature = "wayland")]
+            {
+                // waylandで指定するのは論理座標
+                client_x = client_x / buffer_scale;
+                client_y = client_y / buffer_scale;
+            }
+            #[cfg(windows)]
+            {
+                // Windowsはグローバル座標を渡す必要があるのでここで変換する
+                let mut p = [windows::Win32::Foundation::POINT {
+                    x: client_x as _,
+                    y: client_y as _,
+                }];
+                unsafe {
+                    windows::Win32::Graphics::Gdi::MapWindowPoints(
+                        Some(active_window),
+                        None,
+                        &mut p,
+                    );
+                }
+                client_x = p[0].x as _;
+                client_y = p[0].y as _;
+            }*/
+
+            context
+                .drag_preview
+                .r#move(args.client_x as _, args.client_y as _);
+
+            input::EventContinueControl::STOP_PROPAGATION
+        }
+
+        fn on_drag_end(
+            &self,
+            sender: hittest::HitTestTreeRef,
+            context: &mut hittest::HitTestEventContext,
+            args: &hittest::PointerActionArgs,
+        ) -> input::EventContinueControl {
+            tracing::debug!("tab main drag end");
+
+            // DragPreviewの動作確認用のダミー処理
+            context.drag_preview.hide();
+
+            input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
+                | input::EventContinueControl::STOP_PROPAGATION
+        }
     }
     let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
     let ht_tab_main = ht_manager.create(HitTestTreeData {
@@ -2543,9 +2638,15 @@ async fn run<'sys>(
                 mut client_x,
                 mut client_y,
             } => {
+                #[cfg(feature = "wayland")]
+                {
+                    drag_preview_popover.root_window = root_window.as_ptr();
+                }
+
                 let mut htctx = crate::hittest::HitTestEventContext {
                     composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
+                    drag_preview: &mut drag_preview_popover,
                 };
                 pointer_input_manager.handle_mouse_left_down(
                     &main_window,
@@ -2556,40 +2657,6 @@ async fn run<'sys>(
                 );
                 composite_tree = htctx.composite_tree;
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
-
-                // DragPreviewの動作確認用のダミー処理
-                main_window.capture_pointer();
-
-                #[cfg(feature = "wayland")]
-                {
-                    drag_preview_popover.root_window = root_window.as_ptr();
-                    // waylandで指定するのは論理座標
-                    client_x = client_x / buffer_scale;
-                    client_y = client_y / buffer_scale;
-                }
-                #[cfg(windows)]
-                {
-                    // Windowsはグローバル座標を渡す必要があるのでここで変換する
-                    let mut p = [windows::Win32::Foundation::POINT {
-                        x: client_x as _,
-                        y: client_y as _,
-                    }];
-                    unsafe {
-                        windows::Win32::Graphics::Gdi::MapWindowPoints(
-                            Some(active_window),
-                            None,
-                            &mut p,
-                        );
-                    }
-                    client_x = p[0].x as _;
-                    client_y = p[0].y as _;
-                }
-                drag_preview_popover.show(&DesktopRect {
-                    left: client_x as _,
-                    top: client_y as _,
-                    width: 128,
-                    height: 128,
-                });
             }
             Event::PointerMove {
                 #[cfg(feature = "wayland")]
@@ -2604,10 +2671,12 @@ async fn run<'sys>(
                 let mut htctx = crate::hittest::HitTestEventContext {
                     composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
+                    drag_preview: &mut drag_preview_popover,
                 };
                 pointer_input_manager.handle_mouse_move(
                     client_x as _,
                     client_y as _,
+                    &main_window,
                     &mut ht_manager,
                     &mut htctx,
                     HitTestTreeManager::ROOT,
@@ -2624,38 +2693,12 @@ async fn run<'sys>(
                             .expect("cursor_shape_device.set_cursor");
                     }
                 }
-
-                // DragPreviewの動作確認用のダミー処理
-                #[cfg(feature = "wayland")]
-                {
-                    // waylandで指定するのは論理座標
-                    client_x = client_x / buffer_scale;
-                    client_y = client_y / buffer_scale;
-                }
-                #[cfg(windows)]
-                {
-                    // Windowsはグローバル座標を渡す必要があるのでここで変換する
-                    let mut p = [windows::Win32::Foundation::POINT {
-                        x: client_x as _,
-                        y: client_y as _,
-                    }];
-                    unsafe {
-                        windows::Win32::Graphics::Gdi::MapWindowPoints(
-                            Some(active_window),
-                            None,
-                            &mut p,
-                        );
-                    }
-                    client_x = p[0].x as _;
-                    client_y = p[0].y as _;
-                }
-
-                drag_preview_popover.r#move(client_x as _, client_y as _);
             }
             Event::PointerUp => {
                 let mut htctx = crate::hittest::HitTestEventContext {
                     composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
+                    drag_preview: &mut drag_preview_popover,
                 };
                 pointer_input_manager.handle_mouse_left_up(
                     &main_window,
@@ -2665,10 +2708,6 @@ async fn run<'sys>(
                 );
                 composite_tree = htctx.composite_tree;
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
-
-                // DragPreviewの動作確認用のダミー処理
-                drag_preview_popover.hide();
-                main_window.release_pointer();
             }
         }
     }
