@@ -2505,13 +2505,7 @@ async fn run<'sys>(
         ) -> input::EventContinueControl {
             tracing::debug!(args.client_pos.x, args.client_pos.y, "tab main drag start");
 
-            /*#[cfg(feature = "wayland")]
-            {
-                // waylandで指定するのは論理座標
-                client_x = client_x / buffer_scale;
-                client_y = client_y / buffer_scale;
-            }
-            #[cfg(windows)]
+            /*#[cfg(windows)]
             {
                 // Windowsはグローバル座標を渡す必要があるのでここで変換する
                 let mut p = [windows::Win32::Foundation::POINT {
@@ -2543,13 +2537,7 @@ async fn run<'sys>(
             args: &hittest::PointerActionArgs,
         ) -> input::EventContinueControl {
             // DragPreviewの動作確認用のダミー処理
-            /*#[cfg(feature = "wayland")]
-            {
-                // waylandで指定するのは論理座標
-                client_x = client_x / buffer_scale;
-                client_y = client_y / buffer_scale;
-            }
-            #[cfg(windows)]
+            /*#[cfg(windows)]
             {
                 // Windowsはグローバル座標を渡す必要があるのでここで変換する
                 let mut p = [windows::Win32::Foundation::POINT {
