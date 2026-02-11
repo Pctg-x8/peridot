@@ -358,11 +358,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         popup: None,
     };
 
+    #[cfg(target_os = "macos")]
+    let drag_preview_popover = DragPreviewPopoverHandle {
+        bound_window_link: core::ptr::null_mut(),
+    };
+
     #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(&wl_interfaces, &dbus);
 
     #[cfg(target_os = "macos")]
-    let mut w = MacWindow::new();
+    let mut w = MacWindow::new(LogicFiberEventDispatcher::<AppFuture> {
+        event_store: event_store.as_mut().get_mut() as *mut _,
+        future: core::ptr::null_mut(),
+    });
     #[cfg(target_os = "macos")]
     w.make_primary_window();
 
@@ -468,6 +476,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             wl_surface: w.surface.as_ptr(),
             wl_surface_to_state: &surface_states,
         },
+        #[cfg(target_os = "macos")]
+        WindowHandle {
+            state_ref: &mut w.dispatcher.state as *mut _
+        },
         drag_preview_popover
     ));
 
@@ -477,7 +489,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .as_mut()
             .get_unchecked_mut()
             .event_dispatcher
-            .future = app.as_mut().get_unchecked_mut() as *mut _ as _;
+            .future = app.as_mut().get_unchecked_mut() as *mut _;
     }
     #[cfg(feature = "wayland")]
     wl_interfaces
@@ -491,6 +503,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
         .into_result()
         .expect("seat set_listener");
+    #[cfg(target_os = "macos")]
+    unsafe {
+        w.dispatcher.event_dispatcher.future = app.as_mut().get_unchecked_mut() as *mut _;
+    }
 
     let _ = app
         .as_mut()
@@ -554,7 +570,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     let client_size =
                         surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
                     #[cfg(target_os = "macos")]
-                    let (cw, ch) = *w.state.active_rt_size.lock().expect("poisoned");
+                    let client_size = *w.dispatcher.state.active_rt_size.lock().expect("poisoned");
 
                     br::Extent2D {
                         width: if surface_caps.currentExtent.width == 0xffffffff {
@@ -1142,7 +1158,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         swapchain_invalidated = true;
                     }
                     #[cfg(target_os = "macos")]
-                    if w.state
+                    if w.dispatcher
+                        .state
                         .swapchain_externally_invalidation_signal
                         .compare_exchange_weak(
                             true,
@@ -1190,7 +1207,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                             let client_size =
                                 surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
                             #[cfg(target_os = "macos")]
-                            let (cw, ch) = *w.state.active_rt_size.lock().expect("poisoned");
+                            let client_size =
+                                *w.dispatcher.state.active_rt_size.lock().expect("poisoned");
 
                             br::Extent2D {
                                 width: if surface_caps.currentExtent.width == 0xffffffff {
@@ -2288,6 +2306,8 @@ pub enum Event {
         root_window: core::ptr::NonNull<wl::XdgSurface>,
         #[cfg(windows)]
         active_window: HWND,
+        #[cfg(target_os = "macos")]
+        active_window: *mut core::ffi::c_void,
     },
     PointerMove {
         #[cfg(feature = "wayland")]
@@ -2302,9 +2322,9 @@ pub enum Event {
         new_scale: f32,
     },
 }
-#[cfg(any(feature = "wayland", windows))]
+#[cfg(any(feature = "wayland", windows, target_os = "macos"))]
 unsafe impl Sync for Event {}
-#[cfg(any(feature = "wayland", windows))]
+#[cfg(any(feature = "wayland", windows, target_os = "macos"))]
 unsafe impl Send for Event {}
 
 struct EventQueue {
@@ -2316,7 +2336,7 @@ impl EventQueue {
     }
 }
 
-struct LogicFiberEventDispatcher<AppFuture> {
+pub struct LogicFiberEventDispatcher<AppFuture> {
     event_store: *mut Option<Event>,
     future: *mut AppFuture,
 }
@@ -2566,6 +2586,8 @@ async fn run<'sys>(
                 root_window,
                 #[cfg(windows)]
                 active_window,
+                #[cfg(target_os = "macos")]
+                active_window,
             } => {
                 #[cfg(feature = "wayland")]
                 {
@@ -2574,6 +2596,10 @@ async fn run<'sys>(
                 #[cfg(windows)]
                 {
                     drag_preview_popover.base_window_handle = active_window;
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    drag_preview_popover.bound_window_link = active_window;
                 }
 
                 pointer_input_manager.handle_mouse_left_down(
@@ -2767,6 +2793,42 @@ impl crate::input::ShellPointerActions for WindowHandle {
     fn release_pointer(&self) {
         // Waylandはなし(勝手にキャプチャ状態になってるらしい)
     }
+}
+
+#[cfg(target_os = "macos")]
+pub struct WindowHandle {
+    state_ref: *mut MacWindowState,
+}
+#[cfg(target_os = "macos")]
+impl WindowHandle {
+    #[inline(always)]
+    pub fn client_size(&self) -> Size<LogicalUnit> {
+        let state = unsafe { &*self.state_ref };
+
+        state
+            .active_rt_size
+            .lock()
+            .expect("poisoned")
+            .to_logical(*state.active_buffer_scale.lock().expect("poisoned"))
+    }
+
+    #[inline(always)]
+    pub fn ui_scale_factor(&self) -> f32 {
+        unsafe {
+            *(*self.state_ref)
+                .active_buffer_scale
+                .lock()
+                .expect("poisoned")
+        }
+    }
+}
+#[cfg(target_os = "macos")]
+impl ShellPointerActions for WindowHandle {
+    #[inline(always)]
+    fn capture_pointer(&self) {}
+
+    #[inline(always)]
+    fn release_pointer(&self) {}
 }
 
 struct Surface<'d> {
@@ -3714,19 +3776,26 @@ impl DragPreviewPopoverHandle {
 }
 
 #[cfg(target_os = "macos")]
-pub struct DragPreviewPopoverHandle;
+pub struct DragPreviewPopoverHandle {
+    bound_window_link: *mut core::ffi::c_void,
+}
 #[cfg(target_os = "macos")]
 impl DragPreviewPopoverHandle {
-    pub fn show(&mut self, rect: &DesktopRect) {
+    pub fn show(&mut self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
         unsafe {
-            ni_show_drag_preview();
-            // macはleft,bottomが0,0なのでその分を考慮して計算してleft,topを合わせる
-            ni_move_drag_preview(
-                rect.left as _,
-                (rect.top - rect.height as i32) as _,
-                rect.width as _,
-                rect.height as _,
-            );
+            let mut x = pos.x as f64;
+            let mut y = pos.y as f64;
+            ni_convert_point_to_screen(self.bound_window_link, &mut x, &mut y);
+            ni_show_drag_preview(x, y, size.width as _, size.height as _);
+        }
+    }
+
+    pub fn r#move(&mut self, pos: &Point<PointerInputUnit>) {
+        unsafe {
+            let mut x = pos.x as f64;
+            let mut y = pos.y as f64;
+            ni_convert_point_to_screen(self.bound_window_link, &mut x, &mut y);
+            ni_move_drag_preview(x, y);
         }
     }
 
@@ -5434,12 +5503,12 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
 }
 
 #[cfg(target_os = "macos")]
-pub struct MacWindow {
+pub struct MacWindow<AppFuture> {
     native_ptr: *mut core::ffi::c_void,
-    state: Pin<Box<MacWindowState>>,
+    dispatcher: Pin<Box<MacWindowDispatcher<AppFuture>>>,
 }
 #[cfg(target_os = "macos")]
-impl Drop for MacWindow {
+impl<AppFuture> Drop for MacWindow<AppFuture> {
     fn drop(&mut self) {
         unsafe {
             ni_unset_window_callbacks(self.native_ptr);
@@ -5448,35 +5517,46 @@ impl Drop for MacWindow {
     }
 }
 #[cfg(target_os = "macos")]
-unsafe impl Sync for MacWindow {}
+unsafe impl<AppFuture> Sync for MacWindow<AppFuture> {}
 #[cfg(target_os = "macos")]
-unsafe impl Send for MacWindow {}
+unsafe impl<AppFuture> Send for MacWindow<AppFuture> {}
 #[cfg(target_os = "macos")]
-impl MacWindow {
-    pub fn new() -> Self {
+impl<AppFuture: core::future::Future<Output = ()>> MacWindow<AppFuture> {
+    pub fn new(event_dispatcher: LogicFiberEventDispatcher<AppFuture>) -> Self {
         let native_ptr = unsafe { ni_create_window() };
-        let mut state = Box::pin(MacWindowState {
-            wlink: native_ptr,
-            drag_preview: MacDragPreviewPopupHandle,
-            swapchain_externally_invalidation_signal: std::sync::Arc::new(
-                std::sync::atomic::AtomicBool::new(false),
-            ),
-            active_rt_size: std::sync::Mutex::new((960, 540)),
+        let init_scale = unsafe { ni_get_content_scale(native_ptr) };
+        let mut dispatcher = Box::pin(MacWindowDispatcher {
+            event_dispatcher,
+            state: MacWindowState {
+                wlink: native_ptr,
+                swapchain_externally_invalidation_signal: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
+                active_size: std::sync::Mutex::new(Size::new_logical(960.0, 540.0)),
+                active_rt_size: std::sync::Mutex::new(
+                    Size::new_logical(960.0, 540.0).to_pixels_ceil(init_scale),
+                ),
+                active_buffer_scale: std::sync::Mutex::new(init_scale),
+            },
         });
         let callbacks: &'static WindowLinkCallbacks = &WindowLinkCallbacks {
-            on_resize: MacWindowState::on_resize,
-            on_pointer_down: MacWindowState::on_pointer_down,
-            on_pointer_up: MacWindowState::on_pointer_up,
+            on_resize: MacWindowDispatcher::<AppFuture>::on_resize,
+            on_pointer_down: MacWindowDispatcher::<AppFuture>::on_pointer_down,
+            on_pointer_move: MacWindowDispatcher::<AppFuture>::on_pointer_move,
+            on_pointer_up: MacWindowDispatcher::<AppFuture>::on_pointer_up,
         };
         unsafe {
             ni_set_window_callbacks(
                 native_ptr,
                 callbacks,
-                state.as_mut().get_mut() as *mut _ as _,
+                dispatcher.as_mut().get_mut() as *mut _ as _,
             );
         }
 
-        Self { native_ptr, state }
+        Self {
+            native_ptr,
+            dispatcher,
+        }
     }
 
     #[inline(always)]
@@ -5500,57 +5580,81 @@ impl MacWindow {
 }
 
 #[cfg(target_os = "macos")]
-struct MacWindowState {
-    wlink: *mut core::ffi::c_void,
-    drag_preview: MacDragPreviewPopupHandle,
-    swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    active_rt_size: std::sync::Mutex<(u32, u32)>,
+struct MacWindowDispatcher<AppFuture> {
+    event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    state: MacWindowState,
 }
 #[cfg(target_os = "macos")]
-unsafe impl Sync for MacWindowState {}
+unsafe impl<AppFuture> Sync for MacWindowDispatcher<AppFuture> {}
 #[cfg(target_os = "macos")]
-unsafe impl Send for MacWindowState {}
+unsafe impl<AppFuture> Send for MacWindowDispatcher<AppFuture> {}
 #[cfg(target_os = "macos")]
-impl MacWindowState {
-    extern "C" fn on_resize(caller_context: *mut core::ffi::c_void, width: u32, height: u32) {
+impl<AppFuture: core::future::Future<Output = ()>> MacWindowDispatcher<AppFuture> {
+    extern "C" fn on_resize(caller_context: *mut core::ffi::c_void, width: f64, height: f64) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        let mut active_rt_size_locked = this.active_rt_size.lock().expect("poisoned");
-        if width != active_rt_size_locked.0 || height != active_rt_size_locked.1 {
-            *active_rt_size_locked = (width, height);
-            this.swapchain_externally_invalidation_signal
+        let new_size = Size::new_logical(width as _, height as _);
+        let mut active_size_locked = this.state.active_size.lock().expect("poisoned");
+        if new_size != *active_size_locked {
+            *active_size_locked = new_size;
+            *this.state.active_rt_size.lock().expect("poisoned") =
+                new_size.to_pixels_ceil(*this.state.active_buffer_scale.lock().expect("poisoned"));
+            this.state
+                .swapchain_externally_invalidation_signal
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+            this.event_dispatcher
+                .dispatch(Event::WindowResize(new_size));
         }
     }
 
-    extern "C" fn on_pointer_down(caller_context: *mut core::ffi::c_void, mut x: f64, mut y: f64) {
+    extern "C" fn on_pointer_down(caller_context: *mut core::ffi::c_void, x: f64, y: f64) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        tracing::info!(x, y, "pointer down");
-        unsafe {
-            ni_convert_point_to_screen(this.wlink, &mut x, &mut y);
-        }
-        this.drag_preview.show(&DesktopRect {
-            left: x as _,
-            top: y as _,
-            width: 128,
-            height: 128,
+        // tracing::info!(x, y, "pointer down");
+        this.event_dispatcher.dispatch(Event::PointerMove {
+            client_pos: Point::new_logical(x as _, y as _),
+        });
+        this.event_dispatcher.dispatch(Event::PointerDown {
+            active_window: this.state.wlink,
+        });
+    }
+
+    extern "C" fn on_pointer_move(caller_context: *mut core::ffi::c_void, x: f64, y: f64) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        // tracing::trace!(x, y, "pointer move");
+        this.event_dispatcher.dispatch(Event::PointerMove {
+            client_pos: Point::new_logical(x as _, y as _),
         });
     }
 
     extern "C" fn on_pointer_up(caller_context: *mut core::ffi::c_void) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        tracing::info!("pointer up");
-        this.drag_preview.hide();
+        // tracing::info!("pointer up");
+        this.event_dispatcher.dispatch(Event::PointerUp);
     }
 }
 
 #[cfg(target_os = "macos")]
+struct MacWindowState {
+    wlink: *mut core::ffi::c_void,
+    swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    active_size: std::sync::Mutex<Size<LogicalUnit>>,
+    active_rt_size: std::sync::Mutex<Size<PixelsUnit>>,
+    active_buffer_scale: std::sync::Mutex<f32>,
+}
+#[cfg(target_os = "macos")]
+unsafe impl Sync for MacWindowState {}
+#[cfg(target_os = "macos")]
+unsafe impl Send for MacWindowState {}
+
+#[cfg(target_os = "macos")]
 #[repr(C)]
 pub struct WindowLinkCallbacks {
-    pub on_resize: extern "C" fn(caller_context: *mut core::ffi::c_void, width: u32, height: u32),
+    pub on_resize: extern "C" fn(caller_context: *mut core::ffi::c_void, width: f64, height: f64),
     pub on_pointer_down: extern "C" fn(caller_context: *mut core::ffi::c_void, x: f64, y: f64),
+    pub on_pointer_move: extern "C" fn(caller_context: *mut core::ffi::c_void, x: f64, y: f64),
     pub on_pointer_up: extern "C" fn(caller_context: *mut core::ffi::c_void),
 }
 
@@ -5561,6 +5665,7 @@ unsafe extern "C" {
     fn ni_create_window() -> *mut core::ffi::c_void;
     fn ni_release_window(window_link: *mut core::ffi::c_void);
     fn ni_make_primary_window(window_link: *mut core::ffi::c_void);
+    fn ni_get_content_scale(window_link: *mut core::ffi::c_void) -> core::ffi::c_float;
     fn ni_set_window_callbacks(
         window_link: *mut core::ffi::c_void,
         callbacks: *const WindowLinkCallbacks,
@@ -5574,14 +5679,14 @@ unsafe extern "C" {
         y: *mut core::ffi::c_double,
     );
 
-    fn ni_show_drag_preview();
-    fn ni_hide_drag_preview();
-    fn ni_move_drag_preview(
+    fn ni_show_drag_preview(
         x: core::ffi::c_double,
         y: core::ffi::c_double,
         width: core::ffi::c_double,
         height: core::ffi::c_double,
     );
+    fn ni_hide_drag_preview();
+    fn ni_move_drag_preview(x: core::ffi::c_double, y: core::ffi::c_double);
 
     fn manual_capture_begin(window_link: *mut core::ffi::c_void);
     fn manual_capture_end();

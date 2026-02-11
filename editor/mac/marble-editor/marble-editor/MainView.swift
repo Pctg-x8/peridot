@@ -2,6 +2,7 @@ import Cocoa
 
 final class MainView : NSView {
     var windowLinkCallbacks: WindowLinkCallbackSet? = nil
+    var contentsScale: CGFloat = 1.0
     
     func setup() {
         self.wantsLayer = true
@@ -10,7 +11,8 @@ final class MainView : NSView {
         
         let layer = CAMetalLayer()
         let scaling = self.convertToBacking(NSSize(width: 1.0, height: 1.0))
-        layer.contentsScale = min(scaling.width, scaling.height)
+        self.contentsScale = min(scaling.width, scaling.height)
+        layer.contentsScale = self.contentsScale
         self.layer = layer
     }
     
@@ -18,20 +20,12 @@ final class MainView : NSView {
         super.setFrameSize(newSize)
 //        NSLog("Resize \(newSize)")
         let drawableSize = self.convertToBacking(newSize)
-        self.windowLinkCallbacks?.notifyResize(UInt32(drawableSize.width), UInt32(drawableSize.height))
+        self.windowLinkCallbacks?.notifyResize(drawableSize.width, drawableSize.height)
     }
     
     var actualLayer: CAMetalLayer {
         get {
             return self.layer! as! CAMetalLayer
         }
-    }
-    
-    override func mouseDown(with event: NSEvent) {
-        self.windowLinkCallbacks?.notifyPointerDown(Double(event.locationInWindow.x), Double(event.locationInWindow.y))
-    }
-    
-    override func mouseUp(with event: NSEvent) {
-        self.windowLinkCallbacks?.notifyPointerUp()
     }
 }

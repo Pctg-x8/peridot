@@ -65,7 +65,7 @@ struct WindowLinkCallbackSet {
         self.ctx = ctx
     }
     
-    func notifyResize(_ width: UInt32, _ height: UInt32) {
+    func notifyResize(_ width: Double, _ height: Double) {
         self.funcs.pointee.onResize(self.ctx, width, height)
     }
     
@@ -73,27 +73,39 @@ struct WindowLinkCallbackSet {
         self.funcs.pointee.onPointerDown(self.ctx, x, y)
     }
     
+    func notifyPointerMove(_ x: Double, _ y: Double) {
+        self.funcs.pointee.onPointerMove(self.ctx, x, y)
+    }
+    
     func notifyPointerUp() {
         self.funcs.pointee.onPointerUp(self.ctx)
     }
 }
 
-final class WindowLink {
-    let w: NSWindow
+final class WindowLink : NSWindow {
     private var mainWindowDelegate: MainWindowDelegate? = nil
     private var callbacks: WindowLinkCallbackSet? = nil
     
-    init(_ w: NSWindow) {
-        self.w = w
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0.0, y: 0.0, width: 960.0, height: 540.0),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        self.acceptsMouseMovedEvents = true
+        self.titlebarAppearsTransparent = true
+        self.titleVisibility = .hidden
+        self.title = "Peridot Marble Editor"
         
         let mainView = MainView()
         mainView.setup()
-        self.w.contentView = mainView
+        self.contentView = mainView
     }
     
     var mainView: MainView {
         get {
-            return self.w.contentView! as! MainView
+            return self.contentView! as! MainView
         }
     }
     var metalLayer: CAMetalLayer {
@@ -117,23 +129,34 @@ final class WindowLink {
     
     func makePrimaryWindow() {
         self.mainWindowDelegate = MainWindowDelegate()
-        self.w.delegate = self.mainWindowDelegate
-        self.w.center()
-        self.w.makeKeyAndOrderFront(nil)
+        self.delegate = self.mainWindowDelegate
+        self.center()
+        self.makeKeyAndOrderFront(nil)
+    }
+    
+    override func mouseDown(with event: NSEvent) {
+        let p = event.locationInWindow
+        self.callbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y))
+    }
+    
+    override func mouseMoved(with event: NSEvent) {
+        let p = event.locationInWindow
+        self.callbacks?.notifyPointerMove(Double(p.x), Double(self.frame.height - p.y))
+    }
+    
+    override func mouseDragged(with event: NSEvent) {
+        let p = event.locationInWindow
+        self.callbacks?.notifyPointerMove(Double(p.x), Double(self.frame.height - p.y))
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        self.callbacks?.notifyPointerUp()
     }
 }
 
 @_cdecl("ni_create_window")
 func createWindow() -> UnsafeMutableRawPointer {
-    let w = NSWindow(
-        contentRect: NSRect(x: 0.0, y: 0.0, width: 960.0, height: 540.0),
-        styleMask: [.titled, .closable, .miniaturizable, .resizable],
-        backing: .buffered,
-        defer: false
-    )
-    w.title = "Peridot Marble Editor"
-    
-    return Unmanaged.passRetained(WindowLink(w)).toOpaque()
+    return Unmanaged.passRetained(WindowLink()).toOpaque()
 }
 
 @_cdecl("ni_release_window")
@@ -144,6 +167,11 @@ func releaseWindow(p: UnsafeMutableRawPointer) {
 @_cdecl("ni_make_primary_window")
 func makePrimaryWindow(windowLink: UnsafeMutableRawPointer) {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().makePrimaryWindow()
+}
+
+@_cdecl("ni_get_content_scale")
+func getContentScale(windowLink: UnsafeMutableRawPointer) -> Float {
+    Float(Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().mainView.contentsScale)
 }
 
 @_cdecl("ni_set_window_callbacks")
@@ -170,14 +198,18 @@ func getMetalLayer(windowLink: UnsafeMutableRawPointer) -> UnsafeMutableRawPoint
 
 @_cdecl("ni_convert_point_to_screen")
 func convertPointToScreen(windowLink: UnsafeMutableRawPointer, x: UnsafeMutablePointer<Double>, y: UnsafeMutablePointer<Double>) {
-    let result = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().w
-        .convertPoint(toScreen: NSPoint(x: x.pointee, y: y.pointee))
+    let w = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue()
+    // yはtopの値がくる convertPoint:toScreen:に渡すのはbottomである必要があるので変換する
+    let result = w.convertPoint(toScreen: NSPoint(x: x.pointee, y: w.frame.height - y.pointee))
     x.pointee = result.x
+    // こっちは再変換しなくていい（よくわからん）
     y.pointee = result.y
 }
 
 @_cdecl("ni_show_drag_preview")
-func showDragPreview() {
+func showDragPreview(x: Double, y: Double, width: Double, height: Double) {
+    // top leftの座標が来るのでbottom leftに変換する
+    dragPreviewWindow.setFrame(NSRect(x: x, y: y - height, width: width, height: height), display: false)
     dragPreviewWindow.orderFront(dragPreviewWindow)
 }
 
@@ -187,6 +219,6 @@ func hideDragPreview() {
 }
 
 @_cdecl("ni_move_drag_preview")
-func moveDragPreview(x: Double, y: Double, width: Double, height: Double) {
-    dragPreviewWindow.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
+func moveDragPreview(x: Double, y: Double) {
+    dragPreviewWindow.setFrameTopLeftPoint(NSPoint(x: x, y: y))
 }
