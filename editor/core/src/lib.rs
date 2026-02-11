@@ -2686,6 +2686,18 @@ async fn run<'sys>(
                         ),
                     });
                 }
+
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    ni_set_cursor_shape(match cursor_shape {
+                        hittest::CursorShape::Default => MacCursorShape::Arrow as _,
+                        hittest::CursorShape::Pointer => MacCursorShape::Pointer as _,
+                        hittest::CursorShape::IBeam => MacCursorShape::IBeam as _,
+                        hittest::CursorShape::ResizeHorizontal => {
+                            MacCursorShape::ResizeHorizontal as _
+                        }
+                    })
+                }
             }
             Event::PointerUp => {
                 pointer_input_manager.handle_mouse_left_up(
@@ -5666,6 +5678,15 @@ pub struct WindowLinkCallbacks {
 }
 
 #[cfg(target_os = "macos")]
+#[repr(u8)]
+enum MacCursorShape {
+    Arrow = 0,
+    Pointer = 1,
+    IBeam = 2,
+    ResizeHorizontal = 3,
+}
+
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn nsapp_run();
 
@@ -5685,6 +5706,7 @@ unsafe extern "C" {
         x: *mut core::ffi::c_double,
         y: *mut core::ffi::c_double,
     );
+    fn ni_set_cursor_shape(shape: u8);
 
     fn ni_show_drag_preview(
         x: core::ffi::c_double,

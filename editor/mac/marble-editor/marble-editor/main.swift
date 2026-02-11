@@ -222,3 +222,27 @@ func hideDragPreview() {
 func moveDragPreview(x: Double, y: Double) {
     dragPreviewWindow.setFrameTopLeftPoint(NSPoint(x: x, y: y))
 }
+
+enum CursorShape {
+    static let Arrow: UInt8 = 0
+    static let Pointer: UInt8 = 1
+    static let IBeam: UInt8 = 2
+    static let ResizeHorizontal: UInt8 = 3
+}
+
+@_cdecl("ni_set_cursor_shape")
+func setCursorShape(shape: UInt8) {
+    switch (shape) {
+    case CursorShape.Arrow:
+        NSCursor.arrow.set()
+    case CursorShape.Pointer:
+        NSCursor.pointingHand.set()
+    case CursorShape.IBeam:
+        NSCursor.iBeam.set()
+    case CursorShape.ResizeHorizontal:
+        NSCursor.rowResize.set()
+    default:
+        NSLog("[PeridotMarbleEditor:Warn] invalid CursorShape value: \(shape)")
+        break
+    }
+}
