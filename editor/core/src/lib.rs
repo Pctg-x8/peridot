@@ -2410,12 +2410,19 @@ async fn run<'sys>(
     let init_scale = main_window.ui_scale_factor();
 
     // app title view
+    #[cfg(target_os = "macos")]
+    let title_bar_thickness = 32.0;
+    #[cfg(not(target_os = "macos"))]
+    let title_bar_thickness = 24.0;
     let app_title = composite_tree.create(CompositeRect {
         has_bitmap: true,
         base_scale_factor: init_scale,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
         relative_size_adjustment: [1.0, 0.0],
-        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(24.0)],
+        size: [
+            AnimatableFloat::Value(0.0),
+            AnimatableFloat::Value(title_bar_thickness),
+        ],
         text: Some(CompositeRectText {
             runs: vec![
                 CompositeRectTextRun {
@@ -2442,7 +2449,7 @@ async fn run<'sys>(
     composite_tree.add_child(CompositeTree::ROOT, app_title);
     let ht_caption_bar = ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
-        height: 24.0 * 2.0,
+        height: title_bar_thickness,
         role: Some(crate::hittest::Role::TitleBar),
         ..Default::default()
     });
