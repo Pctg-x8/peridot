@@ -7,7 +7,7 @@ use crate::{
         CursorShape, HitTestEventContext, HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
         Role,
     },
-    utils::{LogicalUnit, Point, Rect, Size},
+    utils::{LogicalUnit, Point, Size},
 };
 
 pub type PointerInputUnit = LogicalUnit;

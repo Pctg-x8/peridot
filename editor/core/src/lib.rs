@@ -2278,7 +2278,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
         #[cfg(target_os = "macos")]
         unsafe {
-            nsapp_run();
+            platform::mac::bridge::nsapp_run();
         }
 
         *event_store = Some(Event::Quit);
@@ -2307,7 +2307,7 @@ pub enum Event {
         #[cfg(windows)]
         active_window: HWND,
         #[cfg(target_os = "macos")]
-        active_window: *mut core::ffi::c_void,
+        active_window: *mut platform::mac::bridge::WindowLink,
     },
     PointerMove {
         #[cfg(feature = "wayland")]
@@ -2689,12 +2689,18 @@ async fn run<'sys>(
 
                 #[cfg(target_os = "macos")]
                 unsafe {
-                    ni_set_cursor_shape(match cursor_shape {
-                        hittest::CursorShape::Default => MacCursorShape::Arrow as _,
-                        hittest::CursorShape::Pointer => MacCursorShape::Pointer as _,
-                        hittest::CursorShape::IBeam => MacCursorShape::IBeam as _,
+                    platform::mac::bridge::ni_set_cursor_shape(match cursor_shape {
+                        hittest::CursorShape::Default => {
+                            platform::mac::bridge::CursorShape::Arrow as _
+                        }
+                        hittest::CursorShape::Pointer => {
+                            platform::mac::bridge::CursorShape::Pointer as _
+                        }
+                        hittest::CursorShape::IBeam => {
+                            platform::mac::bridge::CursorShape::IBeam as _
+                        }
                         hittest::CursorShape::ResizeHorizontal => {
-                            MacCursorShape::ResizeHorizontal as _
+                            platform::mac::bridge::CursorShape::ResizeHorizontal as _
                         }
                     })
                 }
@@ -3796,31 +3802,43 @@ impl DragPreviewPopoverHandle {
 
 #[cfg(target_os = "macos")]
 pub struct DragPreviewPopoverHandle {
-    bound_window_link: *mut core::ffi::c_void,
+    bound_window_link: *mut platform::mac::bridge::WindowLink,
 }
 #[cfg(target_os = "macos")]
 impl DragPreviewPopoverHandle {
     pub fn show(&mut self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
         unsafe {
+            // macの場合はスクリーン座標が必要
             let mut x = pos.x as f64;
             let mut y = pos.y as f64;
-            ni_convert_point_to_screen(self.bound_window_link, &mut x, &mut y);
-            ni_show_drag_preview(x, y, size.width as _, size.height as _);
+            platform::mac::bridge::ni_convert_point_to_screen(
+                self.bound_window_link,
+                &mut x,
+                &mut y,
+            );
+
+            platform::mac::bridge::ni_show_drag_preview(x, y, size.width as _, size.height as _);
         }
     }
 
     pub fn r#move(&mut self, pos: &Point<PointerInputUnit>) {
         unsafe {
+            // macの場合はスクリーン座標が必要
             let mut x = pos.x as f64;
             let mut y = pos.y as f64;
-            ni_convert_point_to_screen(self.bound_window_link, &mut x, &mut y);
-            ni_move_drag_preview(x, y);
+            platform::mac::bridge::ni_convert_point_to_screen(
+                self.bound_window_link,
+                &mut x,
+                &mut y,
+            );
+
+            platform::mac::bridge::ni_move_drag_preview(x, y);
         }
     }
 
     pub fn hide(&mut self) {
         unsafe {
-            ni_hide_drag_preview();
+            platform::mac::bridge::ni_hide_drag_preview();
         }
     }
 }
@@ -5523,15 +5541,15 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
 
 #[cfg(target_os = "macos")]
 pub struct MacWindow<AppFuture> {
-    native_ptr: *mut core::ffi::c_void,
+    native_ptr: *mut platform::mac::bridge::WindowLink,
     dispatcher: Pin<Box<MacWindowDispatcher<AppFuture>>>,
 }
 #[cfg(target_os = "macos")]
 impl<AppFuture> Drop for MacWindow<AppFuture> {
     fn drop(&mut self) {
         unsafe {
-            ni_unset_window_callbacks(self.native_ptr);
-            ni_release_window(self.native_ptr);
+            platform::mac::bridge::ni_unset_window_callbacks(self.native_ptr);
+            platform::mac::bridge::ni_release_window(self.native_ptr);
         }
     }
 }
@@ -5542,8 +5560,8 @@ unsafe impl<AppFuture> Send for MacWindow<AppFuture> {}
 #[cfg(target_os = "macos")]
 impl<AppFuture: core::future::Future<Output = ()>> MacWindow<AppFuture> {
     pub fn new(event_dispatcher: LogicFiberEventDispatcher<AppFuture>) -> Self {
-        let native_ptr = unsafe { ni_create_window() };
-        let init_scale = unsafe { ni_get_content_scale(native_ptr) };
+        let native_ptr = unsafe { platform::mac::bridge::ni_create_window() };
+        let init_scale = unsafe { platform::mac::bridge::ni_get_content_scale(native_ptr) };
         let mut dispatcher = Box::pin(MacWindowDispatcher {
             event_dispatcher,
             state: MacWindowState {
@@ -5558,14 +5576,15 @@ impl<AppFuture: core::future::Future<Output = ()>> MacWindow<AppFuture> {
                 active_buffer_scale: std::sync::Mutex::new(init_scale),
             },
         });
-        let callbacks: &'static WindowLinkCallbacks = &WindowLinkCallbacks {
-            on_resize: MacWindowDispatcher::<AppFuture>::on_resize,
-            on_pointer_down: MacWindowDispatcher::<AppFuture>::on_pointer_down,
-            on_pointer_move: MacWindowDispatcher::<AppFuture>::on_pointer_move,
-            on_pointer_up: MacWindowDispatcher::<AppFuture>::on_pointer_up,
-        };
+        let callbacks: &'static platform::mac::bridge::WindowLinkCallbacks =
+            &platform::mac::bridge::WindowLinkCallbacks {
+                on_resize: MacWindowDispatcher::<AppFuture>::on_resize,
+                on_pointer_down: MacWindowDispatcher::<AppFuture>::on_pointer_down,
+                on_pointer_move: MacWindowDispatcher::<AppFuture>::on_pointer_move,
+                on_pointer_up: MacWindowDispatcher::<AppFuture>::on_pointer_up,
+            };
         unsafe {
-            ni_set_window_callbacks(
+            platform::mac::bridge::ni_set_window_callbacks(
                 native_ptr,
                 callbacks,
                 dispatcher.as_mut().get_mut() as *mut _ as _,
@@ -5581,19 +5600,19 @@ impl<AppFuture: core::future::Future<Output = ()>> MacWindow<AppFuture> {
     #[inline(always)]
     pub fn make_primary_window(&mut self) {
         unsafe {
-            ni_make_primary_window(self.native_ptr);
+            platform::mac::bridge::ni_make_primary_window(self.native_ptr);
         }
     }
 
     #[inline(always)]
     pub fn metal_layer(&self) -> *mut core::ffi::c_void {
-        unsafe { ni_get_metal_layer(self.native_ptr) }
+        unsafe { platform::mac::bridge::ni_get_metal_layer(self.native_ptr) }
     }
 
     #[inline(always)]
     pub fn manual_capture_begin(&self) {
         unsafe {
-            manual_capture_begin(self.native_ptr);
+            platform::mac::bridge::manual_capture_begin(self.native_ptr);
         }
     }
 }
@@ -5657,7 +5676,7 @@ impl<AppFuture: core::future::Future<Output = ()>> MacWindowDispatcher<AppFuture
 
 #[cfg(target_os = "macos")]
 struct MacWindowState {
-    wlink: *mut core::ffi::c_void,
+    wlink: *mut platform::mac::bridge::WindowLink,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     active_size: std::sync::Mutex<Size<LogicalUnit>>,
     active_rt_size: std::sync::Mutex<Size<PixelsUnit>>,
@@ -5667,56 +5686,3 @@ struct MacWindowState {
 unsafe impl Sync for MacWindowState {}
 #[cfg(target_os = "macos")]
 unsafe impl Send for MacWindowState {}
-
-#[cfg(target_os = "macos")]
-#[repr(C)]
-pub struct WindowLinkCallbacks {
-    pub on_resize: extern "C" fn(caller_context: *mut core::ffi::c_void, width: f64, height: f64),
-    pub on_pointer_down: extern "C" fn(caller_context: *mut core::ffi::c_void, x: f64, y: f64),
-    pub on_pointer_move: extern "C" fn(caller_context: *mut core::ffi::c_void, x: f64, y: f64),
-    pub on_pointer_up: extern "C" fn(caller_context: *mut core::ffi::c_void),
-}
-
-#[cfg(target_os = "macos")]
-#[repr(u8)]
-enum MacCursorShape {
-    Arrow = 0,
-    Pointer = 1,
-    IBeam = 2,
-    ResizeHorizontal = 3,
-}
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" {
-    fn nsapp_run();
-
-    fn ni_create_window() -> *mut core::ffi::c_void;
-    fn ni_release_window(window_link: *mut core::ffi::c_void);
-    fn ni_make_primary_window(window_link: *mut core::ffi::c_void);
-    fn ni_get_content_scale(window_link: *mut core::ffi::c_void) -> core::ffi::c_float;
-    fn ni_set_window_callbacks(
-        window_link: *mut core::ffi::c_void,
-        callbacks: *const WindowLinkCallbacks,
-        caller_context: *mut core::ffi::c_void,
-    );
-    fn ni_unset_window_callbacks(window_link: *mut core::ffi::c_void);
-    fn ni_get_metal_layer(window_link: *mut core::ffi::c_void) -> *mut core::ffi::c_void;
-    fn ni_convert_point_to_screen(
-        window_link: *mut core::ffi::c_void,
-        x: *mut core::ffi::c_double,
-        y: *mut core::ffi::c_double,
-    );
-    fn ni_set_cursor_shape(shape: u8);
-
-    fn ni_show_drag_preview(
-        x: core::ffi::c_double,
-        y: core::ffi::c_double,
-        width: core::ffi::c_double,
-        height: core::ffi::c_double,
-    );
-    fn ni_hide_drag_preview();
-    fn ni_move_drag_preview(x: core::ffi::c_double, y: core::ffi::c_double);
-
-    fn manual_capture_begin(window_link: *mut core::ffi::c_void);
-    fn manual_capture_end();
-}
