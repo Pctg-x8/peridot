@@ -9,7 +9,7 @@ use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
 use linux_eventfd::{EventFD, EventFDFlags};
 #[cfg(target_os = "linux")]
-use peridot_tp_dbus::{self as dbus, MessageIterAppendLike};
+use peridot_tp_dbus as dbus;
 #[cfg(feature = "fontconfig")]
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
@@ -79,7 +79,7 @@ use crate::{
         CompositeTreeSyncBuffer, FontID, VectorRasterizationState,
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
-    hittest::{HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
+    hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
     utils::{Color32, LogicalUnit, PixelsUnit, Point, Size},
 };
@@ -184,11 +184,16 @@ pub fn launch() {
     let composite_sync_buffer = Mutex::new(CompositeTreeSyncBuffer::new());
     let global_time_base = std::time::Instant::now();
     main_wrapper(
-        move |global_time_base, composite_tree_sync_buffer, main_window, drag_preview_popover| {
+        move |global_time_base,
+              composite_tree_sync_buffer,
+              cursor_shaping,
+              main_window,
+              drag_preview_popover| {
             run(
                 event_queue,
                 global_time_base,
                 composite_tree_sync_buffer,
+                cursor_shaping,
                 main_window,
                 drag_preview_popover,
             )
@@ -203,6 +208,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     run_app: impl FnOnce(
         &'sys std::time::Instant,
         &'sys Mutex<CompositeTreeSyncBuffer>,
+        CursorShaping,
         WindowHandle,
         DragPreviewPopoverHandle,
     ) -> AppFuture,
@@ -470,6 +476,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let mut app = core::pin::pin!(run_app(
         global_time_base,
         &composite_sync_buffer,
+        #[cfg(feature = "wayland")]
+        CursorShaping {
+            pointer_state_ref: unsafe {
+                &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
+            },
+        },
         #[cfg(windows)]
         WindowHandle { hwnd: w.0 },
         #[cfg(feature = "wayland")]
@@ -2109,10 +2121,9 @@ pub enum Event {
         active_window: *mut platform::mac::bridge::WindowLink,
     },
     PointerMove {
-        #[cfg(feature = "wayland")]
-        cursor_shaping_info: Option<(u32, *mut wl::WpCursorShapeDeviceV1)>, // 暫定的にここで送る
         #[cfg(windows)]
         active_window: HWND,
+        pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
     },
     PointerUp,
@@ -2175,6 +2186,7 @@ async fn run<'sys>(
     event_queue: EventQueue,
     global_time_base: &'sys std::time::Instant,
     composite_tree_sync_buffer: &'sys Mutex<CompositeTreeSyncBuffer>,
+    cursor_shaping: CursorShaping,
     main_window: WindowHandle,
     mut drag_preview_popover: DragPreviewPopoverHandle,
 ) {
@@ -2422,10 +2434,9 @@ async fn run<'sys>(
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
             }
             Event::PointerMove {
-                #[cfg(feature = "wayland")]
-                cursor_shaping_info,
                 #[cfg(windows)]
                 active_window,
+                pointer_id,
                 client_pos,
             } => {
                 pointer_input_manager.handle_mouse_move(
@@ -2440,18 +2451,11 @@ async fn run<'sys>(
                     HitTestTreeManager::ROOT,
                 );
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
+
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
+                cursor_shaping.set_cursor(&pointer_id, cursor_shape);
 
-                #[cfg(feature = "wayland")]
-                if let Some((serial, cursor_shape_device)) = cursor_shaping_info {
-                    unsafe {
-                        (*cursor_shape_device)
-                            .set_shape(serial, cursor_shape.as_wayland())
-                            .expect("cursor_shape_device.set_cursor");
-                    }
-                }
-
-                #[cfg(windows)]
+                /*#[cfg(windows)]
                 unsafe {
                     // TODO: 必要そうならキャッシュする
                     windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor_shape {
@@ -2502,7 +2506,7 @@ async fn run<'sys>(
                             platform::mac::bridge::CursorShape::ResizeHorizontal as _
                         }
                     })
-                }
+                }*/
             }
             Event::PointerUp => {
                 pointer_input_manager.handle_mouse_left_up(
@@ -2653,6 +2657,29 @@ impl ShellPointerActions for WindowHandle {
 
     #[inline(always)]
     fn release_pointer(&self) {}
+}
+
+#[cfg(feature = "wayland")]
+#[derive(Clone, Copy)]
+pub struct PointerID();
+#[cfg(feature = "wayland")]
+pub struct CursorShaping {
+    pointer_state_ref: *mut Option<WaylandPointerState>,
+}
+#[cfg(feature = "wayland")]
+impl CursorShaping {
+    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
+        if let Some(&WaylandPointerState {
+            enter_state: Some(WaylandPointerEnterState { serial, .. }),
+            cursor: Some(ref shape_device),
+            ..
+        }) = unsafe { (*self.pointer_state_ref).as_ref() }
+        {
+            shape_device
+                .set_shape(serial, cursor.as_wayland())
+                .expect("cursor_shape_device.set_cursor");
+        }
+    }
 }
 
 struct Surface<'d> {
@@ -4030,10 +4057,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
 
         self.event_dispatcher.dispatch(Event::PointerMove {
-            cursor_shaping_info: match state.cursor {
-                Some(ref cursor) => Some((serial, cursor.as_ptr())),
-                _ => None,
-            },
+            pointer_id: PointerID(),
             client_pos: state.pos,
         });
     }
@@ -4060,10 +4084,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
         self.event_dispatcher.dispatch(Event::PointerMove {
-            cursor_shaping_info: match state.cursor {
-                Some(ref cursor) => Some((enter_state.serial, cursor.as_ptr())),
-                _ => None,
-            },
+            pointer_id: PointerID(),
             client_pos: state.pos,
         });
     }
