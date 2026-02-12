@@ -3547,7 +3547,9 @@ impl DragPreviewPopoverHandle {
                 .get_popup(Some(&*self.root_window), &positioner)
                 .expect("pop.create")
         };
-        let mut popup_state = Box::new(WaylandPopupState {});
+        let mut popup_state = Box::new(WaylandPopupState {
+            surface_ptr: wl_popup_surface.as_ptr(),
+        });
         xdg_popup_surface
             .set_listener(&mut *popup_state)
             .into_result()
@@ -4677,13 +4679,19 @@ impl WaylandWindow {
 }
 
 #[cfg(feature = "wayland")]
-struct WaylandPopupState {}
+struct WaylandPopupState {
+    surface_ptr: *mut wl::Surface,
+}
 #[cfg(feature = "wayland")]
 impl wl::XdgSurfaceEventListener for WaylandPopupState {
     #[tracing::instrument(skip(self, sender))]
     fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
         tracing::trace!("popup.surface.configure");
         sender.ack_configure(serial).expect("popup.ack_configure");
+
+        unsafe {
+            (*self.surface_ptr).commit().expect("popup.surface.commit");
+        }
     }
 }
 #[cfg(feature = "wayland")]
