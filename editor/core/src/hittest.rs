@@ -342,11 +342,6 @@ impl CursorShape {
     }
 }
 
-pub struct PointerActionArgs {
-    pub client_pos: Point<LogicalUnit>,
-    pub client_size: Size<LogicalUnit>,
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum Role {
     ForceClient,
@@ -355,6 +350,11 @@ pub enum Role {
     MaximizeButton,
     MinimizeButton,
     RestoreButton,
+}
+
+pub struct PointerActionArgs {
+    pub client_pos: Point<LogicalUnit>,
+    pub client_size: Size<LogicalUnit>,
 }
 
 pub struct HitTestEventContext<'h> {
