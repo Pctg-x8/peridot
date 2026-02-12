@@ -714,6 +714,17 @@ pub trait MessageIterAppendLike {
 }
 
 #[repr(transparent)]
+pub struct MessageIterAppendRef<'a>(&'a mut ffi::DBusMessageIter);
+unsafe impl Sync for MessageIterAppendRef<'_> {}
+unsafe impl Send for MessageIterAppendRef<'_> {}
+impl MessageIterAppendLike for MessageIterAppendRef<'_> {
+    #[inline(always)]
+    fn ffi_pointer_mut(&mut self) -> *mut ffi::DBusMessageIter {
+        self.0 as _
+    }
+}
+
+#[repr(transparent)]
 pub struct MessageIterAppend<'m>(ffi::DBusMessageIter, PhantomData<&'m mut Message>);
 unsafe impl Sync for MessageIterAppend<'_> {}
 unsafe impl Send for MessageIterAppend<'_> {}
@@ -721,6 +732,12 @@ impl MessageIterAppendLike for MessageIterAppend<'_> {
     #[inline(always)]
     fn ffi_pointer_mut(&mut self) -> *mut ffi::DBusMessageIter {
         &mut self.0 as _
+    }
+}
+impl MessageIterAppend<'_> {
+    #[inline(always)]
+    pub const fn as_ref<'a>(&'a mut self) -> MessageIterAppendRef<'a> {
+        MessageIterAppendRef(&mut self.0)
     }
 }
 
@@ -739,6 +756,11 @@ impl<'p, P: MessageIterAppendLike + ?Sized + 'p> Drop for MessageIterAppendConta
     }
 }
 impl<'p, P: MessageIterAppendLike + ?Sized + 'p> MessageIterAppendContainer<'p, P> {
+    #[inline(always)]
+    pub const fn as_ref<'a>(&'a mut self) -> MessageIterAppendRef<'a> {
+        MessageIterAppendRef(&mut self.0)
+    }
+
     #[inline]
     pub fn close(mut self) -> Result<(), NotEnoughMemory> {
         let r = unsafe {

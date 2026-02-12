@@ -94,6 +94,7 @@ mod hittest;
 mod input;
 mod mathext;
 mod platform;
+mod proto;
 mod utils;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
@@ -1940,268 +1941,68 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     match m.r#type() {
                         dbus::MessageType::MethodCall
                             if m.path().is_some_and(|x| x == WL_APPMENU_OBJECT_PATH)
-                                && m.interface() == Some(c"com.canonical.dbusmenu")
+                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                                 && m.member() == Some(c"GetLayout") =>
                         {
-                            let mut args_iter = m.iter();
-                            let parent_id = args_iter.try_get_i32().expect("parent:i");
-                            args_iter.next();
-                            let recursion_depth =
-                                args_iter.try_get_i32().expect("recursionDepth:i");
-                            args_iter.next();
-                            let mut property_names_iter = args_iter
-                                .try_begin_iter_array_content()
-                                .expect("propertyNames:as");
-                            let mut property_names = Vec::new();
-                            while property_names_iter.has_next() {
-                                property_names.push(
-                                    property_names_iter
-                                        .try_get_cstr()
-                                        .expect("propertyNames[]:s")
-                                        .to_owned(),
-                                );
-                                property_names_iter.next();
-                            }
+                            let args =
+                                proto::dbus_menu::GetLayoutRequest::deserialize(&mut m.iter());
 
-                            tracing::debug!(
-                                parent_id,
-                                recursion_depth,
-                                ?property_names,
-                                "com.canonical.dbusmenu.GetLayout"
-                            );
+                            tracing::debug!(?args, "com.canonical.dbusmenu.GetLayout");
 
                             // toriaezu
-                            assert_eq!(recursion_depth, 1);
-                            assert!(property_names.is_empty());
+                            assert_eq!(args.recursion_depth, 1);
 
-                            if parent_id == 1 {
+                            if args.parent_id == 1 {
                                 let mut reply = dbus::Message::new_method_return(&m)
                                     .expect("dbus.message.new_method_return");
-                                let mut reply_iter = reply.iter_append();
-                                reply_iter
-                                    .append_u32(1)
-                                    .expect("dbus.message.append.getlayout.revision");
-                                let mut layout_root_struct_iter = reply_iter
-                                    .open_struct_container()
-                                    .expect("dbus.message.open_struct_container.getlayout.layout");
-                                layout_root_struct_iter
-                                    .append_i32(0)
-                                    .expect("dbus.message.struct.append.getlayout.layout.0");
-                                let mut layout_root_property_array_iter = layout_root_struct_iter
-                                .open_array_container(c"{sv}")
-                                .expect(
-                                    "dbus.message.open_array_container.getlayout.layout.properties",
-                                );
-                                layout_root_property_array_iter
-                                    .close()
-                                    .expect("dbus.message.array.close.getlayout.layout.properties");
-                                let mut layout_children_array_iter =
-                                layout_root_struct_iter.open_array_container(c"v").expect(
-                                    "dbus.message.open_array_container.getlayout.layout.children",
-                                );
-                                let mut layout_child_variant_iter = layout_children_array_iter
-                                .open_variant_container(c"(ia{sv}av)")
-                                .expect(
-                                    "dbus.message.open_variant_container.getlayout.layout.child",
-                                );
-                                let mut layout_child_struct_iter =
-                                    layout_child_variant_iter.open_struct_container().expect(
-                                        "dbus.message.open_struct_container.getlayout.layout.child",
-                                    );
-                                layout_child_struct_iter.append_i32(100).expect(
-                                    "dbus.message.array.append_i32.getlayout.layout.child.file",
-                                );
-                                let mut layout_child_properties_iter = layout_child_struct_iter.open_array_container(c"{sv}").expect("dbus.message.open_array_container.getlayout.layout.child.properties");
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"label").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"s").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_cstr(c"終了").expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"enabled").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"b").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_bool(true).expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"visible").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"b").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_bool(true).expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"icon-name").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"s").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_cstr(c"window-close").expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"shortcut").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"aas").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                let mut shortcut_array_iter = layout_child_property_value_iter.open_array_container(c"as").expect("dbus.message.open_array_container.getlayout.layout.child.property.value");
-                                let mut shortcut_entry_iter = shortcut_array_iter.open_array_container(c"s").expect("dbus.message.open_array_container.getlayout.layout.child.property.value");
-                                shortcut_entry_iter.append_cstr(c"Alt").expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                shortcut_entry_iter.append_cstr(c"F4").expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                shortcut_entry_iter.close().expect("dbus.message.array.close.getlayout.layout.child.property.value");
-                                shortcut_array_iter.close().expect("dbus.message.array.close.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                layout_child_properties_iter.close().expect(
-                                    "dbus.message.array.close.getlayout.layout.child.properties",
-                                );
-                                let mut layout_child_children_iter =
-                                    layout_child_struct_iter.open_array_container(c"v").expect(
-                                        "dbus.message.open_array_container.getlayout.layout.child",
-                                    );
-                                layout_child_children_iter.close().expect(
-                                    "dbus.message.array.close.getlayout.layout.child.children",
-                                );
-                                layout_child_struct_iter
-                                    .close()
-                                    .expect("dbus.message.struct.close.getlayout.layout.child");
-                                layout_child_variant_iter
-                                    .close()
-                                    .expect("dbus.message.variant.close.getlayout.layout.child");
-                                layout_children_array_iter
-                                    .close()
-                                    .expect("dbus.message.array.close.getlayout.layout.children");
-                                layout_root_struct_iter
-                                    .close()
-                                    .expect("dbus.message.struct.close.getlayout.layout");
-
+                                proto::dbus_menu::GetLayoutReply {
+                                    revision: 1,
+                                    layout: proto::dbus_menu::Layout {
+                                        id: 1,
+                                        properties: Default::default(),
+                                        children: &[proto::dbus_menu::Layout {
+                                            id: 100,
+                                            properties: proto::dbus_menu::LayoutProperties {
+                                                label: Some(c"終了"),
+                                                enabled: Some(true),
+                                                visible: Some(true),
+                                                icon_name: Some(c"window-close"),
+                                                shortcut: Some(&[&[c"Alt", c"F4"]]),
+                                                ..Default::default()
+                                            },
+                                            children: &[],
+                                        }],
+                                    },
+                                }
+                                .serialize(&mut reply.iter_append())
+                                .expect("dbus_menu.get_layout.serialize_reply");
                                 dbus.send(&mut reply).expect("dbus.send");
-                            } else if parent_id == 0 {
+                            } else if args.parent_id == 0 {
                                 let mut reply = dbus::Message::new_method_return(&m)
                                     .expect("dbus.message.new_method_return");
-                                let mut reply_iter = reply.iter_append();
-                                reply_iter
-                                    .append_u32(1)
-                                    .expect("dbus.message.append.getlayout.revision");
-                                let mut layout_root_struct_iter = reply_iter
-                                    .open_struct_container()
-                                    .expect("dbus.message.open_struct_container.getlayout.layout");
-                                layout_root_struct_iter
-                                    .append_i32(0)
-                                    .expect("dbus.message.struct.append.getlayout.layout.0");
-                                let mut layout_root_property_array_iter = layout_root_struct_iter
-                                .open_array_container(c"{sv}")
-                                .expect(
-                                    "dbus.message.open_array_container.getlayout.layout.properties",
-                                );
-                                let mut layout_root_property_entry_iter = layout_root_property_array_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.properties.element");
-                                layout_root_property_entry_iter.append_cstr(c"children-display").expect("dbus.message.dict_entry.append_cstr.getlayout.layout.properties.element");
-                                let mut layout_root_property_entry_value_iter = layout_root_property_entry_iter.open_variant_container(c"s").expect("dbus.message.dict_entry.open_variant_container.getlayout.layout.properties.element");
-                                layout_root_property_entry_value_iter.append_cstr(c"submenu").expect("dbus.message.variant.append_cstr.getlayout.layout.properties.element");
-                                layout_root_property_entry_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.properties.element",
-                            );
-                                layout_root_property_entry_iter.close().expect(
-                                "dbus.message.dict_entry.close.getlayout.layout.properties.element",
-                            );
-                                layout_root_property_array_iter
-                                    .close()
-                                    .expect("dbus.message.array.close.getlayout.layout.properties");
-                                let mut layout_children_array_iter =
-                                layout_root_struct_iter.open_array_container(c"v").expect(
-                                    "dbus.message.open_array_container.getlayout.layout.children",
-                                );
-                                let mut layout_child_variant_iter = layout_children_array_iter
-                                .open_variant_container(c"(ia{sv}av)")
-                                .expect(
-                                    "dbus.message.open_variant_container.getlayout.layout.child",
-                                );
-                                let mut layout_child_struct_iter =
-                                    layout_child_variant_iter.open_struct_container().expect(
-                                        "dbus.message.open_struct_container.getlayout.layout.child",
-                                    );
-                                layout_child_struct_iter.append_i32(1).expect(
-                                    "dbus.message.array.append_i32.getlayout.layout.child.file",
-                                );
-                                let mut layout_child_properties_iter = layout_child_struct_iter.open_array_container(c"{sv}").expect("dbus.message.open_array_container.getlayout.layout.child.properties");
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"label").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"s").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_cstr(c"ファイル").expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"enabled").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"b").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_bool(true).expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"visible").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"b").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_bool(true).expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                let mut layout_child_property_iter = layout_child_properties_iter.open_dict_entry_container().expect("dbus.message.open_dict_entry_container.getlayout.layout.child.property");
-                                layout_child_property_iter.append_cstr(c"children-display").expect("dbus.message.array.append_string.getlayout.layout.child.property.label");
-                                let mut layout_child_property_value_iter = layout_child_property_iter.open_variant_container(c"s").expect("dbus.message.open_variant_container.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.append_cstr(c"submenu").expect("dbus.message.array.append_string.getlayout.layout.child.property.value");
-                                layout_child_property_value_iter.close().expect(
-                                "dbus.message.variant.close.getlayout.layout.child.property.value",
-                            );
-                                layout_child_property_iter.close().expect(
-                                    "dbus.message.dict_entry.close.getlayout.layout.child.property",
-                                );
-                                layout_child_properties_iter.close().expect(
-                                    "dbus.message.array.close.getlayout.layout.child.properties",
-                                );
-                                let mut layout_child_children_iter =
-                                    layout_child_struct_iter.open_array_container(c"v").expect(
-                                        "dbus.message.open_array_container.getlayout.layout.child",
-                                    );
-                                layout_child_children_iter.close().expect(
-                                    "dbus.message.array.close.getlayout.layout.child.children",
-                                );
-                                layout_child_struct_iter
-                                    .close()
-                                    .expect("dbus.message.struct.close.getlayout.layout.child");
-                                layout_child_variant_iter
-                                    .close()
-                                    .expect("dbus.message.variant.close.getlayout.layout.child");
-                                layout_children_array_iter
-                                    .close()
-                                    .expect("dbus.message.array.close.getlayout.layout.children");
-                                layout_root_struct_iter
-                                    .close()
-                                    .expect("dbus.message.struct.close.getlayout.layout");
-
+                                proto::dbus_menu::GetLayoutReply {
+                                    revision: 1,
+                                    layout: proto::dbus_menu::Layout {
+                                        id: 0,
+                                        properties: proto::dbus_menu::LayoutProperties {
+                                            children_display: Some(c"submenu"),
+                                            ..Default::default()
+                                        },
+                                        children: &[proto::dbus_menu::Layout {
+                                            id: 1,
+                                            properties: proto::dbus_menu::LayoutProperties {
+                                                label: Some(c"ファイル"),
+                                                enabled: Some(true),
+                                                visible: Some(true),
+                                                children_display: Some(c"submenu"),
+                                                ..Default::default()
+                                            },
+                                            children: &[],
+                                        }],
+                                    },
+                                }
+                                .serialize(&mut reply.iter_append())
+                                .expect("dbus_menu.get_layout.serialize_reply");
                                 dbus.send(&mut reply).expect("dbus.send");
                             } else {
                                 unreachable!("unknown menu id");
@@ -2209,7 +2010,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         }
                         dbus::MessageType::MethodCall
                             if m.path().is_some_and(|x| x == WL_APPMENU_OBJECT_PATH)
-                                && m.interface() == Some(c"com.canonical.dbusmenu")
+                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                                 && m.member() == Some(c"Event") =>
                         {
                             let mut args_iter = m.iter();
@@ -2237,7 +2038,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         }
                         dbus::MessageType::MethodCall
                             if m.path().is_some_and(|x| x == WL_APPMENU_OBJECT_PATH)
-                                && m.interface() == Some(c"com.canonical.dbusmenu")
+                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                                 && m.member() == Some(c"AboutToShow") =>
                         {
                             let mut args_iter = m.iter();
@@ -2245,11 +2046,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
                             let mut reply = dbus::Message::new_method_return(&m)
                                 .expect("dbus.message.new_method_return");
-                            let mut reply_iter = reply.iter_append();
-                            reply_iter
-                                .append_bool(false)
-                                .expect("dbus.message.append_bool");
-
+                            proto::dbus_menu::AboutToShowReply { need_update: false }
+                                .serialize(&mut reply.iter_append())
+                                .expect("dbus_menu.about_to_show.serialize_reply");
                             dbus.send(&mut reply).expect("dbus.send");
                         }
                         _ => tracing::trace!(target: "dbus::loop", "unknown dbus message"),
@@ -2808,7 +2607,7 @@ impl WindowHandle {
     }
 }
 #[cfg(feature = "wayland")]
-impl crate::input::ShellPointerActions for WindowHandle {
+impl ShellPointerActions for WindowHandle {
     #[inline(always)]
     fn capture_pointer(&self) {
         // Waylandはなし(勝手にキャプチャ状態になってるらしい)
