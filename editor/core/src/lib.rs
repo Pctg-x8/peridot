@@ -4193,7 +4193,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
         .expect("xkb_keymap.create");
         let xkb_state = xkbcommon::State::new(&keymap).expect("xkb_state.create");
 
-        tracing::trace!("keyboard::keymap\n{content}");
         state.xkb_keymap = Some(keymap);
         state.xkb_state = Some(xkb_state);
     }

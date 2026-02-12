@@ -3364,11 +3364,7 @@ impl CompositeTree {
             .try_reserve(self.pushed_rects.len());
         for n in self.pushed_rects.drain(..) {
             sync_buffer.pushed_rects.push(self.rects[n].clone());
-            // dirtyをおとす(他におちるタイミングがないため)
-            self.rects[n].dirty = false;
-            if let Some(ref mut x) = self.rects[n].text {
-                x.layout_dirty = false;
-            }
+            // TDDO: dirtyフラグどうするか......(同期しないようにする？
         }
 
         let _ = sync_buffer.dirty_rects.try_reserve(self.dirty_rects.len());
@@ -3378,11 +3374,6 @@ impl CompositeTree {
                     sync_buffer
                         .dirty_rects
                         .push((n, DirtyRectSync::Modified(self.rects[n].clone())));
-                    // dirtyをおとす(他におちるタイミングがないため)
-                    self.rects[n].dirty = false;
-                    if let Some(ref mut x) = self.rects[n].text {
-                        x.layout_dirty = false;
-                    }
                 }
                 DirtyRect::Deleted => {
                     sync_buffer.dirty_rects.push((n, DirtyRectSync::Deleted));
