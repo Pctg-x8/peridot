@@ -255,6 +255,39 @@ impl<T: Zero + One> One for Matrix3x4<T> {
     );
 }
 
+// Transpose //
+impl<T> Matrix2<T> {
+    #[inline(always)]
+    pub fn transpose(self) -> Self {
+        let Self([x00, x01], [x10, x11]) = self;
+        Self([x00, x10], [x01, x11])
+    }
+}
+impl<T> Matrix3<T> {
+    #[inline(always)]
+    pub fn transpose(self) -> Self {
+        let Self([x00, x01, x02], [x10, x11, x12], [x20, x21, x22]) = self;
+        Self([x00, x10, x20], [x01, x11, x21], [x02, x12, x22])
+    }
+}
+impl<T> Matrix4<T> {
+    #[inline(always)]
+    pub fn transpose(self) -> Self {
+        let Self(
+            [x00, x01, x02, x03],
+            [x10, x11, x12, x13],
+            [x20, x21, x22, x23],
+            [x30, x31, x32, x33],
+        ) = self;
+        Self(
+            [x00, x10, x20, x30],
+            [x01, x11, x21, x31],
+            [x02, x12, x22, x32],
+            [x03, x13, x23, x33],
+        )
+    }
+}
+
 // Extending Matrix Dimensions //
 impl<T: Zero + One> From<Matrix2<T>> for Matrix3<T> {
     fn from(Matrix2([a, b], [c, d]): Matrix2<T>) -> Self {

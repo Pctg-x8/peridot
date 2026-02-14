@@ -9,6 +9,7 @@ use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, Image, ImageChild, MemoryBound,
     QueueMut, RenderPass, ShaderModule, TypedVulkanStructure, VkHandle,
 };
+use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
 #[cfg(windows)]
 use windows::Win32::Graphics::{
     Direct2D::Common::{ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl},
@@ -24,7 +25,6 @@ use crate::{
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, VulkanDevice,
     },
     helper_types::SafeF32,
-    mathext::Matrix4,
     text::{FontID, FontSet, GlyphAtlas},
 };
 
@@ -35,7 +35,7 @@ pub struct CompositeInstanceData {
     /// scale_x(width), scale_y(height), translate_x(left), translate_y(top)
     pub pos_st: [f32; 4],
     pub uv_st: [f32; 4],
-    pub position_modifier_matrix: [f32; 4 * 4],
+    pub position_modifier_matrix: Matrix4F32,
     /// left, top, right, bottom (pixels from edge)
     pub slice_borders: [f32; 4],
     // float param1: float4 packed
@@ -1396,7 +1396,7 @@ impl<Event> CompositeTreeRender<Event> {
                 size.width as f32,
                 size.height as f32,
                 1.0,
-                Matrix4::IDENTITY,
+                Matrix4::ONE,
                 None::<([SafeF32; 4], ClipConfig)>,
             ),
         )];
@@ -1435,17 +1435,17 @@ impl<Event> CompositeTreeRender<Event> {
             let h = effective_height * r.relative_size_adjustment[1] + local_height;
 
             let opacity = parent_opacity * r.opacity.evaluate(current_sec, &self.parameter_store);
-            let matrix = parent_matrix.mul_mat4(
-                Matrix4::translate(
+            let matrix = parent_matrix
+                * (Matrix4::translation(Vector3(
                     left - effective_base_left + r.pivot[0] * w,
                     top - effective_base_top + r.pivot[1] * h,
-                )
-                .mul_mat4(Matrix4::scale(
+                    0.0,
+                )) * Matrix4::scale(Vector4(
                     r.scale_x.evaluate(current_sec, &self.parameter_store),
                     r.scale_y.evaluate(current_sec, &self.parameter_store),
-                ))
-                .mul_mat4(Matrix4::translate(-r.pivot[0] * w, -r.pivot[1] * h)),
-            );
+                    1.0,
+                    1.0,
+                )) * Matrix4::translation(Vector3(-r.pivot[0] * w, -r.pivot[1] * h, 0.0)));
 
             r.offset[0].process_on_complete(current_sec, &mut on_event);
             r.offset[1].process_on_complete(current_sec, &mut on_event);
@@ -1501,7 +1501,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 (r.texatlas_rect.top as f32 + 0.5)
                                     / mask_atlas.size().height as f32,
                             ],
-                            position_modifier_matrix: matrix.clone().transpose().0,
+                            position_modifier_matrix: matrix.clone().transpose(),
                             slice_borders: r.slice_borders,
                             tex_size_pixels: [
                                 mask_atlas.size().width as _,
@@ -1609,7 +1609,7 @@ impl<Event> CompositeTreeRender<Event> {
                                     b.tex_left as f32 / mask_atlas.size().width as f32,
                                     b.tex_top as f32 / mask_atlas.size().height as f32,
                                 ],
-                                position_modifier_matrix: matrix.clone().transpose().0,
+                                position_modifier_matrix: matrix.clone().transpose(),
                                 slice_borders: [0.0; 4],
                                 tex_size_pixels: [
                                     mask_atlas.size().width as _,

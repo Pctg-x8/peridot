@@ -25,6 +25,7 @@ bedrock = { workspace = true, features = [
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lyon_geom = "1.0"
+peridot-math = { path = "../../modules/math" }
 peridot-tp-freetype = { path = "../../thirdparty/freetype", optional = true }
 peridot-tp-fontconfig = { path = "../../thirdparty/fontconfig", optional = true }
 peridot-tp-harfbuzz = { path = "../../thirdparty/harfbuzz", optional = true }
