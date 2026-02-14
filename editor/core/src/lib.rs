@@ -181,18 +181,17 @@ pub fn launch() {
     let event_queue = EventQueue {
         event_store: event_store.as_mut().get_mut(),
     };
-    let composite_sync_buffer = Mutex::new(CompositeTreeSyncBuffer::new());
     let global_time_base = std::time::Instant::now();
     main_wrapper(
         move |global_time_base,
-              composite_tree_sync_buffer,
+              renderer_sync,
               cursor_shaping,
               main_window,
               drag_preview_popover| {
             run(
                 event_queue,
                 global_time_base,
-                composite_tree_sync_buffer,
+                renderer_sync,
                 cursor_shaping,
                 main_window,
                 drag_preview_popover,
@@ -200,21 +199,30 @@ pub fn launch() {
         },
         event_store,
         &global_time_base,
-        &composite_sync_buffer,
+        &Mutex::new(RendererSync {
+            composite_buffer: CompositeTreeSyncBuffer::new(),
+            latest_ui_scale_changes: None,
+        }),
     );
+}
+
+struct RendererSync {
+    pub composite_buffer: CompositeTreeSyncBuffer,
+    // TODO: multi-window support
+    pub latest_ui_scale_changes: Option<f32>,
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     run_app: impl FnOnce(
         &'sys std::time::Instant,
-        &'sys Mutex<CompositeTreeSyncBuffer>,
+        &'sys Mutex<RendererSync>,
         CursorShaping,
         WindowHandle,
         DragPreviewPopoverHandle,
     ) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
     global_time_base: &'sys std::time::Instant,
-    composite_sync_buffer: &'sys Mutex<CompositeTreeSyncBuffer>,
+    renderer_sync: &'sys Mutex<RendererSync>,
 ) {
     let events = AppEventBus {
         queue: std::sync::Mutex::new(VecDeque::new()),
@@ -475,7 +483,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     let mut app = core::pin::pin!(run_app(
         global_time_base,
-        &composite_sync_buffer,
+        renderer_sync,
         #[cfg(feature = "wayland")]
         CursorShaping {
             pointer_state_ref: unsafe {
@@ -1336,10 +1344,13 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
                     let current_t = global_time_base.elapsed();
                     vector_raster_state.clear();
-                    composite_sync_buffer
-                        .lock()
-                        .expect("poisoned")
-                        .clean(&mut composite_tree);
+                    {
+                        let mut renderer_sync = renderer_sync.lock().expect("poisoned");
+                        if let Some(_) = renderer_sync.latest_ui_scale_changes.take() {
+                            glyph_atlas.clear();
+                        }
+                        renderer_sync.composite_buffer.clean(&mut composite_tree);
+                    }
                     let composite_render_data = composite_renderer.update(
                         &vk_device,
                         &mut composite_tree,
@@ -2185,7 +2196,7 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
 async fn run<'sys>(
     event_queue: EventQueue,
     global_time_base: &'sys std::time::Instant,
-    composite_tree_sync_buffer: &'sys Mutex<CompositeTreeSyncBuffer>,
+    renderer_sync: &'sys Mutex<RendererSync>,
     cursor_shaping: CursorShaping,
     main_window: WindowHandle,
     mut drag_preview_popover: DragPreviewPopoverHandle,
@@ -2382,7 +2393,7 @@ async fn run<'sys>(
     let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
     ht_manager.set_action_handler(ht_tab_main, &ht_action_handler);
 
-    composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
+    composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(HitTestTreeManager::ROOT);
 
     loop {
@@ -2393,11 +2404,13 @@ async fn run<'sys>(
             }
             Event::WindowRescaleUI { new_scale } => {
                 composite_tree.get_mut(app_title).base_scale_factor = new_scale;
-                composite_tree.mark_dirty(app_title);
+                composite_tree.mark_dirty_all(app_title);
                 composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
-                composite_tree.mark_dirty(tab_main);
+                composite_tree.mark_dirty_all(tab_main);
 
-                composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
+                let mut renderer_sync = renderer_sync.lock().expect("poisoned");
+                composite_tree.commit(&mut renderer_sync.composite_buffer);
+                renderer_sync.latest_ui_scale_changes = Some(new_scale);
             }
             Event::PointerDown {
                 #[cfg(feature = "wayland")]
@@ -2431,7 +2444,8 @@ async fn run<'sys>(
                     HitTestTreeManager::ROOT,
                     &mut keyboard_focus_manager,
                 );
-                composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::PointerMove {
                 pointer_id,
@@ -2448,7 +2462,8 @@ async fn run<'sys>(
                     },
                     HitTestTreeManager::ROOT,
                 );
-                composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
 
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 cursor_shaping.set_cursor(&pointer_id, cursor_shape);
@@ -2483,7 +2498,8 @@ async fn run<'sys>(
                     },
                     HitTestTreeManager::ROOT,
                 );
-                composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
         }
     }
@@ -3085,6 +3101,14 @@ impl GlyphAtlasSpaceManager {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.skylines.clear();
+        self.skylines.push(Skyline {
+            y: 0,
+            width: self.max.width,
+        });
+    }
+
     pub fn acquire(&mut self, width: u32, height: u32) -> Option<GlyphRect> {
         let cons_width = width + Self::SPACING;
         let cons_height = height + Self::SPACING;
@@ -3250,6 +3274,12 @@ impl GlyphAtlas {
             acquired_rects: HashMap::new(),
             space_mgr: GlyphAtlasSpaceManager::new(size),
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.space_mgr.clear();
+        self.acquired_rects.clear();
+        // TODO: clear atlas content?
     }
 
     pub fn acquire(&mut self, key: (usize, u16), width: u32, height: u32) -> (GlyphRect, bool) {

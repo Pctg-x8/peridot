@@ -1566,10 +1566,7 @@ impl CompositeTreeRender {
                     cache.text_height = 0.0;
                     cache.text_rects.clear();
 
-                    #[cfg(windows)]
-                    let dip_to_pixels_scaling: f32 = 168.0 / 96.0;
-                    #[cfg(not(windows))]
-                    let dip_to_pixels_scaling: f32 = 2.0;
+                    let dip_to_pixels_scaling = r.base_scale_factor;
 
                     #[cfg(feature = "harfbuzz")]
                     let mut buffers = Vec::with_capacity(t.runs.len());
@@ -2492,7 +2489,14 @@ impl CompositeTreeRender {
                                     width: r.width,
                                     height: r.height,
                                 };
-                                tracing::debug!(?glyph_placement_box);
+                                tracing::debug!(
+                                    met = ?glyph_metrics[n],
+                                    font_em_size = glyphrun.fontEmSize,
+                                    design_unit,
+                                    scaling = self.dip_to_pixels_scaling,
+                                    ?glyph_placement_box,
+                                    is_new
+                                );
 
                                 unsafe {
                                     (*self.cache).text_rects.push(glyph_placement_box);
@@ -3354,6 +3358,15 @@ impl CompositeTree {
 
     pub fn mark_dirty(&mut self, index: CompositeTreeRef) {
         self.rects[index.0].dirty = true;
+        self.dirty_rects.insert(index.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn mark_dirty_all(&mut self, index: CompositeTreeRef) {
+        self.rects[index.0].dirty = true;
+        if let Some(ref mut x) = self.rects[index.0].text {
+            x.layout_dirty = true;
+        }
         self.dirty_rects.insert(index.0, DirtyRect::Modified);
         self.dirty = true;
     }
