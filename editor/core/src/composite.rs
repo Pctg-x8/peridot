@@ -18,7 +18,6 @@ use windows::Win32::Graphics::{
 use windows_core::*;
 
 use crate::{
-    AppEventBus, Event, FontSet, GlyphAtlas,
     atlas::{AtlasRect, DynamicAtlasManager},
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
@@ -26,6 +25,7 @@ use crate::{
     },
     helper_types::SafeF32,
     mathext::Matrix4,
+    text::{FontID, FontSet, GlyphAtlas},
 };
 
 pub const BLUR_SAMPLE_STEPS: usize = 4;
@@ -89,14 +89,14 @@ pub struct CompositeStreamingData {
 }
 
 #[derive(Debug, Clone)]
-pub enum CompositeMode {
+pub enum CompositeMode<Event> {
     DirectSourceOver,
-    ColorTint(AnimatableColor),
-    FillColor(AnimatableColor),
-    ColorTintBackdropBlur(AnimatableColor, AnimatableFloat),
-    FillColorBackdropBlur(AnimatableColor, AnimatableFloat),
+    ColorTint(AnimatableColor<Event>),
+    FillColor(AnimatableColor<Event>),
+    ColorTintBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
+    FillColorBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
 }
-impl CompositeMode {
+impl<Event> CompositeMode<Event> {
     const fn shader_mode_value(&self) -> f32 {
         match self {
             Self::DirectSourceOver => 0.0,
@@ -118,7 +118,7 @@ const fn lerp4(x: f32, [a, c, e, g]: [f32; 4], [b, d, f, h]: [f32; 4]) -> [f32; 
 
 // TODO: このへんうまくまとめたいが......
 
-pub enum FloatParameter {
+pub enum FloatParameter<Event> {
     Value(f32),
     Animated {
         start_sec: f32,
@@ -129,7 +129,7 @@ pub enum FloatParameter {
         event_on_complete: Option<Event>,
     },
 }
-impl FloatParameter {
+impl<Event> FloatParameter<Event> {
     pub fn evaluate(&self, current_sec: f32) -> f32 {
         match self {
             &Self::Value(x) => x,
@@ -150,9 +150,9 @@ impl FloatParameter {
 }
 
 #[derive(Clone)]
-pub enum AnimatableFloat {
+pub enum AnimatableFloat<Event> {
     Value(f32),
-    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender) -> f32 + Sync + Send>),
+    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender<Event>) -> f32 + Sync + Send>),
     Animated {
         start_sec: f32,
         end_sec: f32,
@@ -162,7 +162,7 @@ pub enum AnimatableFloat {
         event_on_complete: Option<Event>,
     },
 }
-impl core::fmt::Debug for AnimatableFloat {
+impl<Event> core::fmt::Debug for AnimatableFloat<Event> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Value(x) => f.debug_tuple("AnimatableFloat::Value").field(x).finish(),
@@ -176,7 +176,7 @@ impl core::fmt::Debug for AnimatableFloat {
                 from_value,
                 to_value,
                 curve,
-                event_on_complete,
+                ..
             } => f
                 .debug_struct("AnimatableFloat::Animated")
                 .field("start_sec", start_sec)
@@ -189,11 +189,11 @@ impl core::fmt::Debug for AnimatableFloat {
         }
     }
 }
-impl AnimatableFloat {
+impl<Event> AnimatableFloat<Event> {
     pub fn evaluate(
         &self,
         current_sec: f32,
-        parameter_store: &CompositeTreeParameterStoreRender,
+        parameter_store: &CompositeTreeParameterStoreRender<Event>,
     ) -> f32 {
         match self {
             &Self::Value(x) => x,
@@ -213,7 +213,7 @@ impl AnimatableFloat {
         }
     }
 
-    fn process_on_complete(&mut self, current_sec: f32, q: &AppEventBus) {
+    fn process_on_complete(&mut self, current_sec: f32, cb: impl FnOnce(Event)) {
         if let &mut Self::Animated {
             end_sec,
             ref mut event_on_complete,
@@ -222,16 +222,16 @@ impl AnimatableFloat {
             && end_sec <= current_sec
         {
             if let Some(e) = event_on_complete.take() {
-                q.push(e);
+                cb(e);
             }
         }
     }
 }
 
 #[derive(Clone)]
-pub enum AnimatableColor {
+pub enum AnimatableColor<Event> {
     Value([f32; 4]),
-    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender) -> [f32; 4] + Sync + Send>),
+    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender<Event>) -> [f32; 4] + Sync + Send>),
     Animated {
         start_sec: f32,
         end_sec: f32,
@@ -241,7 +241,7 @@ pub enum AnimatableColor {
         event_on_complete: Option<Event>,
     },
 }
-impl core::fmt::Debug for AnimatableColor {
+impl<Event> core::fmt::Debug for AnimatableColor<Event> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Value(x) => f.debug_tuple("AnimatableColor::Value").field(x).finish(),
@@ -255,7 +255,7 @@ impl core::fmt::Debug for AnimatableColor {
                 from_value,
                 to_value,
                 curve,
-                event_on_complete,
+                ..
             } => f
                 .debug_struct("AnimatableColor::Animated")
                 .field("start_sec", start_sec)
@@ -268,11 +268,11 @@ impl core::fmt::Debug for AnimatableColor {
         }
     }
 }
-impl AnimatableColor {
+impl<Event> AnimatableColor<Event> {
     pub fn evaluate(
         &self,
         current_sec: f32,
-        parameter_store: &CompositeTreeParameterStoreRender,
+        parameter_store: &CompositeTreeParameterStoreRender<Event>,
     ) -> [f32; 4] {
         match self {
             &Self::Value(x) => x,
@@ -292,7 +292,7 @@ impl AnimatableColor {
         }
     }
 
-    fn process_on_complete(&mut self, current_sec: f32, q: &AppEventBus) {
+    fn process_on_complete(&mut self, current_sec: f32, cb: impl FnOnce(Event)) {
         if let &mut Self::Animated {
             end_sec,
             ref mut event_on_complete,
@@ -301,7 +301,7 @@ impl AnimatableColor {
             && end_sec <= current_sec
         {
             if let Some(e) = event_on_complete.take() {
-                q.push(e);
+                cb(e);
             }
         }
     }
@@ -489,14 +489,6 @@ pub struct ClipConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomRenderToken(usize);
 
-#[derive(Default, Clone, Copy, Debug)]
-#[repr(usize)]
-pub enum FontID {
-    #[default]
-    UIDefault,
-    UITitleProjectName,
-}
-
 #[derive(Debug, Clone, Copy, Default)]
 pub enum CompositeRectTextHorizontalAlignment {
     #[default]
@@ -514,13 +506,13 @@ pub enum CompositeRectTextVerticalAlignment {
 }
 
 #[derive(Debug, Clone)]
-pub struct CompositeRectTextRun {
+pub struct CompositeRectTextRun<Event> {
     pub font_id: FontID,
     pub content: String,
-    pub color: AnimatableColor,
+    pub color: AnimatableColor<Event>,
     pub spacing_inline_start: f32,
 }
-impl Default for CompositeRectTextRun {
+impl<Event> Default for CompositeRectTextRun<Event> {
     fn default() -> Self {
         Self {
             font_id: Default::default(),
@@ -531,37 +523,47 @@ impl Default for CompositeRectTextRun {
     }
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct CompositeRectText {
-    pub runs: Vec<CompositeRectTextRun>,
+#[derive(Debug, Clone)]
+pub struct CompositeRectText<Event> {
+    pub runs: Vec<CompositeRectTextRun<Event>>,
     pub layout_dirty: bool,
     pub horizontal_alignment: CompositeRectTextHorizontalAlignment,
     pub vertical_alignment: CompositeRectTextVerticalAlignment,
 }
+impl<Event> Default for CompositeRectText<Event> {
+    fn default() -> Self {
+        Self {
+            runs: Vec::new(),
+            layout_dirty: false,
+            horizontal_alignment: Default::default(),
+            vertical_alignment: Default::default(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
-pub struct CompositeRect {
+pub struct CompositeRect<Event> {
     pub has_bitmap: bool,
     pub base_scale_factor: f32,
-    pub offset: [AnimatableFloat; 2],
-    pub size: [AnimatableFloat; 2],
+    pub offset: [AnimatableFloat<Event>; 2],
+    pub size: [AnimatableFloat<Event>; 2],
     pub relative_offset_adjustment: [f32; 2],
     pub relative_size_adjustment: [f32; 2],
     pub clip_child: Option<ClipConfig>,
     pub texatlas_rect: AtlasRect,
     pub slice_borders: [f32; 4],
-    pub composite_mode: CompositeMode,
+    pub composite_mode: CompositeMode<Event>,
     pub custom_render_token: Option<CustomRenderToken>,
-    pub opacity: AnimatableFloat,
+    pub opacity: AnimatableFloat<Event>,
     pub pivot: [f32; 2],
-    pub scale_x: AnimatableFloat,
-    pub scale_y: AnimatableFloat,
-    pub text: Option<CompositeRectText>,
+    pub scale_x: AnimatableFloat<Event>,
+    pub scale_y: AnimatableFloat<Event>,
+    pub text: Option<CompositeRectText<Event>>,
     pub dirty: bool,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
 }
-impl Default for CompositeRect {
+impl<Event> Default for CompositeRect<Event> {
     fn default() -> Self {
         Self {
             has_bitmap: false,
@@ -845,23 +847,29 @@ impl CompositeInstanceMappedStreamingMemory<'_, '_> {
 pub struct CompositeTreeRef(usize);
 impl CompositeTreeRef {
     #[inline(always)]
-    pub fn entity<'c>(&self, mgr: &'c CompositeTree) -> &'c CompositeRect {
+    pub fn entity<'c, Event>(&self, mgr: &'c CompositeTree<Event>) -> &'c CompositeRect<Event> {
         mgr.get(*self)
     }
 
     #[inline(always)]
-    pub fn entity_mut<'c>(&self, mgr: &'c mut CompositeTree) -> &'c mut CompositeRect {
+    pub fn entity_mut<'c, Event>(
+        &self,
+        mgr: &'c mut CompositeTree<Event>,
+    ) -> &'c mut CompositeRect<Event> {
         mgr.get_mut(*self)
     }
 
     #[inline(always)]
-    pub fn entity_mut_dirtified<'c>(&self, mgr: &'c mut CompositeTree) -> &'c mut CompositeRect {
+    pub fn entity_mut_dirtified<'c, Event>(
+        &self,
+        mgr: &'c mut CompositeTree<Event>,
+    ) -> &'c mut CompositeRect<Event> {
         mgr.mark_dirty(*self);
         mgr.get_mut(*self)
     }
 
     #[inline(always)]
-    pub fn mark_dirty(&self, mgr: &mut CompositeTree) {
+    pub fn mark_dirty<Event>(&self, mgr: &mut CompositeTree<Event>) {
         mgr.mark_dirty(*self);
     }
 }
@@ -870,16 +878,16 @@ impl CompositeTreeRef {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CompositeTreeFloatParameterRef(usize);
 
-enum DirtyFloatParameter {
-    Modified(FloatParameter),
+enum DirtyFloatParameter<Event> {
+    Modified(FloatParameter<Event>),
     Deleted,
 }
 
-pub struct CompositeTreeParameterStoreRender {
-    float_parameters: Vec<FloatParameter>,
+pub struct CompositeTreeParameterStoreRender<Event> {
+    float_parameters: Vec<FloatParameter<Event>>,
     float_values: Vec<f32>,
 }
-impl CompositeTreeParameterStoreRender {
+impl<Event> CompositeTreeParameterStoreRender<Event> {
     pub fn evaluate_float(&self, r: CompositeTreeFloatParameterRef, current_sec: f32) -> f32 {
         self.float_parameters[r.0].evaluate(current_sec)
     }
@@ -899,12 +907,12 @@ impl CompositeTreeParameterStoreRender {
     }
 }
 
-struct CompositeTreeParameterStoreSyncBuffer {
-    dirty_float_parameters: Vec<(usize, DirtyFloatParameter)>,
-    push_float_parameters: Vec<FloatParameter>,
+struct CompositeTreeParameterStoreSyncBuffer<Event> {
+    dirty_float_parameters: Vec<(usize, DirtyFloatParameter<Event>)>,
+    push_float_parameters: Vec<FloatParameter<Event>>,
 }
-impl CompositeTreeParameterStoreSyncBuffer {
-    pub fn clean(&mut self, render: &mut CompositeTreeParameterStoreRender) {
+impl<Event> CompositeTreeParameterStoreSyncBuffer<Event> {
+    pub fn clean(&mut self, render: &mut CompositeTreeParameterStoreRender<Event>) {
         for x in self.push_float_parameters.drain(..) {
             render.float_parameters.push(x);
             render.float_values.push(0.0);
@@ -924,14 +932,14 @@ impl CompositeTreeParameterStoreSyncBuffer {
     }
 }
 
-pub struct CompositeTreeParameterStore {
-    dirty_float_parameters: HashMap<usize, DirtyFloatParameter>,
-    push_float_parameters: Vec<FloatParameter>,
+pub struct CompositeTreeParameterStore<Event> {
+    dirty_float_parameters: HashMap<usize, DirtyFloatParameter<Event>>,
+    push_float_parameters: Vec<FloatParameter<Event>>,
     unused_float_parameters: BTreeSet<usize>,
     float_parameter_store_size: usize,
 }
-impl CompositeTreeParameterStore {
-    pub fn alloc_float(&mut self, init: FloatParameter) -> CompositeTreeFloatParameterRef {
+impl<Event> CompositeTreeParameterStore<Event> {
+    pub fn alloc_float(&mut self, init: FloatParameter<Event>) -> CompositeTreeFloatParameterRef {
         if let Some(x) = self.unused_float_parameters.pop_first() {
             self.dirty_float_parameters
                 .insert(x, DirtyFloatParameter::Modified(init));
@@ -950,12 +958,12 @@ impl CompositeTreeParameterStore {
             .insert(r.0, DirtyFloatParameter::Deleted);
     }
 
-    pub fn set_float(&mut self, r: CompositeTreeFloatParameterRef, a: FloatParameter) {
+    pub fn set_float(&mut self, r: CompositeTreeFloatParameterRef, a: FloatParameter<Event>) {
         self.dirty_float_parameters
             .insert(r.0, DirtyFloatParameter::Modified(a));
     }
 
-    fn commit(&mut self, sync: &mut CompositeTreeParameterStoreSyncBuffer) {
+    fn commit(&mut self, sync: &mut CompositeTreeParameterStoreSyncBuffer<Event>) {
         sync.push_float_parameters
             .extend(self.push_float_parameters.drain(..));
         sync.dirty_float_parameters
@@ -1332,17 +1340,17 @@ enum DirtyRect {
     Deleted,
 }
 
-enum DirtyRectSync {
-    Modified(CompositeRect),
+enum DirtyRectSync<Event> {
+    Modified(CompositeRect<Event>),
     Deleted,
 }
 
-pub struct CompositeTreeRender {
-    rects: Vec<CompositeRect>,
+pub struct CompositeTreeRender<Event> {
+    rects: Vec<CompositeRect<Event>>,
     caches: Vec<CompositeRectCache>,
-    parameter_store: CompositeTreeParameterStoreRender,
+    parameter_store: CompositeTreeParameterStoreRender<Event>,
 }
-impl CompositeTreeRender {
+impl<Event> CompositeTreeRender<Event> {
     pub fn new() -> Self {
         let mut rects = Vec::new();
         let mut caches = Vec::new();
@@ -1364,22 +1372,21 @@ impl CompositeTreeRender {
         }
     }
 
-    /// return: bitmap count
-    pub unsafe fn update(
+    unsafe fn update(
         &mut self,
+        inst_builder: &mut CompositeRenderingInstructionBuilder,
         size: br::Extent2D,
         current_sec: f32,
         mapped_head: *mut core::ffi::c_void,
         font_set: &FontSet,
         mask_atlas: &mut GlyphAtlas,
         vector_raster_state: &mut VectorRasterizationState,
-        event_bus: &AppEventBus,
-    ) -> CompositeRenderingData {
+        mut on_event: impl FnMut(Event),
+    ) {
         // let update_timer = std::time::Instant::now();
 
         self.parameter_store.evaluate_all(current_sec);
 
-        let mut inst_builder = CompositeRenderingInstructionBuilder::new(size);
         let mut instance_slot_index = 0;
         let mut processes = vec![(
             0,
@@ -1440,28 +1447,28 @@ impl CompositeTreeRender {
                 .mul_mat4(Matrix4::translate(-r.pivot[0] * w, -r.pivot[1] * h)),
             );
 
-            r.offset[0].process_on_complete(current_sec, event_bus);
-            r.offset[1].process_on_complete(current_sec, event_bus);
-            r.size[0].process_on_complete(current_sec, event_bus);
-            r.size[1].process_on_complete(current_sec, event_bus);
-            r.opacity.process_on_complete(current_sec, event_bus);
-            r.scale_x.process_on_complete(current_sec, event_bus);
-            r.scale_y.process_on_complete(current_sec, event_bus);
+            r.offset[0].process_on_complete(current_sec, &mut on_event);
+            r.offset[1].process_on_complete(current_sec, &mut on_event);
+            r.size[0].process_on_complete(current_sec, &mut on_event);
+            r.size[1].process_on_complete(current_sec, &mut on_event);
+            r.opacity.process_on_complete(current_sec, &mut on_event);
+            r.scale_x.process_on_complete(current_sec, &mut on_event);
+            r.scale_y.process_on_complete(current_sec, &mut on_event);
             match r.composite_mode {
                 CompositeMode::DirectSourceOver => (),
                 CompositeMode::ColorTint(ref mut t) => {
-                    t.process_on_complete(current_sec, event_bus)
+                    t.process_on_complete(current_sec, &mut on_event)
                 }
                 CompositeMode::FillColor(ref mut t) => {
-                    t.process_on_complete(current_sec, event_bus)
+                    t.process_on_complete(current_sec, &mut on_event)
                 }
                 CompositeMode::ColorTintBackdropBlur(ref mut t, ref mut stdev) => {
-                    t.process_on_complete(current_sec, event_bus);
-                    stdev.process_on_complete(current_sec, event_bus);
+                    t.process_on_complete(current_sec, &mut on_event);
+                    stdev.process_on_complete(current_sec, &mut on_event);
                 }
                 CompositeMode::FillColorBackdropBlur(ref mut t, ref mut stdev) => {
-                    t.process_on_complete(current_sec, event_bus);
-                    stdev.process_on_complete(current_sec, event_bus);
+                    t.process_on_complete(current_sec, &mut on_event);
+                    stdev.process_on_complete(current_sec, &mut on_event);
                 }
             }
 
@@ -1485,20 +1492,20 @@ impl CompositeTreeRender {
                             uv_st: [
                                 ((r.texatlas_rect.right as f32 - r.texatlas_rect.left as f32)
                                     - 1.0)
-                                    / mask_atlas.space_mgr.max.width as f32,
+                                    / mask_atlas.size().width as f32,
                                 ((r.texatlas_rect.bottom as f32 - r.texatlas_rect.top as f32)
                                     - 1.0)
-                                    / mask_atlas.space_mgr.max.height as f32,
+                                    / mask_atlas.size().height as f32,
                                 (r.texatlas_rect.left as f32 + 0.5)
-                                    / mask_atlas.space_mgr.max.width as f32,
+                                    / mask_atlas.size().width as f32,
                                 (r.texatlas_rect.top as f32 + 0.5)
-                                    / mask_atlas.space_mgr.max.height as f32,
+                                    / mask_atlas.size().height as f32,
                             ],
                             position_modifier_matrix: matrix.clone().transpose().0,
                             slice_borders: r.slice_borders,
                             tex_size_pixels: [
-                                mask_atlas.space_mgr.max.width as _,
-                                mask_atlas.space_mgr.max.height as _,
+                                mask_atlas.size().width as _,
+                                mask_atlas.size().height as _,
                             ],
                             composite_mode: r.composite_mode.shader_mode_value(),
                             opacity,
@@ -1597,16 +1604,16 @@ impl CompositeTreeRender {
                                     b.top + y_offset,
                                 ],
                                 uv_st: [
-                                    b.width as f32 / mask_atlas.space_mgr.max.width as f32,
-                                    b.height as f32 / mask_atlas.space_mgr.max.height as f32,
-                                    b.tex_left as f32 / mask_atlas.space_mgr.max.width as f32,
-                                    b.tex_top as f32 / mask_atlas.space_mgr.max.height as f32,
+                                    b.width as f32 / mask_atlas.size().width as f32,
+                                    b.height as f32 / mask_atlas.size().height as f32,
+                                    b.tex_left as f32 / mask_atlas.size().width as f32,
+                                    b.tex_top as f32 / mask_atlas.size().height as f32,
                                 ],
                                 position_modifier_matrix: matrix.clone().transpose().0,
                                 slice_borders: [0.0; 4],
                                 tex_size_pixels: [
-                                    mask_atlas.space_mgr.max.width as _,
-                                    mask_atlas.space_mgr.max.height as _,
+                                    mask_atlas.size().width as _,
+                                    mask_atlas.size().height as _,
                                 ],
                                 composite_mode: 1.0,
                                 opacity,
@@ -1685,14 +1692,12 @@ impl CompositeTreeRender {
 
         // let update_time = update_timer.elapsed();
         // println!("instbuild({update_time:?}): {:?}", inst_builder.insts);
-
-        inst_builder.build()
     }
 
     #[tracing::instrument(skip(text_layout, cache, font_set, glyph_atlas, vector_raster_state))]
     fn populate_text_layout_cache(
         cache: &mut CompositeRectCache,
-        text_layout: &CompositeRectText,
+        text_layout: &CompositeRectText<Event>,
         scale_factor: f32,
         font_set: &FontSet,
         glyph_atlas: &mut GlyphAtlas,
@@ -3132,12 +3137,12 @@ impl CompositeTreeRender {
     }
 }
 
-pub struct CompositeTreeSyncBuffer {
-    pushed_rects: Vec<CompositeRect>,
-    dirty_rects: Vec<(usize, DirtyRectSync)>,
-    parameter_store: CompositeTreeParameterStoreSyncBuffer,
+pub struct CompositeTreeSyncBuffer<Event> {
+    pushed_rects: Vec<CompositeRect<Event>>,
+    dirty_rects: Vec<(usize, DirtyRectSync<Event>)>,
+    parameter_store: CompositeTreeParameterStoreSyncBuffer<Event>,
 }
-impl CompositeTreeSyncBuffer {
+impl<Event> CompositeTreeSyncBuffer<Event> {
     pub fn new() -> Self {
         Self {
             pushed_rects: Vec::new(),
@@ -3149,7 +3154,7 @@ impl CompositeTreeSyncBuffer {
         }
     }
 
-    pub fn clean(&mut self, render: &mut CompositeTreeRender) {
+    pub fn clean(&mut self, render: &mut CompositeTreeRender<Event>) {
         let _ = render.rects.try_reserve(self.pushed_rects.len());
         let _ = render.caches.try_reserve(self.pushed_rects.len());
         for x in self.pushed_rects.drain(..) {
@@ -3172,17 +3177,17 @@ impl CompositeTreeSyncBuffer {
     }
 }
 
-pub struct CompositeTree {
-    rects: Vec<CompositeRect>,
+pub struct CompositeTree<Event> {
+    rects: Vec<CompositeRect<Event>>,
     pushed_rects: Vec<usize>,
     dirty_rects: HashMap<usize, DirtyRect>,
     unused: BTreeSet<usize>,
     dirty: bool,
-    parameter_store: CompositeTreeParameterStore,
+    parameter_store: CompositeTreeParameterStore<Event>,
     custom_render_unused: BTreeSet<usize>,
     custom_render_last_id: usize,
 }
-impl CompositeTree {
+impl<Event> CompositeTree<Event> {
     /// ルートノード
     pub const ROOT: CompositeTreeRef = CompositeTreeRef(0);
 
@@ -3211,7 +3216,7 @@ impl CompositeTree {
         }
     }
 
-    pub fn create(&mut self, data: CompositeRect) -> CompositeTreeRef {
+    pub fn create(&mut self, data: CompositeRect<Event>) -> CompositeTreeRef {
         if let Some(x) = self.unused.pop_first() {
             self.rects[x] = data;
             self.dirty_rects.insert(x, DirtyRect::Modified);
@@ -3243,11 +3248,11 @@ impl CompositeTree {
         self.custom_render_unused.insert(token.0);
     }
 
-    pub fn get(&self, index: CompositeTreeRef) -> &CompositeRect {
+    pub fn get(&self, index: CompositeTreeRef) -> &CompositeRect<Event> {
         &self.rects[index.0]
     }
 
-    pub fn get_mut(&mut self, index: CompositeTreeRef) -> &mut CompositeRect {
+    pub fn get_mut(&mut self, index: CompositeTreeRef) -> &mut CompositeRect<Event> {
         &mut self.rects[index.0]
     }
 
@@ -3266,7 +3271,10 @@ impl CompositeTree {
         self.dirty = true;
     }
 
-    pub fn commit(&mut self, sync_buffer: &mut CompositeTreeSyncBuffer) {
+    pub fn commit(&mut self, sync_buffer: &mut CompositeTreeSyncBuffer<Event>)
+    where
+        Event: Clone,
+    {
         let _ = sync_buffer
             .pushed_rects
             .try_reserve(self.pushed_rects.len());
@@ -3315,11 +3323,11 @@ impl CompositeTree {
         }
     }
 
-    pub const fn parameter_store(&self) -> &CompositeTreeParameterStore {
+    pub const fn parameter_store(&self) -> &CompositeTreeParameterStore<Event> {
         &self.parameter_store
     }
 
-    pub const fn parameter_store_mut(&mut self) -> &mut CompositeTreeParameterStore {
+    pub const fn parameter_store_mut(&mut self) -> &mut CompositeTreeParameterStore<Event> {
         &mut self.parameter_store
     }
 }
@@ -3919,15 +3927,15 @@ impl CompositeRenderer {
         }
     }
 
-    pub fn update(
+    pub fn update<Event>(
         &mut self,
         gfx: &VulkanDevice,
-        tree: &mut CompositeTreeRender,
+        tree: &mut CompositeTreeRender<Event>,
         rt_size: br::Extent2D,
         font_set: &FontSet,
         mask_atlas: &mut GlyphAtlas,
         vector_raster_state: &mut VectorRasterizationState,
-        event_bus: &AppEventBus,
+        mut on_event: impl FnMut(Event),
         current_sec: f32,
     ) -> CompositeRenderingData {
         let h = self.instance_manager.staging_memory_raw_handle();
@@ -3938,17 +3946,20 @@ impl CompositeRenderer {
                 .map_staging(gfx)
                 .expect("composite.instances.stg.map")
         };
-        let render_data = unsafe {
+        let mut inst_builder = CompositeRenderingInstructionBuilder::new(rt_size);
+        unsafe {
             tree.update(
+                &mut inst_builder,
                 rt_size,
                 current_sec,
                 ptr.ptr(),
                 font_set,
                 mask_atlas,
                 vector_raster_state,
-                event_bus,
+                on_event,
             )
         };
+        let render_data = inst_builder.build();
         if flush_required {
             unsafe {
                 gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
