@@ -103,67 +103,10 @@ static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable
     |_| {},
 );
 
-#[cfg(windows)]
-struct WindowsDebugOutputWriter;
-#[cfg(windows)]
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for WindowsDebugOutputWriter {
-    type Writer = &'a Self;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        self
-    }
-}
-#[cfg(windows)]
-impl std::io::Write for &'_ WindowsDebugOutputWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let zero_terminated = unsafe {
-            core::str::from_utf8_unchecked(buf)
-                .encode_utf16()
-                .chain(core::iter::once(0))
-                .collect::<Vec<_>>()
-        };
-
-        unsafe {
-            windows::Win32::System::Diagnostics::Debug::OutputDebugStringW(windows::core::PCWSTR(
-                zero_terminated.as_ptr(),
-            ));
-        }
-
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 pub fn launch() {
     #[cfg(windows)]
-    std::panic::set_hook(Box::new(|panic| unsafe {
-        let panic_msg = match std::ffi::CString::new(panic.to_string()) {
-            Ok(x) => x,
-            Err(_) => c"<<Could not convert panic message!>>".into(),
-        };
+    platform::windows::set_panic_hook();
 
-        windows::Win32::System::Diagnostics::Debug::OutputDebugStringA(windows::core::PCSTR(
-            panic_msg.as_ptr().cast(),
-        ));
-
-        windows::Win32::UI::WindowsAndMessaging::MessageBoxA(
-            None,
-            windows::core::PCSTR(panic_msg.as_ptr().cast()),
-            windows::core::PCSTR(c"Program panic!".as_ptr().cast()),
-            windows::Win32::UI::WindowsAndMessaging::MB_OK
-                | windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
-        );
-        std::process::abort();
-    }));
-
-    #[cfg(all(not(target_os = "macos"), not(windows)))]
-    tracing_subscriber::fmt()
-        .pretty()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
     #[cfg(target_os = "macos")]
     tracing_subscriber::fmt()
         .with_ansi(false)
@@ -173,7 +116,12 @@ pub fn launch() {
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(WindowsDebugOutputWriter)
+        .with_writer(platform::windows::DebugOutputWriter)
+        .init();
+    #[cfg(all(not(target_os = "macos"), not(windows)))]
+    tracing_subscriber::fmt()
+        .pretty()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
     let mut event_store = core::pin::pin!(None);
@@ -203,12 +151,6 @@ pub fn launch() {
             latest_ui_scale_changes: None,
         }),
     );
-}
-
-struct RendererSync {
-    pub composite_buffer: CompositeTreeSyncBuffer<Event>,
-    // TODO: multi-window support
-    pub latest_ui_scale_changes: Option<f32>,
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
@@ -2103,6 +2045,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(windows)]
         app_runtime.shutdown();
     });
+}
+
+struct RendererSync {
+    pub composite_buffer: CompositeTreeSyncBuffer<Event>,
+    // TODO: multi-window support
+    pub latest_ui_scale_changes: Option<f32>,
 }
 
 #[derive(Clone)]
