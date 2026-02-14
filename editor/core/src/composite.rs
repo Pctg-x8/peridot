@@ -24,8 +24,8 @@ use crate::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, VulkanDevice,
     },
-    helper_types::SafeF32,
     text::{FontID, FontSet, GlyphAtlas},
+    utils::SafeF32,
 };
 
 pub const BLUR_SAMPLE_STEPS: usize = 4;

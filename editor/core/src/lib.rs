@@ -87,7 +87,6 @@ mod atlas;
 mod bindgen;
 mod composite;
 mod graphics;
-mod helper_types;
 mod hittest;
 mod input;
 // mod mathext;
