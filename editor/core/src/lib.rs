@@ -2123,8 +2123,6 @@ pub enum Event {
         active_window: *mut platform::mac::bridge::WindowLink,
     },
     PointerMove {
-        #[cfg(windows)]
-        active_window: HWND,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
     },
@@ -2436,8 +2434,6 @@ async fn run<'sys>(
                 composite_tree.commit(&mut composite_tree_sync_buffer.lock().expect("poisoned"));
             }
             Event::PointerMove {
-                #[cfg(windows)]
-                active_window,
                 pointer_id,
                 client_pos,
             } => {
@@ -5331,7 +5327,6 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             Self::get_for_window(hwnd)
                 .event_dispatcher
                 .dispatch(Event::PointerMove {
-                    active_window: hwnd,
                     pointer_id: PointerID(),
                     client_pos: Point::new_pixels(
                         (lparam.0 & 0xffff) as i16 as _,
@@ -5354,7 +5349,6 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             Self::get_for_window(hwnd)
                 .event_dispatcher
                 .dispatch(Event::PointerMove {
-                    active_window: hwnd,
                     pointer_id: PointerID(),
                     client_pos: Point::new_pixels(
                         (lparam.0 & 0xffff) as i16 as _,
