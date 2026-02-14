@@ -483,6 +483,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             },
         },
         #[cfg(windows)]
+        CursorShaping {},
+        #[cfg(windows)]
         WindowHandle { hwnd: w.0 },
         #[cfg(feature = "wayland")]
         WindowHandle {
@@ -2455,41 +2457,7 @@ async fn run<'sys>(
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 cursor_shaping.set_cursor(&pointer_id, cursor_shape);
 
-                /*#[cfg(windows)]
-                unsafe {
-                    // TODO: 必要そうならキャッシュする
-                    windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor_shape {
-                        hittest::CursorShape::Default => Some(
-                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                                None,
-                                windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
-                            )
-                            .expect("load_cursor.default"),
-                        ),
-                        hittest::CursorShape::Pointer => Some(
-                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                                None,
-                                windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
-                            )
-                            .expect("load_cursor.default"),
-                        ),
-                        hittest::CursorShape::IBeam => Some(
-                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                                None,
-                                windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
-                            )
-                            .expect("load_cursor.default"),
-                        ),
-                        hittest::CursorShape::ResizeHorizontal => Some(
-                            windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                                None,
-                                windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
-                            )
-                            .expect("load_cursor.default"),
-                        ),
-                    });
-                }
-
+                /*
                 #[cfg(target_os = "macos")]
                 unsafe {
                     platform::mac::bridge::ni_set_cursor_shape(match cursor_shape {
@@ -2678,6 +2646,50 @@ impl CursorShaping {
             shape_device
                 .set_shape(serial, cursor.as_wayland())
                 .expect("cursor_shape_device.set_cursor");
+        }
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+pub struct PointerID();
+#[cfg(windows)]
+pub struct CursorShaping {}
+#[cfg(windows)]
+impl CursorShaping {
+    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
+        unsafe {
+            // TODO: 必要そうならキャッシュする
+            windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor {
+                CursorShape::Default => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::Pointer => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::IBeam => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::ResizeHorizontal => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+            });
         }
     }
 }
@@ -5320,6 +5332,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
                 .event_dispatcher
                 .dispatch(Event::PointerMove {
                     active_window: hwnd,
+                    pointer_id: PointerID(),
                     client_pos: Point::new_pixels(
                         (lparam.0 & 0xffff) as i16 as _,
                         ((lparam.0 >> 16) & 0xffff) as i16 as _,
@@ -5342,6 +5355,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
                 .event_dispatcher
                 .dispatch(Event::PointerMove {
                     active_window: hwnd,
+                    pointer_id: PointerID(),
                     client_pos: Point::new_pixels(
                         (lparam.0 & 0xffff) as i16 as _,
                         ((lparam.0 >> 16) & 0xffff) as i16 as _,
