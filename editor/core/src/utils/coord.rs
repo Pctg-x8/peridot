@@ -84,6 +84,25 @@ impl Point<PixelsUnit> {
             _marker: PhantomData,
         }
     }
+
+    #[cfg(windows)]
+    #[inline(always)]
+    pub const fn to_win32(&self) -> windows::Win32::Foundation::POINT {
+        windows::Win32::Foundation::POINT {
+            x: self.x,
+            y: self.y,
+        }
+    }
+
+    #[cfg(windows)]
+    #[inline(always)]
+    pub const fn from_win32(point: windows::Win32::Foundation::POINT) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            _marker: PhantomData,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

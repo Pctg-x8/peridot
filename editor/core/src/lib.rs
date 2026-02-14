@@ -48,11 +48,11 @@ use windows::{
         UI::WindowsAndMessaging::{
             CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect,
             GetMessageW, GetWindowLongPtrW, HCURSOR, HICON, IDI_APPLICATION, LoadIconW,
-            PostQuitMessage, RegisterClassExW, SHOW_WINDOW_CMD, SW_HIDE, SW_SHOWNOACTIVATE,
-            SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_LONG_PTR_INDEX,
-            WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
-            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
-            WS_POPUP,
+            NCCALCSIZE_PARAMS, PostQuitMessage, RegisterClassExW, SHOW_WINDOW_CMD, SW_HIDE,
+            SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TranslateMessage,
+            WINDOW_LONG_PTR_INDEX, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
+            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+            WS_OVERLAPPEDWINDOW, WS_POPUP,
         },
     },
 };
@@ -546,6 +546,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         WindowState::set_for_window(
             &w,
             Box::new(WindowState {
+                content_scale: windows::Win32::UI::HiDpi::GetDpiForWindow(w.0) as f32 / 96.0,
                 event_dispatcher: LogicFiberEventDispatcher {
                     event_store: event_store.as_mut().get_mut() as *mut _ as _,
                     future: app.as_mut().get_unchecked_mut() as *mut _ as _,
@@ -4341,9 +4342,19 @@ impl crate::input::ShellPointerActions for WindowMessageHandlingContext {
 
 #[cfg(windows)]
 struct WindowState<AppFuture: core::future::Future<Output = ()>> {
+    content_scale: f32,
     event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
     text_services_mgr: Option<CoreTextServicesManager>,
     edit_context: Option<CoreTextEditContext>,
+}
+#[cfg(windows)]
+impl<AppFuture: core::future::Future<Output = ()>> Drop for WindowState<AppFuture> {
+    fn drop(&mut self) {
+        unsafe {
+            // TODO: detect main window
+            PostQuitMessage(0);
+        }
+    }
 }
 #[cfg(windows)]
 impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
@@ -4377,6 +4388,160 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
     }
 
+    fn compute_client_rect(params: &mut NCCALCSIZE_PARAMS) {
+        // remove non-client area
+        let w = unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSIZEFRAME};
+            GetSystemMetrics(SM_CXSIZEFRAME)
+        };
+        let h = unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
+            GetSystemMetrics(SM_CYSIZEFRAME)
+        };
+        params.rgrc[0].left += w;
+        params.rgrc[0].right -= w;
+        params.rgrc[0].bottom -= h;
+        // topはいじらない（topいじるともとのタイトルバーが一部表示される 他アプリもそんな感じなのでtopは自前で当たり判定組んでリサイズ判定する）
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn dpi_changed(
+        &mut self,
+        hwnd: HWND,
+        new_scale: f32,
+        new_rect: &windows::Win32::Foundation::RECT,
+    ) {
+        tracing::trace!("dpi changed");
+
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{SWP_NOZORDER, SetWindowPos};
+
+            if let Err(e) = SetWindowPos(
+                hwnd,
+                None,
+                new_rect.left,
+                new_rect.top,
+                new_rect.right - new_rect.left,
+                new_rect.bottom - new_rect.top,
+                SWP_NOZORDER,
+            ) {
+                tracing::error!(reason = %e, "dpi_changed.set_window_pos");
+            }
+        }
+
+        self.content_scale = new_scale;
+        self.event_dispatcher
+            .dispatch(Event::WindowRescaleUI { new_scale });
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn resize(&mut self, new_size: Size<PixelsUnit>) {
+        tracing::trace!(?new_size);
+
+        self.event_dispatcher
+            .dispatch(Event::WindowResize(new_size.to_logical(self.content_scale)));
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn mouse_move(&mut self, client_pos: Point<PixelsUnit>) {
+        self.event_dispatcher.dispatch(Event::PointerMove {
+            pointer_id: PointerID(),
+            client_pos: client_pos.to_logical(self.content_scale),
+        });
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn left_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
+        // move then down
+        self.event_dispatcher.dispatch(Event::PointerMove {
+            pointer_id: PointerID(),
+            client_pos: client_pos.to_logical(self.content_scale),
+        });
+        self.event_dispatcher.dispatch(Event::PointerDown {
+            active_window: hwnd,
+        });
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn left_button_up(&mut self) {
+        self.event_dispatcher.dispatch(Event::PointerUp);
+    }
+
+    fn non_client_hittest(&self, hwnd: HWND, screen_pos: Point<PixelsUnit>) -> Option<u32> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
+        };
+
+        let mut p = [screen_pos.to_win32()];
+        unsafe {
+            use windows::Win32::Graphics::Gdi::MapWindowPoints;
+            MapWindowPoints(None, Some(hwnd), &mut p);
+        }
+        let client_pos = Point::from_win32(p[0]);
+
+        let mut client_size = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(hwnd, client_size.as_mut_ptr()).expect("getclientsize");
+        }
+        let client_size = unsafe { client_size.assume_init() };
+
+        if 0 > client_pos.x
+            || client_pos.x > client_size.right
+            || 0 > client_pos.y
+            || client_pos.y > client_size.bottom
+        {
+            // ウィンドウ範囲外
+            return None;
+        }
+
+        let resize_h = unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
+            GetSystemMetrics(SM_CYSIZEFRAME)
+        };
+        if client_pos.y < resize_h {
+            return Some(windows::Win32::UI::WindowsAndMessaging::HTTOP);
+        }
+
+        let pointer_input_manager_ptr = unsafe {
+            core::ptr::with_exposed_provenance_mut::<PointerInputManager>(GetWindowLongPtrW(
+                hwnd,
+                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
+            ) as _)
+        };
+        let ht_manager_ptr = unsafe {
+            core::ptr::with_exposed_provenance_mut::<HitTestTreeManager>(GetWindowLongPtrW(
+                hwnd,
+                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            ) as _)
+        };
+
+        if pointer_input_manager_ptr.is_null() {
+            // unlinked from logic fiber
+            return Some(HTCLIENT);
+        }
+
+        let pointer_input_manager = unsafe { &*pointer_input_manager_ptr };
+        match pointer_input_manager.role(
+            &client_pos.to_logical(self.content_scale),
+            &Size::new_pixels(
+                (client_size.right - client_size.left) as _,
+                (client_size.bottom - client_size.top) as _,
+            )
+            .to_logical(self.content_scale),
+            unsafe { &*ht_manager_ptr },
+            HitTestTreeManager::ROOT,
+        ) {
+            None => Some(HTCLIENT),
+            Some(crate::hittest::Role::TitleBar) => Some(HTCAPTION),
+            Some(crate::hittest::Role::ForceClient) => Some(HTCLIENT),
+            Some(crate::hittest::Role::CloseButton) => Some(HTCLOSE),
+            Some(crate::hittest::Role::MaximizeButton) => Some(HTMAXBUTTON),
+            Some(crate::hittest::Role::MinimizeButton) => Some(HTMINBUTTON),
+            // Windowsだと同じ位置にあるので同じものを返す
+            Some(crate::hittest::Role::RestoreButton) => Some(HTMAXBUTTON),
+        }
+    }
+
     extern "system" fn handle_messages(
         hwnd: HWND,
         msg: u32,
@@ -4392,7 +4557,6 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         if msg == WM_DESTROY {
             unsafe {
                 drop(Box::from_raw(Self::get_for_window(hwnd)));
-                PostQuitMessage(0);
             }
 
             return LRESULT(0);
@@ -4633,34 +4797,11 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_DPICHANGED {
-            let new_scale = (wparam.0 & 0xffff) as u16 as f32 / 96.0;
-            let new_rect = unsafe {
-                &*core::ptr::without_provenance::<windows::Win32::Foundation::RECT>(
-                    lparam.0.cast_unsigned(),
-                )
-            };
-            tracing::trace!(new_scale, "dpi changed");
-
-            unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::SWP_NOZORDER;
-
-                if let Err(e) = windows::Win32::UI::WindowsAndMessaging::SetWindowPos(
-                    hwnd,
-                    None,
-                    new_rect.left,
-                    new_rect.top,
-                    new_rect.right - new_rect.left,
-                    new_rect.bottom - new_rect.top,
-                    SWP_NOZORDER,
-                ) {
-                    tracing::error!(reason = %e, "dpi_changed.set_window_pos");
-                }
-            }
-
-            let state = Self::get_for_window(hwnd);
-            state
-                .event_dispatcher
-                .dispatch(Event::WindowRescaleUI { new_scale });
+            Self::get_for_window(hwnd).dpi_changed(
+                hwnd,
+                (wparam.0 & 0xffff) as u16 as f32 / 96.0,
+                unsafe { &*core::ptr::without_provenance(lparam.0.cast_unsigned()) },
+            );
 
             return LRESULT(0);
         }
@@ -4697,176 +4838,69 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             return LRESULT(0);
         }
 
-        if msg == WM_NCCALCSIZE {
-            if wparam.0 == 1 {
-                // remove non-client area
-
-                let params = unsafe {
-                    use windows::Win32::UI::WindowsAndMessaging::NCCALCSIZE_PARAMS;
-
-                    &mut *core::ptr::without_provenance_mut::<NCCALCSIZE_PARAMS>(
-                        lparam.0.cast_unsigned(),
-                    )
-                };
-                let w = unsafe {
-                    use windows::Win32::UI::WindowsAndMessaging::{
-                        GetSystemMetrics, SM_CXSIZEFRAME,
-                    };
-                    GetSystemMetrics(SM_CXSIZEFRAME)
-                };
-                let h = unsafe {
-                    use windows::Win32::UI::WindowsAndMessaging::{
-                        GetSystemMetrics, SM_CYSIZEFRAME,
-                    };
-                    GetSystemMetrics(SM_CYSIZEFRAME)
-                };
-                params.rgrc[0].left += w;
-                params.rgrc[0].right -= w;
-                params.rgrc[0].bottom -= h;
-                // topはいじらない（topいじるともとのタイトルバーが一部表示される 他アプリもそんな感じなのでtopは自前で当たり判定組んでリサイズ判定する）
-
-                return LRESULT(0);
-            }
-        }
-
         if msg == WM_SIZE {
-            let w = (lparam.0 & 0xffff) as u16;
-            let h = ((lparam.0 >> 16) & 0xffff) as u16;
-            tracing::trace!(w, h, "WM_SIZE");
-
             if let Some(state) = Self::try_get_for_window(hwnd) {
-                state.event_dispatcher.dispatch(Event::WindowResize(
-                    Size::new_pixels(w as _, h as _).to_logical(unsafe {
-                        windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as f32 / 96.0
-                    }),
+                state.resize(Size::new_pixels(
+                    (lparam.0 & 0xffff) as u16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as u16 as _,
                 ));
             }
 
             return LRESULT(0);
         }
 
+        if msg == WM_NCCALCSIZE {
+            if wparam.0 == 1 {
+                Self::compute_client_rect(unsafe {
+                    &mut *core::ptr::without_provenance_mut(lparam.0.cast_unsigned())
+                });
+
+                return LRESULT(0);
+            }
+        }
+
         if msg == WM_NCHITTEST {
-            use windows::Win32::UI::WindowsAndMessaging::{
-                HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON,
-            };
-
-            let x = (lparam.0 & 0xffff) as i16;
-            let y = ((lparam.0 >> 16) & 0xffff) as i16;
-            let mut p = [windows::Win32::Foundation::POINT {
-                x: x as _,
-                y: y as _,
-            }];
-            unsafe {
-                use windows::Win32::Graphics::Gdi::MapWindowPoints;
-                MapWindowPoints(None, Some(hwnd), &mut p);
-            }
-            let [windows::Win32::Foundation::POINT { x, y }] = p;
-
-            let mut client_size = core::mem::MaybeUninit::uninit();
-            unsafe {
-                GetClientRect(hwnd, client_size.as_mut_ptr()).expect("getclientsize");
-            }
-            let client_size = unsafe { client_size.assume_init() };
-
-            if 0 > x || x > client_size.right || 0 > y || y > client_size.bottom {
-                // ウィンドウ範囲外はシステムにおまかせ
+            let Some(state) = Self::try_get_for_window(hwnd) else {
+                // 初期化完了前にきた
                 return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-            }
-
-            let resize_h = unsafe {
-                use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CYSIZEFRAME};
-                GetSystemMetrics(SM_CYSIZEFRAME)
             };
-            if y < resize_h {
-                return LRESULT(windows::Win32::UI::WindowsAndMessaging::HTTOP as _);
-            }
-
-            let pointer_input_manager_ptr = unsafe {
-                core::ptr::with_exposed_provenance_mut::<PointerInputManager>(GetWindowLongPtrW(
-                    hwnd,
-                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
-                )
-                    as _)
-            };
-            let ht_manager_ptr = unsafe {
-                core::ptr::with_exposed_provenance_mut::<HitTestTreeManager>(GetWindowLongPtrW(
-                    hwnd,
-                    WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-                ) as _)
+            let Some(result) = state.non_client_hittest(
+                hwnd,
+                Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                ),
+            ) else {
+                // よくわからん(アプリウィンドウ範囲外)のでデフォルトに任せる
+                return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
             };
 
-            if pointer_input_manager_ptr.is_null() {
-                // unlinked from logic fiber
-                return LRESULT(HTCLIENT as _);
-            }
-
-            let pointer_input_manager = unsafe { &*pointer_input_manager_ptr };
-            let ui_scale_factor = 1.0; // TODO: dpi
-            return match pointer_input_manager.role(
-                &Point::new_pixels(x, y).to_logical(ui_scale_factor),
-                &Size::new_pixels(
-                    (client_size.right - client_size.left) as _,
-                    (client_size.bottom - client_size.top) as _,
-                )
-                .to_logical(ui_scale_factor),
-                unsafe { &*ht_manager_ptr },
-                HitTestTreeManager::ROOT,
-            ) {
-                None => LRESULT(HTCLIENT as _),
-                Some(crate::hittest::Role::TitleBar) => LRESULT(HTCAPTION as _),
-                Some(crate::hittest::Role::ForceClient) => LRESULT(HTCLIENT as _),
-                Some(crate::hittest::Role::CloseButton) => LRESULT(HTCLOSE as _),
-                Some(crate::hittest::Role::MaximizeButton) => LRESULT(HTMAXBUTTON as _),
-                Some(crate::hittest::Role::MinimizeButton) => LRESULT(HTMINBUTTON as _),
-                // Windowsだと同じ位置にあるので同じものを返す
-                Some(crate::hittest::Role::RestoreButton) => LRESULT(HTMAXBUTTON as _),
-            };
+            return LRESULT(result as _);
         }
 
         if msg == WM_LBUTTONDOWN {
-            // move then down
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::PointerMove {
-                    pointer_id: PointerID(),
-                    client_pos: Point::new_pixels(
-                        (lparam.0 & 0xffff) as i16 as _,
-                        ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                    )
-                    .to_logical(unsafe {
-                        windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as f32 / 96.0
-                    }),
-                });
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::PointerDown {
-                    active_window: hwnd,
-                });
+            Self::get_for_window(hwnd).left_button_down(
+                hwnd,
+                Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                ),
+            );
 
             return LRESULT(0);
         }
 
         if msg == WM_MOUSEMOVE {
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::PointerMove {
-                    pointer_id: PointerID(),
-                    client_pos: Point::new_pixels(
-                        (lparam.0 & 0xffff) as i16 as _,
-                        ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                    )
-                    .to_logical(unsafe {
-                        windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) as f32 / 96.0
-                    }),
-                });
+            Self::get_for_window(hwnd).mouse_move(Point::new_pixels(
+                (lparam.0 & 0xffff) as i16 as _,
+                ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            ));
 
             return LRESULT(0);
         }
 
         if msg == WM_LBUTTONUP {
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::PointerUp);
+            Self::get_for_window(hwnd).left_button_up();
 
             return LRESULT(0);
         }
