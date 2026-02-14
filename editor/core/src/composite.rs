@@ -1670,10 +1670,10 @@ impl CompositeTreeRender {
                         r.clip_child.map(|cc| {
                             (
                                 [
-                                    unsafe { SafeF32::new_unchecked(left) },
-                                    unsafe { SafeF32::new_unchecked(top) },
-                                    unsafe { SafeF32::new_unchecked(left + w) },
-                                    unsafe { SafeF32::new_unchecked(top + h) },
+                                    SafeF32::new(left).expect("invalid left"),
+                                    SafeF32::new(top).expect("invalid top"),
+                                    SafeF32::new(left + w).expect("invalid right"),
+                                    SafeF32::new(top + h).expect("invalid bottom"),
                                 ],
                                 cc,
                             )
