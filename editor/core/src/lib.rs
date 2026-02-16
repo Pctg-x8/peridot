@@ -126,19 +126,8 @@ pub fn launch() {
     };
     let global_time_base = std::time::Instant::now();
     main_wrapper(
-        move |global_time_base,
-              renderer_sync,
-              cursor_shaping,
-              main_window,
-              drag_preview_popover| {
-            run(
-                event_queue,
-                global_time_base,
-                renderer_sync,
-                cursor_shaping,
-                main_window,
-                drag_preview_popover,
-            )
+        move |global_time_base, renderer_sync, system_link| {
+            run(event_queue, global_time_base, renderer_sync, system_link)
         },
         event_store,
         &global_time_base,
@@ -150,13 +139,7 @@ pub fn launch() {
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-    run_app: impl FnOnce(
-        &'sys std::time::Instant,
-        &'sys Mutex<RendererSync>,
-        CursorShaping,
-        WindowHandle,
-        DragPreviewPopoverHandle,
-    ) -> AppFuture,
+    run_app: impl FnOnce(&'sys std::time::Instant, &'sys Mutex<RendererSync>, SystemLink) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
@@ -305,9 +288,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let drag_preview_popover = DragPreviewPopoverHandle {
         display: &mut wl_display,
         wl_interfaces: &wl_interfaces as *const _ as _,
-        root_window: core::ptr::null_mut(),
+        root_window: core::cell::Cell::new(core::ptr::null_mut()),
         buf: popover_buf,
-        popup: None,
+        popup: core::cell::UnsafeCell::new(None),
     };
 
     #[cfg(target_os = "macos")]
@@ -407,26 +390,37 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let mut app = core::pin::pin!(run_app(
         global_time_base,
         renderer_sync,
-        #[cfg(feature = "wayland")]
-        CursorShaping {
+        SystemLink {
+            #[cfg(feature = "wayland")]
+            main_window: WindowHandle {
+                wl_surface: w.surface.as_ptr(),
+                wl_surface_to_state: &surface_states,
+            },
+            drag_preview_popover,
+            #[cfg(feature = "wayland")]
             pointer_state_ref: unsafe {
                 &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
             },
-        },
-        #[cfg(windows)]
-        CursorShaping {},
-        #[cfg(windows)]
-        WindowHandle { hwnd: w.0 },
-        #[cfg(feature = "wayland")]
-        WindowHandle {
-            wl_surface: w.surface.as_ptr(),
-            wl_surface_to_state: &surface_states,
-        },
-        #[cfg(target_os = "macos")]
-        WindowHandle {
-            state_ref: &mut w.dispatcher.state as *mut _
-        },
-        drag_preview_popover
+        } /*#[cfg(feature = "wayland")]
+          CursorShaping {
+              pointer_state_ref: unsafe {
+                  &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
+              },
+          },
+          #[cfg(windows)]
+          CursorShaping {},
+          #[cfg(windows)]
+          WindowHandle { hwnd: w.0 },
+          #[cfg(feature = "wayland")]
+          WindowHandle {
+              wl_surface: w.surface.as_ptr(),
+              wl_surface_to_state: &surface_states,
+          },
+          #[cfg(target_os = "macos")]
+          WindowHandle {
+              state_ref: &mut w.dispatcher.state as *mut _
+          },
+          drag_preview_popover*/
     ));
 
     #[cfg(feature = "wayland")]
@@ -1960,15 +1954,14 @@ async fn run<'sys>(
     event_queue: EventQueue,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
-    cursor_shaping: CursorShaping,
-    main_window: WindowHandle,
-    mut drag_preview_popover: DragPreviewPopoverHandle,
+    system_link: SystemLink,
 ) {
     tracing::info!("app start");
 
     let mut keyboard_focus_manager = KeyboardFocusManager::new();
     // TODO: マルチウィンドウ対応
-    let mut pointer_input_manager = PointerInputManager::new(main_window.client_size());
+    let mut pointer_input_manager =
+        PointerInputManager::new(system_link.main_window().client_size());
 
     let mut ht_manager = HitTestTreeManager::new();
     let mut composite_tree = CompositeTree::new();
@@ -1995,7 +1988,7 @@ async fn run<'sys>(
         .has_bitmap = true;
     composite_tree.mark_dirty(CompositeTree::<Event>::ROOT);
 
-    let init_scale = main_window.ui_scale_factor();
+    let init_scale = system_link.main_window().ui_scale_factor();
 
     // app title view
     #[cfg(target_os = "macos")]
@@ -2187,9 +2180,10 @@ async fn run<'sys>(
                 active_window,
             } => {
                 #[cfg(feature = "wayland")]
-                {
-                    drag_preview_popover.root_window = root_window.as_ptr();
-                }
+                system_link
+                    .drag_preview_popover()
+                    .root_window
+                    .set(root_window.as_ptr());
                 #[cfg(windows)]
                 {
                     drag_preview_popover.base_window_handle = active_window;
@@ -2200,12 +2194,12 @@ async fn run<'sys>(
                 }
 
                 pointer_input_manager.handle_mouse_left_down(
-                    &main_window,
+                    system_link.main_window(),
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: &mut drag_preview_popover,
+                        drag_preview: system_link.drag_preview_popover(),
                     },
                     HitTestTreeManager::ROOT,
                     &mut keyboard_focus_manager,
@@ -2219,12 +2213,12 @@ async fn run<'sys>(
             } => {
                 pointer_input_manager.handle_mouse_move(
                     client_pos,
-                    &main_window,
+                    system_link.main_window(),
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: &mut drag_preview_popover,
+                        drag_preview: system_link.drag_preview_popover(),
                     },
                     HitTestTreeManager::ROOT,
                 );
@@ -2232,7 +2226,7 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
 
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
-                cursor_shaping.set_cursor(&pointer_id, cursor_shape);
+                system_link.set_cursor(&pointer_id, cursor_shape);
 
                 /*
                 #[cfg(target_os = "macos")]
@@ -2255,12 +2249,12 @@ async fn run<'sys>(
             }
             Event::PointerUp => {
                 pointer_input_manager.handle_mouse_left_up(
-                    &main_window,
+                    system_link.main_window(),
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: &mut drag_preview_popover,
+                        drag_preview: system_link.drag_preview_popover(),
                     },
                     HitTestTreeManager::ROOT,
                 );
@@ -2283,6 +2277,38 @@ async fn run<'sys>(
             WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
             0,
         );
+    }
+}
+
+struct SystemLink {
+    main_window: WindowHandle,
+    drag_preview_popover: DragPreviewPopoverHandle,
+    #[cfg(feature = "wayland")]
+    pointer_state_ref: *const Option<WaylandPointerState>,
+}
+impl SystemLink {
+    #[inline(always)]
+    pub fn main_window(&self) -> &WindowHandle {
+        &self.main_window
+    }
+
+    #[inline(always)]
+    pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
+        &self.drag_preview_popover
+    }
+
+    #[cfg(feature = "wayland")]
+    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
+        if let Some(&WaylandPointerState {
+            enter_state: Some(WaylandPointerEnterState { serial, .. }),
+            cursor: Some(ref shape_device),
+            ..
+        }) = unsafe { (*self.pointer_state_ref).as_ref() }
+        {
+            shape_device
+                .set_shape(serial, cursor.as_wayland())
+                .expect("cursor_shape_device.set_cursor");
+        }
     }
 }
 
@@ -2746,20 +2772,22 @@ impl DragPreviewPopoverBuffer {
 struct DragPreviewPopoverHandle {
     pub display: *mut wl::Display,
     pub wl_interfaces: *const WaylandGlobalInterfaces,
-    pub root_window: *mut wl::XdgSurface,
+    pub root_window: core::cell::Cell<*mut wl::XdgSurface>,
     pub buf: DragPreviewPopoverBuffer,
-    pub popup: Option<(
-        Option<wl::Owned<wl::OrgKdeKwinBlur>>,
-        wl::Owned<wl::XdgPopup>,
-        wl::Owned<wl::XdgSurface>,
-        wl::Owned<wl::WpViewport>,
-        wl::Owned<wl::Surface>,
-        Box<WaylandPopupState>,
-    )>,
+    pub popup: core::cell::UnsafeCell<
+        Option<(
+            Option<wl::Owned<wl::OrgKdeKwinBlur>>,
+            wl::Owned<wl::XdgPopup>,
+            wl::Owned<wl::XdgSurface>,
+            wl::Owned<wl::WpViewport>,
+            wl::Owned<wl::Surface>,
+            Box<WaylandPopupState>,
+        )>,
+    >,
 }
 #[cfg(feature = "wayland")]
 impl DragPreviewPopoverHandle {
-    pub fn show(&mut self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
+    pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
         let wl_popup_surface = unsafe {
             (*self.wl_interfaces)
                 .compositor
@@ -2799,7 +2827,7 @@ impl DragPreviewPopoverHandle {
             .expect("pos.set_constraint_adjustment");
         let mut pp = unsafe {
             xdg_popup_surface
-                .get_popup(Some(&*self.root_window), &positioner)
+                .get_popup(Some(&*self.root_window.get()), &positioner)
                 .expect("pop.create")
         };
         let mut popup_state = Box::new(WaylandPopupState {
@@ -2853,18 +2881,20 @@ impl DragPreviewPopoverHandle {
 
         wl_popup_surface.commit().expect("wl_popup_surface.commit");
 
-        self.popup = Some((
-            blur,
-            pp,
-            xdg_popup_surface,
-            viewport,
-            wl_popup_surface,
-            popup_state,
-        ));
+        unsafe {
+            (*self.popup.get()) = Some((
+                blur,
+                pp,
+                xdg_popup_surface,
+                viewport,
+                wl_popup_surface,
+                popup_state,
+            ));
+        }
     }
 
-    pub fn r#move(&mut self, p: &Point<PointerInputUnit>) {
-        let Some((_, ref pp, _, _, _, _)) = self.popup else {
+    pub fn r#move(&self, p: &Point<PointerInputUnit>) {
+        let Some((_, pp, _, _, _, _)) = (unsafe { &*self.popup.get() }) else {
             return;
         };
 
@@ -2878,8 +2908,10 @@ impl DragPreviewPopoverHandle {
         pp.reposition(&pos, 0).expect("pp.reposition");
     }
 
-    pub fn hide(&mut self) {
-        self.popup = None;
+    pub fn hide(&self) {
+        unsafe {
+            (*self.popup.get()) = None;
+        }
     }
 }
 

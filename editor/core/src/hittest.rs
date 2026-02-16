@@ -360,7 +360,7 @@ pub struct PointerActionArgs {
 pub struct HitTestEventContext<'h> {
     pub current_sec: f32,
     pub composite_tree: &'h mut CompositeTree<Event>,
-    pub drag_preview: &'h mut DragPreviewPopoverHandle,
+    pub drag_preview: &'h DragPreviewPopoverHandle,
 }
 
 pub trait HitTestTreeActionHandler {
