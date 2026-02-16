@@ -1,9 +1,11 @@
 use std::path::Path;
 
 use bedrock::{
-    self as br, Device, Instance, PhysicalDevice, ResolverInterface, VkHandle, VkRawHandle,
-    VulkanStructure,
+    self as br, Device, Instance, InstanceChild, PhysicalDevice, ResolverInterface, Swapchain,
+    VkHandle, VkRawHandle, VulkanStructure,
 };
+
+use crate::utils::{PixelsUnit, Size};
 
 pub const VG_COLOR_FORMAT: br::Format = br::vk::VK_FORMAT_R8_UNORM;
 pub const VG_STENCIL_FORMAT: br::Format = br::vk::VK_FORMAT_S8_UINT;
@@ -520,3 +522,349 @@ impl br::InstanceChild for VulkanDeviceAdapterRef<'_> {
     }
 }
 impl br::PhysicalDevice for VulkanDeviceAdapterRef<'_> {}
+
+pub struct VulkanSwapchain<'d> {
+    device: &'d VulkanDevice,
+    handle: br::vk::VkSwapchainKHR,
+    ext: br::Extent2D,
+    images: Vec<br::vk::VkImage>,
+    image_views: Vec<br::vk::VkImageView>,
+}
+impl Drop for VulkanSwapchain<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            for x in self.image_views.drain(..) {
+                br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), x, None);
+            }
+            br::vkfn_wrapper::destroy_swapchain(self.device.native_ptr(), self.handle, None);
+        }
+    }
+}
+impl br::VkHandle for VulkanSwapchain<'_> {
+    type Handle = br::vk::VkSwapchainKHR;
+
+    #[inline(always)]
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+impl br::DeviceChildHandle for VulkanSwapchain<'_> {
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.device.native_ptr()
+    }
+}
+impl br::DeviceChild for VulkanSwapchain<'_> {
+    type ConcreteDevice = VulkanDevice;
+
+    #[inline(always)]
+    fn device(&self) -> &Self::ConcreteDevice {
+        self.device
+    }
+}
+impl br::Swapchain for VulkanSwapchain<'_> {}
+impl<'d> VulkanSwapchain<'d> {
+    pub fn new(
+        surface: &VulkanSurface<'d>,
+        query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
+    ) -> Self {
+        let ext = if surface.caps.currentExtent.width == 0xffffffff
+            || surface.caps.currentExtent.height == 0xffffffff
+        {
+            let window_ext = query_window_extent();
+
+            br::Extent2D {
+                width: if surface.caps.currentExtent.width == 0xffffffff {
+                    window_ext.width
+                } else {
+                    surface.caps.currentExtent.width
+                },
+                height: if surface.caps.currentExtent.height == 0xffffffff {
+                    window_ext.height
+                } else {
+                    surface.caps.currentExtent.height
+                },
+            }
+        } else {
+            surface.caps.currentExtent
+        };
+
+        tracing::trace!(?ext, "swapchain.create");
+        let o = br::SwapchainWithSurfaceBuilder::new(
+            surface,
+            surface.caps.minImageCount.max(2),
+            surface.selected_format,
+            ext,
+            br::ImageUsageFlags::COLOR_ATTACHMENT,
+        )
+        .present_mode(surface.selected_present_mode)
+        .pre_transform(br::SurfaceTransformFlags::IDENTITY)
+        .composite_alpha(br::CompositeAlphaFlags::OPAQUE)
+        .create(surface.device)
+        .expect("swapchain create");
+        let image_count = o.image_count().expect("swapchain.get_image_count");
+        let mut images = Vec::with_capacity(image_count as _);
+        o.images(images.spare_capacity_mut())
+            .expect("swapchain.get_images");
+        unsafe {
+            images.set_len(images.capacity());
+        }
+        let image_views = images
+            .iter()
+            .map(|b| unsafe {
+                br::vkfn_wrapper::create_image_view(
+                    surface.device.native_ptr(),
+                    &br::ImageViewCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(b),
+                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                        br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                        surface.selected_format.format,
+                    ),
+                    None,
+                )
+                .expect("backbuffer image view create")
+            })
+            .collect::<Vec<_>>();
+
+        let (device, _, handle) = o.unmanage();
+        Self {
+            device,
+            handle,
+            ext,
+            images,
+            image_views,
+        }
+    }
+
+    pub fn recreate(
+        &mut self,
+        surface: &VulkanSurface<'d>,
+        query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
+    ) {
+        // release pre-created resources
+        for x in self.image_views.drain(..) {
+            unsafe {
+                br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), x, None);
+            }
+        }
+        self.images.clear();
+
+        self.ext = if surface.caps.currentExtent.width == 0xffffffff
+            || surface.caps.currentExtent.height == 0xffffffff
+        {
+            let window_ext = query_window_extent();
+
+            br::Extent2D {
+                width: if surface.caps.currentExtent.width == 0xffffffff {
+                    window_ext.width
+                } else {
+                    surface.caps.currentExtent.width
+                },
+                height: if surface.caps.currentExtent.height == 0xffffffff {
+                    window_ext.height
+                } else {
+                    surface.caps.currentExtent.height
+                },
+            }
+        } else {
+            surface.caps.currentExtent
+        };
+
+        tracing::trace!(ext = ?self.ext, "swapchain.recreate");
+        let o = br::SwapchainWithSurfaceBuilder::new(
+            surface,
+            surface.caps.minImageCount.max(2),
+            surface.selected_format,
+            self.ext,
+            br::ImageUsageFlags::COLOR_ATTACHMENT,
+        )
+        .present_mode(surface.selected_present_mode)
+        .pre_transform(br::SurfaceTransformFlags::IDENTITY)
+        .composite_alpha(br::CompositeAlphaFlags::OPAQUE)
+        .enable_clip()
+        .old_swapchain(br::VkHandleRef::from_raw_ref(&self.handle))
+        .create(self.device)
+        .expect("swapchain create");
+        let image_count = o.image_count().expect("swapchain.recreate.get_image_count");
+        let _ = self.images.try_reserve(image_count as _);
+        o.images(self.images.spare_capacity_mut())
+            .expect("swapchain.recreate.get_images");
+        unsafe {
+            self.images.set_len(image_count as _);
+        }
+        self.image_views.extend(self.images.iter().map(|b| unsafe {
+            br::vkfn_wrapper::create_image_view(
+                self.device.native_ptr(),
+                &br::ImageViewCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(b),
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                    br::vk::VK_IMAGE_VIEW_TYPE_2D,
+                    surface.selected_format.format,
+                ),
+                None,
+            )
+            .expect("backbuffer image view create")
+        }));
+
+        let (_, _, handle) = o.unmanage();
+        self.handle = handle;
+    }
+
+    #[inline(always)]
+    pub const fn size(&self) -> br::Extent2D {
+        self.ext
+    }
+
+    #[inline(always)]
+    pub fn image_ref<'a>(&'a self, index: usize) -> br::VkHandleRef<'a, br::vk::VkImage> {
+        unsafe { br::VkHandleRef::dangling(self.images[index]) }
+    }
+
+    #[inline(always)]
+    pub fn image_view_refs<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = br::VkHandleRef<'a, br::vk::VkImageView>> + use<'a> {
+        self.image_views
+            .iter()
+            .map(|&x| unsafe { br::VkHandleRef::dangling(x) })
+    }
+}
+
+pub struct VulkanSurface<'d> {
+    device: &'d VulkanDevice,
+    handle: br::vk::VkSurfaceKHR,
+    selected_format: br::SurfaceFormat,
+    selected_present_mode: br::PresentMode,
+    caps: br::SurfaceCapabilities,
+}
+impl Drop for VulkanSurface<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(
+                self.device.instance().native_ptr(),
+                self.handle,
+                None,
+            );
+        }
+    }
+}
+impl br::VkHandle for VulkanSurface<'_> {
+    type Handle = br::vk::VkSurfaceKHR;
+
+    #[inline(always)]
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+unsafe impl Sync for VulkanSurface<'_> {}
+unsafe impl Send for VulkanSurface<'_> {}
+impl br::InstanceChild for VulkanSurface<'_> {
+    type ConcreteInstance = <VulkanDevice as br::InstanceChild>::ConcreteInstance;
+
+    #[inline(always)]
+    fn instance(&self) -> &Self::ConcreteInstance {
+        self.device.instance()
+    }
+}
+impl br::Surface for VulkanSurface<'_> {}
+impl<'d> VulkanSurface<'d> {
+    pub fn new(device: &'d VulkanDevice, handle: br::vk::VkSurfaceKHR) -> Self {
+        match unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_support(
+                device.primary_adapter_ref().native_ptr(),
+                device.present_queue_family_index(),
+                handle,
+            )
+        } {
+            Ok(true) => (),
+            Ok(false) => {
+                panic!("surface not supported on graphics queue");
+            }
+            Err(e) => Err(e).expect("surface_support"),
+        };
+
+        let present_mode_count = unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_present_mode_count(
+                device.primary_adapter_ref().native_ptr(),
+                handle,
+            )
+            .expect("vk.surface.get_present_mode_count")
+        };
+        let mut present_modes = Vec::with_capacity(present_mode_count as _);
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_present_modes(
+                device.primary_adapter_ref().native_ptr(),
+                handle,
+                present_modes.spare_capacity_mut(),
+            )
+            .expect("vk.surface.get_present_modes")
+        };
+        unsafe {
+            present_modes.set_len(present_modes.capacity());
+        }
+
+        let format_count = unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_format_count(
+                device.primary_adapter_ref().native_ptr(),
+                handle,
+            )
+            .expect("vk.surface.get_format_count")
+        };
+        let mut formats = Vec::with_capacity(format_count as _);
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_formats(
+                device.primary_adapter_ref().native_ptr(),
+                handle,
+                formats.spare_capacity_mut(),
+            )
+            .expect("vk.surface.get_formats");
+        }
+        unsafe {
+            formats.set_len(formats.capacity());
+        }
+
+        let mut caps = core::mem::MaybeUninit::uninit();
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_capabilities(
+                device.primary_adapter_ref().native_ptr(),
+                handle,
+                &mut caps,
+            )
+            .expect("vk.surface.get_capabilities");
+        }
+        let caps = unsafe { caps.assume_init() };
+
+        Self {
+            device,
+            handle,
+            selected_format: formats
+                .iter()
+                .find(|f| {
+                    f.colorSpace == br::vk::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+                        && (f.format == br::vk::VK_FORMAT_B8G8R8A8_SRGB
+                            || f.format == br::vk::VK_FORMAT_R8G8B8A8_SRGB)
+                })
+                .copied()
+                .expect("no suitable surface format"),
+            selected_present_mode: present_modes
+                .iter()
+                .find(|&&x| x == br::PresentMode::FIFO)
+                .copied()
+                .expect("no suitable present mode"),
+            caps,
+        }
+    }
+
+    pub fn refresh_caps(&mut self) {
+        self.caps = self
+            .device
+            .primary_adapter_ref()
+            .surface_capabilities(self)
+            .expect("vk.surface.refresh_caps");
+    }
+
+    #[inline(always)]
+    pub const fn format(&self) -> br::Format {
+        self.selected_format.format
+    }
+}

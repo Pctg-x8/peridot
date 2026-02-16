@@ -3515,11 +3515,11 @@ impl CompositeRenderer {
             br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
         ]);
 
-    pub fn new(
+    pub fn new<'b>(
         gfx: &VulkanDevice,
         mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
         rt_format: br::Format,
-        rt_buffers: &[impl br::ImageView],
+        rt_buffers: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
         rt_size: br::Extent2D,
     ) -> Self {
         let rp_grabbed = gfx
@@ -3617,10 +3617,12 @@ impl CompositeRenderer {
             .unwrap();
         gfx.dbg_set_name(&rp_continue_final, c"CompositeRenderer::rp[final,cont]");
 
-        let mut fbs_grabbed = Vec::with_capacity(rt_buffers.len());
-        let mut fbs_final = Vec::with_capacity(rt_buffers.len());
-        let mut fbs_continue_grabbed = Vec::with_capacity(rt_buffers.len());
-        let mut fbs_continue_final = Vec::with_capacity(rt_buffers.len());
+        let buffer_size_hint = rt_buffers.size_hint();
+        let buffer_size_hint = buffer_size_hint.1.unwrap_or(buffer_size_hint.0);
+        let mut fbs_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_final = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_final = Vec::with_capacity(buffer_size_hint);
         for bb in rt_buffers {
             fbs_grabbed.push(
                 br::FramebufferObject::new(
@@ -4015,22 +4017,25 @@ impl CompositeRenderer {
         }
     }
 
-    pub fn recreate_rt_resources<'s>(
+    pub fn recreate_rt_resources<'s, 'b>(
         &'s mut self,
         gfx: &VulkanDevice,
         rt_format: br::Format,
-        rt_buffers: &[impl br::ImageView],
+        rt_buffers: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
         rt_size: br::Extent2D,
         descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
     ) {
+        let buffer_size_hint = rt_buffers.size_hint();
+        let buffer_size_hint = buffer_size_hint.1.unwrap_or(buffer_size_hint.0);
+
         Self::release_all_framebuffers(gfx, &mut self.fbs_grabbed);
         Self::release_all_framebuffers(gfx, &mut self.fbs_final);
         Self::release_all_framebuffers(gfx, &mut self.fbs_continue_grabbed);
         Self::release_all_framebuffers(gfx, &mut self.fbs_continue_final);
-        let mut fbs_grabbed = Vec::with_capacity(rt_buffers.len());
-        let mut fbs_final = Vec::with_capacity(rt_buffers.len());
-        let mut fbs_continue_grabbed = Vec::with_capacity(rt_buffers.len());
-        let mut fbs_continue_final = Vec::with_capacity(rt_buffers.len());
+        let mut fbs_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_final = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_final = Vec::with_capacity(buffer_size_hint);
         for bb in rt_buffers {
             fbs_grabbed.push(
                 br::FramebufferObject::new(
@@ -4890,12 +4895,12 @@ impl core::ops::DerefMut for BoundCompositeRenderer<'_> {
     }
 }
 impl<'d> BoundCompositeRenderer<'d> {
-    pub fn new(
+    pub fn new<'b>(
         device: &'d VulkanDevice,
         mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
         rt_format: br::Format,
         rt_size: br::Extent2D,
-        back_buffer_views: &[impl br::ImageView],
+        back_buffer_views: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
     ) -> Self {
         Self {
             core: CompositeRenderer::new(device, mask_atlas, rt_format, back_buffer_views, rt_size),

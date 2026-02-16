@@ -62,6 +62,8 @@ use windows_numerics::{Vector2, Vector3};
 use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
     EffectOptimization, GaussianBlurEffect,
 };
+#[cfg(feature = "wayland")]
+use crate::graphics::VulkanSurface;
 use crate::{
     composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, BoundCompositeRenderer, CompositeMode,
@@ -70,7 +72,7 @@ use crate::{
         CompositeStreamingData, CompositeTree, CompositeTreeRef, CompositeTreeRender,
         CompositeTreeSyncBuffer, VectorRasterizationState,
     },
-    graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
+    graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice, VulkanSwapchain},
     hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
     text::{FontID, FontSet, GlyphAtlas},
@@ -334,7 +336,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         panic!("win32 presentation not supported on graphics queue");
     }
     #[cfg(windows)]
-    let vk_surface = Surface {
+    let mut vk_surface = VulkanSurface {
         handle: unsafe {
             br::Win32SurfaceCreateInfo::new(
                 core::mem::transmute(hinstance),
@@ -358,34 +360,20 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         panic!("wayland presentation not supported on graphics queue");
     }
     #[cfg(feature = "wayland")]
-    let vk_surface = Surface {
-        handle: unsafe {
-            br::WaylandSurfaceCreateInfo::new(wl_display.as_raw().cast(), w.surface.as_raw().cast())
-                .execute(vk_device.instance(), None)
-                .expect("vk_surface.create")
-        },
-        device: &vk_device,
-    };
+    let mut vk_surface = VulkanSurface::new(&vk_device, unsafe {
+        br::WaylandSurfaceCreateInfo::new(wl_display.as_raw().cast(), w.surface.as_raw().cast())
+            .execute(vk_device.instance(), None)
+            .expect("vk_surface.create")
+    });
 
     #[cfg(target_os = "macos")]
-    let vk_surface = Surface {
+    let mut vk_surface = VulkanSurface {
         handle: unsafe {
             br::MetalSurfaceCreateInfo::new(w.metal_layer())
                 .execute(vk_device.instance(), None)
                 .expect("vk_surface.create")
         },
         device: &vk_device,
-    };
-
-    match vk_device
-        .primary_adapter_ref()
-        .surface_support(vk_device.present_queue_family_index(), &vk_surface)
-    {
-        Ok(true) => (),
-        Ok(false) => {
-            panic!("surface not supported on graphics queue");
-        }
-        Err(e) => Err(e).expect("surface_support"),
     };
 
     #[cfg(feature = "wayland")]
@@ -508,104 +496,20 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("dwrite.factory.create")
                 };
 
-                let surface_present_modes = vk_device
-                    .primary_adapter_ref()
-                    .surface_present_modes_alloc(&vk_surface)
-                    .expect("vk_surface.present_modes");
-                let surface_caps = vk_device
-                    .primary_adapter_ref()
-                    .surface_capabilities(&vk_surface)
-                    .expect("vk_surface.capabilities");
-                let surface_formats = vk_device
-                    .primary_adapter_ref()
-                    .surface_formats_alloc(&vk_surface)
-                    .expect("vk_surface.formats");
-                let mut surface_ext = if surface_caps.currentExtent.width == 0xffffffff
-                    || surface_caps.currentExtent.height == 0xffffffff
-                {
-                    #[cfg(windows)]
-                    let client_size = w.pixels_client_size();
-                    #[cfg(feature = "wayland")]
-                    let client_size =
-                        surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
-                    #[cfg(target_os = "macos")]
-                    let client_size = *w.dispatcher.state.active_rt_size.lock().expect("poisoned");
-
-                    br::Extent2D {
-                        width: if surface_caps.currentExtent.width == 0xffffffff {
-                            client_size.width
-                        } else {
-                            surface_caps.currentExtent.width
-                        },
-                        height: if surface_caps.currentExtent.height == 0xffffffff {
-                            client_size.height
-                        } else {
-                            surface_caps.currentExtent.height
-                        },
-                    }
-                } else {
-                    surface_caps.currentExtent
-                };
-                let surface_format = surface_formats
-                    .iter()
-                    .find(|f| {
-                        f.colorSpace == br::vk::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
-                            && f.format == br::vk::VK_FORMAT_B8G8R8A8_SRGB
-                    })
-                    .copied()
-                    .expect("no suitable surface format");
-                let surface_present_mode = surface_present_modes
-                    .iter()
-                    .find(|&&x| x == br::PresentMode::FIFO)
-                    .copied()
-                    .expect("no suitable present mode");
-                tracing::trace!(?surface_ext, "swapchain.create");
-                let mut vk_swapchain = br::SwapchainBuilder::new(
+                let mut vk_swapchain = VulkanSwapchain::new(
                     &vk_surface,
-                    surface_caps.minImageCount.max(2),
-                    surface_format,
-                    surface_ext,
-                    br::ImageUsageFlags::COLOR_ATTACHMENT,
-                )
-                .present_mode(surface_present_mode)
-                .pre_transform(br::SurfaceTransformFlags::IDENTITY.bits())
-                .composite_alpha(br::CompositeAlphaFlags::OPAQUE.bits())
-                .create(&vk_device)
-                .expect("swapchain create");
-                let mut backbuffer_images = vk_swapchain
-                    .images_alloc()
-                    .expect("backbuffer images")
-                    .into_iter()
-                    .map(|x| x.unmanage().0)
-                    .collect::<Vec<_>>();
-                let mut backbuffer_image_views = backbuffer_images
-                    .iter()
-                    .map(|b| LocalImageView {
-                        handle: unsafe {
-                            br::vkfn_wrapper::create_image_view(
-                                vk_device.native_ptr(),
-                                &br::ImageViewCreateInfo::new(
-                                    br::VkHandleRef::from_raw_ref(b),
-                                    br::ImageSubresourceRange::new(
-                                        br::AspectMask::COLOR,
-                                        0..1,
-                                        0..1,
-                                    ),
-                                    br::vk::VK_IMAGE_VIEW_TYPE_2D,
-                                    surface_format.format,
-                                ),
-                                None,
-                            )
-                            .expect("backbuffer image view create")
-                        },
-                        device: &vk_device,
-                    })
-                    .collect::<Vec<_>>();
+                    #[cfg(windows)]
+                    || w.pixels_client_size(),
+                    #[cfg(feature = "wayland")]
+                    || surface_states.lock().expect("poisoned")[&w.as_key()].active_size,
+                    #[cfg(target_os = "macos")]
+                    || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
+                );
 
                 let vk_render_pass = br::RenderPassObject::new(
                     &vk_device,
                     &br::RenderPassCreateInfo2::new(
-                        &[br::AttachmentDescription2::new(surface_format.format)
+                        &[br::AttachmentDescription2::new(vk_surface.format())
                             .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)
                             .layout_transition(
                                 br::ImageLayout::PresentSrc,
@@ -629,16 +533,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     ),
                 )
                 .expect("render pass create");
-                let mut vk_framebuffers = backbuffer_image_views
-                    .iter()
+                let mut vk_framebuffers = vk_swapchain
+                    .image_view_refs()
                     .map(|bb| {
                         br::FramebufferObject::new(
                             &vk_device,
                             &br::FramebufferCreateInfo::new(
                                 &vk_render_pass,
-                                &[bb.as_transparent_ref()],
-                                surface_ext.width,
-                                surface_ext.height,
+                                &[bb],
+                                vk_swapchain.size().width,
+                                vk_swapchain.size().height,
                             ),
                         )
                         .expect("framebuffer create")
@@ -932,9 +836,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 let mut composite_renderer = BoundCompositeRenderer::new(
                     &vk_device,
                     glyph_atlas.view(),
-                    surface_format.format,
-                    surface_ext,
-                    &backbuffer_image_views,
+                    vk_surface.format(),
+                    vk_swapchain.size(),
+                    vk_swapchain.image_view_refs(),
                 );
 
                 let mut init_cp = br::CommandPoolObject::new(
@@ -1133,95 +1037,27 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                             main_cb_invalid = true;
                         }
                         drop(vk_framebuffers);
-                        drop(backbuffer_image_views);
-                        drop(backbuffer_images);
 
-                        let surface_caps = vk_device
-                            .primary_adapter_ref()
-                            .surface_capabilities(&vk_surface)
-                            .expect("vk_surface.capabilities");
-                        surface_ext = if surface_caps.currentExtent.width == 0xffffffff
-                            || surface_caps.currentExtent.height == 0xffffffff
-                        {
-                            #[cfg(windows)]
-                            let client_size = w.pixels_client_size();
-                            #[cfg(feature = "wayland")]
-                            let client_size =
-                                surface_states.lock().expect("poisoned")[&w.as_key()].active_size;
-                            #[cfg(target_os = "macos")]
-                            let client_size =
-                                *w.dispatcher.state.active_rt_size.lock().expect("poisoned");
-
-                            br::Extent2D {
-                                width: if surface_caps.currentExtent.width == 0xffffffff {
-                                    client_size.width
-                                } else {
-                                    surface_caps.currentExtent.width
-                                },
-                                height: if surface_caps.currentExtent.height == 0xffffffff {
-                                    client_size.height
-                                } else {
-                                    surface_caps.currentExtent.height
-                                },
-                            }
-                        } else {
-                            surface_caps.currentExtent
-                        };
-
-                        tracing::trace!(?surface_ext, "swapchain.create");
-                        vk_swapchain = br::SwapchainBuilder::new(
+                        vk_surface.refresh_caps();
+                        vk_swapchain.recreate(
                             &vk_surface,
-                            surface_caps.minImageCount.max(2),
-                            surface_format,
-                            surface_ext,
-                            br::ImageUsageFlags::COLOR_ATTACHMENT,
-                        )
-                        .present_mode(surface_present_mode)
-                        .pre_transform(br::SurfaceTransformFlags::IDENTITY.bits())
-                        .composite_alpha(br::CompositeAlphaFlags::OPAQUE.bits())
-                        .enable_clip()
-                        .old_swapchain(&vk_swapchain)
-                        .create(&vk_device)
-                        .expect("swapchain create");
-                        backbuffer_images = vk_swapchain
-                            .images_alloc()
-                            .expect("backbuffer images")
-                            .into_iter()
-                            .map(|x| x.unmanage().0)
-                            .collect::<Vec<_>>();
-                        backbuffer_image_views = backbuffer_images
-                            .iter()
-                            .map(|b| LocalImageView {
-                                handle: unsafe {
-                                    br::vkfn_wrapper::create_image_view(
-                                        vk_device.native_ptr(),
-                                        &br::ImageViewCreateInfo::new(
-                                            br::VkHandleRef::from_raw_ref(b),
-                                            br::ImageSubresourceRange::new(
-                                                br::AspectMask::COLOR,
-                                                0..1,
-                                                0..1,
-                                            ),
-                                            br::vk::VK_IMAGE_VIEW_TYPE_2D,
-                                            surface_format.format,
-                                        ),
-                                        None,
-                                    )
-                                    .expect("backbuffer image view create")
-                                },
-                                device: &vk_device,
-                            })
-                            .collect::<Vec<_>>();
-                        vk_framebuffers = backbuffer_image_views
-                            .iter()
+                            #[cfg(windows)]
+                            || w.pixels_client_size(),
+                            #[cfg(feature = "wayland")]
+                            || surface_states.lock().expect("poisoned")[&w.as_key()].active_size,
+                            #[cfg(target_os = "macos")]
+                            || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
+                        );
+                        vk_framebuffers = vk_swapchain
+                            .image_view_refs()
                             .map(|bb| {
                                 br::FramebufferObject::new(
                                     &vk_device,
                                     &br::FramebufferCreateInfo::new(
                                         &vk_render_pass,
-                                        &[bb.as_transparent_ref()],
-                                        surface_ext.width,
-                                        surface_ext.height,
+                                        &[bb],
+                                        vk_swapchain.size().width,
+                                        vk_swapchain.size().height,
                                     ),
                                 )
                                 .expect("framebuffer create")
@@ -1231,9 +1067,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         let mut descriptor_writes = Vec::new();
                         composite_renderer.recreate_rt_resources(
                             &vk_device,
-                            surface_format.format,
-                            &backbuffer_image_views,
-                            surface_ext,
+                            vk_surface.format(),
+                            vk_swapchain.image_view_refs(),
+                            vk_swapchain.size(),
                             &mut descriptor_writes,
                         );
                         vk_device.update_descriptor_sets(&descriptor_writes, &[]);
@@ -1275,7 +1111,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     let composite_render_data = composite_renderer.update(
                         &vk_device,
                         &mut composite_tree,
-                        surface_ext,
+                        vk_swapchain.size(),
                         &font_set,
                         &mut glyph_atlas,
                         &mut vector_raster_state,
@@ -1669,8 +1505,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
                     let needs_update = composite_renderer.update_backdrop_resources(
                         &vk_device,
-                        surface_format.format,
-                        surface_ext,
+                        vk_surface.format(),
+                        vk_swapchain.size(),
                         last_composite_render_data.required_backdrop_buffer_count == 0,
                     );
                     // TODO: いったんめんどうなので毎回更新
@@ -1725,8 +1561,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                                     r,
                                     &vk_device,
                                     &last_composite_render_data,
-                                    surface_ext,
-                                    br::VkHandleRef::from_raw_ref(&backbuffer_images[n]),
+                                    vk_swapchain.size(),
+                                    &vk_swapchain.image_ref(n),
                                     n,
                                     |_, r| r,
                                 )
@@ -2635,41 +2471,6 @@ impl CursorShaping {
         }
     }
 }
-
-struct Surface<'d> {
-    handle: br::vk::VkSurfaceKHR,
-    device: &'d VulkanDevice,
-}
-impl Drop for Surface<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            br::vkfn_wrapper::destroy_surface(
-                self.device.instance().native_ptr(),
-                self.handle,
-                None,
-            );
-        }
-    }
-}
-impl br::VkHandle for Surface<'_> {
-    type Handle = br::vk::VkSurfaceKHR;
-
-    #[inline(always)]
-    fn native_ptr(&self) -> Self::Handle {
-        self.handle
-    }
-}
-unsafe impl Sync for Surface<'_> {}
-unsafe impl Send for Surface<'_> {}
-impl br::InstanceChild for Surface<'_> {
-    type ConcreteInstance = <VulkanDevice as br::InstanceChild>::ConcreteInstance;
-
-    #[inline(always)]
-    fn instance(&self) -> &Self::ConcreteInstance {
-        self.device.instance()
-    }
-}
-impl br::Surface for Surface<'_> {}
 
 // async logicむけにあとで作りなおすかも いったんsprite-atlas-visualizerから雑にコピー
 pub struct AppEventBus {
