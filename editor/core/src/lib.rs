@@ -10,10 +10,6 @@ use linux_epoll::{Epoll, EpollEventBits};
 use linux_eventfd::{EventFD, EventFDFlags};
 #[cfg(target_os = "linux")]
 use peridot_tp_dbus as dbus;
-#[cfg(feature = "fontconfig")]
-use peridot_tp_fontconfig as fc;
-#[cfg(feature = "freetype")]
-use peridot_tp_freetype as ft;
 #[cfg(feature = "wayland")]
 use peridot_tp_wayland as wl;
 #[cfg(target_os = "linux")]
@@ -21,7 +17,7 @@ use peridot_tp_xkbcommon as xkbcommon;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(feature = "wayland")]
-use std::sync::RwLock;
+use std::{collections::HashMap, sync::RwLock};
 use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
@@ -63,9 +59,8 @@ use windows_core::*;
 use windows_numerics::{Vector2, Vector3};
 
 #[cfg(windows)]
-use crate::{
-    bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
-    text::FontSet,
+use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
+    EffectOptimization, GaussianBlurEffect,
 };
 use crate::{
     composite::{
@@ -78,7 +73,7 @@ use crate::{
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
     hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
-    text::{FontID, GlyphAtlas},
+    text::{FontID, FontSet, GlyphAtlas},
     utils::{Color32, LogicalUnit, PixelsUnit, Point, Size},
 };
 
@@ -195,7 +190,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
     #[cfg(feature = "freetype")]
-    let ft = FreeType::init().expect("FreeType.init");
+    let ft = text::FreeType::init().expect("FreeType.init");
 
     #[cfg(windows)]
     let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
@@ -650,10 +645,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     })
                     .collect::<Vec<_>>();
 
-                let dpi = 108;
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device);
+                // TODO: initial scale?
                 #[cfg(feature = "freetype")]
-                let font_set = FontSet::new(&ft, dpi);
+                let mut font_set = FontSet::new(&ft, 72);
                 #[cfg(target_os = "macos")]
                 let font_set = FontSet::new();
                 #[cfg(windows)]
@@ -1270,8 +1265,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     vector_raster_state.clear();
                     {
                         let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                        if let Some(_) = renderer_sync.latest_ui_scale_changes.take() {
+                        if let Some(scale) = renderer_sync.latest_ui_scale_changes.take() {
                             glyph_atlas.clear();
+                            #[cfg(feature = "freetype")]
+                            font_set.rescale((scale * 72.0) as _);
                         }
                         renderer_sync.composite_buffer.clean(&mut composite_tree);
                     }

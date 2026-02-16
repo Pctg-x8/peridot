@@ -1710,7 +1710,7 @@ impl<Event> CompositeTreeRender<Event> {
         cache.text_rects.clear();
 
         #[cfg(feature = "harfbuzz")]
-        let mut buffers = Vec::with_capacity(t.runs.len());
+        let mut buffers = Vec::with_capacity(text_layout.runs.len());
         #[cfg(feature = "freetype")]
         let mut baseline_y_offset = 0.0f32;
         #[cfg(feature = "freetype")]
@@ -1757,11 +1757,11 @@ impl<Event> CompositeTreeRender<Event> {
         #[cfg(feature = "harfbuzz")]
         let mut x_shift = 0.0;
         #[cfg(feature = "harfbuzz")]
-        for (r, &b) in t.runs.iter().zip(buffers.iter()) {
+        for (r, &b) in text_layout.runs.iter().zip(buffers.iter()) {
             #[cfg(feature = "freetype")]
             let font = font_set.select(r.font_id);
 
-            x_shift += r.spacing_inline_start * dip_to_pixels_scaling;
+            x_shift += r.spacing_inline_start * scale_factor;
 
             let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
             let glyph_infos = unsafe {
@@ -1795,7 +1795,7 @@ impl<Event> CompositeTreeRender<Event> {
                 let glyph_width = metrics.width as f32 / 64.0;
                 let glyph_height = metrics.height as f32 / 64.0;
 
-                let (r, is_new) = mask_atlas.acquire(
+                let (r, is_new) = glyph_atlas.acquire(
                     (r.font_id as _, glyph_info.codepoint as _),
                     glyph_width.ceil() as _,
                     glyph_height.ceil() as _,
@@ -3935,7 +3935,7 @@ impl CompositeRenderer {
         font_set: &FontSet,
         mask_atlas: &mut GlyphAtlas,
         vector_raster_state: &mut VectorRasterizationState,
-        mut on_event: impl FnMut(Event),
+        on_event: impl FnMut(Event),
         current_sec: f32,
     ) -> CompositeRenderingData {
         let h = self.instance_manager.staging_memory_raw_handle();

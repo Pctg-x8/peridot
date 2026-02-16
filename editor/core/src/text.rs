@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
 use bedrock::{self as br, ImageChild, MemoryBound, VkHandle, VkObject};
+#[cfg(feature = "fontconfig")]
+use peridot_tp_fontconfig as fc;
+#[cfg(feature = "freetype")]
+use peridot_tp_freetype as ft;
 
 use crate::graphics::VulkanDevice;
 
@@ -466,6 +470,35 @@ impl FontSet {
             ui_default_shaping,
             #[cfg(feature = "harfbuzz")]
             ui_title_project_name_shaping,
+        }
+    }
+
+    #[cfg(feature = "freetype")]
+    #[tracing::instrument(skip(self))]
+    pub fn rescale(&mut self, dpi: u32) {
+        tracing::trace!("font rescale");
+
+        unsafe {
+            use peridot_tp_freetype::FractionalExt;
+
+            ft::set_char_size(self.ui_default, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi)
+                .expect("freetype.set_char_size.ui_default");
+            ft::set_char_size(
+                self.ui_title_project_name,
+                0,
+                10.0f32.to_f26dot6_lossy(),
+                0,
+                dpi,
+            )
+            .expect("freetype.set_char_size.ui_title_project_name");
+        }
+
+        #[cfg(feature = "harfbuzz")]
+        unsafe {
+            peridot_tp_harfbuzz::ffi::hb_ft_font_changed(self.ui_default_shaping.as_ptr());
+            peridot_tp_harfbuzz::ffi::hb_ft_font_changed(
+                self.ui_title_project_name_shaping.as_ptr(),
+            );
         }
     }
 
