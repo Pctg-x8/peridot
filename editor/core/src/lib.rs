@@ -1,7 +1,6 @@
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut,
-    ImageChild, InstanceChild, MemoryBound, PhysicalDevice, QueueMut, RenderPass, ShaderModule,
-    SurfaceCreateInfo, Swapchain, VkHandle, VkHandleMut,
+    self as br, CommandBufferMut, Device, DeviceMemoryMut, ImageChild, InstanceChild, MemoryBound,
+    PhysicalDevice, QueueMut, RenderPass, ShaderModule, SurfaceCreateInfo, VkHandle,
 };
 use core::pin::Pin;
 #[cfg(target_os = "linux")]
@@ -66,15 +65,15 @@ use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
 use crate::graphics::VulkanSurface;
 use crate::{
     composite::{
-        AnimatableColor, AnimatableFloat, AnimationCurve, BoundCompositeRenderer, CompositeMode,
-        CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
-        CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeRenderingData,
-        CompositeStreamingData, CompositeTree, CompositeTreeRef, CompositeTreeRender,
+        AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
+        CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+        CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
         CompositeTreeSyncBuffer, VectorRasterizationState,
     },
-    graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice, VulkanSwapchain},
+    graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
     hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
+    renderer::WindowRenderer,
     text::{FontID, FontSet, GlyphAtlas},
     utils::{Color32, LogicalUnit, PixelsUnit, Point, Size},
 };
@@ -86,9 +85,9 @@ mod composite;
 mod graphics;
 mod hittest;
 mod input;
-// mod mathext;
 mod platform;
 mod proto;
+mod renderer;
 mod text;
 mod utils;
 
@@ -319,7 +318,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         panic!("win32 presentation not supported on graphics queue");
     }
     #[cfg(windows)]
-    let mut vk_surface = VulkanSurface {
+    let vk_surface = VulkanSurface {
         handle: unsafe {
             br::Win32SurfaceCreateInfo::new(
                 core::mem::transmute(hinstance),
@@ -343,14 +342,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         panic!("wayland presentation not supported on graphics queue");
     }
     #[cfg(feature = "wayland")]
-    let mut vk_surface = VulkanSurface::new(&vk_device, unsafe {
+    let vk_surface = VulkanSurface::new(&vk_device, unsafe {
         br::WaylandSurfaceCreateInfo::new(wl_display.as_raw().cast(), w.surface.as_raw().cast())
             .execute(vk_device.instance(), None)
             .expect("vk_surface.create")
     });
 
     #[cfg(target_os = "macos")]
-    let mut vk_surface = VulkanSurface {
+    let vk_surface = VulkanSurface {
         handle: unsafe {
             br::MetalSurfaceCreateInfo::new(w.metal_layer())
                 .execute(vk_device.instance(), None)
@@ -483,65 +482,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 tracing::info!("Starting RenderThread...");
                 let mut render_queue = vk_device.queue(vk_device.present_queue_family_index(), 0);
 
-                let mut composite_tree = CompositeTreeRender::new();
-
                 #[cfg(windows)]
                 let dw_factory: IDWriteFactory = unsafe {
                     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("dwrite.factory.create")
                 };
-
-                let mut vk_swapchain = VulkanSwapchain::new(
-                    &vk_surface,
-                    #[cfg(windows)]
-                    || w.pixels_client_size(),
-                    #[cfg(feature = "wayland")]
-                    || surface_states.lock().expect("poisoned")[&w.as_key()].active_size,
-                    #[cfg(target_os = "macos")]
-                    || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
-                );
-
-                let vk_render_pass = br::RenderPassObject::new(
-                    &vk_device,
-                    &br::RenderPassCreateInfo2::new(
-                        &[br::AttachmentDescription2::new(vk_surface.format())
-                            .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)
-                            .layout_transition(
-                                br::ImageLayout::PresentSrc,
-                                br::ImageLayout::PresentSrc,
-                            )],
-                        &[br::SubpassDescription2::new()
-                            .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
-                        &[br::SubpassDependency2::new(
-                            br::SubpassIndex::Internal(0),
-                            br::SubpassIndex::External,
-                        )
-                        .by_region()
-                        .of_memory(
-                            br::AccessFlags::COLOR_ATTACHMENT.write,
-                            br::AccessFlags::MEMORY.read,
-                        )
-                        .of_execution(
-                            br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                            br::PipelineStageFlags(0),
-                        )],
-                    ),
-                )
-                .expect("render pass create");
-                let mut vk_framebuffers = vk_swapchain
-                    .image_view_refs()
-                    .map(|bb| {
-                        br::FramebufferObject::new(
-                            &vk_device,
-                            &br::FramebufferCreateInfo::new(
-                                &vk_render_pass,
-                                &[bb],
-                                vk_swapchain.size().width,
-                                vk_swapchain.size().height,
-                            ),
-                        )
-                        .expect("framebuffer create")
-                    })
-                    .collect::<Vec<_>>();
 
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device);
                 // TODO: initial scale?
@@ -551,6 +495,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 let font_set = FontSet::new();
                 #[cfg(windows)]
                 let font_set = FontSet::new(dw_factory);
+
+                let vg_stencil_buffer_format = br::vk::VK_FORMAT_S8_UINT;
+                let vg_color_buffer_format = br::vk::VK_FORMAT_R8_UNORM;
 
                 #[derive(br::SpecializationConstants)]
                 struct FillShaderVertexConstants {
@@ -574,14 +521,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     &vk_device,
                     &br::RenderPassCreateInfo2::new(
                         &[
-                            br::AttachmentDescription2::new(br::vk::VK_FORMAT_S8_UINT)
+                            br::AttachmentDescription2::new(vg_stencil_buffer_format)
                                 .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
                                 .layout_transition(
                                     br::ImageLayout::Undefined,
                                     br::ImageLayout::DepthStencilReadOnlyOpt,
                                 )
                                 .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
-                            br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8_UNORM)
+                            br::AttachmentDescription2::new(vg_color_buffer_format)
                                 .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
                                 .layout_transition(
                                     br::ImageLayout::Undefined,
@@ -827,14 +774,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     )
                     .expect("create vector rasterize pipelines");
 
-                let mut composite_renderer = BoundCompositeRenderer::new(
-                    &vk_device,
-                    glyph_atlas.view(),
-                    vk_surface.format(),
-                    vk_swapchain.size(),
-                    vk_swapchain.image_view_refs(),
-                );
-
                 let mut init_cp = br::CommandPoolObject::new(
                     &vk_device,
                     &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
@@ -919,65 +858,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     render_queue.wait().expect("init_cb.wait");
                 }
 
-                let mut update_cp = br::CommandPoolObject::new(
-                    &vk_device,
-                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
-                )
-                .expect("update_cp.create");
-                let [mut update_cb] = br::CommandBufferObject::alloc_array(
-                    &vk_device,
-                    &br::CommandBufferFixedCountAllocateInfo::new(
-                        &mut update_cp,
-                        br::CommandBufferLevel::Primary,
-                    ),
-                )
-                .expect("update_cb.create");
-                unsafe {
-                    update_cb
-                        .begin(&br::CommandBufferBeginInfo::new())
-                        .expect("update_cb.begin")
-                        .end()
-                        .expect("update_cb.end");
-                }
-                let mut update_completion_fence =
-                    br::FenceObject::new(&vk_device, &br::FenceCreateInfo::new(0))
-                        .expect("update_completion_fence.create");
-                let update_completion_semaphore =
-                    br::SemaphoreObject::new(&vk_device, &br::SemaphoreCreateInfo::new())
-                        .expect("update_completion_semaphore.create");
-                let mut updating = false;
+                let mut main_window_renderer =
+                    WindowRenderer::new(w, &surface_states, vk_surface, &vk_device, &glyph_atlas);
 
-                let mut render_cp = br::CommandPoolObject::new(
-                    &vk_device,
-                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
-                )
-                .expect("command pool create");
-                let mut render_commands = br::CommandBufferObject::alloc(
-                    &vk_device,
-                    &br::CommandBufferAllocateInfo::new(
-                        &mut render_cp,
-                        vk_framebuffers.len() as _,
-                        br::CommandBufferLevel::Primary,
-                    ),
-                )
-                .expect("command buffer alloc");
-                let mut main_cb_invalid = true;
-
-                let present_ready_semaphores = (0..vk_framebuffers.len())
-                    .map(|_| {
-                        br::SemaphoreObject::new(&vk_device, &br::SemaphoreCreateInfo::new())
-                            .expect("rendering_timeline_semaphore create")
-                    })
-                    .collect::<Vec<_>>();
-                let mut backbuffer_ready_fence =
-                    br::FenceObject::new(&vk_device, &br::FenceCreateInfo::new(0))
-                        .expect("last render completion fence create");
-                let mut swapchain_invalidated = false;
-                let mut last_composite_render_data = CompositeRenderingData {
-                    instructions: Vec::new(),
-                    render_passes: Vec::new(),
-                    required_backdrop_buffer_count: 0,
-                };
+                let mut any_swapchain_invalidated = false;
                 let mut vector_raster_state = VectorRasterizationState::new();
                 'lp: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
                     // unsafe {
@@ -985,7 +869,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     // }
 
                     #[cfg(feature = "wayland")]
-                    if surface_states.lock().expect("poisoned")[&w.as_key()]
+                    if surface_states.lock().expect("poisoned")[&main_window_renderer.window_key()]
                         .swapchain_externally_invalidation_signal
                         .compare_exchange_weak(
                             true,
@@ -995,7 +879,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         )
                         .is_ok()
                     {
-                        swapchain_invalidated = true;
+                        main_window_renderer.invalidate_swapchain();
+                        any_swapchain_invalidated = true;
                     }
                     #[cfg(target_os = "macos")]
                     if w.dispatcher
@@ -1009,109 +894,66 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         )
                         == Ok(true)
                     {
-                        swapchain_invalidated = true;
+                        main_window_renderer.invalidate_swapchain();
+                        any_swapchain_invalidated = true;
                     }
 
-                    if swapchain_invalidated {
+                    if any_swapchain_invalidated {
                         let x = std::time::Instant::now();
                         render_queue.wait().expect("waiting pending queue works");
                         tracing::trace!(elapsed = ?x.elapsed(), "queue waiting time during resize");
 
                         if shutdown.load(std::sync::atomic::Ordering::Acquire) {
-                            // already shut down
+                            // already shut down while waiting queue completion
                             break 'lp;
                         }
 
-                        if !main_cb_invalid {
-                            unsafe {
-                                render_cp
-                                    .reset(br::CommandPoolResetFlags::EMPTY)
-                                    .expect("reset render cp");
-                            }
-                            main_cb_invalid = true;
-                        }
-                        drop(vk_framebuffers);
-
-                        vk_surface.refresh_caps();
-                        vk_swapchain.recreate(
-                            &vk_surface,
-                            #[cfg(windows)]
-                            || w.pixels_client_size(),
-                            #[cfg(feature = "wayland")]
-                            || surface_states.lock().expect("poisoned")[&w.as_key()].active_size,
-                            #[cfg(target_os = "macos")]
-                            || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
-                        );
-                        vk_framebuffers = vk_swapchain
-                            .image_view_refs()
-                            .map(|bb| {
-                                br::FramebufferObject::new(
-                                    &vk_device,
-                                    &br::FramebufferCreateInfo::new(
-                                        &vk_render_pass,
-                                        &[bb],
-                                        vk_swapchain.size().width,
-                                        vk_swapchain.size().height,
-                                    ),
-                                )
-                                .expect("framebuffer create")
-                            })
-                            .collect::<Vec<_>>();
-
                         let mut descriptor_writes = Vec::new();
-                        composite_renderer.recreate_rt_resources(
-                            &vk_device,
-                            vk_surface.format(),
-                            vk_swapchain.image_view_refs(),
-                            vk_swapchain.size(),
+                        main_window_renderer.validate_swapchain(
                             &mut descriptor_writes,
+                            #[cfg(feature = "wayland")]
+                            &surface_states,
                         );
                         vk_device.update_descriptor_sets(&descriptor_writes, &[]);
 
-                        swapchain_invalidated = false;
+                        any_swapchain_invalidated = false;
                     }
 
-                    let backbuffer_index = match vk_swapchain.acquire_next(
-                        None,
-                        br::CompletionHandlerMut::Host(
-                            backbuffer_ready_fence.as_transparent_ref_mut(),
-                        ),
-                    ) {
+                    let backbuffer_index = match main_window_renderer.acquire_backbuffer_with_wait()
+                    {
                         Ok(x) => x,
                         Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
-                            swapchain_invalidated = true;
+                            main_window_renderer.invalidate_swapchain();
+                            any_swapchain_invalidated = true;
                             continue 'lp;
                         }
                         Err(e) => Err(e).expect("acquire next"),
                     };
-                    backbuffer_ready_fence
-                        .wait()
-                        .expect("last render completion fence wait");
-                    backbuffer_ready_fence
-                        .reset()
-                        .expect("last render completion fence reset");
 
                     let current_t = global_time_base.elapsed();
                     vector_raster_state.clear();
-                    {
-                        let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                        if let Some(scale) = renderer_sync.latest_ui_scale_changes.take() {
-                            glyph_atlas.clear();
-                            #[cfg(feature = "freetype")]
-                            font_set.rescale((scale * 72.0) as _);
-                        }
-                        renderer_sync.composite_buffer.clean(&mut composite_tree);
-                    }
-                    let composite_render_data = composite_renderer.update(
-                        &vk_device,
-                        &mut composite_tree,
-                        vk_swapchain.size(),
-                        &font_set,
-                        &mut glyph_atlas,
-                        &mut vector_raster_state,
-                        |e| events.push(e),
+
+                    let needs_update_command = main_window_renderer.update(
                         current_t.as_secs_f32(),
+                        &renderer_sync,
+                        &mut glyph_atlas,
+                        &mut font_set,
+                        &mut vector_raster_state,
+                        &events,
                     );
+
+                    let mut render_wait_semaphores = Vec::with_capacity(1);
+                    let mut render_wait_stages = Vec::with_capacity(1);
+
+                    // TODO: いったんめんどうなので毎回更新
+                    if true || needs_update_command {
+                        main_window_renderer.submit_update_commands(&mut render_queue);
+
+                        render_wait_semaphores
+                            .push(main_window_renderer.update_completion_semaphore_ref());
+                        render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
+                    }
+
                     if !vector_raster_state.is_empty() {
                         // TODO: 最適化はあとで
                         let filltri_points_offset = 0;
@@ -1385,14 +1227,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                                             0..1,
                                         ),
                                     )
-                                    .from(
-                                        br::PipelineStageFlags2::FRAGMENT_SHADER,
-                                        br::AccessFlags2::SHADER.read,
-                                    )
-                                    .to(
-                                        br::PipelineStageFlags2::RESOLVE,
-                                        br::AccessFlags2::TRANSFER.read,
-                                    )
                                     .transferring_layout(
                                         br::ImageLayout::ShaderReadOnlyOpt,
                                         br::ImageLayout::TransferDestOpt,
@@ -1441,7 +1275,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                                     )
                                     .from(
                                         br::PipelineStageFlags2::RESOLVE,
-                                        br::AccessFlags2::TRANSFER.read,
+                                        br::AccessFlags2::TRANSFER.write,
                                     )
                                     .to(
                                         br::PipelineStageFlags2::FRAGMENT_SHADER,
@@ -1471,111 +1305,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         }
                         render_queue.wait().expect("vector render wait");
                     }
-                    if composite_render_data != last_composite_render_data {
-                        // requires repopulate render commands
-                        if !main_cb_invalid {
-                            unsafe {
-                                render_cp
-                                    .reset(br::CommandPoolResetFlags::EMPTY)
-                                    .expect("render_cp.reset");
-                            }
-                            main_cb_invalid = true;
-                        }
-
-                        composite_renderer.prepare_input_backdrop_descriptor_sets(
-                            &vk_device,
-                            composite_render_data.required_backdrop_buffer_count,
-                        );
-
-                        last_composite_render_data = composite_render_data;
-                    }
-
-                    composite_renderer.update_streaming_data(
-                        &vk_device,
-                        CompositeStreamingData {
-                            current_sec: current_t.as_secs_f32(),
-                        },
-                    );
-
-                    let needs_update = composite_renderer.update_backdrop_resources(
-                        &vk_device,
-                        vk_surface.format(),
-                        vk_swapchain.size(),
-                        last_composite_render_data.required_backdrop_buffer_count == 0,
-                    );
-                    // TODO: いったんめんどうなので毎回更新
-                    if true || needs_update {
-                        if updating {
-                            update_completion_fence
-                                .wait()
-                                .expect("update_completion_fence.wait");
-                            update_completion_fence
-                                .reset()
-                                .expect("update_completion_fence.reset");
-                        }
-
-                        unsafe {
-                            update_cp
-                                .reset(br::CommandPoolResetFlags::EMPTY)
-                                .expect("update_cp.reset");
-                        }
-                        unsafe {
-                            update_cb
-                                .begin(&br::CommandBufferBeginInfo::new())
-                                .expect("update_cb.begin")
-                        }
-                        .inject(|r| composite_renderer.sync_buffer(r))
-                        .end()
-                        .expect("update_cb.end");
-
-                        unsafe {
-                            render_queue
-                                .submit_raw(
-                                    &[br::SubmitInfo::new(
-                                        &[],
-                                        &[],
-                                        &[update_cb.as_transparent_ref()],
-                                        &[update_completion_semaphore.as_transparent_ref()],
-                                    )],
-                                    Some(update_completion_fence.as_transparent_ref_mut()),
-                                )
-                                .expect("gfx.update.submit");
-                        }
-                        updating = true;
-                    }
-
-                    if main_cb_invalid {
-                        for (n, cb) in render_commands.iter_mut().enumerate() {
-                            unsafe {
-                                cb.begin(&br::CommandBufferBeginInfo::new())
-                                    .expect("command buffer begin")
-                            }
-                            .inject(|r| {
-                                composite_renderer.populate_commands(
-                                    r,
-                                    &vk_device,
-                                    &last_composite_render_data,
-                                    vk_swapchain.size(),
-                                    &vk_swapchain.image_ref(n),
-                                    n,
-                                    |_, r| r,
-                                )
-                            })
-                            .inject(|r| vk_device.cmd_end_render_pass(r))
-                            .end()
-                            .expect("command buffer end");
-                        }
-
-                        main_cb_invalid = false;
-                    }
-
-                    let mut render_wait_semaphores = Vec::with_capacity(1);
-                    let mut render_wait_stages = Vec::with_capacity(1);
-                    if needs_update {
-                        render_wait_semaphores
-                            .push(update_completion_semaphore.as_transparent_ref());
-                        render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
-                    }
 
                     unsafe {
                         render_queue
@@ -1583,10 +1312,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                                 &[br::SubmitInfo::new(
                                     &render_wait_semaphores,
                                     &render_wait_stages,
-                                    &[render_commands[backbuffer_index as usize]
-                                        .as_transparent_ref()],
-                                    &[present_ready_semaphores[backbuffer_index as usize]
-                                        .as_transparent_ref()],
+                                    &[main_window_renderer
+                                        .primary_render_commands_ref(backbuffer_index)],
+                                    &[main_window_renderer
+                                        .present_ready_semaphore_ref(backbuffer_index)],
                                 )],
                                 None,
                             )
@@ -1594,20 +1323,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     };
                     let mut results = [br::vk::VK_SUCCESS];
                     match render_queue.present(&br::PresentInfo::new(
-                        &[
-                            present_ready_semaphores[backbuffer_index as usize]
-                                .as_transparent_ref(),
-                        ],
-                        &[vk_swapchain.as_transparent_ref()],
+                        &[main_window_renderer.present_ready_semaphore_ref(backbuffer_index)],
+                        &[main_window_renderer.swapchain_ref()],
                         &[backbuffer_index],
                         &mut results,
                     )) {
                         Ok(_) => (),
-                        Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
-                            swapchain_invalidated = true;
-                            continue 'lp;
-                        }
+                        Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
                         Err(e) => Err::<(), _>(e).expect("queue present"),
+                    }
+
+                    if results[0] == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
+                        main_window_renderer.invalidate_swapchain();
+                        any_swapchain_invalidated = true;
                     }
 
                     // unsafe {
