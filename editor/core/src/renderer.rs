@@ -7,9 +7,9 @@ use bedrock::{
 };
 
 use crate::{
-    AppEventBus, Event, RendererSync,
+    AppEventBus, Event,
     composite::{
-        BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData,
+        BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData, CompositeTreeRef,
         CompositeTreeRender, VectorRasterizationState,
     },
     graphics::{VulkanDevice, VulkanSurface, VulkanSwapchain},
@@ -22,12 +22,8 @@ pub struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
     w: WaylandWindow,
     vk_device: &'d VulkanDevice,
-    surface: VulkanSurface<'d>,
-    swapchain: VulkanSwapchain<'d>,
     swapchain_invalidated: bool,
-    primary_render_pass: br::RenderPassObject<&'d VulkanDevice>,
-    primary_framebuffers: Vec<br::FramebufferObject<'d, &'d VulkanDevice>>,
-    composite_tree: CompositeTreeRender<Event>,
+    composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
     last_composite_render_data: CompositeRenderingData,
     update_cp: br::CommandPoolObject<&'d VulkanDevice>,
@@ -40,12 +36,17 @@ pub struct WindowRenderer<'d> {
     render_cb_invalid: bool,
     present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice>>,
     backbuffer_ready_fence: br::FenceObject<&'d VulkanDevice>,
+    primary_framebuffers: Vec<br::FramebufferObject<'d, &'d VulkanDevice>>,
+    primary_render_pass: br::RenderPassObject<&'d VulkanDevice>,
+    swapchain: VulkanSwapchain<'d>,
+    surface: VulkanSurface<'d>,
 }
 impl<'d> WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
     pub fn new(
         w: WaylandWindow,
         surface_states: &Mutex<HashMap<WaylandSurfaceKey, WaylandWindowState>>,
+        composite_root: CompositeTreeRef,
         surface: VulkanSurface<'d>,
         vk_device: &'d VulkanDevice,
         glyph_atlas: &GlyphAtlas,
@@ -147,7 +148,7 @@ impl<'d> WindowRenderer<'d> {
         Self {
             w,
             vk_device,
-            composite_tree: CompositeTreeRender::new(),
+            composite_root,
             composite_renderer: BoundCompositeRenderer::new(
                 &vk_device,
                 glyph_atlas.view(),
@@ -197,26 +198,16 @@ impl<'d> WindowRenderer<'d> {
     pub fn update(
         &mut self,
         current_sec: f32,
-        renderer_sync: &Mutex<RendererSync>,
+        composite_tree: &mut CompositeTreeRender<Event>,
         glyph_atlas: &mut GlyphAtlas,
         font_set: &mut FontSet,
         vector_raster_state: &mut VectorRasterizationState,
         events: &AppEventBus,
     ) -> bool {
-        {
-            let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-            if let Some(scale) = renderer_sync.latest_ui_scale_changes.take() {
-                glyph_atlas.clear();
-                #[cfg(feature = "freetype")]
-                font_set.rescale((scale * 72.0) as _);
-            }
-            renderer_sync
-                .composite_buffer
-                .clean(&mut self.composite_tree);
-        }
         let composite_render_data = self.composite_renderer.update(
             self.vk_device,
-            &mut self.composite_tree,
+            composite_tree,
+            self.composite_root,
             self.swapchain.size(),
             &font_set,
             glyph_atlas,

@@ -1352,15 +1352,8 @@ pub struct CompositeTreeRender<Event> {
 }
 impl<Event> CompositeTreeRender<Event> {
     pub fn new() -> Self {
-        let mut rects = Vec::new();
-        let mut caches = Vec::new();
-        // root is filling rect
-        // CompositeTree側とあらかじめ同じ値で初期化しておくことでsync量を削減する
-        rects.push(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        });
-        caches.push(CompositeRectCache::new());
+        let rects = Vec::new();
+        let caches = Vec::new();
 
         Self {
             rects,
@@ -1372,8 +1365,13 @@ impl<Event> CompositeTreeRender<Event> {
         }
     }
 
+    pub fn update_shared(&mut self, current_sec: f32) {
+        self.parameter_store.evaluate_all(current_sec);
+    }
+
     unsafe fn update(
         &mut self,
+        root: CompositeTreeRef,
         inst_builder: &mut CompositeRenderingInstructionBuilder,
         size: br::Extent2D,
         current_sec: f32,
@@ -1385,11 +1383,9 @@ impl<Event> CompositeTreeRender<Event> {
     ) {
         // let update_timer = std::time::Instant::now();
 
-        self.parameter_store.evaluate_all(current_sec);
-
         let mut instance_slot_index = 0;
         let mut processes = vec![(
-            0,
+            root.0,
             (
                 0.0,
                 0.0,
@@ -3188,19 +3184,9 @@ pub struct CompositeTree<Event> {
     custom_render_last_id: usize,
 }
 impl<Event> CompositeTree<Event> {
-    /// ルートノード
-    pub const ROOT: CompositeTreeRef = CompositeTreeRef(0);
-
     pub fn new() -> Self {
-        let mut rects = Vec::new();
-        // root is filling rect
-        rects.push(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        });
-
         Self {
-            rects,
+            rects: Vec::new(),
             pushed_rects: Vec::new(),
             dirty_rects: HashMap::new(),
             unused: BTreeSet::new(),
@@ -3933,6 +3919,7 @@ impl CompositeRenderer {
         &mut self,
         gfx: &VulkanDevice,
         tree: &mut CompositeTreeRender<Event>,
+        root: CompositeTreeRef,
         rt_size: br::Extent2D,
         font_set: &FontSet,
         mask_atlas: &mut GlyphAtlas,
@@ -3951,6 +3938,7 @@ impl CompositeRenderer {
         let mut inst_builder = CompositeRenderingInstructionBuilder::new(rt_size);
         unsafe {
             tree.update(
+                root,
                 &mut inst_builder,
                 rt_size,
                 current_sec,

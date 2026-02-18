@@ -67,7 +67,7 @@ use crate::{
     composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
         CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-        CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
+        CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, CompositeTreeRender,
         CompositeTreeSyncBuffer, VectorRasterizationState,
     },
     graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
@@ -125,8 +125,14 @@ pub fn launch() {
     };
     let global_time_base = std::time::Instant::now();
     main_wrapper(
-        move |global_time_base, renderer_sync, system_link| {
-            run(event_queue, global_time_base, renderer_sync, system_link)
+        move |global_time_base, renderer_sync, composite_tree, system_link| {
+            run(
+                event_queue,
+                global_time_base,
+                renderer_sync,
+                composite_tree,
+                system_link,
+            )
         },
         event_store,
         &global_time_base,
@@ -138,7 +144,12 @@ pub fn launch() {
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-    run_app: impl FnOnce(&'sys std::time::Instant, &'sys Mutex<RendererSync>, SystemLink) -> AppFuture,
+    run_app: impl FnOnce(
+        &'sys std::time::Instant,
+        &'sys Mutex<RendererSync>,
+        CompositeTree<Event>,
+        SystemLink,
+    ) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
@@ -386,14 +397,21 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     w.bind_global_messaging(wl_global_msg.as_mut(), terminate_event.clone());
 
+    let mut composite_tree = CompositeTree::new();
+    let main_window_composite_root = composite_tree.create(CompositeRect {
+        relative_size_adjustment: [1.0, 1.0],
+        ..Default::default()
+    });
     let mut app = core::pin::pin!(run_app(
         global_time_base,
         renderer_sync,
+        composite_tree,
         SystemLink {
             #[cfg(feature = "wayland")]
             main_window: WindowHandle {
                 wl_surface: w.surface.as_ptr(),
                 wl_surface_to_state: &surface_states,
+                composite_root: main_window_composite_root,
             },
             drag_preview_popover,
             #[cfg(feature = "wayland")]
@@ -487,6 +505,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("dwrite.factory.create")
                 };
 
+                let mut composite_tree = CompositeTreeRender::new();
                 let mut glyph_atlas = GlyphAtlas::new(&vk_device);
                 // TODO: initial scale?
                 #[cfg(feature = "freetype")]
@@ -858,8 +877,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     render_queue.wait().expect("init_cb.wait");
                 }
 
-                let mut main_window_renderer =
-                    WindowRenderer::new(w, &surface_states, vk_surface, &vk_device, &glyph_atlas);
+                let mut main_window_renderer = WindowRenderer::new(
+                    w,
+                    &surface_states,
+                    main_window_composite_root,
+                    vk_surface,
+                    &vk_device,
+                    &glyph_atlas,
+                );
 
                 let mut any_swapchain_invalidated = false;
                 let mut vector_raster_state = VectorRasterizationState::new();
@@ -930,12 +955,23 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         Err(e) => Err(e).expect("acquire next"),
                     };
 
+                    {
+                        let mut renderer_sync = renderer_sync.lock().expect("poisoned");
+                        if let Some(scale) = renderer_sync.latest_ui_scale_changes.take() {
+                            glyph_atlas.clear();
+                            #[cfg(feature = "freetype")]
+                            font_set.rescale((scale * 72.0) as _);
+                        }
+                        renderer_sync.composite_buffer.clean(&mut composite_tree);
+                    }
+
                     let current_t = global_time_base.elapsed();
                     vector_raster_state.clear();
+                    composite_tree.update_shared(current_t.as_secs_f32());
 
                     let needs_update_command = main_window_renderer.update(
                         current_t.as_secs_f32(),
-                        &renderer_sync,
+                        &mut composite_tree,
                         &mut glyph_atlas,
                         &mut font_set,
                         &mut vector_raster_state,
@@ -1682,6 +1718,7 @@ async fn run<'sys>(
     event_queue: EventQueue,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
+    mut composite_tree: CompositeTree<Event>,
     system_link: SystemLink,
 ) {
     tracing::info!("app start");
@@ -1692,7 +1729,6 @@ async fn run<'sys>(
         PointerInputManager::new(system_link.main_window().client_size());
 
     let mut ht_manager = HitTestTreeManager::new();
-    let mut composite_tree = CompositeTree::new();
     #[cfg(windows)]
     unsafe {
         // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
@@ -1709,12 +1745,12 @@ async fn run<'sys>(
     }
 
     composite_tree
-        .get_mut(CompositeTree::<Event>::ROOT)
+        .get_mut(system_link.main_window().composite_root())
         .composite_mode = CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
     composite_tree
-        .get_mut(CompositeTree::<Event>::ROOT)
+        .get_mut(system_link.main_window().composite_root())
         .has_bitmap = true;
-    composite_tree.mark_dirty(CompositeTree::<Event>::ROOT);
+    composite_tree.mark_dirty(system_link.main_window().composite_root());
 
     let init_scale = system_link.main_window().ui_scale_factor();
 
@@ -1755,7 +1791,7 @@ async fn run<'sys>(
         }),
         ..Default::default()
     });
-    composite_tree.add_child(CompositeTree::<Event>::ROOT, app_title);
+    composite_tree.add_child(system_link.main_window().composite_root(), app_title);
     let ht_caption_bar = ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
         height: title_bar_thickness,
@@ -1785,7 +1821,7 @@ async fn run<'sys>(
         }),
         ..Default::default()
     });
-    composite_tree.add_child(CompositeTree::<Event>::ROOT, tab_main);
+    composite_tree.add_child(system_link.main_window().composite_root(), tab_main);
     let ht_tab_main = ht_manager.create(HitTestTreeData {
         left: 100.0,
         top: 100.0,
@@ -2090,6 +2126,7 @@ impl ShellPointerActions for WindowHandle {
 pub struct WindowHandle {
     wl_surface: *mut wl::Surface,
     wl_surface_to_state: *const Mutex<HashMap<WaylandSurfaceKey, WaylandWindowState>>,
+    composite_root: CompositeTreeRef,
 }
 #[cfg(feature = "wayland")]
 impl WindowHandle {
@@ -2108,6 +2145,11 @@ impl WindowHandle {
                 [&WaylandSurfaceKey(self.wl_surface)]
                 .active_buffer_scale
         }
+    }
+
+    #[inline(always)]
+    pub fn composite_root(&self) -> CompositeTreeRef {
+        self.composite_root
     }
 }
 #[cfg(feature = "wayland")]
