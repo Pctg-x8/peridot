@@ -2985,8 +2985,8 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
     #[tracing::instrument(skip(self, _surface, _output))]
     fn leave(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {}
 
-    #[tracing::instrument(skip(self, surface))]
-    fn preferred_buffer_scale(&mut self, surface: &mut wl::Surface, factor: i32) {
+    #[tracing::instrument(skip(self, _surface))]
+    fn preferred_buffer_scale(&mut self, _surface: &mut wl::Surface, factor: i32) {
         tracing::trace!(
             has_fractional_scale = self.has_fractional_scale_support,
             "perferred buffer scale"
@@ -2996,7 +2996,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
             return;
         }
 
-        self.rescale(factor as _);
+        self.pending_configure_buffer_scale = Some(factor as _);
     }
 
     #[tracing::instrument(skip(self, _surface))]
@@ -3012,49 +3012,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgSurfaceEventListener
     fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
         tracing::trace!("xdg surface configure");
 
-        let mut committed_state_ref = self.state.committed_state.lock().expect("poisoned");
-        let mut rescaled = false;
-        if let Some(s) = self.pending_configure_buffer_scale.take() {
-            if self.has_fractional_scale_support {
-                // fractional scaleでは1固定にする必要がある
-                unsafe { &*self.state.surface_ptr }
-                    .set_buffer_scale(1)
-                    .expect("wl_surface.set_buffer_scale");
-            } else {
-                unsafe { &*self.state.surface_ptr }
-                    .set_buffer_scale(s as _)
-                    .expect("wl_surface.set_buffer_scale");
-            }
-
-            committed_state_ref.active_buffer_scale = s;
-            rescaled = true;
-        }
-
-        let (w, h) = (
-            self.pending_configure_size.0.take(),
-            self.pending_configure_size.1.take(),
-        );
-        if rescaled || w.is_some() || h.is_some() {
-            // potentially size changes
-            let logical_size = Size::new_logical(
-                w.map_or(committed_state_ref.active_size_logical.width, |x| x as _),
-                h.map_or(committed_state_ref.active_size_logical.height, |y| y as _),
-            );
-            let pixels_size = logical_size.to_pixels_ceil(committed_state_ref.active_buffer_scale);
-            if pixels_size != committed_state_ref.active_size {
-                committed_state_ref.active_size = pixels_size;
-                committed_state_ref.active_size_logical = logical_size;
-                self.state
-                    .swapchain_externally_invalidation_signal
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
-
-                self.event_dispatcher.dispatch(Event::WindowResize {
-                    window: WindowHandle(self.state.surface_ptr),
-                    size: logical_size,
-                });
-            }
-        }
-
+        self.commit();
         sender
             .ack_configure(serial)
             .expect("xdg_surface.ack_configure");
@@ -3126,20 +3084,70 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZxdgToplevelDecorationV1E
 impl<AppFuture: core::future::Future<Output = ()>> wl::WpFractionalScaleV1EventListener
     for WaylandWindowEventListener<AppFuture>
 {
-    #[tracing::instrument(skip(self, sender))]
-    fn preferred_scale(&mut self, sender: &mut wl::WpFractionalScaleV1, scale: u32) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn preferred_scale(&mut self, _sender: &mut wl::WpFractionalScaleV1, scale: u32) {
         tracing::trace!("fractional scale");
-        self.rescale(scale as f32 / 120.0);
+        self.pending_configure_buffer_scale = Some(scale as f32 / 120.0);
     }
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> WaylandWindowEventListener<AppFuture> {
-    fn rescale(&mut self, scale: f32) {
-        self.pending_configure_buffer_scale = Some(scale);
-        self.event_dispatcher.dispatch(Event::WindowRescaleUI {
-            window: WindowHandle(self.state.surface_ptr),
-            new_scale: scale,
-        });
+    fn commit(&mut self) {
+        let mut delayed_event_queue = Vec::with_capacity(2);
+
+        {
+            let mut committed_state_ref = self.state.committed_state.lock().expect("poisoned");
+            let mut rescaled = false;
+            if let Some(s) = self.pending_configure_buffer_scale.take() {
+                if self.has_fractional_scale_support {
+                    // fractional scaleでは1固定にする必要がある
+                    unsafe { &*self.state.surface_ptr }
+                        .set_buffer_scale(1)
+                        .expect("wl_surface.set_buffer_scale");
+                } else {
+                    unsafe { &*self.state.surface_ptr }
+                        .set_buffer_scale(s as _)
+                        .expect("wl_surface.set_buffer_scale");
+                }
+
+                committed_state_ref.active_buffer_scale = s;
+                delayed_event_queue.push(Event::WindowRescaleUI {
+                    window: WindowHandle(self.state.surface_ptr),
+                    new_scale: s,
+                });
+                rescaled = true;
+            }
+
+            let (w, h) = (
+                self.pending_configure_size.0.take(),
+                self.pending_configure_size.1.take(),
+            );
+            if rescaled || w.is_some() || h.is_some() {
+                // potentially size changes
+                let logical_size = Size::new_logical(
+                    w.map_or(committed_state_ref.active_size_logical.width, |x| x as _),
+                    h.map_or(committed_state_ref.active_size_logical.height, |y| y as _),
+                );
+                let pixels_size =
+                    logical_size.to_pixels_ceil(committed_state_ref.active_buffer_scale);
+                if pixels_size != committed_state_ref.active_size {
+                    committed_state_ref.active_size = pixels_size;
+                    committed_state_ref.active_size_logical = logical_size;
+                    self.state
+                        .swapchain_externally_invalidation_signal
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                    delayed_event_queue.push(Event::WindowResize {
+                        window: WindowHandle(self.state.surface_ptr),
+                        size: logical_size,
+                    });
+                }
+            }
+        }
+
+        for x in delayed_event_queue {
+            self.event_dispatcher.dispatch(x);
+        }
     }
 }
 
