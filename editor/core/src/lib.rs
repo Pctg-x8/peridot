@@ -58,8 +58,6 @@ use windows_numerics::{Vector2, Vector3};
 use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
     EffectOptimization, GaussianBlurEffect,
 };
-#[cfg(feature = "wayland")]
-use crate::graphics::VulkanSurface;
 use crate::{
     composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
@@ -77,6 +75,8 @@ use crate::{
     text::{FontID, RootFontSet},
     utils::{Color32, LogicalUnit, PixelsUnit, Point, SafeF32, Size},
 };
+#[cfg(feature = "wayland")]
+use crate::{graphics::VulkanSurface, hittest::HitTestTreeRef};
 
 mod atlas;
 #[cfg(windows)]
@@ -125,12 +125,13 @@ pub fn launch() {
     };
     let global_time_base = std::time::Instant::now();
     main_wrapper(
-        move |global_time_base, renderer_sync, composite_tree, system_link| {
+        move |global_time_base, renderer_sync, composite_tree, ht_manager, system_link| {
             run(
                 event_queue,
                 global_time_base,
                 renderer_sync,
                 composite_tree,
+                ht_manager,
                 system_link,
             )
         },
@@ -147,6 +148,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         &'sys std::time::Instant,
         &'sys Mutex<RendererSync>,
         CompositeTree<Event>,
+        HitTestTreeManager<'sys>,
         SystemLink,
     ) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
@@ -312,6 +314,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         relative_size_adjustment: [1.0, 1.0],
         ..Default::default()
     });
+    let mut ht_manager = HitTestTreeManager::new();
+    let main_window_ht_root = ht_manager.create(HitTestTreeData {
+        width_adjustment_factor: 1.0,
+        height_adjustment_factor: 1.0,
+        ..Default::default()
+    });
 
     #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(
@@ -323,6 +331,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             future: core::ptr::null_mut(),
         },
         main_window_composite_root,
+        main_window_ht_root,
     );
 
     #[cfg(target_os = "macos")]
@@ -332,6 +341,21 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     });
     #[cfg(target_os = "macos")]
     w.make_primary_window();
+
+    #[cfg(windows)]
+    unsafe {
+        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
+        SetWindowLongPtrW(
+            main_window.hwnd,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
+            &pointer_input_manager as *const _ as _,
+        );
+        SetWindowLongPtrW(
+            main_window.hwnd,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            &ht_manager as *const _ as _,
+        );
+    }
 
     let vk_device = VulkanDevice::new();
 
@@ -405,6 +429,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         global_time_base,
         renderer_sync,
         composite_tree,
+        ht_manager,
         SystemLink {
             #[cfg(feature = "wayland")]
             main_window: WindowHandle(w.surface.as_ptr()),
@@ -1010,9 +1035,12 @@ pub enum Event {
     },
     PointerMove {
         pointer_id: PointerID,
+        window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
     },
-    PointerUp,
+    PointerUp {
+        window: WindowHandle,
+    },
     WindowResize {
         window: WindowHandle,
         size: Size<PointerInputUnit>,
@@ -1077,6 +1105,7 @@ async fn run<'sys>(
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
     mut composite_tree: CompositeTree<Event>,
+    mut ht_manager: HitTestTreeManager<'sys>,
     system_link: SystemLink,
 ) {
     tracing::info!("app start");
@@ -1087,22 +1116,6 @@ async fn run<'sys>(
         system_link.main_window(),
         system_link.main_window().client_size(),
     );
-
-    let mut ht_manager = HitTestTreeManager::new();
-    #[cfg(windows)]
-    unsafe {
-        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
-        SetWindowLongPtrW(
-            main_window.hwnd,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
-            &pointer_input_manager as *const _ as _,
-        );
-        SetWindowLongPtrW(
-            main_window.hwnd,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            &ht_manager as *const _ as _,
-        );
-    }
 
     composite_tree
         .get_mut(system_link.main_window().composite_root())
@@ -1158,7 +1171,7 @@ async fn run<'sys>(
         role: Some(crate::hittest::Role::TitleBar),
         ..Default::default()
     });
-    ht_manager.add_child(HitTestTreeManager::ROOT, ht_caption_bar);
+    ht_manager.add_child(system_link.main_window().ht_root(), ht_caption_bar);
 
     // tab view
     let tab_main = composite_tree.create(CompositeRect {
@@ -1190,7 +1203,7 @@ async fn run<'sys>(
         cursor_shape: hittest::CursorShape::Pointer,
         ..Default::default()
     });
-    ht_manager.add_child(HitTestTreeManager::ROOT, ht_tab_main);
+    ht_manager.add_child(system_link.main_window().ht_root(), ht_tab_main);
 
     struct TabHitAction {
         ct: CompositeTreeRef,
@@ -1277,7 +1290,7 @@ async fn run<'sys>(
     ht_manager.set_action_handler(ht_tab_main, &ht_action_handler);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-    ht_manager.dump(HitTestTreeManager::ROOT);
+    ht_manager.dump(system_link.main_window().ht_root());
 
     loop {
         match event_queue.next_event().await {
@@ -1316,14 +1329,14 @@ async fn run<'sys>(
                 }
 
                 pointer_input_manager.handle_mouse_left_down(
-                    &system_link.main_window(),
+                    &window,
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
                     },
-                    HitTestTreeManager::ROOT,
+                    window.ht_root(),
                     &mut keyboard_focus_manager,
                 );
                 composite_tree
@@ -1331,19 +1344,20 @@ async fn run<'sys>(
             }
             Event::PointerMove {
                 pointer_id,
+                window,
                 client_pos,
             } => {
                 pointer_input_manager.handle_mouse_move(
-                    system_link.main_window(),
+                    window,
                     client_pos,
-                    &system_link.main_window(),
+                    &window,
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
                     },
-                    HitTestTreeManager::ROOT,
+                    window.ht_root(),
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -1370,16 +1384,16 @@ async fn run<'sys>(
                     })
                 }*/
             }
-            Event::PointerUp => {
+            Event::PointerUp { window } => {
                 pointer_input_manager.handle_mouse_left_up(
-                    &system_link.main_window(),
+                    &window,
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
                     },
-                    HitTestTreeManager::ROOT,
+                    window.ht_root(),
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -1388,19 +1402,6 @@ async fn run<'sys>(
     }
 
     tracing::info!("app finish");
-    #[cfg(windows)]
-    unsafe {
-        SetWindowLongPtrW(
-            main_window.hwnd,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
-            0,
-        );
-        SetWindowLongPtrW(
-            main_window.hwnd,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            0,
-        );
-    }
 }
 
 struct SystemLink {
@@ -1516,6 +1517,11 @@ impl WindowHandle {
     #[inline(always)]
     pub fn composite_root(&self) -> CompositeTreeRef {
         unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).composite_root }
+    }
+
+    #[inline(always)]
+    pub fn ht_root(&self) -> HitTestTreeRef {
+        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).ht_root }
     }
 
     #[inline(always)]
@@ -2505,6 +2511,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
+            window: WindowHandle(surface as *mut _),
             client_pos: state.pos,
         });
     }
@@ -2525,13 +2532,14 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         surface_y: wl::Fixed,
     ) {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
-        let Some(_) = state.enter_state else {
+        let Some(ref enter_state) = state.enter_state else {
             return;
         };
 
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
+            window: WindowHandle(enter_state.surface),
             client_pos: state.pos,
         });
     }
@@ -2555,7 +2563,9 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
                 window: WindowHandle(enter_state.surface),
             });
         } else if state == wl::PointerButtonState::Released {
-            self.event_dispatcher.dispatch(Event::PointerUp);
+            self.event_dispatcher.dispatch(Event::PointerUp {
+                window: WindowHandle(enter_state.surface),
+            });
         }
     }
 
@@ -2822,6 +2832,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
         terminate_event: Arc<EventFD>,
         event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
         composite_root: CompositeTreeRef,
+        ht_root: HitTestTreeRef,
     ) -> Self {
         let mut surface = wl_interfaces
             .compositor
@@ -2876,6 +2887,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
                 surface_ptr: surface.as_ptr(),
                 xdg_surface_ptr: xdg_surface.as_ptr(),
                 composite_root,
+                ht_root,
                 committed_state: Mutex::new(WaylandWindowCommittedState {
                     active_buffer_scale: 1.0,
                     active_size: Size::new_pixels(640, 480),
@@ -2959,6 +2971,7 @@ struct WaylandWindowState {
     surface_ptr: *mut wl::Surface,
     xdg_surface_ptr: *mut wl::XdgSurface,
     composite_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
     committed_state: Mutex<WaylandWindowCommittedState>,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     latest_ui_scale_changes: std::sync::Arc<Mutex<Option<f32>>>,

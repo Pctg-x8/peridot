@@ -66,23 +66,12 @@ pub struct HitTestTreeManager<'h> {
     free_index: BTreeSet<usize>,
 }
 impl<'h> HitTestTreeManager<'h> {
-    pub const ROOT: HitTestTreeRef = HitTestTreeRef(0);
-
     pub fn new() -> Self {
-        let mut this = Self {
+        Self {
             data: Vec::new(),
             relations: Vec::new(),
             free_index: BTreeSet::new(),
-        };
-
-        // root(simply fits to client_width/client_height)
-        this.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
-
-        this
+        }
     }
 
     pub fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
