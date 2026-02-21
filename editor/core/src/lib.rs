@@ -125,13 +125,19 @@ pub fn launch() {
     };
     let global_time_base = std::time::Instant::now();
     main_wrapper(
-        move |global_time_base, renderer_sync, composite_tree, ht_manager, system_link| {
+        move |global_time_base,
+              renderer_sync,
+              composite_tree,
+              ht_manager,
+              main_window,
+              system_link| {
             run(
                 event_queue,
                 global_time_base,
                 renderer_sync,
                 composite_tree,
                 ht_manager,
+                main_window,
                 system_link,
             )
         },
@@ -149,6 +155,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         &'sys Mutex<RendererSync>,
         CompositeTree<Event>,
         HitTestTreeManager<'sys>,
+        WindowHandle,
         SystemLink,
     ) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
@@ -430,9 +437,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         renderer_sync,
         composite_tree,
         ht_manager,
+        #[cfg(feature = "wayland")]
+        WindowHandle(w.surface.as_ptr()),
         SystemLink {
-            #[cfg(feature = "wayland")]
-            main_window: WindowHandle(w.surface.as_ptr()),
             drag_preview_popover,
             #[cfg(feature = "wayland")]
             pointer_state_ref: unsafe {
@@ -1106,26 +1113,24 @@ async fn run<'sys>(
     renderer_sync: &'sys Mutex<RendererSync>,
     mut composite_tree: CompositeTree<Event>,
     mut ht_manager: HitTestTreeManager<'sys>,
+    main_window: WindowHandle,
     system_link: SystemLink,
 ) {
     tracing::info!("app start");
 
     let mut keyboard_focus_manager = KeyboardFocusManager::new();
     let mut pointer_input_manager = PointerInputManager::new();
-    pointer_input_manager.set_client_size(
-        system_link.main_window(),
-        system_link.main_window().client_size(),
-    );
+    pointer_input_manager.set_client_size(main_window, main_window.client_size());
 
     composite_tree
-        .get_mut(system_link.main_window().composite_root())
+        .get_mut(main_window.composite_root())
         .composite_mode = CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
     composite_tree
-        .get_mut(system_link.main_window().composite_root())
+        .get_mut(main_window.composite_root())
         .has_bitmap = true;
-    composite_tree.mark_dirty(system_link.main_window().composite_root());
+    composite_tree.mark_dirty(main_window.composite_root());
 
-    let init_scale = system_link.main_window().ui_scale_factor();
+    let init_scale = main_window.ui_scale_factor();
 
     // app title view
     #[cfg(target_os = "macos")]
@@ -1164,14 +1169,14 @@ async fn run<'sys>(
         }),
         ..Default::default()
     });
-    composite_tree.add_child(system_link.main_window().composite_root(), app_title);
+    composite_tree.add_child(main_window.composite_root(), app_title);
     let ht_caption_bar = ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
         height: title_bar_thickness,
         role: Some(crate::hittest::Role::TitleBar),
         ..Default::default()
     });
-    ht_manager.add_child(system_link.main_window().ht_root(), ht_caption_bar);
+    ht_manager.add_child(main_window.ht_root(), ht_caption_bar);
 
     // tab view
     let tab_main = composite_tree.create(CompositeRect {
@@ -1194,7 +1199,7 @@ async fn run<'sys>(
         }),
         ..Default::default()
     });
-    composite_tree.add_child(system_link.main_window().composite_root(), tab_main);
+    composite_tree.add_child(main_window.composite_root(), tab_main);
     let ht_tab_main = ht_manager.create(HitTestTreeData {
         left: 100.0,
         top: 100.0,
@@ -1203,7 +1208,7 @@ async fn run<'sys>(
         cursor_shape: hittest::CursorShape::Pointer,
         ..Default::default()
     });
-    ht_manager.add_child(system_link.main_window().ht_root(), ht_tab_main);
+    ht_manager.add_child(main_window.ht_root(), ht_tab_main);
 
     struct TabHitAction {
         ct: CompositeTreeRef,
@@ -1290,7 +1295,7 @@ async fn run<'sys>(
     ht_manager.set_action_handler(ht_tab_main, &ht_action_handler);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-    ht_manager.dump(system_link.main_window().ht_root());
+    ht_manager.dump(main_window.ht_root());
 
     loop {
         match event_queue.next_event().await {
@@ -1405,17 +1410,11 @@ async fn run<'sys>(
 }
 
 struct SystemLink {
-    main_window: WindowHandle,
     drag_preview_popover: DragPreviewPopoverHandle,
     #[cfg(feature = "wayland")]
     pointer_state_ref: *const Option<WaylandPointerState>,
 }
 impl SystemLink {
-    #[inline(always)]
-    pub fn main_window(&self) -> WindowHandle {
-        self.main_window
-    }
-
     #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
         &self.drag_preview_popover
