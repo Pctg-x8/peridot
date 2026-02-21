@@ -138,7 +138,6 @@ pub fn launch() {
         &global_time_base,
         &Mutex::new(RendererSync {
             composite_buffer: CompositeTreeSyncBuffer::new(),
-            latest_ui_scale_changes: None,
         }),
     );
 }
@@ -308,6 +307,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         bound_window_link: core::ptr::null_mut(),
     };
 
+    let mut main_window_latest_ui_scale_changes = Arc::new(Mutex::new(None));
+
     #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(&wl_interfaces, &dbus);
 
@@ -395,7 +396,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         _pinned: core::marker::PhantomPinned,
     });
     #[cfg(feature = "wayland")]
-    w.bind_global_messaging(wl_global_msg.as_mut(), terminate_event.clone());
+    w.bind_global_messaging(
+        wl_global_msg.as_mut(),
+        terminate_event.clone(),
+        main_window_latest_ui_scale_changes.clone(),
+    );
 
     let mut composite_tree = CompositeTree::new();
     let main_window_composite_root = composite_tree.create(CompositeRect {
@@ -597,14 +602,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     };
 
                     // flush synchronizing buffers
-                    let new_ui_scale;
                     {
                         let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                        new_ui_scale = renderer_sync.latest_ui_scale_changes.take();
                         renderer_sync.composite_buffer.clean(&mut composite_tree);
                     }
+                    let main_window_new_ui_scale = main_window_latest_ui_scale_changes
+                        .lock()
+                        .expect("poisoned")
+                        .take();
 
-                    if let Some(scale) = new_ui_scale {
+                    if let Some(scale) = main_window_new_ui_scale {
                         let scale = SafeF32::new(scale).expect("scale.invalid");
 
                         glyph_atlas_per_scale
@@ -989,8 +996,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
 struct RendererSync {
     pub composite_buffer: CompositeTreeSyncBuffer<Event>,
-    // TODO: multi-window support
-    pub latest_ui_scale_changes: Option<f32>,
 }
 
 #[derive(Clone)]
@@ -1283,7 +1288,9 @@ async fn run<'sys>(
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                 composite_tree.commit(&mut renderer_sync.composite_buffer);
-                renderer_sync.latest_ui_scale_changes = Some(new_scale);
+                system_link
+                    .main_window()
+                    .notify_ui_scale_changes_to_render(new_scale);
             }
             Event::PointerDown {
                 #[cfg(feature = "wayland")]
@@ -1494,6 +1501,17 @@ impl WindowHandle {
             (*self.wl_surface_to_state).lock().expect("poisoned")
                 [&WaylandSurfaceKey(self.wl_surface)]
                 .active_buffer_scale
+        }
+    }
+
+    #[inline(always)]
+    pub fn notify_ui_scale_changes_to_render(&self, new_scale: f32) {
+        unsafe {
+            *(*self.wl_surface_to_state).lock().expect("poisoned")
+                [&WaylandSurfaceKey(self.wl_surface)]
+                .latest_ui_scale_changes
+                .lock()
+                .expect("poisoned") = Some(new_scale);
         }
     }
 
@@ -3023,6 +3041,7 @@ impl WaylandWindow {
             &mut WaylandGlobalMessaging<impl core::future::Future<Output = ()>>,
         >,
         terminate_event: std::sync::Arc<EventFD>,
+        latest_ui_scale_changes: std::sync::Arc<Mutex<Option<f32>>>,
     ) {
         unsafe { global_messaging.as_mut().get_unchecked_mut() }
             .surface_states
@@ -3038,6 +3057,7 @@ impl WaylandWindow {
                         std::sync::atomic::AtomicBool::new(false),
                     ),
                     terminate_event,
+                    latest_ui_scale_changes,
                 },
             );
         unsafe { global_messaging.as_mut().get_unchecked_mut() }
@@ -3132,6 +3152,7 @@ struct WaylandWindowState {
     active_size: Size<PixelsUnit>,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     terminate_event: std::sync::Arc<EventFD>,
+    latest_ui_scale_changes: std::sync::Arc<Mutex<Option<f32>>>,
 }
 
 #[cfg(target_os = "linux")]
