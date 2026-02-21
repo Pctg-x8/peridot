@@ -3,7 +3,8 @@ pub mod winrt_bootstrap;
 
 use windows::{
     Win32::{
-        System::Diagnostics::Debug::OutputDebugStringA,
+        Foundation::HINSTANCE,
+        System::{Diagnostics::Debug::OutputDebugStringA, LibraryLoader::GetModuleHandleW},
         UI::WindowsAndMessaging::{
             MB_ICONERROR, MB_OK, MessageBoxA, RegisterClassExW, WNDCLASSEXW,
         },
@@ -30,6 +31,11 @@ pub fn set_panic_hook() {
         );
         std::process::abort();
     }));
+}
+
+#[inline(always)]
+pub fn current_instance_handle() -> HINSTANCE {
+    unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() }
 }
 
 #[inline(always)]

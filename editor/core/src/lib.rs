@@ -20,19 +20,12 @@ use std::{
 };
 #[cfg(windows)]
 use windows::Win32::{
-    Foundation::HINSTANCE,
-    System::{
-        LibraryLoader::GetModuleHandleW,
-        WinRT::{
-            CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
-            DispatcherQueueOptions,
-        },
+    System::WinRT::{
+        CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
+        DispatcherQueueOptions,
     },
     UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, SW_SHOWNORMAL, TranslateMessage},
 };
-
-#[cfg(windows)]
-use windows_core::*;
 
 use crate::{
     composite::{
@@ -151,7 +144,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
 
     #[cfg(windows)]
-    let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
+    let hinstance = utils::platform::windows::current_instance_handle();
     #[cfg(windows)]
     let app_runtime = utils::platform::windows::WindowsAppRuntimeBootstrap::init();
     #[cfg(windows)]
@@ -540,13 +533,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                         renderer_sync.composite_buffer.clean(&mut composite_tree);
                     }
-                    #[cfg(feature = "wayland")]
-                    let main_window_new_ui_scale = main_window_state
-                        .latest_ui_scale_changes
-                        .lock()
-                        .expect("poisoned")
-                        .take();
-                    #[cfg(windows)]
                     let main_window_new_ui_scale = main_window_state
                         .latest_ui_scale_changes
                         .lock()
@@ -904,8 +890,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(windows)]
         'app: loop {
             match unsafe { GetMessageW(msg.as_mut_ptr(), None, 0, 0) } {
-                BOOL(0) => break 'app,
-                BOOL(-1) => Err::<(), _>(std::io::Error::last_os_error()).expect("GetMessageW"),
+                windows_core::BOOL(0) => break 'app,
+                windows_core::BOOL(-1) => {
+                    Err::<(), _>(std::io::Error::last_os_error()).expect("GetMessageW")
+                }
                 _ => unsafe {
                     let msg = msg.assume_init_ref();
                     let _ = TranslateMessage(msg);
@@ -1395,6 +1383,8 @@ impl SystemLink {
 
 #[cfg(windows)]
 pub type PointerID = platform::windows::PointerID;
+#[cfg(windows)]
+pub type DragPreviewPopoverHandle = platform::windows::DragPreviewPopoverHandle;
 #[cfg(windows)]
 pub type WindowHandle = platform::windows::WindowHandle;
 
@@ -1956,9 +1946,6 @@ impl DragPreviewPopoverHandle {
         }
     }
 }
-
-#[cfg(windows)]
-pub type DragPreviewPopoverHandle = platform::windows::DragPreviewPopoverHandle;
 
 // platform-dependent constants
 impl DragPreviewPopoverHandle {
