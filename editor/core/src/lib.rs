@@ -307,7 +307,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         bound_window_link: core::ptr::null_mut(),
     };
 
-    let mut main_window_latest_ui_scale_changes = Arc::new(Mutex::new(None));
+    let main_window_latest_ui_scale_changes = Arc::new(Mutex::new(None));
 
     #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(&wl_interfaces, &dbus);
