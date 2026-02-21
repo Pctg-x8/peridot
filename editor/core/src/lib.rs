@@ -39,9 +39,9 @@ use windows::{
             GetMessageW, GetWindowLongPtrW, HCURSOR, HICON, IDI_APPLICATION, LoadIconW,
             NCCALCSIZE_PARAMS, PostQuitMessage, RegisterClassExW, SHOW_WINDOW_CMD, SW_HIDE,
             SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SetWindowLongPtrW, ShowWindow, TranslateMessage,
-            WINDOW_LONG_PTR_INDEX, WM_DESTROY, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
-            WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-            WS_OVERLAPPEDWINDOW, WS_POPUP,
+            WINDOW_LONG_PTR_INDEX, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOACTIVATE,
+            WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
+            WS_POPUP,
         },
     },
 };
@@ -1507,7 +1507,7 @@ impl core::hash::Hash for WindowHandle {
 #[cfg(windows)]
 impl WindowHandle {
     #[inline(always)]
-    fn state(&self) -> &WindowState {
+    fn state<'a, 'h>(&'a self) -> &'a WindowState<'h> {
         unsafe {
             &*core::ptr::with_exposed_provenance(
                 GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
@@ -1521,7 +1521,7 @@ impl WindowHandle {
         pointer_input_manager: &PointerInputManager,
         ht_manager: &HitTestTreeManager,
     ) {
-        let mut st = unsafe {
+        let st = unsafe {
             &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
                 GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
             )
@@ -1532,7 +1532,7 @@ impl WindowHandle {
 
     #[inline(always)]
     fn unbind_hittest_managers(&self) {
-        let mut st = unsafe {
+        let st = unsafe {
             &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
                 GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
             )
