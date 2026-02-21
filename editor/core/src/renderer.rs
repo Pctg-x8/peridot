@@ -24,23 +24,28 @@ use crate::{
     utils::SafeF32,
 };
 
-pub struct RenderThread<'main, 'h> {
+pub struct NewWindowData<'main> {
+    #[cfg(feature = "wayland")]
+    pub state: &'main WaylandWindowState,
+    #[cfg(windows)]
+    pub handle: crate::platform::windows::SendableWindowHandle,
+    #[cfg(windows)]
+    pub latest_ui_scale_changes: &'main Mutex<Option<f32>>,
+    pub init_scale: SafeF32,
+    pub composite_root: CompositeTreeRef,
+    pub vk_surface: VulkanSurface<'main>,
+}
+
+pub struct RenderThread<'main> {
     pub vk_device: &'main VulkanDevice,
     pub shutdown_signal: &'main AtomicBool,
     pub renderer_sync: &'main Mutex<RendererSync>,
     pub global_time_base: &'main std::time::Instant,
     pub event_bus: &'main AppEventBus,
     // TODO: ウィンドウに関係するデータはあとで別のキューかなんかからもらう形にしたい
-    #[cfg(feature = "wayland")]
-    pub main_window_state: &'main WaylandWindowState,
-    #[cfg(windows)]
-    pub main_window_handle: crate::platform::windows::SendableWindowHandle,
-    #[cfg(windows)]
-    pub main_window_state: &'main crate::platform::windows::WindowState<'h>,
-    pub main_window_init_scale: SafeF32,
-    pub main_window_vk_surface: VulkanSurface<'main>,
+    pub main_window_data: NewWindowData<'main>,
 }
-impl<'main, 'h> RenderThread<'main, 'h> {
+impl<'main> RenderThread<'main> {
     pub fn run(self) {
         tracing::info!("Starting RenderThread...");
         let mut render_queue = self
@@ -66,7 +71,7 @@ impl<'main, 'h> RenderThread<'main, 'h> {
         let glyph_atlas_manager_common_resources =
             GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
         glyph_atlas_per_scale.insert(
-            self.main_window_init_scale,
+            self.main_window_data.init_scale,
             GlyphAtlasDataPerDpi {
                 manager: GlyphAtlasManager::new(
                     &glyph_atlas_manager_common_resources,
@@ -82,12 +87,14 @@ impl<'main, 'h> RenderThread<'main, 'h> {
             #[cfg(feature = "wayland")]
             main_window_state,
             #[cfg(windows)]
-            self.main_window_handle,
-            self.main_window_init_scale,
-            self.main_window_state.composite_root,
-            self.main_window_vk_surface,
+            self.main_window_data.handle,
+            #[cfg(windows)]
+            self.main_window_data.latest_ui_scale_changes,
+            self.main_window_data.init_scale,
+            self.main_window_data.composite_root,
+            self.main_window_data.vk_surface,
             self.vk_device,
-            glyph_atlas_per_scale[&self.main_window_init_scale]
+            glyph_atlas_per_scale[&self.main_window_data.init_scale]
                 .manager
                 .atlas(),
             &font_set,
@@ -143,12 +150,7 @@ impl<'main, 'h> RenderThread<'main, 'h> {
                 let mut renderer_sync = self.renderer_sync.lock().expect("poisoned");
                 renderer_sync.composite_buffer.clean(&mut composite_tree);
             }
-            let main_window_new_ui_scale = self
-                .main_window_state
-                .latest_ui_scale_changes
-                .lock()
-                .expect("poisoned")
-                .take();
+            let main_window_new_ui_scale = main_window_renderer.take_latest_ui_scale_changes();
 
             if let Some(scale) = main_window_new_ui_scale {
                 let scale = SafeF32::new(scale).expect("scale.invalid");
@@ -285,6 +287,7 @@ pub struct WindowRenderer<'d> {
     #[cfg(windows)]
     w: crate::platform::windows::SendableWindowHandle,
     active_scale: SafeF32,
+    latest_ui_scale_changes: &'d Mutex<Option<f32>>,
     vk_device: &'d VulkanDevice,
     swapchain_invalidated: bool,
     composite_root: CompositeTreeRef,
@@ -310,6 +313,7 @@ impl<'d> WindowRenderer<'d> {
     pub fn new(
         #[cfg(feature = "wayland")] w: &'d WaylandWindowState,
         #[cfg(windows)] w: crate::platform::windows::SendableWindowHandle,
+        #[cfg(windows)] latest_ui_scale_changes: &'d Mutex<Option<f32>>,
         active_scale: SafeF32,
         composite_root: CompositeTreeRef,
         surface: VulkanSurface<'d>,
@@ -317,6 +321,7 @@ impl<'d> WindowRenderer<'d> {
         glyph_atlas: &GlyphAtlas,
         root_font_set: &'d RootFontSet,
     ) -> Self {
+        #[allow(unused_mut)]
         let mut font_set = PerWindowFontSet::new(root_font_set);
         #[cfg(feature = "wayland")]
         font_set.rescale((active_scale.value() * 72.0) as _);
@@ -418,6 +423,8 @@ impl<'d> WindowRenderer<'d> {
         Self {
             w,
             active_scale,
+            #[cfg(windows)]
+            latest_ui_scale_changes,
             font_set,
             vk_device,
             composite_root,
@@ -464,6 +471,14 @@ impl<'d> WindowRenderer<'d> {
 
     pub fn active_scale(&self) -> SafeF32 {
         self.active_scale
+    }
+
+    pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
+        #[cfg(windows)]
+        self.latest_ui_scale_changes
+            .lock()
+            .expect("poisoned")
+            .take()
     }
 
     pub fn rescale(&mut self, scale: SafeF32) {

@@ -37,7 +37,7 @@ use crate::{
     graphics::VulkanDevice,
     hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
-    renderer::RenderThread,
+    renderer::{NewWindowData, RenderThread},
     text::FontID,
     utils::{Color32, LogicalUnit, PixelsUnit, Point, SafeF32, Size},
 };
@@ -438,13 +438,17 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             renderer_sync: &renderer_sync,
             global_time_base: &global_time_base,
             event_bus: &events,
-            #[cfg(windows)]
-            main_window_handle: w.make_sendable(),
-            #[cfg(windows)]
-            main_window_state: w.state_ref(),
-            #[cfg(windows)]
-            main_window_init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
-            main_window_vk_surface: vk_surface,
+            main_window_data: NewWindowData {
+                #[cfg(windows)]
+                handle: w.make_sendable(),
+                #[cfg(windows)]
+                latest_ui_scale_changes: &w.state_ref().latest_ui_scale_changes,
+                #[cfg(windows)]
+                init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
+                #[cfg(windows)]
+                composite_root: w.state_ref().composite_root,
+                vk_surface,
+            },
         };
         let render_thread = std::thread::Builder::new()
             .name("Render".into())
