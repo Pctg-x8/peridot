@@ -38,15 +38,13 @@ use windows_numerics::{Vector2, Vector3};
 use core::pin::Pin;
 use std::sync::Mutex;
 
-#[cfg(windows)]
-use crate::input::ShellPointerActions;
 use crate::{
     Event, LogicFiberEventDispatcher,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     composite::CompositeTreeRef,
     graphics::{VulkanDevice, VulkanSurface},
     hittest::{HitTestTreeManager, HitTestTreeRef},
-    input::{PointerInputManager, PointerInputUnit},
+    input::{PointerInputManager, PointerInputUnit, ShellPointerActions},
     utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::register_class},
 };
 
@@ -128,7 +126,6 @@ impl WindowHandle {
         self.state().ht_root
     }
 }
-#[cfg(windows)]
 impl ShellPointerActions for WindowHandle {
     #[inline(always)]
     fn capture_pointer(&self) {
