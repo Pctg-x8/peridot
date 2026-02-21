@@ -88,6 +88,20 @@ impl Proxy {
         }
     }
 
+    /// Set the user data associated with a proxy
+    #[inline(always)]
+    pub unsafe fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            ffi::wl_proxy_set_user_data(self.0.get_mut() as _, user_data);
+        }
+    }
+
+    /// Get the user data associated with a proxy
+    #[inline(always)]
+    pub unsafe fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { ffi::wl_proxy_get_user_data(self.0.get() as _) }
+    }
+
     #[inline]
     pub fn marshal_array_flags(
         &self,
@@ -412,6 +426,18 @@ impl Registry {
             )?)
         })
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait RegistryListener {
@@ -443,6 +469,18 @@ impl Callback {
                 listener as *mut _ as _,
             )
         }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -546,6 +584,18 @@ impl Surface {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait SurfaceEventListener {
@@ -581,6 +631,18 @@ impl Subcompositor {
             )
         })
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 #[repr(transparent)]
@@ -607,6 +669,18 @@ impl Subsurface {
     pub fn place_below(&self, sibling: &Surface) -> Result<()> {
         self.0
             .marshal_array_flags_void(3, 0, &mut [sibling.0.as_arg()])
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -641,6 +715,18 @@ impl Shm {
     #[inline(always)]
     pub fn create_pool(&self, fd: &impl AsRawFd, size: i32) -> Result<Owned<ShmPool>> {
         self.create_pool_raw(fd.as_raw_fd(), size)
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -694,6 +780,18 @@ impl ShmPool {
         self.0
             .marshal_array_void(2, &mut [ffi::Argument { i: size }])
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 #[repr(transparent)]
@@ -707,6 +805,19 @@ unsafe impl Interface for Buffer {
     )]
     unsafe fn destruct(&mut self) {
         self.0.call_simple_dtor(0);
+    }
+}
+impl Buffer {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -735,6 +846,18 @@ impl Region {
                 ffi::Argument { i: height },
             ],
         )
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -787,6 +910,18 @@ impl Seat {
                 listener as *mut _ as _
             )
         }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -861,6 +996,18 @@ impl Pointer {
                 listener as *mut _ as _
             )
         }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -950,6 +1097,18 @@ impl Keyboard {
                 listener as *mut _ as _
             )
         }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -1109,6 +1268,18 @@ impl DataOffer {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait DataOfferEventListener {
@@ -1189,6 +1360,18 @@ impl DataSource {
                 listener as *mut _ as _
             )
         }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -1301,6 +1484,18 @@ impl DataDevice {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait DataDeviceEventListener {
@@ -1339,6 +1534,18 @@ impl DataDeviceManager {
                     .marshal_array_typed(1, &mut [NEWID_ARG, seat.0.as_arg()])?,
             )
         })
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 

@@ -183,9 +183,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
-    #[cfg(feature = "freetype")]
-    let ft = text::FreeType::init().expect("FreeType.init");
-
     #[cfg(windows)]
     let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
     #[cfg(windows)]
@@ -310,10 +307,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         bound_window_link: core::ptr::null_mut(),
     };
 
-    let main_window_latest_ui_scale_changes = Arc::new(Mutex::new(None));
-
     #[cfg(feature = "wayland")]
-    let mut w = WaylandWindow::new(&wl_interfaces, &dbus);
+    let mut w = WaylandWindow::new(
+        &wl_interfaces,
+        &dbus,
+        terminate_event.clone(),
+        LogicFiberEventDispatcher {
+            event_store: event_store.as_mut().get_mut() as *mut _ as _,
+            future: core::ptr::null_mut(),
+        },
+    );
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new(LogicFiberEventDispatcher::<AppFuture> {
@@ -374,14 +377,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
 
     #[cfg(feature = "wayland")]
-    let surface_states = Mutex::new(HashMap::new());
-    #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(WaylandGlobalMessaging {
-        surface_states: &surface_states,
-        xdg_surface_to_surface: HashMap::new(),
-        surface_to_xdg_surface: HashMap::new(),
-        xdg_toplevel_to_surface: HashMap::new(),
-        fractional_scale_to_surface: HashMap::new(),
         text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
         xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
             .expect("xkb_context.create"),
@@ -391,19 +387,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .cursor_shape_manager
             .as_ref()
             .map(|x| x.as_ptr()),
-        has_fractional_scale_support: wl_interfaces.fractional_scale_manager.is_some(),
         event_dispatcher: LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
             future: core::ptr::null_mut()
         },
         _pinned: core::marker::PhantomPinned,
     });
-    #[cfg(feature = "wayland")]
-    w.bind_global_messaging(
-        wl_global_msg.as_mut(),
-        terminate_event.clone(),
-        main_window_latest_ui_scale_changes.clone(),
-    );
 
     let mut composite_tree = CompositeTree::new();
     let main_window_composite_root = composite_tree.create(CompositeRect {
@@ -418,7 +407,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             #[cfg(feature = "wayland")]
             main_window: WindowHandle {
                 wl_surface: w.surface.as_ptr(),
-                wl_surface_to_state: &surface_states,
                 composite_root: main_window_composite_root,
             },
             drag_preview_popover,
@@ -457,6 +445,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .future = app.as_mut().get_unchecked_mut() as *mut _;
     }
     #[cfg(feature = "wayland")]
+    w.rebind_event_dispatcher(LogicFiberEventDispatcher {
+        event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ },
+    });
+    #[cfg(target_os = "macos")]
+    unsafe {
+        w.dispatcher.event_dispatcher.future = app.as_mut().get_unchecked_mut() as *mut _;
+    }
+
+    #[cfg(feature = "wayland")]
     wl_interfaces
         .xdg_wm_base
         .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
@@ -468,10 +466,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
         .into_result()
         .expect("seat set_listener");
-    #[cfg(target_os = "macos")]
-    unsafe {
-        w.dispatcher.event_dispatcher.future = app.as_mut().get_unchecked_mut() as *mut _;
-    }
 
     let _ = app
         .as_mut()
@@ -499,6 +493,13 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             }),
         );
     }
+
+    // TODO: stateには原則としてRender Threadからはアクセスしない(ロックとると遅くなるので)
+    #[cfg(feature = "wayland")]
+    let main_window_init_scale =
+        SafeF32::new(w.event_listener.state.active_buffer_scale).expect("invalid scale");
+    #[cfg(feature = "wayland")]
+    let main_window_state = &w.event_listener.state;
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -532,11 +533,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 };
                 let glyph_atlas_manager_common_resources =
                     GlyphAtlasManagerCommonResources::new(&vk_device, &vg_render_formats);
-                #[cfg(feature = "wayland")]
-                let main_window_init_scale = SafeF32::new(
-                    surface_states.lock().expect("poisoned")[&w.as_key()].active_buffer_scale,
-                )
-                .expect("invalid scale");
                 glyph_atlas_per_scale.insert(
                     main_window_init_scale,
                     (
@@ -551,9 +547,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 );
 
                 let mut main_window_renderer = WindowRenderer::new(
-                    w,
+                    main_window_state,
                     main_window_init_scale,
-                    &surface_states,
                     main_window_composite_root,
                     vk_surface,
                     &vk_device,
@@ -583,11 +578,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         }
 
                         let mut descriptor_writes = Vec::new();
-                        main_window_renderer.validate_swapchain(
-                            &mut descriptor_writes,
-                            #[cfg(feature = "wayland")]
-                            &surface_states,
-                        );
+                        main_window_renderer.validate_swapchain(&mut descriptor_writes);
                         vk_device.update_descriptor_sets(&descriptor_writes, &[]);
 
                         any_swapchain_invalidated = false;
@@ -609,7 +600,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                         renderer_sync.composite_buffer.clean(&mut composite_tree);
                     }
-                    let main_window_new_ui_scale = main_window_latest_ui_scale_changes
+                    let main_window_new_ui_scale = main_window_state
+                        .latest_ui_scale_changes
                         .lock()
                         .expect("poisoned")
                         .take();
@@ -1005,8 +997,7 @@ struct RendererSync {
 pub enum Event {
     Quit,
     PointerDown {
-        #[cfg(feature = "wayland")]
-        root_window: core::ptr::NonNull<wl::XdgSurface>,
+        window: WindowIdentifier,
         #[cfg(windows)]
         active_window: HWND,
         #[cfg(target_os = "macos")]
@@ -1296,8 +1287,7 @@ async fn run<'sys>(
                     .notify_ui_scale_changes_to_render(new_scale);
             }
             Event::PointerDown {
-                #[cfg(feature = "wayland")]
-                root_window,
+                window,
                 #[cfg(windows)]
                 active_window,
                 #[cfg(target_os = "macos")]
@@ -1307,7 +1297,7 @@ async fn run<'sys>(
                 system_link
                     .drag_preview_popover()
                     .root_window
-                    .set(root_window.as_ptr());
+                    .set(window.query_xdg_surface());
                 #[cfg(windows)]
                 {
                     drag_preview_popover.base_window_handle = active_window;
@@ -1485,33 +1475,27 @@ impl ShellPointerActions for WindowHandle {
 #[cfg(feature = "wayland")]
 pub struct WindowHandle {
     wl_surface: *mut wl::Surface,
-    wl_surface_to_state: *const Mutex<HashMap<WaylandSurfaceKey, WaylandWindowState>>,
     composite_root: CompositeTreeRef,
 }
 #[cfg(feature = "wayland")]
 impl WindowHandle {
     #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
-        let wl_surface_to_state = unsafe { (*self.wl_surface_to_state).lock().expect("poisoned") };
-        let state = &wl_surface_to_state[&WaylandSurfaceKey(self.wl_surface)];
-
+        let state = unsafe { &mut *(*self.wl_surface).user_data().cast::<WaylandWindowState>() };
         state.active_size.to_logical(state.active_buffer_scale)
     }
 
     #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
         unsafe {
-            (*self.wl_surface_to_state).lock().expect("poisoned")
-                [&WaylandSurfaceKey(self.wl_surface)]
-                .active_buffer_scale
+            (*(*self.wl_surface).user_data().cast::<WaylandWindowState>()).active_buffer_scale
         }
     }
 
     #[inline(always)]
     pub fn notify_ui_scale_changes_to_render(&self, new_scale: f32) {
         unsafe {
-            *(*self.wl_surface_to_state).lock().expect("poisoned")
-                [&WaylandSurfaceKey(self.wl_surface)]
+            *(*(*self.wl_surface).user_data().cast::<WaylandWindowState>())
                 .latest_ui_scale_changes
                 .lock()
                 .expect("poisoned") = Some(new_scale);
@@ -2056,6 +2040,47 @@ impl DragPreviewPopoverHandle {
     }
 }
 
+#[cfg(feature = "wayland")]
+struct WaylandPopupState {
+    surface_ptr: *mut wl::Surface,
+}
+#[cfg(feature = "wayland")]
+impl wl::XdgSurfaceEventListener for WaylandPopupState {
+    #[tracing::instrument(skip(self, sender))]
+    fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
+        tracing::trace!("popup.surface.configure");
+        sender.ack_configure(serial).expect("popup.ack_configure");
+
+        unsafe {
+            (*self.surface_ptr).commit().expect("popup.surface.commit");
+        }
+    }
+}
+#[cfg(feature = "wayland")]
+impl wl::XdgPopupEventListener for WaylandPopupState {
+    #[tracing::instrument(skip(self, sender))]
+    fn configure(
+        &mut self,
+        sender: &mut peridot_tp_wayland::XdgPopup,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) {
+        tracing::trace!("popup.configure");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn popup_done(&mut self, sender: &mut peridot_tp_wayland::XdgPopup) {
+        tracing::trace!("popup.popup_done");
+    }
+
+    #[tracing::instrument(skip(self, sender))]
+    fn repositioned(&mut self, sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
+        tracing::trace!("popup.repositioned");
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub struct DragPreviewPopoverHandle {
     bound_window_link: *mut platform::mac::bridge::WindowLink,
@@ -2349,9 +2374,18 @@ impl DragPreviewPopoverHandle {
 const WL_APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 
 #[cfg(feature = "wayland")]
+#[derive(Clone, Copy)]
+pub struct WindowIdentifier(*mut wl::Surface);
+#[cfg(feature = "wayland")]
+impl WindowIdentifier {
+    pub fn query_xdg_surface(&self) -> *mut wl::XdgSurface {
+        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).xdg_surface_ptr }
+    }
+}
+
+#[cfg(feature = "wayland")]
 struct WaylandPointerEnterState {
     pub surface: *mut wl::Surface,
-    pub xdg_surface: *mut wl::XdgSurface,
     pub serial: u32,
 }
 
@@ -2372,24 +2406,18 @@ struct WaylandKeyboardState {
 }
 
 #[cfg(feature = "wayland")]
-struct WaylandGlobalMessaging<'sys, AppFuture: core::future::Future<Output = ()>> {
-    pub surface_states: &'sys Mutex<HashMap<WaylandSurfaceKey, WaylandWindowState>>,
-    pub xdg_surface_to_surface: HashMap<*mut wl::XdgSurface, *mut wl::Surface>,
-    pub surface_to_xdg_surface: HashMap<*mut wl::Surface, *mut wl::XdgSurface>,
-    pub xdg_toplevel_to_surface: HashMap<*mut wl::XdgToplevel, *mut wl::Surface>,
-    pub fractional_scale_to_surface: HashMap<*mut wl::WpFractionalScaleV1, *mut wl::Surface>,
+struct WaylandGlobalMessaging<AppFuture: core::future::Future<Output = ()>> {
     pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
     pub xkb_context: xkbcommon::Context,
     pub keyboard: Option<WaylandKeyboardState>,
     pub pointer: Option<WaylandPointerState>,
     pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
     pub event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
-    pub has_fractional_scale_support: bool,
     _pinned: core::marker::PhantomPinned,
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::XdgWmBaseEventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandGlobalMessaging<AppFuture>
 {
     #[inline(always)]
     fn ping(&mut self, sender: &mut peridot_tp_wayland::XdgWmBase, serial: u32) {
@@ -2398,7 +2426,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgWmBaseEventListener
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandGlobalMessaging<AppFuture>
 {
     fn capabilities(
         &mut self,
@@ -2466,7 +2494,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandGlobalMessaging<AppFuture>
 {
     #[tracing::instrument(skip(self, _pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn enter(
@@ -2481,7 +2509,6 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 
         state.enter_state = Some(WaylandPointerEnterState {
             surface: surface as *mut _,
-            xdg_surface: self.surface_to_xdg_surface[&(surface as *mut _)],
             serial,
         });
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
@@ -2508,7 +2535,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
         surface_y: wl::Fixed,
     ) {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
-        let Some(ref mut enter_state) = state.enter_state else {
+        let Some(_) = state.enter_state else {
             return;
         };
 
@@ -2535,7 +2562,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 
         if state == wl::PointerButtonState::Pressed {
             self.event_dispatcher.dispatch(Event::PointerDown {
-                root_window: unsafe { core::ptr::NonNull::new_unchecked(enter_state.xdg_surface) },
+                window: WindowIdentifier(enter_state.surface),
             });
         } else if state == wl::PointerButtonState::Released {
             self.event_dispatcher.dispatch(Event::PointerUp);
@@ -2579,7 +2606,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandGlobalMessaging<AppFuture>
 {
     #[tracing::instrument(skip(self, _sender))]
     fn keymap(
@@ -2704,7 +2731,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandGlobalMessaging<AppFuture>
 {
     #[tracing::instrument(skip(self, sender, _surface))]
     fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: &mut wl::Surface) {
@@ -2753,7 +2780,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListen
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::ZwlrLayerSurfaceV1EventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandGlobalMessaging<AppFuture>
 {
     #[tracing::instrument(skip(self, sender))]
     fn configure(
@@ -2774,15 +2801,188 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwlrLayerSurfaceV1EventLi
         tracing::trace!("layer surface closed");
     }
 }
+
+#[cfg(feature = "wayland")]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WaylandSurfaceKey(*mut wl::Surface);
+#[cfg(feature = "wayland")]
+unsafe impl Sync for WaylandSurfaceKey {}
+#[cfg(feature = "wayland")]
+unsafe impl Send for WaylandSurfaceKey {}
+
+#[cfg(feature = "wayland")]
+pub struct WaylandWindow<AppFuture: core::future::Future<Output = ()>> {
+    surface: wl::Owned<wl::Surface>,
+    xdg_surface: wl::Owned<wl::XdgSurface>,
+    xdg_toplevel: wl::Owned<wl::XdgToplevel>,
+    deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
+    fractional_scale: Option<wl::Owned<wl::WpFractionalScaleV1>>,
+    _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
+    event_listener: Pin<Box<WaylandWindowEventListener<AppFuture>>>,
+}
+#[cfg(feature = "wayland")]
+unsafe impl<AppFuture: core::future::Future<Output = ()>> Sync for WaylandWindow<AppFuture> {}
+#[cfg(feature = "wayland")]
+unsafe impl<AppFuture: core::future::Future<Output = ()>> Send for WaylandWindow<AppFuture> {}
+#[cfg(feature = "wayland")]
+impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
+    fn new(
+        wl_interfaces: &WaylandGlobalInterfaces,
+        dbus: &dbus::Connection,
+        terminate_event: Arc<EventFD>,
+        event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    ) -> Self {
+        let mut surface = wl_interfaces
+            .compositor
+            .create_surface()
+            .expect("wl_surface create");
+        let mut xdg_surface = wl_interfaces
+            .xdg_wm_base
+            .get_xdg_surface(&surface)
+            .expect("xdg_surface create");
+        let mut xdg_toplevel = xdg_surface.get_toplevel().expect("xdg_toplevel create");
+        xdg_toplevel
+            .set_title(c"Peridot Marble Editor")
+            .expect("xdg_toplevel.set_title");
+        xdg_surface
+            .set_window_geometry(0, 0, 640, 480)
+            .expect("xdg_surface.set_window_geometry");
+
+        let appmenu = if let Some(ref am) = wl_interfaces.kde_appmenu_manager {
+            let a = am.create(&surface).expect("appmenu.create");
+            a.set_address(dbus.unique_name().expect("no name"), WL_APPMENU_OBJECT_PATH)
+                .expect("appmenu.set_address");
+
+            Some(a)
+        } else {
+            None
+        };
+
+        let mut deco = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager {
+            let d = dm
+                .get_toplevel_decoration(&xdg_toplevel)
+                .expect("decoration.get_toplevel");
+            d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
+                .expect("decoration.set_mode");
+
+            Some(d)
+        } else {
+            None
+        };
+
+        let mut fractional_scale = if let Some(ref fs) = wl_interfaces.fractional_scale_manager {
+            let f = fs
+                .get_fractional_scale(&surface)
+                .expect("fractional_scale.create");
+
+            Some(f)
+        } else {
+            None
+        };
+
+        let mut event_listener = Box::pin(WaylandWindowEventListener {
+            state: WaylandWindowState {
+                surface_ptr: surface.as_ptr(),
+                xdg_surface_ptr: xdg_surface.as_ptr(),
+                pending_configure_size: None,
+                active_buffer_scale: 1.0,
+                active_size: Size::new_pixels(640, 480),
+                swapchain_externally_invalidation_signal: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
+                latest_ui_scale_changes: std::sync::Arc::new(Mutex::new(None)),
+            },
+            has_fractional_scale_support: fractional_scale.is_some(),
+            terminate_event,
+            event_dispatcher,
+        });
+        surface
+            .set_listener(event_listener.as_mut().get_mut())
+            .into_result()
+            .expect("wl_surface set listener");
+        xdg_surface
+            .set_listener(event_listener.as_mut().get_mut())
+            .into_result()
+            .expect("xdg_surface set listener");
+        xdg_toplevel
+            .set_listener(event_listener.as_mut().get_mut())
+            .into_result()
+            .expect("xdg_toplevel set listener");
+        if let Some(ref mut x) = deco {
+            x.set_listener(event_listener.as_mut().get_mut())
+                .into_result()
+                .expect("zxdg_toplevel_decoration_v1.set_listener");
+        }
+        if let Some(ref mut x) = fractional_scale {
+            x.set_listener(event_listener.as_mut().get_mut())
+                .into_result()
+                .expect("wp_fractional_scale_v1.set_listener");
+        }
+
+        println!("{:p}", xdg_toplevel.user_data());
+
+        // commits initial state
+        surface.commit().expect("wl_surface.commit");
+
+        Self {
+            surface,
+            xdg_surface,
+            xdg_toplevel,
+            _appmenu: appmenu,
+            deco,
+            fractional_scale,
+            event_listener,
+        }
+    }
+
+    pub const fn as_key(&self) -> WaylandSurfaceKey {
+        WaylandSurfaceKey(self.surface.as_ptr())
+    }
+
+    pub fn rebind_event_dispatcher(
+        &mut self,
+        event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    ) {
+        self.event_listener.event_dispatcher = event_dispatcher;
+    }
+
+    fn commit(&self) {
+        self.surface.commit().expect("wl_surface.commit");
+    }
+}
+
+#[cfg(feature = "wayland")]
+struct WaylandWindowState {
+    surface_ptr: *mut wl::Surface,
+    xdg_surface_ptr: *mut wl::XdgSurface,
+    pending_configure_size: Option<(i32, i32)>,
+    active_buffer_scale: f32,
+    active_size: Size<PixelsUnit>,
+    swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    latest_ui_scale_changes: std::sync::Arc<Mutex<Option<f32>>>,
+}
+#[cfg(feature = "wayland")]
+unsafe impl Sync for WaylandWindowState {}
+#[cfg(feature = "wayland")]
+unsafe impl Send for WaylandWindowState {}
+
+#[cfg(feature = "wayland")]
+#[repr(C)] // place state at 0 always: WaylandWindowEventListener can be reinterpreted as WaylandWindowState
+struct WaylandWindowEventListener<AppFuture: core::future::Future<Output = ()>> {
+    state: WaylandWindowState,
+    has_fractional_scale_support: bool,
+    terminate_event: std::sync::Arc<EventFD>,
+    event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+}
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandWindowEventListener<AppFuture>
 {
-    #[tracing::instrument(skip(self, surface, output))]
-    fn enter(&mut self, surface: &mut wl::Surface, output: &mut wl::Output) {}
+    #[tracing::instrument(skip(self, _surface, _output))]
+    fn enter(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {}
 
-    #[tracing::instrument(skip(self, surface, output))]
-    fn leave(&mut self, surface: &mut wl::Surface, output: &mut wl::Output) {}
+    #[tracing::instrument(skip(self, _surface, _output))]
+    fn leave(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {}
 
     #[tracing::instrument(skip(self, surface))]
     fn preferred_buffer_scale(&mut self, surface: &mut wl::Surface, factor: i32) {
@@ -2798,29 +2998,28 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
         surface
             .set_buffer_scale(factor)
             .expect("wl_surface set_buffer_scale");
-        self.set_scale(WaylandSurfaceKey(surface as *mut _), factor as _);
+        self.set_scale(factor as _);
     }
 
-    #[tracing::instrument(skip(self, surface))]
-    fn preferred_buffer_transform(&mut self, surface: &mut wl::Surface, transform: u32) {
+    #[tracing::instrument(skip(self, _surface))]
+    fn preferred_buffer_transform(&mut self, _surface: &mut wl::Surface, transform: u32) {
         tracing::trace!("preferred buffer transform");
     }
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::XdgSurfaceEventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandWindowEventListener<AppFuture>
 {
     #[tracing::instrument(skip(self, sender))]
     fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
         tracing::trace!("xdg surface configure");
 
-        let mut states_lock = self.surface_states.lock().expect("poisoned");
-        let state = states_lock
-            .get_mut(&WaylandSurfaceKey(
-                self.xdg_surface_to_surface[&(sender as *mut _)],
-            ))
-            .expect("no surface registered");
-
+        let state = unsafe { &mut *sender.user_data().cast::<WaylandWindowState>() };
+        println!(
+            "{state:p} {:p} {:p}",
+            Arc::as_ptr(&state.swapchain_externally_invalidation_signal),
+            Arc::as_ptr(&state.latest_ui_scale_changes)
+        );
         if let Some((w, h)) = state.pending_configure_size.take() {
             self.event_dispatcher
                 .dispatch(Event::WindowResize(Size::new_logical(w as _, h as _)));
@@ -2846,21 +3045,12 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgSurfaceEventListener
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::XdgToplevelEventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandWindowEventListener<AppFuture>
 {
     #[tracing::instrument(skip(self, sender))]
     fn close(&mut self, sender: &mut wl::XdgToplevel) {
         tracing::trace!("xdg toplevel close");
-        self.surface_states
-            .lock()
-            .expect("poisoned")
-            .get(&WaylandSurfaceKey(
-                self.xdg_toplevel_to_surface[&(sender as *mut _)],
-            ))
-            .expect("no surface registered")
-            .terminate_event
-            .inc(1)
-            .expect("terminate_event.inc");
+        self.terminate_event.inc(1).expect("terminate_event.inc");
     }
 
     #[tracing::instrument(skip(self, sender), fields(states = ?unsafe { states.as_slice::<u32>() }))]
@@ -2873,13 +3063,8 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgToplevelEventListener
     ) {
         tracing::trace!("xdg toplevel configure");
 
-        let mut states_lock = self.surface_states.lock().expect("poisoned");
-        let state = states_lock
-            .get_mut(&WaylandSurfaceKey(
-                self.xdg_toplevel_to_surface[&(sender as *mut _)],
-            ))
-            .expect("no surface registered");
-
+        let state = unsafe { &mut *sender.user_data().cast::<WaylandWindowState>() };
+        println!("{state:p}",);
         state.pending_configure_size = Some((
             if width == 0 {
                 state.active_size.width as _
@@ -2894,18 +3079,22 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgToplevelEventListener
         ));
     }
 
-    fn configure_bounds(&mut self, sender: &mut wl::XdgToplevel, width: i32, height: i32) {}
+    fn configure_bounds(&mut self, _sender: &mut wl::XdgToplevel, _width: i32, _height: i32) {}
 
-    fn wm_capabilities(&mut self, sender: &mut wl::XdgToplevel, capabilities: &mut wl::ffi::Array) {
+    fn wm_capabilities(
+        &mut self,
+        _sender: &mut wl::XdgToplevel,
+        _capabilities: &mut wl::ffi::Array,
+    ) {
     }
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::ZxdgToplevelDecorationV1EventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandWindowEventListener<AppFuture>
 {
     fn configure(
         &mut self,
-        sender: &mut wl::ZxdgToplevelDecorationV1,
+        _sender: &mut wl::ZxdgToplevelDecorationV1,
         mode: wl::ZxdgToplevelDecorationV1Mode,
     ) {
         match mode {
@@ -2920,242 +3109,25 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZxdgToplevelDecorationV1E
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> wl::WpFractionalScaleV1EventListener
-    for WaylandGlobalMessaging<'_, AppFuture>
+    for WaylandWindowEventListener<AppFuture>
 {
     #[tracing::instrument(skip(self, sender))]
     fn preferred_scale(&mut self, sender: &mut wl::WpFractionalScaleV1, scale: u32) {
         tracing::trace!("fractional scale");
         // fractional scaleでは1固定にする必要がある
-        unsafe { &*self.fractional_scale_to_surface[&(sender as *mut _)] }
+        unsafe { &*self.state.surface_ptr }
             .set_buffer_scale(1)
             .expect("wl_surface.set_buffer_scale");
-        self.set_scale(
-            WaylandSurfaceKey(self.fractional_scale_to_surface[&(sender as *mut _)]),
-            scale as f32 / 120.0,
-        );
+        self.set_scale(scale as f32 / 120.0);
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> WaylandGlobalMessaging<'_, AppFuture> {
-    fn set_scale(&self, surface: WaylandSurfaceKey, scale: f32) {
-        self.surface_states
-            .lock()
-            .expect("poisoned")
-            .get_mut(&surface)
-            .expect("surface_states.none")
-            .active_buffer_scale = scale;
+impl<AppFuture: core::future::Future<Output = ()>> WaylandWindowEventListener<AppFuture> {
+    fn set_scale(&mut self, scale: f32) {
+        self.state.active_buffer_scale = scale;
         self.event_dispatcher
             .dispatch(Event::WindowRescaleUI { new_scale: scale });
     }
-}
-
-#[cfg(feature = "wayland")]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WaylandSurfaceKey(*mut wl::Surface);
-#[cfg(feature = "wayland")]
-unsafe impl Sync for WaylandSurfaceKey {}
-#[cfg(feature = "wayland")]
-unsafe impl Send for WaylandSurfaceKey {}
-
-#[cfg(feature = "wayland")]
-pub struct WaylandWindow {
-    surface: wl::Owned<wl::Surface>,
-    xdg_surface: wl::Owned<wl::XdgSurface>,
-    xdg_toplevel: wl::Owned<wl::XdgToplevel>,
-    deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
-    fractional_scale: Option<wl::Owned<wl::WpFractionalScaleV1>>,
-    _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
-}
-#[cfg(feature = "wayland")]
-unsafe impl Sync for WaylandWindow {}
-#[cfg(feature = "wayland")]
-unsafe impl Send for WaylandWindow {}
-#[cfg(feature = "wayland")]
-impl WaylandWindow {
-    fn new(wl_interfaces: &WaylandGlobalInterfaces, dbus: &dbus::Connection) -> Self {
-        let surface = wl_interfaces
-            .compositor
-            .create_surface()
-            .expect("wl_surface create");
-        let xdg_surface = wl_interfaces
-            .xdg_wm_base
-            .get_xdg_surface(&surface)
-            .expect("xdg_surface create");
-        let xdg_toplevel = xdg_surface.get_toplevel().expect("xdg_toplevel create");
-        xdg_toplevel
-            .set_title(c"Peridot Marble Editor")
-            .expect("xdg_toplevel.set_title");
-        xdg_surface
-            .set_window_geometry(0, 0, 640, 480)
-            .expect("xdg_surface.set_window_geometry");
-
-        let appmenu = if let Some(ref am) = wl_interfaces.kde_appmenu_manager {
-            let a = am.create(&surface).expect("appmenu.create");
-            a.set_address(dbus.unique_name().expect("no name"), WL_APPMENU_OBJECT_PATH)
-                .expect("appmenu.set_address");
-
-            Some(a)
-        } else {
-            None
-        };
-
-        let deco = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager {
-            let d = dm
-                .get_toplevel_decoration(&xdg_toplevel)
-                .expect("decoration.get_toplevel");
-            d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
-                .expect("decoration.set_mode");
-
-            Some(d)
-        } else {
-            None
-        };
-
-        let fractional_scale = if let Some(ref fs) = wl_interfaces.fractional_scale_manager {
-            let f = fs
-                .get_fractional_scale(&surface)
-                .expect("fractional_scale.create");
-
-            Some(f)
-        } else {
-            None
-        };
-
-        // commits initial state
-        surface.commit().expect("wl_surface.commit");
-
-        Self {
-            surface,
-            xdg_surface,
-            xdg_toplevel,
-            _appmenu: appmenu,
-            deco,
-            fractional_scale,
-        }
-    }
-
-    pub const fn as_key(&self) -> WaylandSurfaceKey {
-        WaylandSurfaceKey(self.surface.as_ptr())
-    }
-
-    fn bind_global_messaging(
-        &mut self,
-        mut global_messaging: core::pin::Pin<
-            &mut WaylandGlobalMessaging<impl core::future::Future<Output = ()>>,
-        >,
-        terminate_event: std::sync::Arc<EventFD>,
-        latest_ui_scale_changes: std::sync::Arc<Mutex<Option<f32>>>,
-    ) {
-        unsafe { global_messaging.as_mut().get_unchecked_mut() }
-            .surface_states
-            .lock()
-            .expect("poisoned")
-            .insert(
-                WaylandSurfaceKey(self.surface.as_ptr()),
-                WaylandWindowState {
-                    pending_configure_size: None,
-                    active_buffer_scale: 1.0,
-                    active_size: Size::new_pixels(640, 480),
-                    swapchain_externally_invalidation_signal: std::sync::Arc::new(
-                        std::sync::atomic::AtomicBool::new(false),
-                    ),
-                    terminate_event,
-                    latest_ui_scale_changes,
-                },
-            );
-        unsafe { global_messaging.as_mut().get_unchecked_mut() }
-            .xdg_surface_to_surface
-            .insert(self.xdg_surface.as_ptr(), self.surface.as_ptr());
-        unsafe { global_messaging.as_mut().get_unchecked_mut() }
-            .surface_to_xdg_surface
-            .insert(self.surface.as_ptr(), self.xdg_surface.as_ptr());
-        unsafe { global_messaging.as_mut().get_unchecked_mut() }
-            .xdg_toplevel_to_surface
-            .insert(self.xdg_toplevel.as_ptr(), self.surface.as_ptr());
-        if let Some(ref f) = self.fractional_scale {
-            unsafe { global_messaging.as_mut().get_unchecked_mut() }
-                .fractional_scale_to_surface
-                .insert(f.as_ptr(), self.surface.as_ptr());
-        }
-
-        self.surface
-            .set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
-            .into_result()
-            .expect("wl_surface set listener");
-        self.xdg_surface
-            .set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
-            .into_result()
-            .expect("xdg_surface set listener");
-        self.xdg_toplevel
-            .set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
-            .into_result()
-            .expect("xdg_toplevel set listener");
-        if let Some(ref mut x) = self.deco {
-            x.set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
-                .into_result()
-                .expect("zxdg_toplevel_decoration_v1.set_listener");
-        }
-        if let Some(ref mut x) = self.fractional_scale {
-            x.set_listener(unsafe { global_messaging.as_mut().get_unchecked_mut() })
-                .into_result()
-                .expect("wp_fractional_scale_v1.set_listener");
-        }
-    }
-
-    fn commit(&self) {
-        self.surface.commit().expect("wl_surface.commit");
-    }
-}
-
-#[cfg(feature = "wayland")]
-struct WaylandPopupState {
-    surface_ptr: *mut wl::Surface,
-}
-#[cfg(feature = "wayland")]
-impl wl::XdgSurfaceEventListener for WaylandPopupState {
-    #[tracing::instrument(skip(self, sender))]
-    fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
-        tracing::trace!("popup.surface.configure");
-        sender.ack_configure(serial).expect("popup.ack_configure");
-
-        unsafe {
-            (*self.surface_ptr).commit().expect("popup.surface.commit");
-        }
-    }
-}
-#[cfg(feature = "wayland")]
-impl wl::XdgPopupEventListener for WaylandPopupState {
-    #[tracing::instrument(skip(self, sender))]
-    fn configure(
-        &mut self,
-        sender: &mut peridot_tp_wayland::XdgPopup,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-    ) {
-        tracing::trace!("popup.configure");
-    }
-
-    #[tracing::instrument(skip(self, sender))]
-    fn popup_done(&mut self, sender: &mut peridot_tp_wayland::XdgPopup) {
-        tracing::trace!("popup.popup_done");
-    }
-
-    #[tracing::instrument(skip(self, sender))]
-    fn repositioned(&mut self, sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
-        tracing::trace!("popup.repositioned");
-    }
-}
-
-#[cfg(feature = "wayland")]
-struct WaylandWindowState {
-    pending_configure_size: Option<(i32, i32)>,
-    active_buffer_scale: f32,
-    active_size: Size<PixelsUnit>,
-    swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    terminate_event: std::sync::Arc<EventFD>,
-    latest_ui_scale_changes: std::sync::Arc<Mutex<Option<f32>>>,
 }
 
 #[cfg(target_os = "linux")]

@@ -38,6 +38,17 @@ unsafe impl Interface for WpContentTypeManagerV1 {
 }
 
 impl WpContentTypeManagerV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn get_surface_content_type(
         &self,
@@ -56,6 +67,11 @@ impl WpContentTypeManagerV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WpContentTypeManagerV1Error {
     AlreadyConstructed = 0,
+}
+impl WpContentTypeManagerV1Error {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static WP_CONTENT_TYPE_V1_INTERFACE: ffi::Interface = ffi::Interface {
@@ -96,14 +112,20 @@ unsafe impl Interface for WpContentTypeV1 {
 }
 
 impl WpContentTypeV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_content_type(&self, content_type: WpContentTypeV1Type) -> crate::Result<()> {
-        self.0.marshal_array_void(
-            1,
-            &mut [ffi::Argument {
-                u: content_type as _,
-            }],
-        )
+        self.0.marshal_array_void(1, &mut [content_type.as_arg()])
     }
 }
 
@@ -114,4 +136,9 @@ pub enum WpContentTypeV1Type {
     Photo = 1,
     Video = 2,
     Game = 3,
+}
+impl WpContentTypeV1Type {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }

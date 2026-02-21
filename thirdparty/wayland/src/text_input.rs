@@ -264,6 +264,17 @@ impl ZwpTextInputV3 {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn enable(&self) -> crate::Result<()> {
         self.0.marshal_array_void(1, &mut [])
@@ -444,6 +455,17 @@ unsafe impl Interface for ZwpTextInputManagerV3 {
 }
 
 impl ZwpTextInputManagerV3 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn get_text_input(
         &self,

@@ -695,6 +695,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    }}");
             println!("");
         }
+        println!(
+            "    #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {{ unsafe {{ self.0.set_user_data(user_data); }} }}"
+        );
+        println!(
+            "    #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void {{ unsafe {{ self.0.user_data() }} }}"
+        );
+        println!("");
         println!("{request_wrappers} }}\n");
         if !listener_trait_members.is_empty() {
             println!("pub trait {event_listener_trait_name} {{ {listener_trait_members} }}\n");

@@ -44,6 +44,17 @@ unsafe impl Interface for ZxdgDecorationManagerV1 {
 }
 
 impl ZxdgDecorationManagerV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn get_toplevel_decoration(
         &self,
@@ -144,10 +155,20 @@ impl ZxdgToplevelDecorationV1 {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_mode(&self, mode: ZxdgToplevelDecorationV1Mode) -> crate::Result<()> {
-        self.0
-            .marshal_array_void(1, &mut [ffi::Argument { u: mode as _ }])
+        self.0.marshal_array_void(1, &mut [mode.as_arg()])
     }
 
     #[inline]
@@ -172,10 +193,20 @@ pub enum ZxdgToplevelDecorationV1Error {
     Orphaned = 2,
     InvalidMode = 3,
 }
+impl ZxdgToplevelDecorationV1Error {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZxdgToplevelDecorationV1Mode {
     ClientSide = 1,
     ServerSide = 2,
+}
+impl ZxdgToplevelDecorationV1Mode {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }

@@ -63,6 +63,17 @@ unsafe impl Interface for WpFractionalScaleManagerV1 {
 }
 
 impl WpFractionalScaleManagerV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn get_fractional_scale(
         &self,
@@ -81,6 +92,11 @@ impl WpFractionalScaleManagerV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WpFractionalScaleManagerV1Error {
     FractionalScaleExists = 0,
+}
+impl WpFractionalScaleManagerV1Error {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static WP_FRACTIONAL_SCALE_V1_INTERFACE: ffi::Interface = ffi::Interface {
@@ -153,6 +169,17 @@ impl WpFractionalScaleV1 {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
 }
 
 pub trait WpFractionalScaleV1EventListener {

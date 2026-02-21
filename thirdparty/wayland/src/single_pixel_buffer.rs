@@ -64,6 +64,17 @@ unsafe impl Interface for WpSinglePixelBufferManagerV1 {
 }
 
 impl WpSinglePixelBufferManagerV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn create_u32_rgba_buffer(
         &self,

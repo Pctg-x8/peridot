@@ -38,6 +38,17 @@ unsafe impl Interface for WpViewporter {
 }
 
 impl WpViewporter {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn get_viewport(
         &self,
@@ -56,6 +67,11 @@ impl WpViewporter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WpViewporterError {
     ViewportExists = 0,
+}
+impl WpViewporterError {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static WP_VIEWPORT_INTERFACE: ffi::Interface = ffi::Interface {
@@ -109,6 +125,17 @@ unsafe impl Interface for WpViewport {
 }
 
 impl WpViewport {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_source(
         &self,
@@ -144,4 +171,9 @@ pub enum WpViewportError {
     BadSize = 1,
     OutOfBuffer = 2,
     NoSurface = 3,
+}
+impl WpViewportError {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }

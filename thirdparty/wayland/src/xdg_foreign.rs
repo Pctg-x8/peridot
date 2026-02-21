@@ -71,6 +71,17 @@ unsafe impl Interface for ZxdgExporterV2 {
 }
 
 impl ZxdgExporterV2 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn export_toplevel(
         &self,
@@ -89,6 +100,11 @@ impl ZxdgExporterV2 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZxdgExporterV2Error {
     InvalidSurface = 0,
+}
+impl ZxdgExporterV2Error {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static ZXDG_IMPORTER_V2_INTERFACE: ffi::Interface = ffi::Interface {
@@ -129,6 +145,17 @@ unsafe impl Interface for ZxdgImporterV2 {
 }
 
 impl ZxdgImporterV2 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn import_toplevel(
         &self,
@@ -216,6 +243,17 @@ impl ZxdgExportedV2 {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
 }
 
 pub trait ZxdgExportedV2EventListener {
@@ -296,6 +334,17 @@ impl ZxdgImportedV2 {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_parent_of(&self, surface: &crate::Surface) -> crate::Result<()> {
         self.0.marshal_array_void(1, &mut [surface.0.as_arg()])
@@ -310,4 +359,9 @@ pub trait ZxdgImportedV2EventListener {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZxdgImportedV2Error {
     InvalidSurface = 0,
+}
+impl ZxdgImportedV2Error {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }

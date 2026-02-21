@@ -1,4 +1,4 @@
-//! tablet_unstable_v2: Wayland protocol for graphics tablets
+//! tablet_v2: Wayland protocol for graphics tablets
 //!
 //! This description provides a high-level overview of the interplay between
 //! the interfaces defined this protocol. For details, see the protocol
@@ -77,16 +77,12 @@
 //! will likely include some form of removing a tool when all tablets the
 //! tool was used on are removed.
 //!
-//! Disclaimer: This protocol extension has been marked stable. This copy is
-//! no longer used and only retained for backwards compatibility. The
-//! canonical version can be found in the stable/ directory.
-//!
 
 use crate::{Interface, Proxy, ffi};
 
 static ZWP_TABLET_MANAGER_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_manager_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 2,
     methods: const {
         [
@@ -122,6 +118,17 @@ unsafe impl Interface for ZwpTabletManagerV2 {
 }
 
 impl ZwpTabletManagerV2 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn get_tablet_seat(
         &self,
@@ -138,7 +145,7 @@ impl ZwpTabletManagerV2 {
 
 static ZWP_TABLET_SEAT_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_seat_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 1,
     methods: const {
         [ffi::Message {
@@ -267,6 +274,17 @@ impl ZwpTabletSeatV2 {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
 }
 
 pub trait ZwpTabletSeatV2EventListener {
@@ -281,7 +299,7 @@ pub trait ZwpTabletSeatV2EventListener {
 
 static ZWP_TABLET_TOOL_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_tool_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 2,
     methods: const {
         [
@@ -766,6 +784,17 @@ impl ZwpTabletToolV2 {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_cursor(
         &self,
@@ -842,6 +871,11 @@ pub enum ZwpTabletToolV2Type {
     Mouse = 326,
     Lens = 327,
 }
+impl ZwpTabletToolV2Type {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -853,6 +887,11 @@ pub enum ZwpTabletToolV2Capability {
     Slider = 5,
     Wheel = 6,
 }
+impl ZwpTabletToolV2Capability {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -860,16 +899,26 @@ pub enum ZwpTabletToolV2ButtonState {
     Released = 0,
     Pressed = 1,
 }
+impl ZwpTabletToolV2ButtonState {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZwpTabletToolV2Error {
     Role = 0,
 }
+impl ZwpTabletToolV2Error {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 static ZWP_TABLET_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 1,
     methods: const {
         [ffi::Message {
@@ -879,7 +928,7 @@ static ZWP_TABLET_V2_INTERFACE: ffi::Interface = ffi::Interface {
         }]
     }
     .as_ptr(),
-    event_count: 5,
+    event_count: 6,
     events: const {
         [
             ffi::Message {
@@ -906,6 +955,11 @@ static ZWP_TABLET_V2_INTERFACE: ffi::Interface = ffi::Interface {
                 name: c"removed".as_ptr(),
                 signature: c"".as_ptr(),
                 types: const { [] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"bustype".as_ptr(),
+                signature: c"2u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
             },
         ]
     }
@@ -982,6 +1036,17 @@ impl ZwpTabletV2 {
                 &mut *(sender0 as *mut _)
             })
         }
+        extern "C" fn bustype<L: ZwpTabletV2EventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            bustype: u32,
+        ) {
+            L::bustype(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                unsafe { core::mem::transmute(bustype) },
+            )
+        }
 
         #[repr(C)]
         struct FPTable {
@@ -1003,6 +1068,11 @@ impl ZwpTabletV2 {
             ),
             done: extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy),
             removed: extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy),
+            bustype: extern "C" fn(
+                data0: *mut core::ffi::c_void,
+                sender0: *mut ffi::Proxy,
+                bustype: u32,
+            ),
         }
         unsafe {
             self.0.set_listener(
@@ -1013,12 +1083,24 @@ impl ZwpTabletV2 {
                         path: path::<L>,
                         done: done::<L>,
                         removed: removed::<L>,
+                        bustype: bustype::<L>,
                     }
                 } as &'static FPTable as *const _ as _,
                 listener as *mut _ as _,
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
 }
 
 pub trait ZwpTabletV2EventListener {
@@ -1027,11 +1109,27 @@ pub trait ZwpTabletV2EventListener {
     fn path(&mut self, sender: &mut ZwpTabletV2, path: &core::ffi::CStr);
     fn done(&mut self, sender: &mut ZwpTabletV2);
     fn removed(&mut self, sender: &mut ZwpTabletV2);
+    fn bustype(&mut self, sender: &mut ZwpTabletV2, bustype: ZwpTabletV2Bustype);
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZwpTabletV2Bustype {
+    Usb = 3,
+    Bluetooth = 5,
+    Virtual = 6,
+    Serial = 17,
+    I2c = 24,
+}
+impl ZwpTabletV2Bustype {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static ZWP_TABLET_PAD_RING_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_pad_ring_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 2,
     methods: const {
         [
@@ -1165,6 +1263,17 @@ impl ZwpTabletPadRingV2 {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_feedback(&self, description: &core::ffi::CStr, serial: u32) -> crate::Result<()> {
         self.0.marshal_array_void(
@@ -1191,10 +1300,15 @@ pub trait ZwpTabletPadRingV2EventListener {
 pub enum ZwpTabletPadRingV2Source {
     Finger = 1,
 }
+impl ZwpTabletPadRingV2Source {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 static ZWP_TABLET_PAD_STRIP_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_pad_strip_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 2,
     methods: const {
         [
@@ -1328,6 +1442,17 @@ impl ZwpTabletPadStripV2 {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_feedback(&self, description: &core::ffi::CStr, serial: u32) -> crate::Result<()> {
         self.0.marshal_array_void(
@@ -1354,10 +1479,15 @@ pub trait ZwpTabletPadStripV2EventListener {
 pub enum ZwpTabletPadStripV2Source {
     Finger = 1,
 }
+impl ZwpTabletPadStripV2Source {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 static ZWP_TABLET_PAD_GROUP_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_pad_group_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 1,
     methods: const {
         [ffi::Message {
@@ -1367,7 +1497,7 @@ static ZWP_TABLET_PAD_GROUP_V2_INTERFACE: ffi::Interface = ffi::Interface {
         }]
     }
     .as_ptr(),
-    event_count: 6,
+    event_count: 7,
     events: const {
         [
             ffi::Message {
@@ -1399,6 +1529,11 @@ static ZWP_TABLET_PAD_GROUP_V2_INTERFACE: ffi::Interface = ffi::Interface {
                 name: c"mode_switch".as_ptr(),
                 signature: c"uuu".as_ptr(),
                 types: const { [core::ptr::null(), core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"dial".as_ptr(),
+                signature: c"2n".as_ptr(),
+                types: const { [crate::ZwpTabletPadDialV2::DEF] }.as_ptr(),
             },
         ]
     }
@@ -1499,6 +1634,21 @@ impl ZwpTabletPadGroupV2 {
                 mode,
             )
         }
+        extern "C" fn dial<L: ZwpTabletPadGroupV2EventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            dial: *mut ffi::Proxy,
+        ) {
+            L::dial(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                unsafe {
+                    crate::Owned::from_untyped_unchecked(core::ptr::NonNull::new_unchecked(
+                        crate::Proxy::cast_ffi_ptr(dial),
+                    ))
+                },
+            )
+        }
 
         #[repr(C)]
         struct FPTable {
@@ -1527,6 +1677,11 @@ impl ZwpTabletPadGroupV2 {
                 serial: u32,
                 mode: u32,
             ),
+            dial: extern "C" fn(
+                data0: *mut core::ffi::c_void,
+                sender0: *mut ffi::Proxy,
+                dial: *mut ffi::Proxy,
+            ),
         }
         unsafe {
             self.0.set_listener(
@@ -1538,12 +1693,24 @@ impl ZwpTabletPadGroupV2 {
                         modes: modes::<L>,
                         done: done::<L>,
                         mode_switch: mode_switch::<L>,
+                        dial: dial::<L>,
                     }
                 } as &'static FPTable as *const _ as _,
                 listener as *mut _ as _,
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
 }
 
 pub trait ZwpTabletPadGroupV2EventListener {
@@ -1561,11 +1728,16 @@ pub trait ZwpTabletPadGroupV2EventListener {
     fn modes(&mut self, sender: &mut ZwpTabletPadGroupV2, modes: u32);
     fn done(&mut self, sender: &mut ZwpTabletPadGroupV2);
     fn mode_switch(&mut self, sender: &mut ZwpTabletPadGroupV2, time: u32, serial: u32, mode: u32);
+    fn dial(
+        &mut self,
+        sender: &mut ZwpTabletPadGroupV2,
+        dial: crate::Owned<crate::ZwpTabletPadDialV2>,
+    );
 }
 
 static ZWP_TABLET_PAD_V2_INTERFACE: ffi::Interface = ffi::Interface {
     name: c"zwp_tablet_pad_v2".as_ptr(),
-    version: 1,
+    version: 2,
     method_count: 2,
     methods: const {
         [
@@ -1812,6 +1984,17 @@ impl ZwpTabletPadV2 {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_feedback(
         &self,
@@ -1864,4 +2047,141 @@ pub trait ZwpTabletPadV2EventListener {
 pub enum ZwpTabletPadV2ButtonState {
     Released = 0,
     Pressed = 1,
+}
+impl ZwpTabletPadV2ButtonState {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
+
+static ZWP_TABLET_PAD_DIAL_V2_INTERFACE: ffi::Interface = ffi::Interface {
+    name: c"zwp_tablet_pad_dial_v2".as_ptr(),
+    version: 2,
+    method_count: 2,
+    methods: const {
+        [
+            ffi::Message {
+                name: c"set_feedback".as_ptr(),
+                signature: c"su".as_ptr(),
+                types: const { [core::ptr::null(), core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"destroy".as_ptr(),
+                signature: c"".as_ptr(),
+                types: const { [] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+    event_count: 2,
+    events: const {
+        [
+            ffi::Message {
+                name: c"delta".as_ptr(),
+                signature: c"i".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+            ffi::Message {
+                name: c"frame".as_ptr(),
+                signature: c"u".as_ptr(),
+                types: const { [core::ptr::null()] }.as_ptr(),
+            },
+        ]
+    }
+    .as_ptr(),
+};
+
+#[repr(transparent)]
+pub struct ZwpTabletPadDialV2(pub(crate) Proxy);
+unsafe impl Interface for ZwpTabletPadDialV2 {
+    const DEF: *const ffi::Interface = &ZWP_TABLET_PAD_DIAL_V2_INTERFACE;
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<ZwpTabletPadDialV2 as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        self.0.call_simple_dtor(1);
+    }
+}
+
+impl ZwpTabletPadDialV2 {
+    pub fn set_listener<'l, L: ZwpTabletPadDialV2EventListener + 'l>(
+        &'l mut self,
+        listener: &'l mut L,
+    ) -> crate::SetListenerResult {
+        extern "C" fn delta<L: ZwpTabletPadDialV2EventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            value120: i32,
+        ) {
+            L::delta(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                value120,
+            )
+        }
+        extern "C" fn frame<L: ZwpTabletPadDialV2EventListener>(
+            data0: *mut core::ffi::c_void,
+            sender0: *mut ffi::Proxy,
+            time: u32,
+        ) {
+            L::frame(
+                unsafe { &mut *(data0 as *mut _) },
+                unsafe { &mut *(sender0 as *mut _) },
+                time,
+            )
+        }
+
+        #[repr(C)]
+        struct FPTable {
+            delta: extern "C" fn(
+                data0: *mut core::ffi::c_void,
+                sender0: *mut ffi::Proxy,
+                value120: i32,
+            ),
+            frame:
+                extern "C" fn(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy, time: u32),
+        }
+        unsafe {
+            self.0.set_listener(
+                &const {
+                    FPTable {
+                        delta: delta::<L>,
+                        frame: frame::<L>,
+                    }
+                } as &'static FPTable as *const _ as _,
+                listener as *mut _ as _,
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
+    #[inline]
+    pub fn set_feedback(&self, description: &core::ffi::CStr, serial: u32) -> crate::Result<()> {
+        self.0.marshal_array_void(
+            0,
+            &mut [
+                ffi::Argument {
+                    s: description.as_ptr(),
+                },
+                ffi::Argument { u: serial },
+            ],
+        )
+    }
+}
+
+pub trait ZwpTabletPadDialV2EventListener {
+    fn delta(&mut self, sender: &mut ZwpTabletPadDialV2, value120: i32);
+    fn frame(&mut self, sender: &mut ZwpTabletPadDialV2, time: u32);
 }

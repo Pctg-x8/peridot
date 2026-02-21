@@ -1,7 +1,3 @@
-use std::sync::{Arc, atomic::AtomicBool};
-#[cfg(feature = "wayland")]
-use std::{collections::HashMap, sync::Mutex};
-
 use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut,
     ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, Swapchain, VkHandle, VkHandleMut,
@@ -22,16 +18,15 @@ use crate::{
 };
 #[cfg(feature = "wayland")]
 use crate::{
-    WaylandSurfaceKey, WaylandWindow, WaylandWindowState,
+    WaylandWindowState,
     text::{GlyphAtlas, RootFontSet},
 };
 
 pub struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
-    w: WaylandWindow,
+    w: &'d WaylandWindowState,
     active_scale: SafeF32,
     vk_device: &'d VulkanDevice,
-    swapchain_externally_invalidation_signal: Option<Arc<AtomicBool>>,
     swapchain_invalidated: bool,
     composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
@@ -55,9 +50,8 @@ pub struct WindowRenderer<'d> {
 impl<'d> WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
     pub fn new(
-        w: WaylandWindow,
+        w: &'d WaylandWindowState,
         active_scale: SafeF32,
-        surface_states: &'d Mutex<HashMap<WaylandSurfaceKey, WaylandWindowState>>,
         composite_root: CompositeTreeRef,
         surface: VulkanSurface<'d>,
         vk_device: &'d VulkanDevice,
@@ -68,16 +62,12 @@ impl<'d> WindowRenderer<'d> {
         #[cfg(feature = "wayland")]
         font_set.rescale((active_scale.value() * 72.0) as _);
 
-        let swapchain_externally_invalidation_signal = surface_states.lock().expect("poisoned")
-            [&w.as_key()]
-            .swapchain_externally_invalidation_signal
-            .clone();
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
             #[cfg(windows)]
             || w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || surface_states.lock().expect("poisoned")[&w.as_key()].active_size,
+            || w.active_size,
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );
@@ -171,9 +161,6 @@ impl<'d> WindowRenderer<'d> {
             active_scale,
             font_set,
             vk_device,
-            swapchain_externally_invalidation_signal: Some(
-                swapchain_externally_invalidation_signal,
-            ),
             composite_root,
             composite_renderer: BoundCompositeRenderer::new(
                 &vk_device,
@@ -276,18 +263,17 @@ impl<'d> WindowRenderer<'d> {
         needs_update_commands
     }
 
+    #[cfg(feature = "wayland")]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
-        match self.swapchain_externally_invalidation_signal {
-            Some(ref x) => {
-                x.compare_exchange_weak(
-                    true,
-                    false,
-                    std::sync::atomic::Ordering::Relaxed,
-                    std::sync::atomic::Ordering::Relaxed,
-                ) == Ok(true)
-            }
-            None => false,
-        }
+        self.w
+            .swapchain_externally_invalidation_signal
+            .compare_exchange_weak(
+                true,
+                false,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            == Ok(true)
     }
 
     pub fn invalidate_swapchain(&mut self) {
@@ -297,9 +283,6 @@ impl<'d> WindowRenderer<'d> {
     pub fn validate_swapchain<'s>(
         &'s mut self,
         descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
-        #[cfg(feature = "wayland")] surface_states: &Mutex<
-            HashMap<WaylandSurfaceKey, WaylandWindowState>,
-        >,
     ) {
         if !self.swapchain_invalidated {
             // already valid
@@ -315,7 +298,7 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             || w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || surface_states.lock().expect("poisoned")[&self.w.as_key()].active_size,
+            || self.w.active_size,
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );

@@ -51,6 +51,17 @@ unsafe impl Interface for ZwlrLayerShellV1 {
 }
 
 impl ZwlrLayerShellV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn get_layer_surface(
         &self,
@@ -248,6 +259,17 @@ impl ZwlrLayerSurfaceV1 {
                 listener as *mut _ as _,
             )
         }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 
     #[inline]

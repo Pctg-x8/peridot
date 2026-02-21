@@ -84,6 +84,17 @@ impl XdgWmBase {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn create_positioner(&self) -> crate::Result<crate::Owned<crate::XdgPositioner>> {
         Ok(unsafe {
@@ -125,6 +136,11 @@ pub enum XdgWmBaseError {
     InvalidSurfaceState = 4,
     InvalidPositioner = 5,
     Unresponsive = 6,
+}
+impl XdgWmBaseError {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static XDG_POSITIONER_INTERFACE: ffi::Interface = ffi::Interface {
@@ -213,6 +229,17 @@ unsafe impl Interface for XdgPositioner {
 }
 
 impl XdgPositioner {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn set_size(&self, width: i32, height: i32) -> crate::Result<()> {
         self.0.marshal_array_void(
@@ -236,14 +263,12 @@ impl XdgPositioner {
 
     #[inline]
     pub fn set_anchor(&self, anchor: XdgPositionerAnchor) -> crate::Result<()> {
-        self.0
-            .marshal_array_void(3, &mut [ffi::Argument { u: anchor as _ }])
+        self.0.marshal_array_void(3, &mut [anchor.as_arg()])
     }
 
     #[inline]
     pub fn set_gravity(&self, gravity: XdgPositionerGravity) -> crate::Result<()> {
-        self.0
-            .marshal_array_void(4, &mut [ffi::Argument { u: gravity as _ }])
+        self.0.marshal_array_void(4, &mut [gravity.as_arg()])
     }
 
     #[inline]
@@ -251,12 +276,8 @@ impl XdgPositioner {
         &self,
         constraint_adjustment: XdgPositionerConstraintAdjustment,
     ) -> crate::Result<()> {
-        self.0.marshal_array_void(
-            5,
-            &mut [ffi::Argument {
-                u: constraint_adjustment as _,
-            }],
-        )
+        self.0
+            .marshal_array_void(5, &mut [constraint_adjustment.as_arg()])
     }
 
     #[inline]
@@ -293,6 +314,11 @@ impl XdgPositioner {
 pub enum XdgPositionerError {
     InvalidInput = 0,
 }
+impl XdgPositionerError {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,6 +332,11 @@ pub enum XdgPositionerAnchor {
     BottomLeft = 6,
     TopRight = 7,
     BottomRight = 8,
+}
+impl XdgPositionerAnchor {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 #[repr(u32)]
@@ -321,17 +352,25 @@ pub enum XdgPositionerGravity {
     TopRight = 7,
     BottomRight = 8,
 }
+impl XdgPositionerGravity {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum XdgPositionerConstraintAdjustment {
-    None = 0,
-    SlideX = 1,
-    SlideY = 2,
-    FlipX = 4,
-    FlipY = 8,
-    ResizeX = 16,
-    ResizeY = 32,
+bitflags::bitflags! { #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct XdgPositionerConstraintAdjustment : u32 {
+    const None = 0;
+    const SlideX = 1;
+    const SlideY = 2;
+    const FlipX = 4;
+    const FlipY = 8;
+    const ResizeX = 16;
+    const ResizeY = 32;
+} }
+impl XdgPositionerConstraintAdjustment {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: self.bits() }
+    }
 }
 
 static XDG_SURFACE_INTERFACE: ffi::Interface = ffi::Interface {
@@ -442,6 +481,17 @@ impl XdgSurface {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn get_toplevel(&self) -> crate::Result<crate::Owned<crate::XdgToplevel>> {
         Ok(unsafe {
@@ -506,6 +556,11 @@ pub enum XdgSurfaceError {
     InvalidSerial = 4,
     InvalidSize = 5,
     DefunctRoleObject = 6,
+}
+impl XdgSurfaceError {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static XDG_TOPLEVEL_INTERFACE: ffi::Interface = ffi::Interface {
@@ -727,6 +782,17 @@ impl XdgToplevel {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn set_parent(&self, parent: Option<&crate::XdgToplevel>) -> crate::Result<()> {
         self.0.marshal_array_void(
@@ -781,11 +847,7 @@ impl XdgToplevel {
     ) -> crate::Result<()> {
         self.0.marshal_array_void(
             6,
-            &mut [
-                seat.0.as_arg(),
-                ffi::Argument { u: serial },
-                ffi::Argument { u: edges as _ },
-            ],
+            &mut [seat.0.as_arg(), ffi::Argument { u: serial }, edges.as_arg()],
         )
     }
 
@@ -854,6 +916,11 @@ pub enum XdgToplevelError {
     InvalidParent = 1,
     InvalidSize = 2,
 }
+impl XdgToplevelError {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -867,6 +934,11 @@ pub enum XdgToplevelResizeEdge {
     Right = 8,
     TopRight = 9,
     BottomRight = 10,
+}
+impl XdgToplevelResizeEdge {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 #[repr(u32)]
@@ -886,6 +958,11 @@ pub enum XdgToplevelState {
     ConstrainedTop = 12,
     ConstrainedBottom = 13,
 }
+impl XdgToplevelState {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -894,6 +971,11 @@ pub enum XdgToplevelWmCapabilities {
     Maximize = 2,
     Fullscreen = 3,
     Minimize = 4,
+}
+impl XdgToplevelWmCapabilities {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
 
 static XDG_POPUP_INTERFACE: ffi::Interface = ffi::Interface {
@@ -1035,6 +1117,17 @@ impl XdgPopup {
         }
     }
 
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+
     #[inline]
     pub fn grab(&self, seat: &crate::Seat, serial: u32) -> crate::Result<()> {
         self.0
@@ -1058,4 +1151,9 @@ pub trait XdgPopupEventListener {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XdgPopupError {
     InvalidGrab = 0,
+}
+impl XdgPopupError {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }

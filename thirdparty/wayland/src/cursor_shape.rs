@@ -49,6 +49,17 @@ unsafe impl Interface for WpCursorShapeManagerV1 {
 }
 
 impl WpCursorShapeManagerV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn get_pointer(
         &self,
@@ -114,12 +125,21 @@ unsafe impl Interface for WpCursorShapeDeviceV1 {
 }
 
 impl WpCursorShapeDeviceV1 {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+    #[inline(always)]
+    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() } }
+   
+
     #[inline]
     pub fn set_shape(&self, serial: u32, shape: WpCursorShapeDeviceV1Shape) -> crate::Result<()> {
-        self.0.marshal_array_void(
-            1,
-            &mut [ffi::Argument { u: serial }, ffi::Argument { u: shape as _ }],
-        )
+        self.0
+            .marshal_array_void(1, &mut [ffi::Argument { u: serial }, shape.as_arg()])
     }
 }
 
@@ -163,9 +183,19 @@ pub enum WpCursorShapeDeviceV1Shape {
     DndAsk = 35,
     AllResize = 36,
 }
+impl WpCursorShapeDeviceV1Shape {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
+}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WpCursorShapeDeviceV1Error {
     InvalidShape = 1,
+}
+impl WpCursorShapeDeviceV1Error {
+    pub const fn as_arg(&self) -> ffi::Argument {
+        ffi::Argument { u: *self as _ }
+    }
 }
