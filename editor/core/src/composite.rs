@@ -526,7 +526,6 @@ impl<Event> Default for CompositeRectTextRun<Event> {
 #[derive(Debug, Clone)]
 pub struct CompositeRectText<Event> {
     pub runs: Vec<CompositeRectTextRun<Event>>,
-    pub layout_dirty: bool,
     pub horizontal_alignment: CompositeRectTextHorizontalAlignment,
     pub vertical_alignment: CompositeRectTextVerticalAlignment,
 }
@@ -534,7 +533,6 @@ impl<Event> Default for CompositeRectText<Event> {
     fn default() -> Self {
         Self {
             runs: Vec::new(),
-            layout_dirty: false,
             horizontal_alignment: Default::default(),
             vertical_alignment: Default::default(),
         }
@@ -559,7 +557,6 @@ pub struct CompositeRect<Event> {
     pub scale_x: AnimatableFloat<Event>,
     pub scale_y: AnimatableFloat<Event>,
     pub text: Option<CompositeRectText<Event>>,
-    pub dirty: bool,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
 }
@@ -580,7 +577,6 @@ impl<Event> Default for CompositeRect<Event> {
                 bottom: 0,
             },
             slice_borders: [0.0, 0.0, 0.0, 0.0],
-            dirty: false,
             composite_mode: CompositeMode::DirectSourceOver,
             custom_render_token: None,
             opacity: AnimatableFloat::Value(1.0),
@@ -1341,23 +1337,22 @@ enum DirtyRect {
 }
 
 enum DirtyRectSync<Event> {
-    Modified(CompositeRect<Event>),
+    Modified(CompositeRect<Event>, DirtyFlagSet),
     Deleted,
 }
 
 pub struct CompositeTreeRender<Event> {
     rects: Vec<CompositeRect<Event>>,
+    dirty_flags: Vec<DirtyFlagSet>,
     caches: Vec<CompositeRectCache>,
     parameter_store: CompositeTreeParameterStoreRender<Event>,
 }
 impl<Event> CompositeTreeRender<Event> {
     pub fn new() -> Self {
-        let rects = Vec::new();
-        let caches = Vec::new();
-
         Self {
-            rects,
-            caches,
+            rects: Vec::new(),
+            dirty_flags: Vec::new(),
+            caches: Vec::new(),
             parameter_store: CompositeTreeParameterStoreRender {
                 float_parameters: Vec::new(),
                 float_values: Vec::new(),
@@ -1397,7 +1392,7 @@ impl<Event> CompositeTreeRender<Event> {
             ),
         )];
         while let Some((
-            r,
+            rn,
             (
                 effective_base_left,
                 effective_base_top,
@@ -1409,9 +1404,9 @@ impl<Event> CompositeTreeRender<Event> {
             ),
         )) = processes.pop()
         {
-            let cache = &mut self.caches[r];
-            let r = &mut self.rects[r];
-            r.dirty = false;
+            let cache = &mut self.caches[rn];
+            let r = &mut self.rects[rn];
+            self.dirty_flags[rn].dirty = false;
             let local_left =
                 r.offset[0].evaluate(current_sec, &self.parameter_store) * r.base_scale_factor;
             let local_top =
@@ -1564,7 +1559,7 @@ impl<Event> CompositeTreeRender<Event> {
             }
 
             if let Some(ref mut t) = r.text {
-                if t.layout_dirty {
+                if self.dirty_flags[rn].text_layout_dirty {
                     Self::populate_text_layout_cache(
                         cache,
                         t,
@@ -1573,7 +1568,7 @@ impl<Event> CompositeTreeRender<Event> {
                         mask_atlas,
                         vector_raster_state,
                     );
-                    t.layout_dirty = false;
+                    self.dirty_flags[rn].text_layout_dirty = false;
                 }
 
                 let x_offset = match t.horizontal_alignment {
@@ -3133,6 +3128,12 @@ impl<Event> CompositeTreeRender<Event> {
     }
 }
 
+#[derive(Clone)]
+struct DirtyFlagSet {
+    dirty: bool,
+    text_layout_dirty: bool,
+}
+
 pub struct CompositeTreeSyncBuffer<Event> {
     pushed_rects: Vec<CompositeRect<Event>>,
     dirty_rects: Vec<(usize, DirtyRectSync<Event>)>,
@@ -3155,13 +3156,21 @@ impl<Event> CompositeTreeSyncBuffer<Event> {
         let _ = render.caches.try_reserve(self.pushed_rects.len());
         for x in self.pushed_rects.drain(..) {
             render.rects.push(x);
+            render.dirty_flags.push(DirtyFlagSet {
+                dirty: true,
+                text_layout_dirty: true,
+            });
             render.caches.push(CompositeRectCache::new());
         }
 
         for (n, x) in self.dirty_rects.drain(..) {
             match x {
-                DirtyRectSync::Modified(new) => {
+                DirtyRectSync::Modified(new, df) => {
                     render.rects[n] = new;
+                    // Host側でtrueになってるやつだけtrueにする
+                    render.dirty_flags[n].dirty = render.dirty_flags[n].dirty || df.dirty;
+                    render.dirty_flags[n].text_layout_dirty =
+                        render.dirty_flags[n].text_layout_dirty || df.text_layout_dirty;
                 }
                 DirtyRectSync::Deleted => {
                     // TODO: 今はすることがない そのうちCompositeRectに有効無効のフラグもたせるかも
@@ -3175,6 +3184,7 @@ impl<Event> CompositeTreeSyncBuffer<Event> {
 
 pub struct CompositeTree<Event> {
     rects: Vec<CompositeRect<Event>>,
+    dirty_flags: Vec<DirtyFlagSet>,
     pushed_rects: Vec<usize>,
     dirty_rects: HashMap<usize, DirtyRect>,
     unused: BTreeSet<usize>,
@@ -3187,6 +3197,7 @@ impl<Event> CompositeTree<Event> {
     pub fn new() -> Self {
         Self {
             rects: Vec::new(),
+            dirty_flags: Vec::new(),
             pushed_rects: Vec::new(),
             dirty_rects: HashMap::new(),
             unused: BTreeSet::new(),
@@ -3205,12 +3216,18 @@ impl<Event> CompositeTree<Event> {
     pub fn create(&mut self, data: CompositeRect<Event>) -> CompositeTreeRef {
         if let Some(x) = self.unused.pop_first() {
             self.rects[x] = data;
+            self.dirty_flags[x].dirty = true;
+            self.dirty_flags[x].text_layout_dirty = true;
             self.dirty_rects.insert(x, DirtyRect::Modified);
             return CompositeTreeRef(x);
         }
 
         let id = CompositeTreeRef(self.rects.len());
         self.rects.push(data);
+        self.dirty_flags.push(DirtyFlagSet {
+            dirty: true,
+            text_layout_dirty: true,
+        });
         self.pushed_rects.push(id.0);
         id
     }
@@ -3243,15 +3260,21 @@ impl<Event> CompositeTree<Event> {
     }
 
     pub fn mark_dirty(&mut self, index: CompositeTreeRef) {
-        self.rects[index.0].dirty = true;
+        self.dirty_flags[index.0].dirty = true;
+        self.dirty_rects.insert(index.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn mark_text_layout_dirty(&mut self, index: CompositeTreeRef) {
+        self.dirty_flags[index.0].text_layout_dirty = true;
         self.dirty_rects.insert(index.0, DirtyRect::Modified);
         self.dirty = true;
     }
 
     pub fn mark_dirty_all(&mut self, index: CompositeTreeRef) {
-        self.rects[index.0].dirty = true;
+        self.dirty_flags[index.0].dirty = true;
         if let Some(ref mut x) = self.rects[index.0].text {
-            x.layout_dirty = true;
+            self.dirty_flags[index.0].text_layout_dirty = true;
         }
         self.dirty_rects.insert(index.0, DirtyRect::Modified);
         self.dirty = true;
@@ -3266,16 +3289,20 @@ impl<Event> CompositeTree<Event> {
             .try_reserve(self.pushed_rects.len());
         for n in self.pushed_rects.drain(..) {
             sync_buffer.pushed_rects.push(self.rects[n].clone());
-            // TDDO: dirtyフラグどうするか......(同期しないようにする？
+            self.dirty_flags[n].dirty = false;
+            self.dirty_flags[n].text_layout_dirty = false;
         }
 
         let _ = sync_buffer.dirty_rects.try_reserve(self.dirty_rects.len());
         for (n, x) in self.dirty_rects.drain() {
             match x {
                 DirtyRect::Modified => {
-                    sync_buffer
-                        .dirty_rects
-                        .push((n, DirtyRectSync::Modified(self.rects[n].clone())));
+                    sync_buffer.dirty_rects.push((
+                        n,
+                        DirtyRectSync::Modified(self.rects[n].clone(), self.dirty_flags[n].clone()),
+                    ));
+                    self.dirty_flags[n].dirty = false;
+                    self.dirty_flags[n].text_layout_dirty = false;
                 }
                 DirtyRect::Deleted => {
                     sync_buffer.dirty_rects.push((n, DirtyRectSync::Deleted));

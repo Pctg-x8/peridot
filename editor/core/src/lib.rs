@@ -1064,7 +1064,6 @@ async fn run<'sys>(
             ],
             horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
             vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            layout_dirty: true,
             ..Default::default()
         }),
         ..Default::default()
@@ -1094,7 +1093,6 @@ async fn run<'sys>(
             }],
             horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
             vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            layout_dirty: true,
             ..Default::default()
         }),
         ..Default::default()
