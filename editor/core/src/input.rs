@@ -80,12 +80,11 @@ impl PointerInputManager {
         ht_target: HitTestTreeRef,
     ) {
         for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(EventContinueControl::empty(), |h| {
-                    h.on_pointer_enter(ht_ref, action_context, action_args)
-                });
+            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                continue;
+            };
+
+            let flags = a.on_pointer_enter(ht_ref, action_context, action_args);
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
@@ -100,12 +99,11 @@ impl PointerInputManager {
         ht_target: HitTestTreeRef,
     ) {
         for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(EventContinueControl::empty(), |h| {
-                    h.on_pointer_leave(ht_ref, action_context, action_args)
-                });
+            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                continue;
+            };
+
+            let flags = a.on_pointer_leave(ht_ref, action_context, action_args);
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
             }
@@ -166,12 +164,11 @@ impl PointerInputManager {
         let mut needs_recompute_pointer_enter = false;
 
         for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(EventContinueControl::empty(), |h| {
-                    h.on_pointer_move(ht_ref, action_context, action_args)
-                });
+            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                continue;
+            };
+
+            let flags = a.on_pointer_move(ht_ref, action_context, action_args);
             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                 needs_recompute_pointer_enter = true;
             }
@@ -195,12 +192,11 @@ impl PointerInputManager {
         let mut capture_released = false;
 
         for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(EventContinueControl::empty(), |h| {
-                    h.on_pointer_up(ht_ref, action_context, action_args)
-                });
+            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                continue;
+            };
+
+            let flags = a.on_pointer_up(ht_ref, action_context, action_args);
             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                 needs_recompute_pointer_enter = true;
             }
@@ -228,12 +224,11 @@ impl PointerInputManager {
         let mut new_captured = None;
 
         for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(EventContinueControl::empty(), |h| {
-                    h.on_click(ht_ref, action_context, action_args)
-                });
+            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                continue;
+            };
+
+            let flags = a.on_click(ht_ref, action_context, action_args);
             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                 needs_recompute_pointer_enter = true;
             }
@@ -271,12 +266,11 @@ impl PointerInputManager {
             }
             PointerFocusState::Entering(e) => {
                 for ht_ref in ht.iter_ascending_from(e) {
-                    let flags = ht
-                        .get_data(ht_ref)
-                        .action_handler()
-                        .map_or(EventContinueControl::empty(), |h| {
-                            h.on_drag_start(ht_ref, action_context, action_args)
-                        });
+                    let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                        continue;
+                    };
+
+                    let flags = a.on_drag_start(ht_ref, action_context, action_args);
                     if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
                         self.pointer_focus = PointerFocusState::Capturing(ht_ref);
                         shell.capture_pointer();
@@ -299,12 +293,11 @@ impl PointerInputManager {
         let mut needs_recompute_pointer_enter = false;
 
         for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(EventContinueControl::empty(), |h| {
-                    h.on_drag_move(ht_ref, action_context, action_args)
-                });
+            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                continue;
+            };
+
+            let flags = a.on_drag_move(ht_ref, action_context, action_args);
             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                 needs_recompute_pointer_enter = true;
             }
@@ -328,12 +321,11 @@ impl PointerInputManager {
         let mut capture_released = false;
 
         for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
-                .get_data(ht_ref)
-                .action_handler()
-                .map_or(EventContinueControl::empty(), |h| {
-                    h.on_drag_end(ht_ref, action_context, action_args)
-                });
+            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                continue;
+            };
+
+            let flags = a.on_drag_end(ht_ref, action_context, action_args);
             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                 needs_recompute_pointer_enter = true;
             }
