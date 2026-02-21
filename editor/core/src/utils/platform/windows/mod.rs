@@ -4,7 +4,9 @@ pub mod winrt_bootstrap;
 use windows::{
     Win32::{
         System::Diagnostics::Debug::OutputDebugStringA,
-        UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxA},
+        UI::WindowsAndMessaging::{
+            MB_ICONERROR, MB_OK, MessageBoxA, RegisterClassExW, WNDCLASSEXW,
+        },
     },
     core::PCSTR,
 };
@@ -28,4 +30,12 @@ pub fn set_panic_hook() {
         );
         std::process::abort();
     }));
+}
+
+#[inline(always)]
+pub unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
+    match unsafe { RegisterClassExW(x) } {
+        r if r == 0 => Err(std::io::Error::last_os_error()),
+        r => Ok(r),
+    }
 }

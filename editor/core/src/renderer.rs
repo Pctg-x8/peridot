@@ -23,7 +23,7 @@ pub struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
     w: &'d WaylandWindowState,
     #[cfg(windows)]
-    w: crate::Win32SendableWindowHandle,
+    w: crate::platform::windows::SendableWindowHandle,
     active_scale: SafeF32,
     vk_device: &'d VulkanDevice,
     swapchain_invalidated: bool,
@@ -49,7 +49,7 @@ pub struct WindowRenderer<'d> {
 impl<'d> WindowRenderer<'d> {
     pub fn new(
         #[cfg(feature = "wayland")] w: &'d WaylandWindowState,
-        #[cfg(windows)] w: crate::Win32SendableWindowHandle,
+        #[cfg(windows)] w: crate::platform::windows::SendableWindowHandle,
         active_scale: SafeF32,
         composite_root: CompositeTreeRef,
         surface: VulkanSurface<'d>,
@@ -64,12 +64,7 @@ impl<'d> WindowRenderer<'d> {
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
             #[cfg(windows)]
-            || unsafe {
-                let mut rect = core::mem::MaybeUninit::uninit();
-                windows::Win32::UI::WindowsAndMessaging::GetClientRect(w.0, rect.as_mut_ptr());
-                let rect = rect.assume_init();
-                crate::utils::Size::new_pixels(rect.right as _, rect.bottom as _)
-            },
+            || w.pixels_client_size(),
             #[cfg(feature = "wayland")]
             || w.committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]
@@ -304,12 +299,7 @@ impl<'d> WindowRenderer<'d> {
         self.swapchain.recreate(
             &self.surface,
             #[cfg(windows)]
-            || unsafe {
-                let mut rect = core::mem::MaybeUninit::uninit();
-                windows::Win32::UI::WindowsAndMessaging::GetClientRect(self.w.0, rect.as_mut_ptr());
-                let rect = rect.assume_init();
-                crate::utils::Size::new_pixels(rect.right as _, rect.bottom as _)
-            },
+            || self.w.pixels_client_size(),
             #[cfg(feature = "wayland")]
             || self.w.committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]
