@@ -1436,7 +1436,8 @@ impl SystemLink {
 
     #[cfg(feature = "wayland")]
     pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
-        *unsafe { &mut *(*window.0).user_data().cast::<WaylandWindowState>() }
+        *window
+            .state()
             .latest_ui_scale_changes
             .lock()
             .expect("poisoned") = Some(new_scale);
@@ -1494,8 +1495,13 @@ pub struct WindowHandle(*mut wl::Surface);
 #[cfg(feature = "wayland")]
 impl WindowHandle {
     #[inline(always)]
+    fn state(&self) -> &WaylandWindowState {
+        unsafe { &*(*self.0).user_data().cast() }
+    }
+
+    #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
-        unsafe { &mut *(*self.0).user_data().cast::<WaylandWindowState>() }
+        self.state()
             .committed_state
             .lock()
             .expect("poisoned")
@@ -1504,28 +1510,21 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
-        unsafe {
-            (*(*self.0).user_data().cast::<WaylandWindowState>())
-                .committed_state
-                .lock()
-                .expect("poisoned")
-                .active_buffer_scale
-        }
+        self.state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .active_buffer_scale
     }
 
     #[inline(always)]
     pub fn composite_root(&self) -> CompositeTreeRef {
-        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).composite_root }
+        self.state().composite_root
     }
 
     #[inline(always)]
     pub fn ht_root(&self) -> HitTestTreeRef {
-        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).ht_root }
-    }
-
-    #[inline(always)]
-    pub fn query_xdg_surface(&self) -> *mut wl::XdgSurface {
-        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).xdg_surface_ptr }
+        self.state().ht_root
     }
 }
 #[cfg(feature = "wayland")]
@@ -1914,7 +1913,7 @@ struct DragPreviewPopoverHandle {
 #[cfg(feature = "wayland")]
 impl DragPreviewPopoverHandle {
     pub fn bind_parent_window(&self, window: WindowHandle) {
-        self.root_window.set(window.query_xdg_surface());
+        self.root_window.set(window.state().xdg_surface_ptr);
     }
 
     pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
@@ -2925,8 +2924,6 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
                 .into_result()
                 .expect("wp_fractional_scale_v1.set_listener");
         }
-
-        println!("{:p}", xdg_toplevel.user_data());
 
         // commits initial state
         surface.commit().expect("wl_surface.commit");
