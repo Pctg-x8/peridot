@@ -251,15 +251,18 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         DragPreviewPopoverBuffer::SinglePixel(b)
     } else {
         // traditional shm-based single pixel buffer
-        let shm_region =
-            platform::linux::TemporalSharedMemory::new_unique(c"/pme_shm", libc::O_RDWR, 0o0600)
-                .expect("buf.shm.create")
-                .expect("buf.shm.create.non_unique");
+        let shm_region = utils::platform::linux::TemporalSharedMemory::new_unique(
+            c"/pme_shm",
+            libc::O_RDWR,
+            0o0600,
+        )
+        .expect("buf.shm.create")
+        .expect("buf.shm.create.non_unique");
         unsafe {
-            platform::linux::ftruncate(&shm_region, 4).expect("buf.shm.resize");
+            utils::platform::linux::ftruncate(&shm_region, 4).expect("buf.shm.resize");
         }
 
-        let mapped = platform::linux::MappedMemory::new(
+        let mapped = utils::platform::linux::MappedMemory::new(
             None,
             4,
             libc::PROT_READ | libc::PROT_WRITE,
@@ -1889,8 +1892,8 @@ impl wl::RegistryListener for RegistryListener {
 enum DragPreviewPopoverBuffer {
     SinglePixel(wl::Owned<wl::Buffer>),
     Shm {
-        shm_region: platform::linux::TemporalSharedMemory,
-        mapped: platform::linux::MappedMemory,
+        shm_region: utils::platform::linux::TemporalSharedMemory,
+        mapped: utils::platform::linux::MappedMemory,
         shm_pool: wl::Owned<wl::ShmPool>,
         buf: wl::Owned<wl::Buffer>,
     },
@@ -2591,7 +2594,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
             unimplemented!("unknown keymap format: {format:?}");
         }
 
-        let mapped = platform::linux::MappedMemory::new(
+        let mapped = utils::platform::linux::MappedMemory::new(
             None,
             size as _,
             libc::PROT_READ,

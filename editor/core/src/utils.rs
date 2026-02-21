@@ -2,6 +2,7 @@ mod color;
 pub use self::color::*;
 mod coord;
 pub use self::coord::*;
+pub mod platform;
 
 /// Safely comparable/equatable f32
 #[repr(transparent)]
