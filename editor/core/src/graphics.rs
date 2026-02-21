@@ -685,6 +685,9 @@ impl<'d> VulkanSwapchain<'d> {
         .old_swapchain(br::VkHandleRef::from_raw_ref(&self.handle))
         .create(self.device)
         .expect("swapchain create");
+        unsafe {
+            br::vkfn_wrapper::destroy_swapchain(self.device.native_ptr(), self.handle, None);
+        }
         let image_count = o.image_count().expect("swapchain.recreate.get_image_count");
         let _ = self.images.try_reserve(image_count as _);
         o.images(self.images.spare_capacity_mut())
