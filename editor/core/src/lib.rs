@@ -493,10 +493,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         );
     }
 
-    // TODO: stateには原則としてRender Threadからはアクセスしない(ロックとると遅くなるので)
     #[cfg(feature = "wayland")]
-    let main_window_init_scale =
-        SafeF32::new(w.event_listener.state.active_buffer_scale).expect("invalid scale");
+    let main_window_init_scale = SafeF32::new(
+        w.event_listener
+            .state
+            .committed_state
+            .get_mut()
+            .expect("poisoned")
+            .active_buffer_scale,
+    )
+    .expect("invalid scale");
     #[cfg(feature = "wayland")]
     let main_window_state = &w.event_listener.state;
 
@@ -1486,13 +1492,22 @@ pub struct WindowHandle(*mut wl::Surface);
 impl WindowHandle {
     #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
-        let state = unsafe { &mut *(*self.0).user_data().cast::<WaylandWindowState>() };
-        state.active_size.to_logical(state.active_buffer_scale)
+        unsafe { &mut *(*self.0).user_data().cast::<WaylandWindowState>() }
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .active_size_logical
     }
 
     #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
-        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).active_buffer_scale }
+        unsafe {
+            (*(*self.0).user_data().cast::<WaylandWindowState>())
+                .committed_state
+                .lock()
+                .expect("poisoned")
+                .active_buffer_scale
+        }
     }
 
     #[inline(always)]
@@ -2858,15 +2873,19 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
                 surface_ptr: surface.as_ptr(),
                 xdg_surface_ptr: xdg_surface.as_ptr(),
                 composite_root,
-                pending_configure_size: None,
-                active_buffer_scale: 1.0,
-                active_size: Size::new_pixels(640, 480),
+                committed_state: Mutex::new(WaylandWindowCommittedState {
+                    active_buffer_scale: 1.0,
+                    active_size: Size::new_pixels(640, 480),
+                    active_size_logical: Size::new_logical(640.0, 480.0),
+                }),
                 swapchain_externally_invalidation_signal: std::sync::Arc::new(
                     std::sync::atomic::AtomicBool::new(false),
                 ),
                 latest_ui_scale_changes: std::sync::Arc::new(Mutex::new(None)),
             },
             has_fractional_scale_support: fractional_scale.is_some(),
+            pending_configure_size: (None, None),
+            pending_configure_buffer_scale: None,
             terminate_event,
             event_dispatcher,
         });
@@ -2926,13 +2945,18 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
 }
 
 #[cfg(feature = "wayland")]
+struct WaylandWindowCommittedState {
+    active_buffer_scale: f32,
+    active_size: Size<PixelsUnit>,
+    active_size_logical: Size<LogicalUnit>,
+}
+
+#[cfg(feature = "wayland")]
 struct WaylandWindowState {
     surface_ptr: *mut wl::Surface,
     xdg_surface_ptr: *mut wl::XdgSurface,
     composite_root: CompositeTreeRef,
-    pending_configure_size: Option<(i32, i32)>,
-    active_buffer_scale: f32,
-    active_size: Size<PixelsUnit>,
+    committed_state: Mutex<WaylandWindowCommittedState>,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     latest_ui_scale_changes: std::sync::Arc<Mutex<Option<f32>>>,
 }
@@ -2946,6 +2970,8 @@ unsafe impl Send for WaylandWindowState {}
 struct WaylandWindowEventListener<AppFuture: core::future::Future<Output = ()>> {
     state: WaylandWindowState,
     has_fractional_scale_support: bool,
+    pending_configure_size: (Option<i32>, Option<i32>),
+    pending_configure_buffer_scale: Option<f32>,
     terminate_event: std::sync::Arc<EventFD>,
     event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
 }
@@ -2970,10 +2996,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
             return;
         }
 
-        surface
-            .set_buffer_scale(factor)
-            .expect("wl_surface set_buffer_scale");
-        self.set_scale(factor as _);
+        self.rescale(factor as _);
     }
 
     #[tracing::instrument(skip(self, _surface))]
@@ -2989,27 +3012,46 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgSurfaceEventListener
     fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
         tracing::trace!("xdg surface configure");
 
-        let state = unsafe { &mut *sender.user_data().cast::<WaylandWindowState>() };
-        println!(
-            "{state:p} {:p} {:p}",
-            Arc::as_ptr(&state.swapchain_externally_invalidation_signal),
-            Arc::as_ptr(&state.latest_ui_scale_changes)
-        );
-        if let Some((w, h)) = state.pending_configure_size.take() {
-            self.event_dispatcher
-                .dispatch(Event::WindowResize(Size::new_logical(w as _, h as _)));
+        let mut committed_state_ref = self.state.committed_state.lock().expect("poisoned");
+        let mut rescaled = false;
+        if let Some(s) = self.pending_configure_buffer_scale.take() {
+            if self.has_fractional_scale_support {
+                // fractional scaleでは1固定にする必要がある
+                unsafe { &*self.state.surface_ptr }
+                    .set_buffer_scale(1)
+                    .expect("wl_surface.set_buffer_scale");
+            } else {
+                unsafe { &*self.state.surface_ptr }
+                    .set_buffer_scale(s as _)
+                    .expect("wl_surface.set_buffer_scale");
+            }
 
-            let w: u32 = (u32::try_from(w).expect("negative window size") as f32
-                * state.active_buffer_scale)
-                .ceil() as _;
-            let h: u32 = (u32::try_from(h).expect("negative window size") as f32
-                * state.active_buffer_scale)
-                .ceil() as _;
-            if w != state.active_size.width || h != state.active_size.height {
-                state.active_size = Size::new_pixels(w, h);
-                state
+            committed_state_ref.active_buffer_scale = s;
+            rescaled = true;
+        }
+
+        let (w, h) = (
+            self.pending_configure_size.0.take(),
+            self.pending_configure_size.1.take(),
+        );
+        if rescaled || w.is_some() || h.is_some() {
+            // potentially size changes
+            let logical_size = Size::new_logical(
+                w.map_or(committed_state_ref.active_size_logical.width, |x| x as _),
+                h.map_or(committed_state_ref.active_size_logical.height, |y| y as _),
+            );
+            let pixels_size = logical_size.to_pixels_ceil(committed_state_ref.active_buffer_scale);
+            if pixels_size != committed_state_ref.active_size {
+                committed_state_ref.active_size = pixels_size;
+                committed_state_ref.active_size_logical = logical_size;
+                self.state
                     .swapchain_externally_invalidation_signal
                     .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                self.event_dispatcher.dispatch(Event::WindowResize {
+                    window: WindowHandle(self.state.surface_ptr),
+                    size: logical_size,
+                });
             }
         }
 
@@ -3038,20 +3080,18 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgToplevelEventListener
     ) {
         tracing::trace!("xdg toplevel configure");
 
-        let state = unsafe { &mut *sender.user_data().cast::<WaylandWindowState>() };
-        println!("{state:p}",);
-        state.pending_configure_size = Some((
+        self.pending_configure_size = (
             if width == 0 {
-                state.active_size.width as _
+                self.pending_configure_size.0
             } else {
-                width
+                Some(width)
             },
             if height == 0 {
-                state.active_size.height as _
+                self.pending_configure_size.1
             } else {
-                height
+                Some(height)
             },
-        ));
+        );
     }
 
     fn configure_bounds(&mut self, _sender: &mut wl::XdgToplevel, _width: i32, _height: i32) {}
@@ -3089,17 +3129,13 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::WpFractionalScaleV1EventL
     #[tracing::instrument(skip(self, sender))]
     fn preferred_scale(&mut self, sender: &mut wl::WpFractionalScaleV1, scale: u32) {
         tracing::trace!("fractional scale");
-        // fractional scaleでは1固定にする必要がある
-        unsafe { &*self.state.surface_ptr }
-            .set_buffer_scale(1)
-            .expect("wl_surface.set_buffer_scale");
-        self.set_scale(scale as f32 / 120.0);
+        self.rescale(scale as f32 / 120.0);
     }
 }
 #[cfg(feature = "wayland")]
 impl<AppFuture: core::future::Future<Output = ()>> WaylandWindowEventListener<AppFuture> {
-    fn set_scale(&mut self, scale: f32) {
-        self.state.active_buffer_scale = scale;
+    fn rescale(&mut self, scale: f32) {
+        self.pending_configure_buffer_scale = Some(scale);
         self.event_dispatcher.dispatch(Event::WindowRescaleUI {
             window: WindowHandle(self.state.surface_ptr),
             new_scale: scale,

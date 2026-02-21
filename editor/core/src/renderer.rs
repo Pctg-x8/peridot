@@ -67,7 +67,7 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             || w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || w.active_size,
+            || w.committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );
@@ -298,7 +298,7 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             || w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || self.w.active_size,
+            || self.w.committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );
