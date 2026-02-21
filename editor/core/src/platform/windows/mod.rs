@@ -309,7 +309,7 @@ pub struct WindowState<'h> {
     pointer_input_manager_ptr: *const PointerInputManager,
     ht_manager_ptr: *const HitTestTreeManager<'h>,
     content_scale: f32,
-    composite_root: CompositeTreeRef,
+    pub composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
 }

@@ -1,3 +1,8 @@
+use std::{
+    collections::HashMap,
+    sync::{Mutex, atomic::AtomicBool},
+};
+
 use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut,
     ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, Swapchain, VkHandle, VkHandleMut,
@@ -6,7 +11,7 @@ use bedrock::{
 #[cfg(feature = "wayland")]
 use crate::WaylandWindowState;
 use crate::{
-    AppEventBus, Event,
+    AppEventBus, Event, RendererSync,
     composite::{
         BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData, CompositeTreeRef,
         CompositeTreeRender, VectorRasterizationState,
@@ -18,6 +23,261 @@ use crate::{
     text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
     utils::SafeF32,
 };
+
+pub struct RenderThread<'main, 'h> {
+    pub vk_device: &'main VulkanDevice,
+    pub shutdown_signal: &'main AtomicBool,
+    pub renderer_sync: &'main Mutex<RendererSync>,
+    pub global_time_base: &'main std::time::Instant,
+    pub event_bus: &'main AppEventBus,
+    // TODO: ウィンドウに関係するデータはあとで別のキューかなんかからもらう形にしたい
+    #[cfg(feature = "wayland")]
+    pub main_window_state: &'main WaylandWindowState,
+    #[cfg(windows)]
+    pub main_window_handle: crate::platform::windows::SendableWindowHandle,
+    #[cfg(windows)]
+    pub main_window_state: &'main crate::platform::windows::WindowState<'h>,
+    pub main_window_init_scale: SafeF32,
+    pub main_window_vk_surface: VulkanSurface<'main>,
+}
+impl<'main, 'h> RenderThread<'main, 'h> {
+    pub fn run(self) {
+        tracing::info!("Starting RenderThread...");
+        let mut render_queue = self
+            .vk_device
+            .queue(self.vk_device.present_queue_family_index(), 0);
+
+        let mut composite_tree = CompositeTreeRender::new();
+        struct GlyphAtlasDataPerDpi<'d> {
+            manager: GlyphAtlasManager<'d>,
+            vector_raster_state: VectorRasterizationState,
+            ref_count: u64,
+        }
+        let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
+        #[cfg(any(feature = "freetype", windows))]
+        let font_set = RootFontSet::new();
+        #[cfg(target_os = "macos")]
+        let font_set = FontSet::new();
+
+        let vg_render_formats = GlyphAtlasRenderingFormats {
+            color: br::vk::VK_FORMAT_R8_UNORM,
+            stencil: br::vk::VK_FORMAT_S8_UINT,
+        };
+        let glyph_atlas_manager_common_resources =
+            GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
+        glyph_atlas_per_scale.insert(
+            self.main_window_init_scale,
+            GlyphAtlasDataPerDpi {
+                manager: GlyphAtlasManager::new(
+                    &glyph_atlas_manager_common_resources,
+                    &mut render_queue,
+                    self.vk_device.present_queue_family_index(),
+                ),
+                vector_raster_state: VectorRasterizationState::new(),
+                ref_count: 1,
+            },
+        );
+
+        let mut main_window_renderer = WindowRenderer::new(
+            #[cfg(feature = "wayland")]
+            main_window_state,
+            #[cfg(windows)]
+            self.main_window_handle,
+            self.main_window_init_scale,
+            self.main_window_state.composite_root,
+            self.main_window_vk_surface,
+            self.vk_device,
+            glyph_atlas_per_scale[&self.main_window_init_scale]
+                .manager
+                .atlas(),
+            &font_set,
+        );
+
+        let mut any_swapchain_invalidated = false;
+        'lp: while !self
+            .shutdown_signal
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            // unsafe {
+            //     w.manual_capture_begin();
+            // }
+
+            if main_window_renderer.take_swapchain_externally_invalidation_signal() {
+                main_window_renderer.invalidate_swapchain();
+                any_swapchain_invalidated = true;
+            }
+
+            if any_swapchain_invalidated {
+                let x = std::time::Instant::now();
+                render_queue.wait().expect("waiting pending queue works");
+                tracing::trace!(elapsed = ?x.elapsed(), "queue waiting time during resize");
+
+                if self
+                    .shutdown_signal
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    // already shut down while waiting queue completion
+                    break 'lp;
+                }
+
+                let mut descriptor_writes = Vec::new();
+                main_window_renderer.validate_swapchain(&mut descriptor_writes);
+                self.vk_device
+                    .update_descriptor_sets(&descriptor_writes, &[]);
+
+                any_swapchain_invalidated = false;
+            }
+
+            let backbuffer_index = match main_window_renderer.acquire_backbuffer_with_wait() {
+                Ok(x) => x,
+                Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                    main_window_renderer.invalidate_swapchain();
+                    any_swapchain_invalidated = true;
+                    continue 'lp;
+                }
+                Err(e) => Err(e).expect("acquire next"),
+            };
+
+            // flush synchronizing buffers
+            {
+                let mut renderer_sync = self.renderer_sync.lock().expect("poisoned");
+                renderer_sync.composite_buffer.clean(&mut composite_tree);
+            }
+            let main_window_new_ui_scale = self
+                .main_window_state
+                .latest_ui_scale_changes
+                .lock()
+                .expect("poisoned")
+                .take();
+
+            if let Some(scale) = main_window_new_ui_scale {
+                let scale = SafeF32::new(scale).expect("scale.invalid");
+
+                let current = glyph_atlas_per_scale
+                    .get_mut(&main_window_renderer.active_scale())
+                    .expect("invalid state");
+                current.ref_count -= 1;
+                let removed = if current.ref_count == 0 {
+                    // un references
+                    glyph_atlas_per_scale.remove(&main_window_renderer.active_scale())
+                } else {
+                    None
+                };
+
+                match glyph_atlas_per_scale.entry(scale) {
+                    std::collections::hash_map::Entry::Occupied(mut o) => {
+                        // reuse existing
+                        o.get_mut().ref_count += 1;
+                    }
+                    std::collections::hash_map::Entry::Vacant(v) => match removed {
+                        Some(mut data) => {
+                            // reuse existing with clear
+                            data.manager.clear_atlas();
+                            data.ref_count = 1;
+                            v.insert(data);
+                        }
+                        None => {
+                            // new one
+                            v.insert(GlyphAtlasDataPerDpi {
+                                manager: GlyphAtlasManager::new(
+                                    &glyph_atlas_manager_common_resources,
+                                    &mut render_queue,
+                                    self.vk_device.present_queue_family_index(),
+                                ),
+                                vector_raster_state: VectorRasterizationState::new(),
+                                ref_count: 1,
+                            });
+                        }
+                    },
+                }
+
+                main_window_renderer.rescale(scale);
+            }
+
+            for x in glyph_atlas_per_scale.values_mut() {
+                x.vector_raster_state.clear();
+            }
+
+            let current_t = self.global_time_base.elapsed();
+            composite_tree.update_shared(current_t.as_secs_f32());
+
+            let glyph_atlas_mgr = glyph_atlas_per_scale
+                .get_mut(&main_window_renderer.active_scale())
+                .expect("invalid state");
+            let needs_update_command = main_window_renderer.update(
+                current_t.as_secs_f32(),
+                &mut composite_tree,
+                glyph_atlas_mgr.manager.atlas_mut(),
+                &mut glyph_atlas_mgr.vector_raster_state,
+                self.event_bus,
+            );
+
+            let mut render_wait_semaphores = Vec::with_capacity(1);
+            let mut render_wait_stages = Vec::with_capacity(1);
+
+            // TODO: いったんめんどうなので毎回更新
+            if true || needs_update_command {
+                main_window_renderer.submit_update_commands(&mut render_queue);
+
+                render_wait_semaphores.push(main_window_renderer.update_completion_semaphore_ref());
+                render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
+            }
+
+            for x in glyph_atlas_per_scale.values() {
+                if x.vector_raster_state.is_empty() {
+                    // no vector rasterization required
+                    continue;
+                }
+
+                x.manager.perform_render(
+                    &x.vector_raster_state,
+                    &vg_render_formats,
+                    &glyph_atlas_manager_common_resources,
+                    &mut render_queue,
+                );
+            }
+
+            unsafe {
+                render_queue
+                    .submit_raw(
+                        &[br::SubmitInfo::new(
+                            &render_wait_semaphores,
+                            &render_wait_stages,
+                            &[main_window_renderer.primary_render_commands_ref(backbuffer_index)],
+                            &[main_window_renderer.present_ready_semaphore_ref(backbuffer_index)],
+                        )],
+                        None,
+                    )
+                    .expect("queue submit")
+            };
+            let mut results = [br::vk::VK_SUCCESS];
+            match render_queue.present(&br::PresentInfo::new(
+                &[main_window_renderer.present_ready_semaphore_ref(backbuffer_index)],
+                &[main_window_renderer.swapchain_ref()],
+                &[backbuffer_index],
+                &mut results,
+            )) {
+                Ok(_) => (),
+                Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
+                Err(e) => Err::<(), _>(e).expect("queue present"),
+            }
+
+            if results[0] == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
+                main_window_renderer.invalidate_swapchain();
+                any_swapchain_invalidated = true;
+            }
+
+            // unsafe {
+            //     manual_capture_end();
+            // }
+        }
+
+        unsafe {
+            self.vk_device.wait().expect("device wait");
+        }
+        tracing::info!("RenderThread terminated");
+    }
+}
 
 pub struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
