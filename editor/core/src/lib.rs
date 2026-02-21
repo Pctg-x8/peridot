@@ -151,6 +151,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
 
     #[cfg(windows)]
+    let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
+    #[cfg(windows)]
     let app_runtime = utils::platform::windows::WindowsAppRuntimeBootstrap::init();
     #[cfg(windows)]
     let _dispatcher_queue = unsafe {
@@ -167,9 +169,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
-
-    #[cfg(windows)]
-    let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
 
     #[cfg(windows)]
     let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
@@ -460,13 +459,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     SafeF32,
                     (GlyphAtlasManager, VectorRasterizationState, u64),
                 > = HashMap::new();
-                // let mut glyph_atlas = GlyphAtlas::new(&vk_device);
-                #[cfg(feature = "freetype")]
+                #[cfg(any(feature = "freetype", windows))]
                 let font_set = RootFontSet::new();
                 #[cfg(target_os = "macos")]
                 let font_set = FontSet::new();
-                #[cfg(windows)]
-                let font_set = RootFontSet::new();
 
                 let vg_render_formats = GlyphAtlasRenderingFormats {
                     color: br::vk::VK_FORMAT_R8_UNORM,
@@ -1249,7 +1245,7 @@ async fn run<'sys>(
 
                 pointer_input_manager.handle_mouse_left_down(
                     &window,
-                    &mut ht_manager,
+                    &ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
@@ -1270,7 +1266,7 @@ async fn run<'sys>(
                     window,
                     client_pos,
                     &window,
-                    &mut ht_manager,
+                    &ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
@@ -1306,7 +1302,7 @@ async fn run<'sys>(
             Event::PointerUp { window } => {
                 pointer_input_manager.handle_mouse_left_up(
                     &window,
-                    &mut ht_manager,
+                    &ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),

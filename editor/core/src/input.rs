@@ -346,7 +346,7 @@ impl PointerInputManager {
         &mut self,
         window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
-        ht: &mut HitTestTreeManager,
+        ht: &HitTestTreeManager,
         action_context: &mut HitTestEventContext,
         ht_root: HitTestTreeRef,
     ) {
@@ -404,7 +404,7 @@ impl PointerInputManager {
         window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
         sh: &(impl ShellPointerActions + ?Sized),
-        ht: &mut HitTestTreeManager,
+        ht: &HitTestTreeManager,
         action_context: &mut HitTestEventContext,
         ht_root: HitTestTreeRef,
     ) {
@@ -487,7 +487,7 @@ impl PointerInputManager {
     pub fn handle_mouse_left_down(
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
-        ht: &mut HitTestTreeManager,
+        ht: &HitTestTreeManager,
         action_context: &mut HitTestEventContext,
         ht_root: HitTestTreeRef,
         kfm: &mut KeyboardFocusManager,
@@ -578,7 +578,7 @@ impl PointerInputManager {
     pub fn handle_mouse_left_up(
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
-        ht: &mut HitTestTreeManager,
+        ht: &HitTestTreeManager,
         action_context: &mut HitTestEventContext,
         ht_root: HitTestTreeRef,
     ) {
