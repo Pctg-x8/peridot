@@ -5,6 +5,8 @@ use bedrock::{self as br, ImageChild, MemoryBound, VkHandle, VkObject};
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
 use peridot_tp_freetype as ft;
+#[cfg(feature = "harfbuzz")]
+use peridot_tp_harfbuzz as hb;
 
 use crate::graphics::VulkanDevice;
 
@@ -287,33 +289,22 @@ pub enum FontID {
     UITitleProjectName,
 }
 
-pub struct FontSet {
-    #[cfg(target_os = "macos")]
-    ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
-    #[cfg(target_os = "macos")]
-    ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
-    #[cfg(feature = "freetype")]
+#[cfg(feature = "freetype")]
+pub struct PerWindowFontSet<'d> {
     ui_default: ft::Face,
-    #[cfg(feature = "freetype")]
     ui_title_project_name: ft::Face,
     #[cfg(feature = "harfbuzz")]
-    ui_default_shaping: core::ptr::NonNull<peridot_tp_harfbuzz::ffi::hb_font_t>,
+    ui_default_shaping: core::ptr::NonNull<hb::ffi::hb_font_t>,
     #[cfg(feature = "harfbuzz")]
-    ui_title_project_name_shaping: core::ptr::NonNull<peridot_tp_harfbuzz::ffi::hb_font_t>,
-    #[cfg(windows)]
-    dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
-    #[cfg(windows)]
-    ui_default: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
-    #[cfg(windows)]
-    ui_title_project_name: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+    ui_title_project_name_shaping: core::ptr::NonNull<hb::ffi::hb_font_t>,
+    _marker: core::marker::PhantomData<&'d [ft::raw::FT_Byte]>,
 }
-#[cfg(not(windows))]
-impl Drop for FontSet {
+impl Drop for PerWindowFontSet<'_> {
     fn drop(&mut self) {
         #[cfg(feature = "harfbuzz")]
         unsafe {
-            peridot_tp_harfbuzz::ffi::hb_font_destroy(self.ui_default_shaping.as_ptr());
-            peridot_tp_harfbuzz::ffi::hb_font_destroy(self.ui_title_project_name_shaping.as_ptr());
+            hb::ffi::hb_font_destroy(self.ui_default_shaping.as_ptr());
+            hb::ffi::hb_font_destroy(self.ui_title_project_name_shaping.as_ptr());
         }
         #[cfg(feature = "freetype")]
         {
@@ -326,7 +317,142 @@ impl Drop for FontSet {
         }
     }
 }
-impl FontSet {
+impl<'d> PerWindowFontSet<'d> {
+    pub fn new(root_set: &'d RootFontSet) -> Self {
+        #[cfg(feature = "freetype")]
+        let ui_default = unsafe {
+            ft::new_memory_face(
+                root_set.ft_lib.0,
+                &root_set.ui_common_font_data.0,
+                root_set.ui_common_font_data.1 as _,
+            )
+            .expect("FreeType.new_face.ui_default")
+        };
+        #[cfg(feature = "freetype")]
+        let ui_title_project_name = unsafe {
+            ft::new_memory_face(
+                root_set.ft_lib.0,
+                &root_set.ui_common_font_data.0,
+                root_set.ui_common_font_data.1 as _,
+            )
+            .expect("FreeType.Face.new.ui_title_project_name")
+        };
+
+        #[cfg(feature = "harfbuzz")]
+        let ui_default_shaping = core::ptr::NonNull::new(unsafe {
+            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_default)
+        })
+        .expect("hb_ft_font_create_referenced.ui_default");
+        #[cfg(feature = "harfbuzz")]
+        let ui_title_project_name_shaping = core::ptr::NonNull::new(unsafe {
+            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_title_project_name)
+        })
+        .expect("hb_ft_font_create_referenced.ui_title_project_name");
+
+        Self {
+            #[cfg(feature = "freetype")]
+            ui_default,
+            #[cfg(feature = "freetype")]
+            ui_title_project_name,
+            #[cfg(feature = "harfbuzz")]
+            ui_default_shaping,
+            #[cfg(feature = "harfbuzz")]
+            ui_title_project_name_shaping,
+            #[cfg(feature = "freetype")]
+            _marker: core::marker::PhantomData,
+        }
+    }
+
+    #[cfg(feature = "freetype")]
+    #[tracing::instrument(skip(self))]
+    pub fn rescale(&mut self, dpi: u32) {
+        use ft::FractionalExt;
+
+        unsafe {
+            ft::set_char_size(self.ui_default, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi)
+                .expect("FreeType.set_char_size.ui_default")
+        }
+        unsafe {
+            ft::set_char_size(
+                self.ui_title_project_name,
+                0,
+                10.0f32.to_f26dot6_lossy(),
+                0,
+                dpi,
+            )
+            .expect("FreeType.set_char_size.ui_title_project_name")
+        }
+
+        #[cfg(feature = "harfbuzz")]
+        unsafe {
+            hb::ffi::hb_ft_font_changed(self.ui_default_shaping.as_ptr());
+            hb::ffi::hb_ft_font_changed(self.ui_title_project_name_shaping.as_ptr());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[inline]
+    pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+        }
+    }
+
+    #[cfg(feature = "freetype")]
+    #[inline]
+    pub fn select(&self, category: FontID) -> ft::Face {
+        match category {
+            FontID::UIDefault => self.ui_default,
+            FontID::UITitleProjectName => self.ui_title_project_name,
+        }
+    }
+
+    #[cfg(feature = "harfbuzz")]
+    #[inline]
+    pub fn select_shaping(&self, category: FontID) -> *mut peridot_tp_harfbuzz::ffi::hb_font_t {
+        match category {
+            FontID::UIDefault => self.ui_default_shaping.as_ptr(),
+            FontID::UITitleProjectName => self.ui_title_project_name_shaping.as_ptr(),
+        }
+    }
+
+    #[cfg(windows)]
+    #[inline(always)]
+    pub const fn native_factory(&self) -> &windows::Win32::Graphics::DirectWrite::IDWriteFactory {
+        &self.dw_factory
+    }
+
+    #[cfg(windows)]
+    #[inline]
+    pub fn select(
+        &self,
+        category: FontID,
+    ) -> &windows::Win32::Graphics::DirectWrite::IDWriteTextFormat {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+        }
+    }
+}
+
+pub struct RootFontSet {
+    #[cfg(target_os = "macos")]
+    ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
+    #[cfg(target_os = "macos")]
+    ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
+    #[cfg(feature = "freetype")]
+    ft_lib: FreeType,
+    #[cfg(feature = "freetype")]
+    ui_common_font_data: (Vec<ft::raw::FT_Byte>, core::ffi::c_int),
+    #[cfg(windows)]
+    dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    #[cfg(windows)]
+    ui_default: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+    #[cfg(windows)]
+    ui_title_project_name: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+}
+impl RootFontSet {
     #[cfg(windows)]
     pub fn new(dw: windows::Win32::Graphics::DirectWrite::IDWriteFactory) -> Self {
         use windows::Win32::Globalization::GetUserDefaultLocaleName;
@@ -385,9 +511,7 @@ impl FontSet {
     }
 
     #[cfg(feature = "freetype")]
-    pub fn new(lib: &FreeType, dpi: u32) -> Self {
-        use peridot_tp_freetype::FractionalExt;
-
+    pub fn new() -> Self {
         #[cfg(feature = "fontconfig")]
         let (font_file_path, face_index) = unsafe {
             fc::init().expect("FontConfig.init");
@@ -435,70 +559,12 @@ impl FontSet {
             (file, index)
         };
 
-        let ui_default = unsafe {
-            ft::new_face(lib.0, &font_file_path, face_index as _)
-                .expect("FreeType.new_face.ui_default")
-        };
-        unsafe {
-            ft::set_char_size(ui_default, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi)
-                .expect("FreeType.set_char_size.ui_default")
-        }
-        let ui_title_project_name = unsafe {
-            ft::new_face(lib.0, &font_file_path, face_index as _)
-                .expect("FreeType.Face.new.ui_title_project_name")
-        };
-        unsafe {
-            ft::set_char_size(ui_title_project_name, 0, 10.0f32.to_f26dot6_lossy(), 0, dpi)
-                .expect("FreeType.set_char_size.ui_title_project_name")
-        }
-
-        #[cfg(feature = "harfbuzz")]
-        let ui_default_shaping = core::ptr::NonNull::new(unsafe {
-            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_default)
-        })
-        .expect("hb_ft_font_create_referenced.ui_default");
-        #[cfg(feature = "harfbuzz")]
-        let ui_title_project_name_shaping = core::ptr::NonNull::new(unsafe {
-            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_title_project_name)
-        })
-        .expect("hb_ft_font_create_referenced.ui_title_project_name");
+        let ui_common_font_data_content =
+            std::fs::read(font_file_path.to_str().expect("cstr.to_str")).expect("font.readfile");
 
         Self {
-            ui_default,
-            ui_title_project_name,
-            #[cfg(feature = "harfbuzz")]
-            ui_default_shaping,
-            #[cfg(feature = "harfbuzz")]
-            ui_title_project_name_shaping,
-        }
-    }
-
-    #[cfg(feature = "freetype")]
-    #[tracing::instrument(skip(self))]
-    pub fn rescale(&mut self, dpi: u32) {
-        tracing::trace!("font rescale");
-
-        unsafe {
-            use peridot_tp_freetype::FractionalExt;
-
-            ft::set_char_size(self.ui_default, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi)
-                .expect("freetype.set_char_size.ui_default");
-            ft::set_char_size(
-                self.ui_title_project_name,
-                0,
-                10.0f32.to_f26dot6_lossy(),
-                0,
-                dpi,
-            )
-            .expect("freetype.set_char_size.ui_title_project_name");
-        }
-
-        #[cfg(feature = "harfbuzz")]
-        unsafe {
-            peridot_tp_harfbuzz::ffi::hb_ft_font_changed(self.ui_default_shaping.as_ptr());
-            peridot_tp_harfbuzz::ffi::hb_ft_font_changed(
-                self.ui_title_project_name_shaping.as_ptr(),
-            );
+            ft_lib: FreeType::init().expect("freetype.init"),
+            ui_common_font_data: (ui_common_font_data_content, face_index),
         }
     }
 
@@ -518,51 +584,6 @@ impl FontSet {
         Self {
             ui_default,
             ui_title_project_name,
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[inline]
-    pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
-        match category {
-            FontID::UIDefault => &self.ui_default,
-            FontID::UITitleProjectName => &self.ui_title_project_name,
-        }
-    }
-
-    #[cfg(feature = "freetype")]
-    #[inline]
-    pub fn select(&self, category: FontID) -> ft::Face {
-        match category {
-            FontID::UIDefault => self.ui_default,
-            FontID::UITitleProjectName => self.ui_title_project_name,
-        }
-    }
-
-    #[cfg(feature = "harfbuzz")]
-    #[inline]
-    pub fn select_shaping(&self, category: FontID) -> *mut peridot_tp_harfbuzz::ffi::hb_font_t {
-        match category {
-            FontID::UIDefault => self.ui_default_shaping.as_ptr(),
-            FontID::UITitleProjectName => self.ui_title_project_name_shaping.as_ptr(),
-        }
-    }
-
-    #[cfg(windows)]
-    #[inline(always)]
-    pub const fn native_factory(&self) -> &windows::Win32::Graphics::DirectWrite::IDWriteFactory {
-        &self.dw_factory
-    }
-
-    #[cfg(windows)]
-    #[inline]
-    pub fn select(
-        &self,
-        category: FontID,
-    ) -> &windows::Win32::Graphics::DirectWrite::IDWriteTextFormat {
-        match category {
-            FontID::UIDefault => &self.ui_default,
-            FontID::UITitleProjectName => &self.ui_title_project_name,
         }
     }
 }

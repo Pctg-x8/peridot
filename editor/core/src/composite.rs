@@ -24,7 +24,7 @@ use crate::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, VulkanDevice,
     },
-    text::{FontID, FontSet, GlyphAtlas},
+    text::{FontID, GlyphAtlas, PerWindowFontSet},
     utils::SafeF32,
 };
 
@@ -1376,7 +1376,7 @@ impl<Event> CompositeTreeRender<Event> {
         size: br::Extent2D,
         current_sec: f32,
         mapped_head: *mut core::ffi::c_void,
-        font_set: &FontSet,
+        font_set: &PerWindowFontSet,
         mask_atlas: &mut GlyphAtlas,
         vector_raster_state: &mut VectorRasterizationState,
         mut on_event: impl FnMut(Event),
@@ -1695,7 +1695,7 @@ impl<Event> CompositeTreeRender<Event> {
         cache: &mut CompositeRectCache,
         text_layout: &CompositeRectText<Event>,
         scale_factor: f32,
-        font_set: &FontSet,
+        font_set: &PerWindowFontSet,
         glyph_atlas: &mut GlyphAtlas,
         vector_raster_state: &mut VectorRasterizationState,
     ) {
@@ -3921,7 +3921,7 @@ impl CompositeRenderer {
         tree: &mut CompositeTreeRender<Event>,
         root: CompositeTreeRef,
         rt_size: br::Extent2D,
-        font_set: &FontSet,
+        font_set: &PerWindowFontSet,
         mask_atlas: &mut GlyphAtlas,
         vector_raster_state: &mut VectorRasterizationState,
         on_event: impl FnMut(Event),

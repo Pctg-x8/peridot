@@ -1,7 +1,4 @@
-use bedrock::{
-    self as br, CommandBufferMut, Device, DeviceMemoryMut, ImageChild, InstanceChild, MemoryBound,
-    PhysicalDevice, QueueMut, RenderPass, ShaderModule, SurfaceCreateInfo, VkHandle,
-};
+use bedrock::{self as br, Device, InstanceChild, PhysicalDevice, QueueMut, SurfaceCreateInfo};
 use core::pin::Pin;
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
@@ -70,12 +67,15 @@ use crate::{
         CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, CompositeTreeRender,
         CompositeTreeSyncBuffer, VectorRasterizationState,
     },
-    graphics::{VG_COLOR_FORMAT, VG_STENCIL_FORMAT, VulkanDevice},
+    graphics::VulkanDevice,
     hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
-    renderer::WindowRenderer,
-    text::{FontID, FontSet, GlyphAtlas},
-    utils::{Color32, LogicalUnit, PixelsUnit, Point, Size},
+    renderer::{
+        GlyphAtlasManager, GlyphAtlasManagerCommonResources, GlyphAtlasRenderingFormats,
+        WindowRenderer,
+    },
+    text::{FontID, RootFontSet},
+    utils::{Color32, LogicalUnit, PixelsUnit, Point, SafeF32, Size},
 };
 
 mod atlas;
@@ -506,419 +506,60 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 };
 
                 let mut composite_tree = CompositeTreeRender::new();
-                let mut glyph_atlas = GlyphAtlas::new(&vk_device);
-                // TODO: initial scale?
+                let mut glyph_atlas_per_scale: HashMap<
+                    SafeF32,
+                    (GlyphAtlasManager, VectorRasterizationState, u64),
+                > = HashMap::new();
+                // let mut glyph_atlas = GlyphAtlas::new(&vk_device);
                 #[cfg(feature = "freetype")]
-                let mut font_set = FontSet::new(&ft, 72);
+                let font_set = RootFontSet::new();
                 #[cfg(target_os = "macos")]
                 let font_set = FontSet::new();
                 #[cfg(windows)]
                 let font_set = FontSet::new(dw_factory);
 
-                let vg_stencil_buffer_format = br::vk::VK_FORMAT_S8_UINT;
-                let vg_color_buffer_format = br::vk::VK_FORMAT_R8_UNORM;
-
-                #[derive(br::SpecializationConstants)]
-                struct FillShaderVertexConstants {
-                    #[constant_id = 0]
-                    target_texture_width: f32,
-                    #[constant_id = 1]
-                    target_texture_height: f32,
-                }
-                #[derive(br::SpecializationConstants)]
-                struct CurveShaderVertexConstants {
-                    #[constant_id = 0]
-                    target_texture_width: f32,
-                    #[constant_id = 1]
-                    target_texture_height: f32,
-                }
-                let fill_shader_module = vk_device.require_shader("vg-fill.spv");
-                let curve_shader_module = vk_device.require_shader("vg-curve.spv");
-                let vec_tri_fill_shader_module = vk_device.require_shader("vec-tri-fill.spv");
-
-                let vector_render_pass = br::RenderPassObject::new(
-                    &vk_device,
-                    &br::RenderPassCreateInfo2::new(
-                        &[
-                            br::AttachmentDescription2::new(vg_stencil_buffer_format)
-                                .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
-                                .layout_transition(
-                                    br::ImageLayout::Undefined,
-                                    br::ImageLayout::DepthStencilReadOnlyOpt,
-                                )
-                                .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
-                            br::AttachmentDescription2::new(vg_color_buffer_format)
-                                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
-                                .layout_transition(
-                                    br::ImageLayout::Undefined,
-                                    br::ImageLayout::TransferSrcOpt,
-                                )
-                                .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
-                        ],
-                        &[
-                            br::SubpassDescription2::new().depth_stencil(
-                                &br::AttachmentReference2::depth_stencil_attachment_opt(0),
-                            ),
-                            br::SubpassDescription2::new()
-                                .depth_stencil(
-                                    &br::AttachmentReference2::depth_stencil_readonly_opt(0),
-                                )
-                                .colors(&[br::AttachmentReference2::color_attachment_opt(1)]),
-                        ],
-                        &[
-                            br::SubpassDependency2::new(
-                                br::SubpassIndex::Internal(0),
-                                br::SubpassIndex::Internal(1),
-                            )
-                            .by_region()
-                            .of_memory(
-                                br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write,
-                                br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.read,
-                            )
-                            .of_execution(
-                                br::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                                br::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                            ),
-                            br::SubpassDependency2::new(
-                                br::SubpassIndex::Internal(1),
-                                br::SubpassIndex::External,
-                            )
-                            .by_region()
-                            .of_memory(
-                                br::AccessFlags::COLOR_ATTACHMENT.write,
-                                br::AccessFlags::TRANSFER.read,
-                            )
-                            .of_execution(
-                                br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                                br::PipelineStageFlags::TRANSFER,
-                            ),
-                        ],
-                    ),
+                let vg_render_formats = GlyphAtlasRenderingFormats {
+                    color: br::vk::VK_FORMAT_R8_UNORM,
+                    stencil: br::vk::VK_FORMAT_S8_UINT,
+                };
+                let glyph_atlas_manager_common_resources =
+                    GlyphAtlasManagerCommonResources::new(&vk_device, &vg_render_formats);
+                #[cfg(feature = "wayland")]
+                let main_window_init_scale = SafeF32::new(
+                    surface_states.lock().expect("poisoned")[&w.as_key()].active_buffer_scale,
                 )
-                .expect("vector render pass create");
-
-                let pipeline_layout = br::PipelineLayoutObject::new(
-                    &vk_device,
-                    &br::PipelineLayoutCreateInfo::new(&[], &[]),
-                )
-                .expect("vector pipeline layout create");
-                let [triangle_fans_pipeline, curve_pipeline, colorize_pipeline] = vk_device
-                    .new_graphics_pipeline_array(
-                        &[
-                            br::GraphicsPipelineCreateInfo::new(
-                                &pipeline_layout,
-                                vector_render_pass.subpass(0),
-                                &[
-                                    fill_shader_module
-                                        .on_stage(br::ShaderStage::Vertex, c"vertMain")
-                                        .with_specialization_info(&br::SpecializationInfo::new(
-                                            &FillShaderVertexConstants {
-                                                target_texture_width: glyph_atlas.size().width as _,
-                                                target_texture_height: glyph_atlas.size().height
-                                                    as _,
-                                            },
-                                        )),
-                                    fill_shader_module
-                                        .on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                                ],
-                                &br::PipelineVertexInputStateCreateInfo::new(
-                                    &[br::VertexInputBindingDescription::per_vertex_typed::<
-                                        [f32; 2],
-                                    >(0)],
-                                    &[br::VertexInputAttributeDescription {
-                                        location: 0,
-                                        binding: 0,
-                                        offset: 0,
-                                        format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                                    }],
-                                ),
-                                &br::PipelineInputAssemblyStateCreateInfo::new(
-                                    br::PrimitiveTopology::TriangleList,
-                                ),
-                                &br::PipelineViewportStateCreateInfo::new(
-                                    &[glyph_atlas
-                                        .size()
-                                        .into_rect(br::Offset2D::ZERO)
-                                        .make_viewport(0.0..1.0)],
-                                    &[glyph_atlas.size().into_rect(br::Offset2D::ZERO)],
-                                ),
-                                &br::PipelineRasterizationStateCreateInfo::new(
-                                    br::PolygonMode::Fill,
-                                    br::CullModeFlags::NONE,
-                                    br::FrontFace::CounterClockwise,
-                                ),
-                                &br::PipelineColorBlendStateCreateInfo::new(&[
-                                    br::vk::VkPipelineColorBlendAttachmentState::NOBLEND,
-                                ]),
-                            )
-                            .set_multisample_state(
-                                &br::PipelineMultisampleStateCreateInfo::new()
-                                    .rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _),
-                            )
-                            .set_depth_stencil_state(
-                                &br::PipelineDepthStencilStateCreateInfo::new()
-                                    .stencil_test(true)
-                                    .stencil_state_front(
-                                        br::vk::VkStencilOpState::always_forall(
-                                            br::StencilOp::Invert,
-                                        )
-                                        .write_mask(0x01),
-                                    )
-                                    .stencil_state_back(
-                                        br::vk::VkStencilOpState::always_forall(
-                                            br::StencilOp::Invert,
-                                        )
-                                        .write_mask(0x01),
-                                    ),
-                            ),
-                            br::GraphicsPipelineCreateInfo::new(
-                                &pipeline_layout,
-                                vector_render_pass.subpass(0),
-                                &[
-                                    curve_shader_module
-                                        .on_stage(br::ShaderStage::Vertex, c"vertMain")
-                                        .with_specialization_info(&br::SpecializationInfo::new(
-                                            &CurveShaderVertexConstants {
-                                                target_texture_width: glyph_atlas.size().width as _,
-                                                target_texture_height: glyph_atlas.size().height
-                                                    as _,
-                                            },
-                                        )),
-                                    curve_shader_module
-                                        .on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                                ],
-                                &br::PipelineVertexInputStateCreateInfo::new(
-                                    &[br::VertexInputBindingDescription::per_vertex_typed::<
-                                        [f32; 4],
-                                    >(0)],
-                                    &[
-                                        br::VertexInputAttributeDescription {
-                                            location: 0,
-                                            binding: 0,
-                                            offset: 0,
-                                            format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                                        },
-                                        br::VertexInputAttributeDescription {
-                                            location: 1,
-                                            binding: 0,
-                                            offset: core::mem::size_of::<[f32; 2]>() as _,
-                                            format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                                        },
-                                    ],
-                                ),
-                                &br::PipelineInputAssemblyStateCreateInfo::new(
-                                    br::PrimitiveTopology::TriangleList,
-                                ),
-                                &br::PipelineViewportStateCreateInfo::new(
-                                    &[glyph_atlas
-                                        .size()
-                                        .into_rect(br::Offset2D::ZERO)
-                                        .make_viewport(0.0..1.0)],
-                                    &[glyph_atlas.size().into_rect(br::Offset2D::ZERO)],
-                                ),
-                                &br::PipelineRasterizationStateCreateInfo::new(
-                                    br::PolygonMode::Fill,
-                                    br::CullModeFlags::NONE,
-                                    br::FrontFace::CounterClockwise,
-                                ),
-                                &br::PipelineColorBlendStateCreateInfo::new(&[
-                                    br::vk::VkPipelineColorBlendAttachmentState::NOBLEND,
-                                ]),
-                            )
-                            .set_multisample_state(
-                                &br::PipelineMultisampleStateCreateInfo::new()
-                                    .rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _),
-                            )
-                            .set_depth_stencil_state(
-                                &br::PipelineDepthStencilStateCreateInfo::new()
-                                    .stencil_test(true)
-                                    .stencil_state_front(
-                                        br::StencilOpState::always_forall(br::StencilOp::Invert)
-                                            .write_mask(0x01),
-                                    )
-                                    .stencil_state_back(
-                                        br::StencilOpState::always_forall(br::StencilOp::Invert)
-                                            .write_mask(0x01),
-                                    ),
-                            ),
-                            br::GraphicsPipelineCreateInfo::new(
-                                &pipeline_layout,
-                                vector_render_pass.subpass(1),
-                                &[
-                                    vec_tri_fill_shader_module
-                                        .on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                                    vec_tri_fill_shader_module
-                                        .on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                                ],
-                                &br::PipelineVertexInputStateCreateInfo::new(&[], &[]),
-                                &br::PipelineInputAssemblyStateCreateInfo::new(
-                                    br::PrimitiveTopology::TriangleList,
-                                ),
-                                &br::PipelineViewportStateCreateInfo::new(
-                                    &[glyph_atlas
-                                        .size()
-                                        .into_rect(br::Offset2D::ZERO)
-                                        .make_viewport(0.0..1.0)],
-                                    &[glyph_atlas.size().into_rect(br::Offset2D::ZERO)],
-                                ),
-                                &br::PipelineRasterizationStateCreateInfo::new(
-                                    br::PolygonMode::Fill,
-                                    br::CullModeFlags::NONE,
-                                    br::FrontFace::CounterClockwise,
-                                ),
-                                &br::PipelineColorBlendStateCreateInfo::new(&[
-                                    br::vk::VkPipelineColorBlendAttachmentState::NOBLEND,
-                                ]),
-                            )
-                            .set_multisample_state(
-                                &br::PipelineMultisampleStateCreateInfo::new()
-                                    .rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _),
-                            )
-                            .set_depth_stencil_state(
-                                &br::PipelineDepthStencilStateCreateInfo::new()
-                                    .stencil_test(true)
-                                    .stencil_state_front(br::StencilOpState::NOP.set_compare(
-                                        br::CompareOp::Equal,
-                                        0x01,
-                                        0x01,
-                                    ))
-                                    .stencil_state_back(br::StencilOpState::NOP.set_compare(
-                                        br::CompareOp::Equal,
-                                        0x01,
-                                        0x01,
-                                    )),
-                            ),
-                        ],
-                        None::<&br::PipelineCacheObject<&br::DeviceObject<&br::InstanceObject>>>,
-                    )
-                    .expect("create vector rasterize pipelines");
-
-                let mut init_cp = br::CommandPoolObject::new(
-                    &vk_device,
-                    &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
-                )
-                .expect("init_cp.create");
-                let [mut init_cb] = br::CommandBufferObject::alloc_array(
-                    &vk_device,
-                    &br::CommandBufferFixedCountAllocateInfo::new(
-                        &mut init_cp,
-                        br::CommandBufferLevel::Primary,
-                    ),
-                )
-                .expect("init_cb.create");
-                unsafe {
-                    init_cb
-                        .begin(&br::CommandBufferBeginInfo::new())
-                        .expect("init_cb.begin")
-                }
-                .inject(|r| {
-                    vk_device.cmd_pipeline_barrier(
-                        r,
-                        &br::DependencyInfo::new(
-                            &[],
-                            &[],
-                            &[br::ImageMemoryBarrier2::new(
-                                &glyph_atlas.image(),
-                                glyph_atlas.image_range_entire(),
-                            )
-                            .transit_to(br::ImageLayout::TransferDestOpt.from_undefined())],
+                .expect("invalid scale");
+                glyph_atlas_per_scale.insert(
+                    main_window_init_scale,
+                    (
+                        GlyphAtlasManager::new(
+                            &glyph_atlas_manager_common_resources,
+                            &mut render_queue,
+                            vk_device.present_queue_family_index(),
                         ),
-                    )
-                })
-                .clear_color_image(
-                    &glyph_atlas.image(),
-                    br::ImageLayout::TransferDestOpt,
-                    &[br::ClearColorValue::from([0.0; 4])],
-                    &[br::ImageSubresourceRange::new(
-                        br::AspectMask::COLOR,
-                        0..1,
-                        0..1,
-                    )],
-                )
-                .inject(|r| {
-                    vk_device.cmd_pipeline_barrier(
-                        r,
-                        &br::DependencyInfo::new(
-                            &[],
-                            &[],
-                            &[br::ImageMemoryBarrier2::new(
-                                &glyph_atlas.image(),
-                                glyph_atlas.image_range_entire(),
-                            )
-                            .transit_to(
-                                br::ImageLayout::ShaderReadOnlyOpt
-                                    .from(br::ImageLayout::TransferDestOpt),
-                            )
-                            .from(
-                                br::PipelineStageFlags2::CLEAR,
-                                br::AccessFlags2::TRANSFER.write,
-                            )
-                            .to(
-                                br::PipelineStageFlags2::FRAGMENT_SHADER,
-                                br::AccessFlags2::SHADER.read,
-                            )],
-                        ),
-                    )
-                })
-                .end()
-                .expect("init_cb.end");
-                unsafe {
-                    render_queue
-                        .submit_raw(
-                            &[br::SubmitInfo::new(
-                                &[],
-                                &[],
-                                &[init_cb.as_transparent_ref()],
-                                &[],
-                            )],
-                            None,
-                        )
-                        .expect("init_cb.submit");
-                    render_queue.wait().expect("init_cb.wait");
-                }
+                        VectorRasterizationState::new(),
+                        1,
+                    ),
+                );
 
                 let mut main_window_renderer = WindowRenderer::new(
                     w,
+                    main_window_init_scale,
                     &surface_states,
                     main_window_composite_root,
                     vk_surface,
                     &vk_device,
-                    &glyph_atlas,
+                    glyph_atlas_per_scale[&main_window_init_scale].0.atlas(),
+                    &font_set,
                 );
 
                 let mut any_swapchain_invalidated = false;
-                let mut vector_raster_state = VectorRasterizationState::new();
                 'lp: while !shutdown.load(std::sync::atomic::Ordering::Acquire) {
                     // unsafe {
                     //     w.manual_capture_begin();
                     // }
 
-                    #[cfg(feature = "wayland")]
-                    if surface_states.lock().expect("poisoned")[&main_window_renderer.window_key()]
-                        .swapchain_externally_invalidation_signal
-                        .compare_exchange_weak(
-                            true,
-                            false,
-                            std::sync::atomic::Ordering::Relaxed,
-                            std::sync::atomic::Ordering::Relaxed,
-                        )
-                        .is_ok()
-                    {
-                        main_window_renderer.invalidate_swapchain();
-                        any_swapchain_invalidated = true;
-                    }
-                    #[cfg(target_os = "macos")]
-                    if w.dispatcher
-                        .state
-                        .swapchain_externally_invalidation_signal
-                        .compare_exchange_weak(
-                            true,
-                            false,
-                            std::sync::atomic::Ordering::Relaxed,
-                            std::sync::atomic::Ordering::Relaxed,
-                        )
-                        == Ok(true)
-                    {
+                    if main_window_renderer.take_swapchain_externally_invalidation_signal() {
                         main_window_renderer.invalidate_swapchain();
                         any_swapchain_invalidated = true;
                     }
@@ -955,26 +596,73 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         Err(e) => Err(e).expect("acquire next"),
                     };
 
+                    // flush synchronizing buffers
+                    let new_ui_scale;
                     {
                         let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                        if let Some(scale) = renderer_sync.latest_ui_scale_changes.take() {
-                            glyph_atlas.clear();
-                            #[cfg(feature = "freetype")]
-                            font_set.rescale((scale * 72.0) as _);
-                        }
+                        new_ui_scale = renderer_sync.latest_ui_scale_changes.take();
                         renderer_sync.composite_buffer.clean(&mut composite_tree);
                     }
 
+                    if let Some(scale) = new_ui_scale {
+                        let scale = SafeF32::new(scale).expect("scale.invalid");
+
+                        glyph_atlas_per_scale
+                            .get_mut(&main_window_renderer.active_scale())
+                            .expect("invalid state")
+                            .2 -= 1;
+                        let removed =
+                            if glyph_atlas_per_scale[&main_window_renderer.active_scale()].2 == 0 {
+                                // un references
+                                glyph_atlas_per_scale.remove(&main_window_renderer.active_scale())
+                            } else {
+                                None
+                            };
+
+                        match glyph_atlas_per_scale.entry(scale) {
+                            std::collections::hash_map::Entry::Occupied(mut o) => {
+                                // reuse existing
+                                o.get_mut().2 += 1;
+                            }
+                            std::collections::hash_map::Entry::Vacant(v) => match removed {
+                                Some((mut x, vs, _)) => {
+                                    // reuse existing with clear
+                                    x.clear_atlas();
+                                    v.insert((x, vs, 1));
+                                }
+                                None => {
+                                    // new one
+                                    v.insert((
+                                        GlyphAtlasManager::new(
+                                            &glyph_atlas_manager_common_resources,
+                                            &mut render_queue,
+                                            vk_device.present_queue_family_index(),
+                                        ),
+                                        VectorRasterizationState::new(),
+                                        1,
+                                    ));
+                                }
+                            },
+                        }
+
+                        main_window_renderer.rescale(scale);
+                    }
+
+                    for x in glyph_atlas_per_scale.values_mut() {
+                        x.1.clear();
+                    }
+
                     let current_t = global_time_base.elapsed();
-                    vector_raster_state.clear();
                     composite_tree.update_shared(current_t.as_secs_f32());
 
+                    let glyph_atlas_mgr = glyph_atlas_per_scale
+                        .get_mut(&main_window_renderer.active_scale())
+                        .expect("invalid state");
                     let needs_update_command = main_window_renderer.update(
                         current_t.as_secs_f32(),
                         &mut composite_tree,
-                        &mut glyph_atlas,
-                        &mut font_set,
-                        &mut vector_raster_state,
+                        glyph_atlas_mgr.0.atlas_mut(),
+                        &mut glyph_atlas_mgr.1,
                         &events,
                     );
 
@@ -990,356 +678,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
                     }
 
-                    if !vector_raster_state.is_empty() {
-                        // TODO: 最適化はあとで
-                        let filltri_points_offset = 0;
-                        let filltri_indices_offset = filltri_points_offset
-                            + core::mem::size_of_val(&vector_raster_state.fill_tri_points[..]);
-                        let curve_triangles_offset = (filltri_indices_offset
-                            + core::mem::size_of_val(&vector_raster_state.fill_tri_indices[..])
-                            + (core::mem::size_of::<[f32; 4]>() - 1))
-                            & !(core::mem::size_of::<[f32; 4]>() - 1);
-                        let vector_draw_buffer_total_size = curve_triangles_offset
-                            + core::mem::size_of_val(&vector_raster_state.curve_tris[..]);
-                        let mut vector_draw_buffer = br::BufferObject::new(
-                            &vk_device,
-                            &br::BufferCreateInfo::new(
-                                vector_draw_buffer_total_size,
-                                br::BufferUsage::VERTEX_BUFFER
-                                    | br::BufferUsage::INDEX_BUFFER
-                                    | br::BufferUsage::TRANSFER_DEST,
-                            ),
-                        )
-                        .expect("vector_draw_buffer create");
-                        let vector_draw_buffer_memreq = vector_draw_buffer.requirements();
-                        let vector_draw_buffer_memory = br::DeviceMemoryObject::new(
-                            &vk_device,
-                            &br::MemoryAllocateInfo::new(
-                                vector_draw_buffer_memreq.size,
-                                vk_device
-                                    .find_device_local_memory_index(
-                                        vector_draw_buffer_memreq.memoryTypeBits,
-                                    )
-                                    .expect("no suitable memory"),
-                            ),
-                        )
-                        .expect("vector_draw_buffer malloc");
-                        vector_draw_buffer
-                            .bind(&vector_draw_buffer_memory, 0)
-                            .expect("vector_draw_buffer bind");
-
-                        let mut vector_draw_init_buffer = br::BufferObject::new(
-                            &vk_device,
-                            &br::BufferCreateInfo::new(
-                                vector_draw_buffer_total_size,
-                                br::BufferUsage::TRANSFER_SRC,
-                            ),
-                        )
-                        .expect("vector_draw_init_buffer create");
-                        let vector_draw_init_buffer_memreq = vector_draw_init_buffer.requirements();
-                        let vector_draw_init_buffer_memindex = vk_device
-                            .find_host_visible_memory_index(
-                                vector_draw_init_buffer_memreq.memoryTypeBits,
-                            )
-                            .expect("no suitable memory");
-                        let mut vector_draw_init_buffer_memory = br::DeviceMemoryObject::new(
-                            &vk_device,
-                            &br::MemoryAllocateInfo::new(
-                                vector_draw_init_buffer_memreq.size,
-                                vector_draw_init_buffer_memindex,
-                            ),
-                        )
-                        .expect("vector_draw_init_buffer malloc");
-                        vector_draw_init_buffer
-                            .bind(&vector_draw_init_buffer_memory, 0)
-                            .expect("vector_draw_init_buffer bind");
-                        let p = vector_draw_init_buffer_memory
-                            .map(0..vector_draw_buffer_total_size)
-                            .expect("vector_draw_init_buffer_memory map");
-                        unsafe {
-                            core::ptr::copy_nonoverlapping(
-                                vector_raster_state.fill_tri_points.as_ptr(),
-                                p.ptr().byte_add(filltri_points_offset).cast(),
-                                vector_raster_state.fill_tri_points.len(),
-                            );
-                            core::ptr::copy_nonoverlapping(
-                                vector_raster_state.fill_tri_indices.as_ptr(),
-                                p.ptr().byte_add(filltri_indices_offset).cast(),
-                                vector_raster_state.fill_tri_indices.len(),
-                            );
-                            core::ptr::copy_nonoverlapping(
-                                vector_raster_state.curve_tris.as_ptr(),
-                                p.ptr().byte_add(curve_triangles_offset).cast(),
-                                vector_raster_state.curve_tris.len(),
-                            );
-                        }
-                        if !vk_device.is_coherent_memory(vector_draw_init_buffer_memindex) {
-                            unsafe {
-                                vk_device
-                                    .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
-                                        &vector_draw_init_buffer_memory,
-                                        0..vector_draw_buffer_total_size as u64,
-                                    )])
-                                    .expect("flush_mapped_memory_ranges");
-                            }
-                        }
-                        unsafe {
-                            vector_draw_init_buffer_memory.unmap();
+                    for (glyph_atlas_mgr, vector_raster_state, _) in glyph_atlas_per_scale.values()
+                    {
+                        if vector_raster_state.is_empty() {
+                            // no vector rasterization required
+                            continue;
                         }
 
-                        let mut vector_color_ms_buffer = br::ImageObject::new(
-                            &vk_device,
-                            &br::ImageCreateInfo::new(*glyph_atlas.size(), VG_COLOR_FORMAT)
-                                .set_usage(
-                                    br::ImageUsageFlags::COLOR_ATTACHMENT
-                                        | br::ImageUsageFlags::TRANSFER_SRC,
-                                )
-                                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
-                        )
-                        .expect("vector color_ms buffer create");
-                        vk_device.dbg_set_name(&vector_color_ms_buffer, c"Vector::color_ms_buffer");
-                        let mut vector_stencil_buffer = br::ImageObject::new(
-                            &vk_device,
-                            &br::ImageCreateInfo::new(*glyph_atlas.size(), VG_STENCIL_FORMAT)
-                                .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
-                        )
-                        .expect("vector stencil buffer create");
-                        vk_device.dbg_set_name(&vector_stencil_buffer, c"Vector::stencil_buffer");
-                        let vector_color_ms_buffer_memreq = vector_color_ms_buffer.requirements();
-                        let vector_stencil_buffer_memreq = vector_stencil_buffer.requirements();
-                        tracing::debug!(
-                            ?vector_color_ms_buffer_memreq,
-                            ?vector_stencil_buffer_memreq
+                        glyph_atlas_mgr.perform_render(
+                            &vector_raster_state,
+                            &vg_render_formats,
+                            &glyph_atlas_manager_common_resources,
+                            &mut render_queue,
                         );
-                        let vector_color_ms_buffer_mem = br::DeviceMemoryObject::new(
-                            &vk_device,
-                            &br::MemoryAllocateInfo::new(
-                                vector_color_ms_buffer_memreq.size,
-                                vk_device
-                                    .find_lazily_allocatable_device_local_memory_index(
-                                        vector_color_ms_buffer_memreq.memoryTypeBits,
-                                    )
-                                    .expect("no suitable memory"),
-                            ),
-                        )
-                        .expect("vector color_ms buffer malloc");
-                        vector_color_ms_buffer
-                            .bind(&vector_color_ms_buffer_mem, 0)
-                            .expect("vector color_ms buffer bind");
-                        let vector_color_ms_buffer = br::ImageViewBuilder::new(
-                            vector_color_ms_buffer,
-                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-                        )
-                        .create()
-                        .expect("vector color_ms buffer imageview create");
-                        let vector_stencil_buffer_mem = br::DeviceMemoryObject::new(
-                            &vk_device,
-                            &br::MemoryAllocateInfo::new(
-                                vector_stencil_buffer_memreq.size,
-                                vk_device
-                                    .find_lazily_allocatable_device_local_memory_index(
-                                        vector_stencil_buffer_memreq.memoryTypeBits,
-                                    )
-                                    .expect("no suitable memory"),
-                            ),
-                        )
-                        .expect("vector stencil buffer malloc");
-                        vector_stencil_buffer
-                            .bind(&vector_stencil_buffer_mem, 0)
-                            .expect("vector stencil buffer bind");
-                        let vector_stencil_buffer = br::ImageViewBuilder::new(
-                            vector_stencil_buffer,
-                            br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
-                        )
-                        .create()
-                        .expect("vector stencil buffer imageview create");
-                        let vector_framebuffer = br::FramebufferObject::new(
-                            &vk_device,
-                            &br::FramebufferCreateInfo::new(
-                                &vector_render_pass,
-                                &[
-                                    vector_stencil_buffer.as_transparent_ref(),
-                                    vector_color_ms_buffer.as_transparent_ref(),
-                                ],
-                                glyph_atlas.size().width,
-                                glyph_atlas.size().height,
-                            ),
-                        )
-                        .expect("vector framebuffer create");
-
-                        let mut cp = br::CommandPoolObject::new(
-                            &vk_device,
-                            &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
-                        )
-                        .expect("cp init");
-                        let mut cb = br::CommandBufferObject::alloc(
-                            &vk_device,
-                            &br::CommandBufferAllocateInfo::new(
-                                &mut cp,
-                                1,
-                                br::CommandBufferLevel::Primary,
-                            ),
-                        )
-                        .expect("alloc cb");
-                        unsafe {
-                            cb[0]
-                                .begin(&br::CommandBufferBeginInfo::new())
-                                .expect("cb begin")
-                        }
-                        .copy_buffer(
-                            &vector_draw_init_buffer,
-                            &vector_draw_buffer,
-                            &[br::BufferCopy::mirror(
-                                0,
-                                vector_draw_buffer_total_size as _,
-                            )],
-                        )
-                        .inject(|r| {
-                            vk_device.cmd_pipeline_barrier(
-                                r,
-                                &br::DependencyInfo::new(
-                                    &[br::MemoryBarrier2::new()
-                                        .from(
-                                            br::PipelineStageFlags2::COPY,
-                                            br::AccessFlags2::TRANSFER.write,
-                                        )
-                                        .to(
-                                            br::PipelineStageFlags2::VERTEX_INPUT,
-                                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ
-                                                | br::AccessFlags2::INDEX_READ,
-                                        )],
-                                    &[],
-                                    &[],
-                                ),
-                            )
-                        })
-                        .begin_render_pass(
-                            &br::RenderPassBeginInfo::new(
-                                &vector_render_pass,
-                                &vector_framebuffer,
-                                glyph_atlas.size().into_rect(br::Offset2D::ZERO),
-                                &[
-                                    br::ClearValue::depth_stencil(1.0, 0),
-                                    br::ClearValue::color_f32([0.0; 4]),
-                                ],
-                            ),
-                            br::SubpassContents::Inline,
-                        )
-                        .bind_pipeline(br::PipelineBindPoint::Graphics, &triangle_fans_pipeline)
-                        .bind_vertex_buffer_array(
-                            0,
-                            &[vector_draw_buffer.as_transparent_ref()],
-                            &[filltri_points_offset as _],
-                        )
-                        .bind_index_buffer(
-                            &vector_draw_buffer,
-                            filltri_indices_offset,
-                            br::IndexType::U16,
-                        )
-                        .draw_indexed(vector_raster_state.fill_tri_indices.len() as _, 1, 0, 0, 0)
-                        .bind_pipeline(br::PipelineBindPoint::Graphics, &curve_pipeline)
-                        .bind_vertex_buffer_array(
-                            0,
-                            &[vector_draw_buffer.as_transparent_ref()],
-                            &[curve_triangles_offset as _],
-                        )
-                        .draw(vector_raster_state.curve_tris.len() as _, 1, 0, 0)
-                        .next_subpass(br::SubpassContents::Inline)
-                        .bind_pipeline(br::PipelineBindPoint::Graphics, &colorize_pipeline)
-                        .draw(3, 1, 0, 0)
-                        .end_render_pass()
-                        .inject(|r| {
-                            vk_device.cmd_pipeline_barrier(
-                                r,
-                                &br::DependencyInfo::new(
-                                    &[],
-                                    &[],
-                                    &[br::ImageMemoryBarrier2::new(
-                                        &glyph_atlas.image(),
-                                        br::ImageSubresourceRange::new(
-                                            br::AspectMask::COLOR,
-                                            0..1,
-                                            0..1,
-                                        ),
-                                    )
-                                    .transferring_layout(
-                                        br::ImageLayout::ShaderReadOnlyOpt,
-                                        br::ImageLayout::TransferDestOpt,
-                                    )],
-                                ),
-                            )
-                        })
-                        .resolve_image(
-                            vector_color_ms_buffer.image(),
-                            br::ImageLayout::TransferSrcOpt,
-                            &glyph_atlas.image(),
-                            br::ImageLayout::TransferDestOpt,
-                            &vector_raster_state
-                                .updated_rects
-                                .iter()
-                                .map(|r| br::vk::VkImageResolve {
-                                    srcSubresource: br::ImageSubresourceLayers::new(
-                                        br::AspectMask::COLOR,
-                                        0,
-                                        0..1,
-                                    ),
-                                    srcOffset: r.offset.with_z(0),
-                                    dstSubresource: br::ImageSubresourceLayers::new(
-                                        br::AspectMask::COLOR,
-                                        0,
-                                        0..1,
-                                    ),
-                                    dstOffset: r.offset.with_z(0),
-                                    extent: r.extent.with_depth(1),
-                                })
-                                .collect::<Vec<_>>(),
-                        )
-                        .inject(|r| {
-                            vk_device.cmd_pipeline_barrier(
-                                r,
-                                &br::DependencyInfo::new(
-                                    &[],
-                                    &[],
-                                    &[br::ImageMemoryBarrier2::new(
-                                        &glyph_atlas.image(),
-                                        br::ImageSubresourceRange::new(
-                                            br::AspectMask::COLOR,
-                                            0..1,
-                                            0..1,
-                                        ),
-                                    )
-                                    .from(
-                                        br::PipelineStageFlags2::RESOLVE,
-                                        br::AccessFlags2::TRANSFER.write,
-                                    )
-                                    .to(
-                                        br::PipelineStageFlags2::FRAGMENT_SHADER,
-                                        br::AccessFlags2::SHADER.read,
-                                    )
-                                    .transferring_layout(
-                                        br::ImageLayout::TransferDestOpt,
-                                        br::ImageLayout::ShaderReadOnlyOpt,
-                                    )],
-                                ),
-                            )
-                        })
-                        .end()
-                        .expect("cb end");
-                        unsafe {
-                            render_queue
-                                .submit_raw(
-                                    &[br::SubmitInfo::new(
-                                        &[],
-                                        &[],
-                                        &[cb[0].as_transparent_ref()],
-                                        &[],
-                                    )],
-                                    None,
-                                )
-                                .expect("vector render submit");
-                        }
-                        render_queue.wait().expect("vector render wait");
                     }
 
                     unsafe {
@@ -1381,7 +732,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
                 unsafe {
                     vk_device.wait().expect("device wait");
-                    glyph_atlas.drop(&vk_device);
                 }
                 tracing::info!("RenderThread terminated");
             })
