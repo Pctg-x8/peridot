@@ -15,7 +15,7 @@ use std::os::fd::AsRawFd;
 #[cfg(feature = "wayland")]
 use std::{collections::HashMap, sync::RwLock};
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     sync::{Arc, Mutex},
 };
 #[cfg(windows)]
@@ -26,10 +26,7 @@ use windows::{
     },
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM},
-        Graphics::{
-            DirectWrite::{DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory},
-            Gdi::HBRUSH,
-        },
+        Graphics::Gdi::HBRUSH,
         System::{
             LibraryLoader::GetModuleHandleW,
             WinRT::{
@@ -55,8 +52,10 @@ use windows_core::*;
 use windows_numerics::{Vector2, Vector3};
 
 #[cfg(windows)]
-use crate::bindgen::Microsoft::Graphics::Canvas::Effects::{
-    EffectOptimization, GaussianBlurEffect,
+use crate::{
+    bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
+    graphics::VulkanSurface,
+    hittest::HitTestTreeRef,
 };
 use crate::{
     composite::{
@@ -100,7 +99,7 @@ static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable
 
 pub fn launch() {
     #[cfg(windows)]
-    platform::windows::set_panic_hook();
+    utils::platform::windows::set_panic_hook();
 
     #[cfg(target_os = "macos")]
     tracing_subscriber::fmt()
@@ -111,7 +110,7 @@ pub fn launch() {
     tracing_subscriber::fmt()
         .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(platform::windows::DebugOutputWriter)
+        .with_writer(utils::platform::windows::DebugOutputWriter)
         .init();
     #[cfg(all(not(target_os = "macos"), not(windows)))]
     tracing_subscriber::fmt()
@@ -175,7 +174,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
 
     #[cfg(windows)]
-    let app_runtime = platform::windows::WindowsAppRuntimeBootstrap::init();
+    let app_runtime = utils::platform::windows::WindowsAppRuntimeBootstrap::init();
     #[cfg(windows)]
     let _dispatcher_queue = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
@@ -194,44 +193,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(windows)]
     let hinstance: HINSTANCE = unsafe { GetModuleHandleW(None).expect("GetModuleHandleW").into() };
-    #[cfg(windows)]
-    let atom = unsafe {
-        register_class(&WNDCLASSEXW {
-            cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
-            style: WNDCLASS_STYLES(0),
-            cbClsExtra: 0,
-            cbWndExtra: core::mem::size_of::<[usize; 3]>() as _,
-            lpfnWndProc: Some(WindowState::<AppFuture>::handle_messages),
-            hInstance: hinstance,
-            hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
-            hCursor: HCURSOR(core::ptr::null_mut()),
-            hbrBackground: HBRUSH(core::ptr::null_mut()),
-            lpszMenuName: PCWSTR::null(),
-            lpszClassName: w!("MainWindow"),
-            hIconSm: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
-        })
-        .expect("register_class.main")
-    };
-    #[cfg(windows)]
-    let w = unsafe {
-        CreateWindowExW(
-            WS_EX_APPWINDOW,
-            PCWSTR(core::ptr::without_provenance(atom as _)),
-            w!("Peridot Marble Editor"),
-            WS_OVERLAPPEDWINDOW,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            None,
-            None,
-            Some(hinstance),
-            None,
-        )
-        .expect("CreateWindowExW")
-    };
-    #[cfg(windows)]
-    let w = Win32Window(w);
 
     #[cfg(windows)]
     let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
@@ -328,6 +289,45 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         ..Default::default()
     });
 
+    #[cfg(windows)]
+    let atom = unsafe {
+        register_class(&WNDCLASSEXW {
+            cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
+            style: WNDCLASS_STYLES(0),
+            cbClsExtra: 0,
+            cbWndExtra: core::mem::size_of::<[usize; 3]>() as _,
+            lpfnWndProc: Some(WindowEventHandler::<AppFuture>::handle_messages),
+            hInstance: hinstance,
+            hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
+            hCursor: HCURSOR(core::ptr::null_mut()),
+            hbrBackground: HBRUSH(core::ptr::null_mut()),
+            lpszMenuName: PCWSTR::null(),
+            lpszClassName: w!("MainWindow"),
+            hIconSm: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
+        })
+        .expect("register_class.main")
+    };
+    #[cfg(windows)]
+    let w = unsafe {
+        CreateWindowExW(
+            WS_EX_APPWINDOW,
+            PCWSTR(core::ptr::without_provenance(atom as _)),
+            w!("Peridot Marble Editor"),
+            WS_OVERLAPPEDWINDOW,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        )
+        .expect("CreateWindowExW")
+    };
+    #[cfg(windows)]
+    let w = Win32Window(w);
+
     #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(
         &wl_interfaces,
@@ -349,21 +349,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(target_os = "macos")]
     w.make_primary_window();
 
-    #[cfg(windows)]
-    unsafe {
-        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
-        SetWindowLongPtrW(
-            main_window.hwnd,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
-            &pointer_input_manager as *const _ as _,
-        );
-        SetWindowLongPtrW(
-            main_window.hwnd,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            &ht_manager as *const _ as _,
-        );
-    }
-
     let vk_device = VulkanDevice::new();
 
     #[cfg(windows)]
@@ -374,17 +359,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         panic!("win32 presentation not supported on graphics queue");
     }
     #[cfg(windows)]
-    let vk_surface = VulkanSurface {
-        handle: unsafe {
-            br::Win32SurfaceCreateInfo::new(
-                core::mem::transmute(hinstance),
-                core::mem::transmute(w.0),
-            )
+    let vk_surface = VulkanSurface::new(&vk_device, unsafe {
+        br::Win32SurfaceCreateInfo::new(core::mem::transmute(hinstance), core::mem::transmute(w.0))
             .execute(vk_device.instance(), None)
             .expect("vk_surface.create")
-        },
-        device: &vk_device,
-    };
+    });
 
     #[cfg(feature = "wayland")]
     if !unsafe {
@@ -439,33 +418,42 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         ht_manager,
         #[cfg(feature = "wayland")]
         WindowHandle(w.surface.as_ptr()),
+        #[cfg(windows)]
+        WindowHandle(w.0),
         SystemLink {
             drag_preview_popover,
             #[cfg(feature = "wayland")]
             pointer_state_ref: unsafe {
                 &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
             },
-        } /*#[cfg(feature = "wayland")]
-          CursorShaping {
-              pointer_state_ref: unsafe {
-                  &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
-              },
-          },
-          #[cfg(windows)]
-          CursorShaping {},
-          #[cfg(windows)]
-          WindowHandle { hwnd: w.0 },
-          #[cfg(feature = "wayland")]
-          WindowHandle {
-              wl_surface: w.surface.as_ptr(),
-              wl_surface_to_state: &surface_states,
-          },
+        } /*
           #[cfg(target_os = "macos")]
           WindowHandle {
               state_ref: &mut w.dispatcher.state as *mut _
           },
           drag_preview_popover*/
     ));
+
+    #[cfg(windows)]
+    unsafe {
+        WindowEventHandler::set_for_window(
+            &w,
+            Box::new(WindowEventHandler {
+                state: WindowState {
+                    content_scale: windows::Win32::UI::HiDpi::GetDpiForWindow(w.0) as f32 / 96.0,
+                    composite_root: main_window_composite_root,
+                    ht_root: main_window_ht_root,
+                    latest_ui_scale_changes: Mutex::new(None),
+                },
+                event_dispatcher: LogicFiberEventDispatcher {
+                    event_store: event_store.as_mut().get_mut() as *mut _ as _,
+                    future: app.as_mut().get_unchecked_mut() as *mut _ as _,
+                },
+                text_services_mgr: None,
+                edit_context: None,
+            }),
+        );
+    }
 
     #[cfg(feature = "wayland")]
     unsafe {
@@ -509,22 +497,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
-    #[cfg(windows)]
-    unsafe {
-        WindowState::set_for_window(
-            &w,
-            Box::new(WindowState {
-                content_scale: windows::Win32::UI::HiDpi::GetDpiForWindow(w.0) as f32 / 96.0,
-                event_dispatcher: LogicFiberEventDispatcher {
-                    event_store: event_store.as_mut().get_mut() as *mut _ as _,
-                    future: app.as_mut().get_unchecked_mut() as *mut _ as _,
-                },
-                text_services_mgr: None,
-                edit_context: None,
-            }),
-        );
-    }
-
     #[cfg(feature = "wayland")]
     let main_window_init_scale = SafeF32::new(
         w.event_listener
@@ -537,6 +509,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     .expect("invalid scale");
     #[cfg(feature = "wayland")]
     let main_window_state = &w.event_listener.state;
+    #[cfg(windows)]
+    let main_window_init_scale = SafeF32::new(unsafe {
+        use windows::Win32::UI::HiDpi::GetDpiForWindow;
+        GetDpiForWindow(w.0) as f32 / 96.0
+    })
+    .expect("invalid scale");
+    #[cfg(windows)]
+    let main_window_sendable = Win32SendableWindowHandle(w.0);
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -545,11 +525,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .spawn_scoped(thread_scope, || {
                 tracing::info!("Starting RenderThread...");
                 let mut render_queue = vk_device.queue(vk_device.present_queue_family_index(), 0);
-
-                #[cfg(windows)]
-                let dw_factory: IDWriteFactory = unsafe {
-                    DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("dwrite.factory.create")
-                };
 
                 let mut composite_tree = CompositeTreeRender::new();
                 let mut glyph_atlas_per_scale: HashMap<
@@ -562,7 +537,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 #[cfg(target_os = "macos")]
                 let font_set = FontSet::new();
                 #[cfg(windows)]
-                let font_set = FontSet::new(dw_factory);
+                let font_set = RootFontSet::new();
 
                 let vg_render_formats = GlyphAtlasRenderingFormats {
                     color: br::vk::VK_FORMAT_R8_UNORM,
@@ -584,7 +559,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 );
 
                 let mut main_window_renderer = WindowRenderer::new(
+                    #[cfg(feature = "wayland")]
                     main_window_state,
+                    #[cfg(windows)]
+                    main_window_sendable,
                     main_window_init_scale,
                     main_window_composite_root,
                     vk_surface,
@@ -637,11 +615,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                         renderer_sync.composite_buffer.clean(&mut composite_tree);
                     }
+                    #[cfg(feature = "wayland")]
                     let main_window_new_ui_scale = main_window_state
                         .latest_ui_scale_changes
                         .lock()
                         .expect("poisoned")
                         .take();
+                    #[cfg(windows)]
+                    let main_window_new_ui_scale =
+                        WindowState::get_for_window(main_window_sendable.0)
+                            .latest_ui_scale_changes
+                            .lock()
+                            .expect("poisoned")
+                            .take();
 
                     if let Some(scale) = main_window_new_ui_scale {
                         let scale = SafeF32::new(scale).expect("scale.invalid");
@@ -1035,8 +1021,6 @@ pub enum Event {
     Quit,
     PointerDown {
         window: WindowHandle,
-        #[cfg(windows)]
-        active_window: HWND,
         #[cfg(target_os = "macos")]
         active_window: *mut platform::mac::bridge::WindowLink,
     },
@@ -1121,6 +1105,21 @@ async fn run<'sys>(
     let mut keyboard_focus_manager = KeyboardFocusManager::new();
     let mut pointer_input_manager = PointerInputManager::new();
     pointer_input_manager.set_client_size(main_window, main_window.client_size());
+
+    #[cfg(windows)]
+    unsafe {
+        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
+        SetWindowLongPtrW(
+            main_window.0,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
+            &pointer_input_manager as *const _ as _,
+        );
+        SetWindowLongPtrW(
+            main_window.0,
+            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
+            &ht_manager as *const _ as _,
+        );
+    }
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -1315,8 +1314,6 @@ async fn run<'sys>(
             }
             Event::PointerDown {
                 window,
-                #[cfg(windows)]
-                active_window,
                 #[cfg(target_os = "macos")]
                 active_window,
             } => {
@@ -1326,7 +1323,10 @@ async fn run<'sys>(
                     .bind_parent_window(window);
                 #[cfg(windows)]
                 {
-                    drag_preview_popover.base_window_handle = active_window;
+                    system_link
+                        .drag_preview_popover()
+                        .base_window_handle
+                        .set(window.0);
                 }
                 #[cfg(target_os = "macos")]
                 {
@@ -1434,7 +1434,53 @@ impl SystemLink {
         }
     }
 
+    #[cfg(windows)]
+    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
+        unsafe {
+            // TODO: 必要そうならキャッシュする
+            windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor {
+                CursorShape::Default => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::Pointer => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::IBeam => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::ResizeHorizontal => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+            });
+        }
+    }
+
     #[cfg(feature = "wayland")]
+    pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
+        *window
+            .state()
+            .latest_ui_scale_changes
+            .lock()
+            .expect("poisoned") = Some(new_scale);
+    }
+
+    #[inline(always)]
     pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
         *window
             .state()
@@ -1444,32 +1490,55 @@ impl SystemLink {
     }
 }
 
-#[derive(Clone, Copy)]
 #[cfg(windows)]
-pub struct WindowHandle {
-    hwnd: windows::Win32::Foundation::HWND,
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct WindowHandle(windows::Win32::Foundation::HWND);
+#[cfg(windows)]
+impl core::hash::Hash for WindowHandle {
+    #[inline(always)]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.0.hash(state)
+    }
 }
 #[cfg(windows)]
 impl WindowHandle {
     #[inline(always)]
+    fn state(&self) -> &WindowState {
+        unsafe {
+            &*core::ptr::with_exposed_provenance(
+                GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
+            )
+        }
+    }
+
+    #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
         let mut rc = core::mem::MaybeUninit::uninit();
         if let Err(e) = unsafe {
-            windows::Win32::UI::WindowsAndMessaging::GetClientRect(self.hwnd, rc.as_mut_ptr())
+            windows::Win32::UI::WindowsAndMessaging::GetClientRect(self.0, rc.as_mut_ptr())
         } {
             tracing::error!(reason = %e, "get_client_rect");
             return Size::new_logical(0.0, 0.0);
         }
 
         let rc = unsafe { rc.assume_init_ref() };
-        Size::new_pixels(rc.right as _, rc.bottom as _).to_logical(unsafe {
-            windows::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd) as f32 / 96.0
-        })
+        Size::new_pixels(rc.right as _, rc.bottom as _)
+            .to_logical(unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.0) as f32 / 96.0 })
     }
 
     #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
-        unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd) as f32 / 96.0 }
+        unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.0) as f32 / 96.0 }
+    }
+
+    #[inline(always)]
+    pub fn composite_root(&self) -> CompositeTreeRef {
+        self.state().composite_root
+    }
+
+    #[inline(always)]
+    pub fn ht_root(&self) -> HitTestTreeRef {
+        self.state().ht_root
     }
 }
 #[cfg(windows)]
@@ -1477,7 +1546,7 @@ impl ShellPointerActions for WindowHandle {
     #[inline(always)]
     fn capture_pointer(&self) {
         unsafe {
-            windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.hwnd);
+            windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.0);
         }
     }
 
@@ -1602,46 +1671,6 @@ impl CursorShaping {
 #[cfg(windows)]
 #[derive(Clone, Copy)]
 pub struct PointerID();
-#[cfg(windows)]
-pub struct CursorShaping {}
-#[cfg(windows)]
-impl CursorShaping {
-    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
-        unsafe {
-            // TODO: 必要そうならキャッシュする
-            windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor {
-                CursorShape::Default => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::Pointer => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::IBeam => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::ResizeHorizontal => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-            });
-        }
-    }
-}
 
 // async logicむけにあとで作りなおすかも いったんsprite-atlas-visualizerから雑にコピー
 pub struct AppEventBus {
@@ -1700,6 +1729,15 @@ impl AppEventBus {
         }
     }
 }
+
+#[cfg(windows)]
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Win32SendableWindowHandle(HWND);
+#[cfg(windows)]
+unsafe impl Sync for Win32SendableWindowHandle {}
+#[cfg(windows)]
+unsafe impl Send for Win32SendableWindowHandle {}
 
 #[cfg(windows)]
 #[repr(transparent)]
@@ -2131,7 +2169,7 @@ impl DragPreviewPopoverHandle {
 #[cfg(windows)]
 pub struct DragPreviewPopoverHandle {
     w: HWND,
-    base_window_handle: HWND,
+    base_window_handle: core::cell::Cell<HWND>,
     _composition_target: windows::UI::Composition::Desktop::DesktopWindowTarget,
     root_visual: windows::UI::Composition::SpriteVisual,
 }
@@ -2278,13 +2316,13 @@ impl DragPreviewPopoverHandle {
 
         Self {
             w,
-            base_window_handle: HWND(core::ptr::null_mut()),
+            base_window_handle: core::cell::Cell::new(HWND(core::ptr::null_mut())),
             _composition_target: composition_target,
             root_visual: blur_visual,
         }
     }
 
-    pub fn show(&mut self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
+    pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
         unsafe {
             use windows::Win32::{
                 Foundation::POINT,
@@ -2296,11 +2334,11 @@ impl DragPreviewPopoverHandle {
             };
 
             // デスクトップ座標で指定になるので置き換え
-            let scale = GetDpiForWindow(self.base_window_handle) as f32 / 96.0;
+            let scale = GetDpiForWindow(self.base_window_handle.get()) as f32 / 96.0;
             let pos = pos.to_pixels_round(scale);
             let size = size.to_pixels_ceil(scale);
             let mut p = [POINT { x: pos.x, y: pos.y }];
-            MapWindowPoints(Some(self.base_window_handle), None, &mut p);
+            MapWindowPoints(Some(self.base_window_handle.get()), None, &mut p);
             let [POINT { x, y }] = p;
 
             // 影のぶんだけ余分に設定する
@@ -2321,7 +2359,7 @@ impl DragPreviewPopoverHandle {
         }
     }
 
-    pub fn r#move(&mut self, pos: &Point<PointerInputUnit>) {
+    pub fn r#move(&self, pos: &Point<PointerInputUnit>) {
         unsafe {
             use windows::Win32::{
                 Foundation::POINT,
@@ -2333,10 +2371,10 @@ impl DragPreviewPopoverHandle {
             };
 
             // デスクトップ座標で指定になるので置き換え
-            let scale = GetDpiForWindow(self.base_window_handle) as f32 / 96.0;
+            let scale = GetDpiForWindow(self.base_window_handle.get()) as f32 / 96.0;
             let pos = pos.to_pixels_round(scale);
             let mut p = [POINT { x: pos.x, y: pos.y }];
-            MapWindowPoints(Some(self.base_window_handle), None, &mut p);
+            MapWindowPoints(Some(self.base_window_handle.get()), None, &mut p);
             let [POINT { x, y }] = p;
 
             // 影のぶんだけずらして設定する
@@ -2353,7 +2391,7 @@ impl DragPreviewPopoverHandle {
         }
     }
 
-    pub fn hide(&mut self) {
+    pub fn hide(&self) {
         unsafe {
             let _ = ShowWindow(self.w, SW_HIDE);
         }
@@ -3267,14 +3305,34 @@ impl crate::input::ShellPointerActions for WindowMessageHandlingContext {
 }
 
 #[cfg(windows)]
-struct WindowState<AppFuture: core::future::Future<Output = ()>> {
+struct WindowState {
     content_scale: f32,
+    composite_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    latest_ui_scale_changes: Mutex<Option<f32>>,
+}
+#[cfg(windows)]
+impl WindowState {
+    #[inline(always)]
+    pub fn get_for_window<'a>(w: HWND) -> &'a Self {
+        unsafe {
+            &*core::ptr::with_exposed_provenance(
+                GetWindowLongPtrW(w, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
+            )
+        }
+    }
+}
+
+#[cfg(windows)]
+#[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
+struct WindowEventHandler<AppFuture> {
+    state: WindowState,
     event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
     text_services_mgr: Option<CoreTextServicesManager>,
     edit_context: Option<CoreTextEditContext>,
 }
 #[cfg(windows)]
-impl<AppFuture: core::future::Future<Output = ()>> Drop for WindowState<AppFuture> {
+impl<AppFuture> Drop for WindowEventHandler<AppFuture> {
     fn drop(&mut self) {
         unsafe {
             // TODO: detect main window
@@ -3283,13 +3341,17 @@ impl<AppFuture: core::future::Future<Output = ()>> Drop for WindowState<AppFutur
     }
 }
 #[cfg(windows)]
-impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
+impl<AppFuture> WindowEventHandler<AppFuture> {
+    const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+}
+#[cfg(windows)]
+impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<AppFuture> {
     #[inline(always)]
     fn set_for_window(w: &Win32Window, this: Box<Self>) {
         unsafe {
             SetWindowLongPtrW(
                 w.0,
-                WINDOW_LONG_PTR_INDEX(0),
+                Self::LONG_PTR_INDEX,
                 Box::into_raw(this) as *mut _ as _,
             );
         }
@@ -3299,7 +3361,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
     fn get_for_window<'a>(w: HWND) -> &'a mut Self {
         unsafe {
             &mut *core::ptr::with_exposed_provenance_mut::<Self>(
-                GetWindowLongPtrW(w, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
+                GetWindowLongPtrW(w, Self::LONG_PTR_INDEX).cast_unsigned(),
             )
         }
     }
@@ -3308,7 +3370,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
     fn try_get_for_window<'a>(w: HWND) -> Option<&'a mut Self> {
         unsafe {
             core::ptr::with_exposed_provenance_mut::<Self>(
-                GetWindowLongPtrW(w, WINDOW_LONG_PTR_INDEX(0)).cast_unsigned(),
+                GetWindowLongPtrW(w, Self::LONG_PTR_INDEX).cast_unsigned(),
             )
             .as_mut()
         }
@@ -3355,24 +3417,29 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
             }
         }
 
-        self.content_scale = new_scale;
-        self.event_dispatcher
-            .dispatch(Event::WindowRescaleUI { new_scale });
+        self.state.content_scale = new_scale;
+        self.event_dispatcher.dispatch(Event::WindowRescaleUI {
+            window: WindowHandle(hwnd),
+            new_scale,
+        });
     }
 
     #[tracing::instrument(skip(self))]
-    fn resize(&mut self, new_size: Size<PixelsUnit>) {
+    fn resize(&mut self, hwnd: HWND, new_size: Size<PixelsUnit>) {
         tracing::trace!(?new_size);
 
-        self.event_dispatcher
-            .dispatch(Event::WindowResize(new_size.to_logical(self.content_scale)));
+        self.event_dispatcher.dispatch(Event::WindowResize {
+            window: WindowHandle(hwnd),
+            size: new_size.to_logical(self.state.content_scale),
+        });
     }
 
     #[tracing::instrument(skip(self))]
-    fn mouse_move(&mut self, client_pos: Point<PixelsUnit>) {
+    fn mouse_move(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
-            client_pos: client_pos.to_logical(self.content_scale),
+            window: WindowHandle(hwnd),
+            client_pos: client_pos.to_logical(self.state.content_scale),
         });
     }
 
@@ -3381,16 +3448,19 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         // move then down
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
-            client_pos: client_pos.to_logical(self.content_scale),
+            window: WindowHandle(hwnd),
+            client_pos: client_pos.to_logical(self.state.content_scale),
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
-            active_window: hwnd,
+            window: WindowHandle(hwnd),
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn left_button_up(&mut self) {
-        self.event_dispatcher.dispatch(Event::PointerUp);
+    fn left_button_up(&mut self, hwnd: HWND) {
+        self.event_dispatcher.dispatch(Event::PointerUp {
+            window: WindowHandle(hwnd),
+        });
     }
 
     fn non_client_hittest(&self, hwnd: HWND, screen_pos: Point<PixelsUnit>) -> Option<u32> {
@@ -3448,14 +3518,14 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
 
         let pointer_input_manager = unsafe { &*pointer_input_manager_ptr };
         match pointer_input_manager.role(
-            &client_pos.to_logical(self.content_scale),
+            &client_pos.to_logical(self.state.content_scale),
             &Size::new_pixels(
                 (client_size.right - client_size.left) as _,
                 (client_size.bottom - client_size.top) as _,
             )
-            .to_logical(self.content_scale),
+            .to_logical(self.state.content_scale),
             unsafe { &*ht_manager_ptr },
-            HitTestTreeManager::ROOT,
+            self.state.ht_root,
         ) {
             None => Some(HTCLIENT),
             Some(crate::hittest::Role::TitleBar) => Some(HTCAPTION),
@@ -3766,10 +3836,13 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
 
         if msg == WM_SIZE {
             if let Some(state) = Self::try_get_for_window(hwnd) {
-                state.resize(Size::new_pixels(
-                    (lparam.0 & 0xffff) as u16 as _,
-                    ((lparam.0 >> 16) & 0xffff) as u16 as _,
-                ));
+                state.resize(
+                    hwnd,
+                    Size::new_pixels(
+                        (lparam.0 & 0xffff) as u16 as _,
+                        ((lparam.0 >> 16) & 0xffff) as u16 as _,
+                    ),
+                );
             }
 
             return LRESULT(0);
@@ -3817,16 +3890,19 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowState<AppFuture> {
         }
 
         if msg == WM_MOUSEMOVE {
-            Self::get_for_window(hwnd).mouse_move(Point::new_pixels(
-                (lparam.0 & 0xffff) as i16 as _,
-                ((lparam.0 >> 16) & 0xffff) as i16 as _,
-            ));
+            Self::get_for_window(hwnd).mouse_move(
+                hwnd,
+                Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                ),
+            );
 
             return LRESULT(0);
         }
 
         if msg == WM_LBUTTONUP {
-            Self::get_for_window(hwnd).left_button_up();
+            Self::get_for_window(hwnd).left_button_up(hwnd);
 
             return LRESULT(0);
         }

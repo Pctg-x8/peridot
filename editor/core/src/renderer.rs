@@ -3,6 +3,8 @@ use bedrock::{
     ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, Swapchain, VkHandle, VkHandleMut,
 };
 
+#[cfg(feature = "wayland")]
+use crate::WaylandWindowState;
 use crate::{
     AppEventBus, Event,
     composite::{
@@ -13,18 +15,15 @@ use crate::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, RASTER_STATE_DEFAULT_FILL_NOCULL,
         VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
     },
-    text::PerWindowFontSet,
+    text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
     utils::SafeF32,
-};
-#[cfg(feature = "wayland")]
-use crate::{
-    WaylandWindowState,
-    text::{GlyphAtlas, RootFontSet},
 };
 
 pub struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
     w: &'d WaylandWindowState,
+    #[cfg(windows)]
+    w: crate::Win32SendableWindowHandle,
     active_scale: SafeF32,
     vk_device: &'d VulkanDevice,
     swapchain_invalidated: bool,
@@ -48,9 +47,9 @@ pub struct WindowRenderer<'d> {
     font_set: PerWindowFontSet<'d>,
 }
 impl<'d> WindowRenderer<'d> {
-    #[cfg(feature = "wayland")]
     pub fn new(
-        w: &'d WaylandWindowState,
+        #[cfg(feature = "wayland")] w: &'d WaylandWindowState,
+        #[cfg(windows)] w: crate::Win32SendableWindowHandle,
         active_scale: SafeF32,
         composite_root: CompositeTreeRef,
         surface: VulkanSurface<'d>,
@@ -65,7 +64,12 @@ impl<'d> WindowRenderer<'d> {
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
             #[cfg(windows)]
-            || w.pixels_client_size(),
+            || unsafe {
+                let mut rect = core::mem::MaybeUninit::uninit();
+                windows::Win32::UI::WindowsAndMessaging::GetClientRect(w.0, rect.as_mut_ptr());
+                let rect = rect.assume_init();
+                crate::utils::Size::new_pixels(rect.right as _, rect.bottom as _)
+            },
             #[cfg(feature = "wayland")]
             || w.committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]
@@ -275,6 +279,10 @@ impl<'d> WindowRenderer<'d> {
             )
             == Ok(true)
     }
+    #[cfg(not(feature = "wayland"))]
+    pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
+        false
+    }
 
     pub fn invalidate_swapchain(&mut self) {
         self.swapchain_invalidated = true;
@@ -296,7 +304,12 @@ impl<'d> WindowRenderer<'d> {
         self.swapchain.recreate(
             &self.surface,
             #[cfg(windows)]
-            || w.pixels_client_size(),
+            || unsafe {
+                let mut rect = core::mem::MaybeUninit::uninit();
+                windows::Win32::UI::WindowsAndMessaging::GetClientRect(self.w.0, rect.as_mut_ptr());
+                let rect = rect.assume_init();
+                crate::utils::Size::new_pixels(rect.right as _, rect.bottom as _)
+            },
             #[cfg(feature = "wayland")]
             || self.w.committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]

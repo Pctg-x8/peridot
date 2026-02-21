@@ -289,14 +289,22 @@ pub enum FontID {
     UITitleProjectName,
 }
 
-#[cfg(feature = "freetype")]
 pub struct PerWindowFontSet<'d> {
+    #[cfg(windows)]
+    dw_factory: &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory,
+    #[cfg(windows)]
+    ui_default: &'d windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+    #[cfg(windows)]
+    ui_title_project_name: &'d windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+    #[cfg(feature = "freetype")]
     ui_default: ft::Face,
+    #[cfg(feature = "freetype")]
     ui_title_project_name: ft::Face,
     #[cfg(feature = "harfbuzz")]
     ui_default_shaping: core::ptr::NonNull<hb::ffi::hb_font_t>,
     #[cfg(feature = "harfbuzz")]
     ui_title_project_name_shaping: core::ptr::NonNull<hb::ffi::hb_font_t>,
+    #[cfg(feature = "freetype")]
     _marker: core::marker::PhantomData<&'d [ft::raw::FT_Byte]>,
 }
 impl Drop for PerWindowFontSet<'_> {
@@ -350,6 +358,12 @@ impl<'d> PerWindowFontSet<'d> {
         .expect("hb_ft_font_create_referenced.ui_title_project_name");
 
         Self {
+            #[cfg(windows)]
+            dw_factory: &root_set.dw_factory,
+            #[cfg(windows)]
+            ui_default: &root_set.ui_default,
+            #[cfg(windows)]
+            ui_title_project_name: &root_set.ui_title_project_name,
             #[cfg(feature = "freetype")]
             ui_default,
             #[cfg(feature = "freetype")]
@@ -419,8 +433,10 @@ impl<'d> PerWindowFontSet<'d> {
 
     #[cfg(windows)]
     #[inline(always)]
-    pub const fn native_factory(&self) -> &windows::Win32::Graphics::DirectWrite::IDWriteFactory {
-        &self.dw_factory
+    pub const fn native_factory(
+        &self,
+    ) -> &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory {
+        self.dw_factory
     }
 
     #[cfg(windows)]
@@ -454,8 +470,18 @@ pub struct RootFontSet {
 }
 impl RootFontSet {
     #[cfg(windows)]
-    pub fn new(dw: windows::Win32::Graphics::DirectWrite::IDWriteFactory) -> Self {
-        use windows::Win32::Globalization::GetUserDefaultLocaleName;
+    pub fn new() -> Self {
+        use windows::Win32::{
+            Globalization::GetUserDefaultLocaleName, Graphics::DirectWrite::IDWriteFactory,
+        };
+
+        let dw: IDWriteFactory = unsafe {
+            use windows::Win32::Graphics::DirectWrite::{
+                DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory,
+            };
+
+            DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("dwrite.factory.create")
+        };
 
         let mut locale_name = [const { core::mem::MaybeUninit::uninit() }; 32];
         let len = unsafe {
