@@ -330,6 +330,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         hwnd: w,
         event_handler: Box::pin(WindowEventHandler {
             state: WindowState {
+                pointer_input_manager_ptr: core::ptr::null(),
+                ht_manager_ptr: core::ptr::null(),
                 content_scale: unsafe {
                     windows::Win32::UI::HiDpi::GetDpiForWindow(w) as f32 / 96.0
                 },
@@ -1120,20 +1122,9 @@ async fn run<'sys>(
     let mut pointer_input_manager = PointerInputManager::new();
     pointer_input_manager.set_client_size(main_window, main_window.client_size());
 
+    // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
     #[cfg(windows)]
-    unsafe {
-        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
-        SetWindowLongPtrW(
-            main_window.0,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
-            &pointer_input_manager as *const _ as _,
-        );
-        SetWindowLongPtrW(
-            main_window.0,
-            WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            &ht_manager as *const _ as _,
-        );
-    }
+    main_window.bind_hittest_managers(&pointer_input_manager, &ht_manager);
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -1418,6 +1409,8 @@ async fn run<'sys>(
     }
 
     tracing::info!("app finish");
+    #[cfg(windows)]
+    main_window.unbind_hittest_managers();
 }
 
 struct SystemLink {
@@ -1520,6 +1513,32 @@ impl WindowHandle {
                 GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
             )
         }
+    }
+
+    #[inline(always)]
+    fn bind_hittest_managers(
+        &self,
+        pointer_input_manager: &PointerInputManager,
+        ht_manager: &HitTestTreeManager,
+    ) {
+        let mut st = unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
+                GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
+            )
+        };
+        st.pointer_input_manager_ptr = pointer_input_manager;
+        st.ht_manager_ptr = ht_manager;
+    }
+
+    #[inline(always)]
+    fn unbind_hittest_managers(&self) {
+        let mut st = unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
+                GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
+            )
+        };
+        st.pointer_input_manager_ptr = core::ptr::null();
+        st.ht_manager_ptr = core::ptr::null();
     }
 
     #[inline(always)]
@@ -3263,16 +3282,16 @@ unsafe impl Sync for Win32SendableWindowHandle {}
 unsafe impl Send for Win32SendableWindowHandle {}
 
 #[cfg(windows)]
-pub struct Win32Window<AppFuture> {
+pub struct Win32Window<'h, AppFuture> {
     hwnd: HWND,
-    event_handler: Pin<Box<WindowEventHandler<AppFuture>>>,
+    event_handler: Pin<Box<WindowEventHandler<'h, AppFuture>>>,
 }
 #[cfg(windows)]
-unsafe impl<AppFuture> Sync for Win32Window<AppFuture> {}
+unsafe impl<AppFuture> Sync for Win32Window<'_, AppFuture> {}
 #[cfg(windows)]
-unsafe impl<AppFuture> Send for Win32Window<AppFuture> {}
+unsafe impl<AppFuture> Send for Win32Window<'_, AppFuture> {}
 #[cfg(windows)]
-impl<AppFuture> Win32Window<AppFuture> {
+impl<AppFuture> Win32Window<'_, AppFuture> {
     #[inline(always)]
     fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher<AppFuture>) {
         self.event_handler.event_dispatcher = dispatcher;
@@ -3328,38 +3347,33 @@ impl crate::input::ShellPointerActions for WindowMessageHandlingContext {
 }
 
 #[cfg(windows)]
-struct WindowState {
+struct WindowState<'h> {
+    pointer_input_manager_ptr: *const PointerInputManager,
+    ht_manager_ptr: *const HitTestTreeManager<'h>,
     content_scale: f32,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     latest_ui_scale_changes: Mutex<Option<f32>>,
 }
 #[cfg(windows)]
-impl WindowState {
-    #[inline(always)]
-    pub fn get_for_window<'a>(w: HWND) -> &'a Self {
-        unsafe {
-            &*core::ptr::with_exposed_provenance(
-                GetWindowLongPtrW(w, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
-            )
-        }
-    }
-}
+unsafe impl Sync for WindowState<'_> {}
+#[cfg(windows)]
+unsafe impl Send for WindowState<'_> {}
 
 #[cfg(windows)]
 #[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
-struct WindowEventHandler<AppFuture> {
-    state: WindowState,
+struct WindowEventHandler<'h, AppFuture> {
+    state: WindowState<'h>,
     event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
     text_services_mgr: Option<CoreTextServicesManager>,
     edit_context: Option<CoreTextEditContext>,
 }
 #[cfg(windows)]
-impl<AppFuture> WindowEventHandler<AppFuture> {
+impl<AppFuture> WindowEventHandler<'_, AppFuture> {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
 }
 #[cfg(windows)]
-impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<AppFuture> {
+impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<'_, AppFuture> {
     #[inline(always)]
     fn get_for_window<'a>(w: HWND) -> &'a mut Self {
         unsafe {
@@ -3501,25 +3515,12 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<AppFuture>
             return Some(windows::Win32::UI::WindowsAndMessaging::HTTOP);
         }
 
-        let pointer_input_manager_ptr = unsafe {
-            core::ptr::with_exposed_provenance_mut::<PointerInputManager>(GetWindowLongPtrW(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 1) as _),
-            ) as _)
-        };
-        let ht_manager_ptr = unsafe {
-            core::ptr::with_exposed_provenance_mut::<HitTestTreeManager>(GetWindowLongPtrW(
-                hwnd,
-                WINDOW_LONG_PTR_INDEX((core::mem::size_of::<usize>() * 2) as _),
-            ) as _)
-        };
-
-        if pointer_input_manager_ptr.is_null() {
+        if self.state.pointer_input_manager_ptr.is_null() {
             // unlinked from logic fiber
             return Some(HTCLIENT);
         }
 
-        let pointer_input_manager = unsafe { &*pointer_input_manager_ptr };
+        let pointer_input_manager = unsafe { &*self.state.pointer_input_manager_ptr };
         match pointer_input_manager.role(
             &client_pos.to_logical(self.state.content_scale),
             &Size::new_pixels(
@@ -3527,7 +3528,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<AppFuture>
                 (client_size.bottom - client_size.top) as _,
             )
             .to_logical(self.state.content_scale),
-            unsafe { &*ht_manager_ptr },
+            unsafe { &*self.state.ht_manager_ptr },
             self.state.ht_root,
         ) {
             None => Some(HTCLIENT),
@@ -3548,12 +3549,12 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<AppFuture>
         lparam: LPARAM,
     ) -> LRESULT {
         use windows::Win32::UI::WindowsAndMessaging::{
-            WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CHAR, WM_CREATE, WM_DPICHANGED,
+            WA_ACTIVE, WA_CLICKACTIVE, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DPICHANGED,
             WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
             WM_SETFOCUS, WM_SIZE,
         };
 
-        if msg == WM_DESTROY {
+        if msg == WM_CLOSE {
             unsafe {
                 // TODO: detect main window
                 PostQuitMessage(0);
