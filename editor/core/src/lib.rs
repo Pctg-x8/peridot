@@ -307,6 +307,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         bound_window_link: core::ptr::null_mut(),
     };
 
+    let mut composite_tree = CompositeTree::new();
+    let main_window_composite_root = composite_tree.create(CompositeRect {
+        relative_size_adjustment: [1.0, 1.0],
+        ..Default::default()
+    });
+
     #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(
         &wl_interfaces,
@@ -316,6 +322,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
             future: core::ptr::null_mut(),
         },
+        main_window_composite_root,
     );
 
     #[cfg(target_os = "macos")]
@@ -394,21 +401,13 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         _pinned: core::marker::PhantomPinned,
     });
 
-    let mut composite_tree = CompositeTree::new();
-    let main_window_composite_root = composite_tree.create(CompositeRect {
-        relative_size_adjustment: [1.0, 1.0],
-        ..Default::default()
-    });
     let mut app = core::pin::pin!(run_app(
         global_time_base,
         renderer_sync,
         composite_tree,
         SystemLink {
             #[cfg(feature = "wayland")]
-            main_window: WindowHandle {
-                wl_surface: w.surface.as_ptr(),
-                composite_root: main_window_composite_root,
-            },
+            main_window: WindowHandle(w.surface.as_ptr()),
             drag_preview_popover,
             #[cfg(feature = "wayland")]
             pointer_state_ref: unsafe {
@@ -997,7 +996,7 @@ struct RendererSync {
 pub enum Event {
     Quit,
     PointerDown {
-        window: WindowIdentifier,
+        window: WindowHandle,
         #[cfg(windows)]
         active_window: HWND,
         #[cfg(target_os = "macos")]
@@ -1008,8 +1007,12 @@ pub enum Event {
         client_pos: Point<PointerInputUnit>,
     },
     PointerUp,
-    WindowResize(Size<PointerInputUnit>),
+    WindowResize {
+        window: WindowHandle,
+        size: Size<PointerInputUnit>,
+    },
     WindowRescaleUI {
+        window: WindowHandle,
         new_scale: f32,
     },
 }
@@ -1271,10 +1274,10 @@ async fn run<'sys>(
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
-            Event::WindowResize(new) => {
-                pointer_input_manager.set_client_size(new);
+            Event::WindowResize { window, size } => {
+                pointer_input_manager.set_client_size(size);
             }
-            Event::WindowRescaleUI { new_scale } => {
+            Event::WindowRescaleUI { window, new_scale } => {
                 composite_tree.get_mut(app_title).base_scale_factor = new_scale;
                 composite_tree.mark_dirty_all(app_title);
                 composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
@@ -1282,9 +1285,7 @@ async fn run<'sys>(
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                 composite_tree.commit(&mut renderer_sync.composite_buffer);
-                system_link
-                    .main_window()
-                    .notify_ui_scale_changes_to_render(new_scale);
+                system_link.notify_ui_scale_changes_to_render(window, new_scale);
             }
             Event::PointerDown {
                 window,
@@ -1296,8 +1297,7 @@ async fn run<'sys>(
                 #[cfg(feature = "wayland")]
                 system_link
                     .drag_preview_popover()
-                    .root_window
-                    .set(window.query_xdg_surface());
+                    .bind_parent_window(window);
                 #[cfg(windows)]
                 {
                     drag_preview_popover.base_window_handle = active_window;
@@ -1424,6 +1424,14 @@ impl SystemLink {
                 .expect("cursor_shape_device.set_cursor");
         }
     }
+
+    #[cfg(feature = "wayland")]
+    pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
+        *unsafe { &mut *(*window.0).user_data().cast::<WaylandWindowState>() }
+            .latest_ui_scale_changes
+            .lock()
+            .expect("poisoned") = Some(new_scale);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1471,40 +1479,30 @@ impl ShellPointerActions for WindowHandle {
     }
 }
 
-#[derive(Clone, Copy)]
 #[cfg(feature = "wayland")]
-pub struct WindowHandle {
-    wl_surface: *mut wl::Surface,
-    composite_root: CompositeTreeRef,
-}
+#[derive(Clone, Copy)]
+pub struct WindowHandle(*mut wl::Surface);
 #[cfg(feature = "wayland")]
 impl WindowHandle {
     #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
-        let state = unsafe { &mut *(*self.wl_surface).user_data().cast::<WaylandWindowState>() };
+        let state = unsafe { &mut *(*self.0).user_data().cast::<WaylandWindowState>() };
         state.active_size.to_logical(state.active_buffer_scale)
     }
 
     #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
-        unsafe {
-            (*(*self.wl_surface).user_data().cast::<WaylandWindowState>()).active_buffer_scale
-        }
-    }
-
-    #[inline(always)]
-    pub fn notify_ui_scale_changes_to_render(&self, new_scale: f32) {
-        unsafe {
-            *(*(*self.wl_surface).user_data().cast::<WaylandWindowState>())
-                .latest_ui_scale_changes
-                .lock()
-                .expect("poisoned") = Some(new_scale);
-        }
+        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).active_buffer_scale }
     }
 
     #[inline(always)]
     pub fn composite_root(&self) -> CompositeTreeRef {
-        self.composite_root
+        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).composite_root }
+    }
+
+    #[inline(always)]
+    pub fn query_xdg_surface(&self) -> *mut wl::XdgSurface {
+        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).xdg_surface_ptr }
     }
 }
 #[cfg(feature = "wayland")]
@@ -1680,26 +1678,6 @@ impl AppEventBus {
         }
     }
 }
-
-struct LocalImageView<'d, Device: br::Device + ?Sized + 'd> {
-    handle: br::vk::VkImageView,
-    device: &'d Device,
-}
-impl<Device: br::Device + ?Sized> Drop for LocalImageView<'_, Device> {
-    fn drop(&mut self) {
-        unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), self.handle, None);
-        }
-    }
-}
-impl<Device: br::Device + ?Sized> br::VkHandle for LocalImageView<'_, Device> {
-    type Handle = br::vk::VkImageView;
-
-    fn native_ptr(&self) -> Self::Handle {
-        self.handle
-    }
-}
-impl<Device: br::Device + ?Sized> br::ImageView for LocalImageView<'_, Device> {}
 
 #[cfg(windows)]
 #[repr(transparent)]
@@ -1912,6 +1890,10 @@ struct DragPreviewPopoverHandle {
 }
 #[cfg(feature = "wayland")]
 impl DragPreviewPopoverHandle {
+    pub fn bind_parent_window(&self, window: WindowHandle) {
+        self.root_window.set(window.query_xdg_surface());
+    }
+
     pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
         let wl_popup_surface = unsafe {
             (*self.wl_interfaces)
@@ -2374,16 +2356,6 @@ impl DragPreviewPopoverHandle {
 const WL_APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 
 #[cfg(feature = "wayland")]
-#[derive(Clone, Copy)]
-pub struct WindowIdentifier(*mut wl::Surface);
-#[cfg(feature = "wayland")]
-impl WindowIdentifier {
-    pub fn query_xdg_surface(&self) -> *mut wl::XdgSurface {
-        unsafe { (*(*self.0).user_data().cast::<WaylandWindowState>()).xdg_surface_ptr }
-    }
-}
-
-#[cfg(feature = "wayland")]
 struct WaylandPointerEnterState {
     pub surface: *mut wl::Surface,
     pub serial: u32,
@@ -2562,7 +2534,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
 
         if state == wl::PointerButtonState::Pressed {
             self.event_dispatcher.dispatch(Event::PointerDown {
-                window: WindowIdentifier(enter_state.surface),
+                window: WindowHandle(enter_state.surface),
             });
         } else if state == wl::PointerButtonState::Released {
             self.event_dispatcher.dispatch(Event::PointerUp);
@@ -2831,6 +2803,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
         dbus: &dbus::Connection,
         terminate_event: Arc<EventFD>,
         event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+        composite_root: CompositeTreeRef,
     ) -> Self {
         let mut surface = wl_interfaces
             .compositor
@@ -2884,6 +2857,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
             state: WaylandWindowState {
                 surface_ptr: surface.as_ptr(),
                 xdg_surface_ptr: xdg_surface.as_ptr(),
+                composite_root,
                 pending_configure_size: None,
                 active_buffer_scale: 1.0,
                 active_size: Size::new_pixels(640, 480),
@@ -2955,6 +2929,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
 struct WaylandWindowState {
     surface_ptr: *mut wl::Surface,
     xdg_surface_ptr: *mut wl::XdgSurface,
+    composite_root: CompositeTreeRef,
     pending_configure_size: Option<(i32, i32)>,
     active_buffer_scale: f32,
     active_size: Size<PixelsUnit>,
@@ -3125,8 +3100,10 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::WpFractionalScaleV1EventL
 impl<AppFuture: core::future::Future<Output = ()>> WaylandWindowEventListener<AppFuture> {
     fn set_scale(&mut self, scale: f32) {
         self.state.active_buffer_scale = scale;
-        self.event_dispatcher
-            .dispatch(Event::WindowRescaleUI { new_scale: scale });
+        self.event_dispatcher.dispatch(Event::WindowRescaleUI {
+            window: WindowHandle(self.state.surface_ptr),
+            new_scale: scale,
+        });
     }
 }
 
