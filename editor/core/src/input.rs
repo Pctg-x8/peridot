@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use bitflags::bitflags;
 
 use crate::{
+    WindowHandle,
     hittest::{
         CursorShape, HitTestEventContext, HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
         Role,
@@ -51,25 +52,25 @@ pub trait ShellPointerActions {
 }
 
 pub struct PointerInputManager {
-    last_client_pointer_pos: Option<Point<PointerInputUnit>>,
+    last_client_pointer_pos: Option<(WindowHandle, Point<PointerInputUnit>)>,
     pointer_focus: PointerFocusState,
     down_gesture: PointerDownGestureState,
-    client_size: Size<PointerInputUnit>,
+    client_size_by_window: HashMap<WindowHandle, Size<PointerInputUnit>>,
 }
 impl PointerInputManager {
     const CLICK_DETECTION_MAX_DISTANCE: f32 = 4.0;
 
-    pub fn new(client_size: Size<PointerInputUnit>) -> Self {
+    pub fn new() -> Self {
         PointerInputManager {
             last_client_pointer_pos: None,
             pointer_focus: PointerFocusState::None,
             down_gesture: PointerDownGestureState::None,
-            client_size,
+            client_size_by_window: HashMap::new(),
         }
     }
 
-    pub fn set_client_size(&mut self, client_size: Size<PointerInputUnit>) {
-        self.client_size = client_size;
+    pub fn set_client_size(&mut self, window: WindowHandle, client_size: Size<PointerInputUnit>) {
+        self.client_size_by_window.insert(window, client_size);
     }
 
     fn dispatch_pointer_enter(
@@ -343,12 +344,17 @@ impl PointerInputManager {
 
     fn handle_mouse_enter_leave(
         &mut self,
+        window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
         ht: &mut HitTestTreeManager,
         action_context: &mut HitTestEventContext,
         ht_root: HitTestTreeRef,
     ) {
-        let new_hit = ht.test(ht_root, &client_pos, &self.client_size.into());
+        let new_hit = ht.test(
+            ht_root,
+            &client_pos,
+            &self.client_size_by_window[&window].into(),
+        );
         let (new_leave, new_enter) = match (&self.pointer_focus, new_hit) {
             // in capturing, this routine is never called
             (&PointerFocusState::Capturing(_), _) => unreachable!(),
@@ -368,7 +374,7 @@ impl PointerInputManager {
             self.dispatch_pointer_leave(
                 &PointerActionArgs {
                     client_pos,
-                    client_size: self.client_size,
+                    client_size: self.client_size_by_window[&window],
                 },
                 ht,
                 action_context,
@@ -384,7 +390,7 @@ impl PointerInputManager {
             self.dispatch_pointer_enter(
                 &PointerActionArgs {
                     client_pos,
-                    client_size: self.client_size,
+                    client_size: self.client_size_by_window[&window],
                 },
                 ht,
                 action_context,
@@ -395,13 +401,14 @@ impl PointerInputManager {
 
     pub fn handle_mouse_move(
         &mut self,
+        window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
         sh: &(impl ShellPointerActions + ?Sized),
         ht: &mut HitTestTreeManager,
         action_context: &mut HitTestEventContext,
         ht_root: HitTestTreeRef,
     ) {
-        self.last_client_pointer_pos = Some(client_pos);
+        self.last_client_pointer_pos = Some((window, client_pos));
 
         if let PointerDownGestureState::Click { base_client_pos } = self.down_gesture
             && client_pos.distance_sq(&base_client_pos)
@@ -413,7 +420,7 @@ impl PointerInputManager {
                 action_context,
                 &PointerActionArgs {
                     client_pos,
-                    client_size: self.client_size,
+                    client_size: self.client_size_by_window[&window],
                 },
                 sh,
             );
@@ -428,7 +435,7 @@ impl PointerInputManager {
                         action_context,
                         &PointerActionArgs {
                             client_pos,
-                            client_size: self.client_size,
+                            client_size: self.client_size_by_window[&window],
                         },
                     );
                 } else {
@@ -437,7 +444,7 @@ impl PointerInputManager {
                         action_context,
                         &PointerActionArgs {
                             client_pos,
-                            client_size: self.client_size,
+                            client_size: self.client_size_by_window[&window],
                         },
                     );
                 }
@@ -446,14 +453,14 @@ impl PointerInputManager {
             return;
         }
 
-        self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+        self.handle_mouse_enter_leave(window, client_pos, ht, action_context, ht_root);
 
         if let PointerFocusState::Entering(ht_ref) = self.pointer_focus {
             let needs_recompute_pointer_enter = if self.down_gesture.is_dragging() {
                 self.dispatch_drag_move(
                     &PointerActionArgs {
                         client_pos,
-                        client_size: self.client_size,
+                        client_size: self.client_size_by_window[&window],
                     },
                     ht,
                     action_context,
@@ -463,7 +470,7 @@ impl PointerInputManager {
                 self.dispatch_pointer_move(
                     &PointerActionArgs {
                         client_pos,
-                        client_size: self.client_size,
+                        client_size: self.client_size_by_window[&window],
                     },
                     ht,
                     action_context,
@@ -472,7 +479,7 @@ impl PointerInputManager {
             };
 
             if needs_recompute_pointer_enter {
-                self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                self.handle_mouse_enter_leave(window, client_pos, ht, action_context, ht_root);
             }
         }
     }
@@ -491,7 +498,7 @@ impl PointerInputManager {
         };
 
         self.down_gesture = PointerDownGestureState::Click {
-            base_client_pos: client_pos,
+            base_client_pos: client_pos.1,
         };
 
         match self.pointer_focus {
@@ -503,8 +510,8 @@ impl PointerInputManager {
                             ht_ref,
                             action_context,
                             &PointerActionArgs {
-                                client_pos,
-                                client_size: self.client_size,
+                                client_pos: client_pos.1,
+                                client_size: self.client_size_by_window[&client_pos.0],
                             },
                         )
                     },
@@ -519,20 +526,32 @@ impl PointerInputManager {
                 }
 
                 if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
-                    self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                    self.handle_mouse_enter_leave(
+                        client_pos.0,
+                        client_pos.1,
+                        ht,
+                        action_context,
+                        ht_root,
+                    );
                 }
                 if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
                     sh.release_pointer();
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
-                    self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                    self.handle_mouse_enter_leave(
+                        client_pos.0,
+                        client_pos.1,
+                        ht,
+                        action_context,
+                        ht_root,
+                    );
                 }
             }
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, new_captured) = self.dispatch_pointer_down(
                     sh,
                     &PointerActionArgs {
-                        client_pos,
-                        client_size: self.client_size,
+                        client_pos: client_pos.1,
+                        client_size: self.client_size_by_window[&client_pos.0],
                     },
                     ht,
                     action_context,
@@ -543,7 +562,13 @@ impl PointerInputManager {
                 if let Some(h) = new_captured {
                     self.pointer_focus = PointerFocusState::Capturing(h);
                 } else if needs_recompute_pointer_enter {
-                    self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                    self.handle_mouse_enter_leave(
+                        client_pos.0,
+                        client_pos.1,
+                        ht,
+                        action_context,
+                        ht_root,
+                    );
                 }
             }
             PointerFocusState::None => (),
@@ -573,27 +598,39 @@ impl PointerInputManager {
                                 ht_ref,
                                 action_context,
                                 &PointerActionArgs {
-                                    client_pos,
-                                    client_size: self.client_size,
+                                    client_pos: client_pos.1,
+                                    client_size: self.client_size_by_window[&client_pos.0],
                                 },
                             )
                         },
                     );
                     if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
-                        self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                        self.handle_mouse_enter_leave(
+                            client_pos.0,
+                            client_pos.1,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
                     }
                     if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
                         sh.release_pointer();
                         self.pointer_focus = PointerFocusState::Entering(ht_ref);
-                        self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                        self.handle_mouse_enter_leave(
+                            client_pos.0,
+                            client_pos.1,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
                     }
                 }
                 PointerFocusState::Entering(ht_ref) => {
                     let (needs_recompute_pointer_enter, capture_released) = self.dispatch_drag_end(
                         sh,
                         &PointerActionArgs {
-                            client_pos,
-                            client_size: self.client_size,
+                            client_pos: client_pos.1,
+                            client_size: self.client_size_by_window[&client_pos.0],
                         },
                         ht,
                         action_context,
@@ -605,7 +642,13 @@ impl PointerInputManager {
                     }
                     if capture_released || needs_recompute_pointer_enter {
                         // PointerCaptureを解除したときもEnter/Leaveの再計算をさせる
-                        self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                        self.handle_mouse_enter_leave(
+                            client_pos.0,
+                            client_pos.1,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
                     }
                 }
                 PointerFocusState::None => (),
@@ -621,27 +664,39 @@ impl PointerInputManager {
                             ht_ref,
                             action_context,
                             &PointerActionArgs {
-                                client_pos,
-                                client_size: self.client_size,
+                                client_pos: client_pos.1,
+                                client_size: self.client_size_by_window[&client_pos.0],
                             },
                         )
                     },
                 );
                 if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
-                    self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                    self.handle_mouse_enter_leave(
+                        client_pos.0,
+                        client_pos.1,
+                        ht,
+                        action_context,
+                        ht_root,
+                    );
                 }
                 if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
                     sh.release_pointer();
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
-                    self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                    self.handle_mouse_enter_leave(
+                        client_pos.0,
+                        client_pos.1,
+                        ht,
+                        action_context,
+                        ht_root,
+                    );
                 }
             }
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, capture_released) = self.dispatch_pointer_up(
                     sh,
                     &PointerActionArgs {
-                        client_pos,
-                        client_size: self.client_size,
+                        client_pos: client_pos.1,
+                        client_size: self.client_size_by_window[&client_pos.0],
                     },
                     ht,
                     action_context,
@@ -653,7 +708,13 @@ impl PointerInputManager {
                 }
                 if capture_released || needs_recompute_pointer_enter {
                     // PointerCaptureを解除したときもEnter/Leaveの再計算をさせる
-                    self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                    self.handle_mouse_enter_leave(
+                        client_pos.0,
+                        client_pos.1,
+                        ht,
+                        action_context,
+                        ht_root,
+                    );
                 }
             }
             PointerFocusState::None => (),
@@ -670,27 +731,39 @@ impl PointerInputManager {
                                 ht_ref,
                                 action_context,
                                 &PointerActionArgs {
-                                    client_pos,
-                                    client_size: self.client_size,
+                                    client_pos: client_pos.1,
+                                    client_size: self.client_size_by_window[&client_pos.0],
                                 },
                             )
                         },
                     );
                     if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
-                        self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                        self.handle_mouse_enter_leave(
+                            client_pos.0,
+                            client_pos.1,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
                     }
                     if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
                         sh.release_pointer();
                         self.pointer_focus = PointerFocusState::Entering(ht_ref);
-                        self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                        self.handle_mouse_enter_leave(
+                            client_pos.0,
+                            client_pos.1,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
                     }
                 }
                 PointerFocusState::Entering(ht_ref) => {
                     let (needs_recompute_pointer_enter, new_captured) = self.dispatch_click(
                         sh,
                         &PointerActionArgs {
-                            client_pos,
-                            client_size: self.client_size,
+                            client_pos: client_pos.1,
+                            client_size: self.client_size_by_window[&client_pos.0],
                         },
                         ht,
                         action_context,
@@ -700,7 +773,13 @@ impl PointerInputManager {
                     if let Some(h) = new_captured {
                         self.pointer_focus = PointerFocusState::Capturing(h);
                     } else if needs_recompute_pointer_enter {
-                        self.handle_mouse_enter_leave(client_pos, ht, action_context, ht_root);
+                        self.handle_mouse_enter_leave(
+                            client_pos.0,
+                            client_pos.1,
+                            ht,
+                            action_context,
+                            ht_root,
+                        );
                     }
                 }
                 PointerFocusState::None => (),

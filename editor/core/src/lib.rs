@@ -1082,9 +1082,11 @@ async fn run<'sys>(
     tracing::info!("app start");
 
     let mut keyboard_focus_manager = KeyboardFocusManager::new();
-    // TODO: マルチウィンドウ対応
-    let mut pointer_input_manager =
-        PointerInputManager::new(system_link.main_window().client_size());
+    let mut pointer_input_manager = PointerInputManager::new();
+    pointer_input_manager.set_client_size(
+        system_link.main_window(),
+        system_link.main_window().client_size(),
+    );
 
     let mut ht_manager = HitTestTreeManager::new();
     #[cfg(windows)]
@@ -1281,7 +1283,7 @@ async fn run<'sys>(
         match event_queue.next_event().await {
             Event::Quit => break,
             Event::WindowResize { window, size } => {
-                pointer_input_manager.set_client_size(size);
+                pointer_input_manager.set_client_size(window, size);
             }
             Event::WindowRescaleUI { window, new_scale } => {
                 composite_tree.get_mut(app_title).base_scale_factor = new_scale;
@@ -1314,7 +1316,7 @@ async fn run<'sys>(
                 }
 
                 pointer_input_manager.handle_mouse_left_down(
-                    system_link.main_window(),
+                    &system_link.main_window(),
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
@@ -1332,8 +1334,9 @@ async fn run<'sys>(
                 client_pos,
             } => {
                 pointer_input_manager.handle_mouse_move(
-                    client_pos,
                     system_link.main_window(),
+                    client_pos,
+                    &system_link.main_window(),
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
@@ -1369,7 +1372,7 @@ async fn run<'sys>(
             }
             Event::PointerUp => {
                 pointer_input_manager.handle_mouse_left_up(
-                    system_link.main_window(),
+                    &system_link.main_window(),
                     &mut ht_manager,
                     &mut crate::hittest::HitTestEventContext {
                         composite_tree: &mut composite_tree,
@@ -1408,8 +1411,8 @@ struct SystemLink {
 }
 impl SystemLink {
     #[inline(always)]
-    pub fn main_window(&self) -> &WindowHandle {
-        &self.main_window
+    pub fn main_window(&self) -> WindowHandle {
+        self.main_window
     }
 
     #[inline(always)]
@@ -1486,7 +1489,7 @@ impl ShellPointerActions for WindowHandle {
 }
 
 #[cfg(feature = "wayland")]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowHandle(*mut wl::Surface);
 #[cfg(feature = "wayland")]
 impl WindowHandle {
