@@ -448,9 +448,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         };
         let render_thread = std::thread::Builder::new()
             .name("Render".into())
-            .spawn_scoped(thread_scope, || {
-                render_thread.run();
-            })
+            .spawn_scoped(thread_scope, || render_thread.run())
             .expect("render_thread spawn");
 
         #[cfg(target_os = "linux")]
