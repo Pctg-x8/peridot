@@ -326,7 +326,33 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .expect("CreateWindowExW")
     };
     #[cfg(windows)]
-    let w = Win32Window(w);
+    let mut w = Win32Window {
+        hwnd: w,
+        event_handler: Box::pin(WindowEventHandler {
+            state: WindowState {
+                content_scale: unsafe {
+                    windows::Win32::UI::HiDpi::GetDpiForWindow(w) as f32 / 96.0
+                },
+                composite_root: main_window_composite_root,
+                ht_root: main_window_ht_root,
+                latest_ui_scale_changes: Mutex::new(None),
+            },
+            event_dispatcher: LogicFiberEventDispatcher {
+                event_store: event_store.as_mut().get_mut() as *mut _ as _,
+                future: core::ptr::null_mut(),
+            },
+            text_services_mgr: None,
+            edit_context: None,
+        }),
+    };
+    #[cfg(windows)]
+    unsafe {
+        SetWindowLongPtrW(
+            w.hwnd,
+            WindowEventHandler::<()>::LONG_PTR_INDEX,
+            w.event_handler.as_mut().get_mut() as *mut _ as _,
+        );
+    }
 
     #[cfg(feature = "wayland")]
     let mut w = WaylandWindow::new(
@@ -360,9 +386,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     }
     #[cfg(windows)]
     let vk_surface = VulkanSurface::new(&vk_device, unsafe {
-        br::Win32SurfaceCreateInfo::new(core::mem::transmute(hinstance), core::mem::transmute(w.0))
-            .execute(vk_device.instance(), None)
-            .expect("vk_surface.create")
+        br::Win32SurfaceCreateInfo::new(
+            core::mem::transmute(hinstance),
+            core::mem::transmute(w.hwnd),
+        )
+        .execute(vk_device.instance(), None)
+        .expect("vk_surface.create")
     });
 
     #[cfg(feature = "wayland")]
@@ -419,7 +448,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(feature = "wayland")]
         WindowHandle(w.surface.as_ptr()),
         #[cfg(windows)]
-        WindowHandle(w.0),
+        WindowHandle(w.hwnd),
         SystemLink {
             drag_preview_popover,
             #[cfg(feature = "wayland")]
@@ -433,27 +462,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
           },
           drag_preview_popover*/
     ));
-
-    #[cfg(windows)]
-    unsafe {
-        WindowEventHandler::set_for_window(
-            &w,
-            Box::new(WindowEventHandler {
-                state: WindowState {
-                    content_scale: windows::Win32::UI::HiDpi::GetDpiForWindow(w.0) as f32 / 96.0,
-                    composite_root: main_window_composite_root,
-                    ht_root: main_window_ht_root,
-                    latest_ui_scale_changes: Mutex::new(None),
-                },
-                event_dispatcher: LogicFiberEventDispatcher {
-                    event_store: event_store.as_mut().get_mut() as *mut _ as _,
-                    future: app.as_mut().get_unchecked_mut() as *mut _ as _,
-                },
-                text_services_mgr: None,
-                edit_context: None,
-            }),
-        );
-    }
 
     #[cfg(feature = "wayland")]
     unsafe {
@@ -472,6 +480,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     unsafe {
         w.dispatcher.event_dispatcher.future = app.as_mut().get_unchecked_mut() as *mut _;
     }
+    #[cfg(windows)]
+    w.rebind_event_dispatcher(LogicFiberEventDispatcher {
+        event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ },
+    });
 
     #[cfg(feature = "wayland")]
     wl_interfaces
@@ -512,11 +525,13 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(windows)]
     let main_window_init_scale = SafeF32::new(unsafe {
         use windows::Win32::UI::HiDpi::GetDpiForWindow;
-        GetDpiForWindow(w.0) as f32 / 96.0
+        GetDpiForWindow(w.hwnd) as f32 / 96.0
     })
     .expect("invalid scale");
     #[cfg(windows)]
-    let main_window_sendable = Win32SendableWindowHandle(w.0);
+    let main_window_state = &w.event_handler.state;
+    #[cfg(windows)]
+    let main_window_sendable = Win32SendableWindowHandle(w.hwnd);
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
@@ -622,12 +637,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         .expect("poisoned")
                         .take();
                     #[cfg(windows)]
-                    let main_window_new_ui_scale =
-                        WindowState::get_for_window(main_window_sendable.0)
-                            .latest_ui_scale_changes
-                            .lock()
-                            .expect("poisoned")
-                            .take();
+                    let main_window_new_ui_scale = main_window_state
+                        .latest_ui_scale_changes
+                        .lock()
+                        .expect("poisoned")
+                        .take();
 
                     if let Some(scale) = main_window_new_ui_scale {
                         let scale = SafeF32::new(scale).expect("scale.invalid");
@@ -1322,12 +1336,9 @@ async fn run<'sys>(
                     .drag_preview_popover()
                     .bind_parent_window(window);
                 #[cfg(windows)]
-                {
-                    system_link
-                        .drag_preview_popover()
-                        .base_window_handle
-                        .set(window.0);
-                }
+                system_link
+                    .drag_preview_popover()
+                    .bind_position_base_window(window);
                 #[cfg(target_os = "macos")]
                 {
                     drag_preview_popover.bound_window_link = active_window;
@@ -1727,51 +1738,6 @@ impl AppEventBus {
             // TODO
             Ok(())
         }
-    }
-}
-
-#[cfg(windows)]
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct Win32SendableWindowHandle(HWND);
-#[cfg(windows)]
-unsafe impl Sync for Win32SendableWindowHandle {}
-#[cfg(windows)]
-unsafe impl Send for Win32SendableWindowHandle {}
-
-#[cfg(windows)]
-#[repr(transparent)]
-pub struct Win32Window(HWND);
-#[cfg(windows)]
-unsafe impl Sync for Win32Window {}
-#[cfg(windows)]
-unsafe impl Send for Win32Window {}
-#[cfg(windows)]
-impl Win32Window {
-    #[inline(always)]
-    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
-        let mut rect = core::mem::MaybeUninit::uninit();
-        unsafe {
-            GetClientRect(self.0, rect.as_mut_ptr()).expect("GetClientRect");
-        }
-        let rect = unsafe { rect.assume_init_ref() };
-        Size::new_pixels(rect.right as _, rect.bottom as _)
-    }
-
-    #[inline(always)]
-    pub fn client_size(&self) -> Size<LogicalUnit> {
-        self.pixels_client_size()
-            .to_logical(unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.0) as f32 / 96.0 })
-    }
-
-    #[inline(always)]
-    pub fn show(&self, cmd: SHOW_WINDOW_CMD) {
-        let _ = unsafe { ShowWindow(self.0, cmd) };
-    }
-
-    #[inline(always)]
-    pub unsafe fn set_long_ptr(&mut self, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
-        unsafe { SetWindowLongPtrW(self.0, index, value) }
     }
 }
 
@@ -2184,6 +2150,10 @@ impl Drop for DragPreviewPopoverHandle {
 }
 #[cfg(windows)]
 impl DragPreviewPopoverHandle {
+    pub fn bind_position_base_window(&self, window: WindowHandle) {
+        self.base_window_handle.set(window.0);
+    }
+
     pub fn new(
         hinstance: HINSTANCE,
         native_compositor: &windows::UI::Composition::Compositor,
@@ -3284,6 +3254,59 @@ unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
 }
 
 #[cfg(windows)]
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct Win32SendableWindowHandle(HWND);
+#[cfg(windows)]
+unsafe impl Sync for Win32SendableWindowHandle {}
+#[cfg(windows)]
+unsafe impl Send for Win32SendableWindowHandle {}
+
+#[cfg(windows)]
+pub struct Win32Window<AppFuture> {
+    hwnd: HWND,
+    event_handler: Pin<Box<WindowEventHandler<AppFuture>>>,
+}
+#[cfg(windows)]
+unsafe impl<AppFuture> Sync for Win32Window<AppFuture> {}
+#[cfg(windows)]
+unsafe impl<AppFuture> Send for Win32Window<AppFuture> {}
+#[cfg(windows)]
+impl<AppFuture> Win32Window<AppFuture> {
+    #[inline(always)]
+    fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher<AppFuture>) {
+        self.event_handler.event_dispatcher = dispatcher;
+    }
+
+    #[inline(always)]
+    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
+        let mut rect = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(self.hwnd, rect.as_mut_ptr()).expect("GetClientRect");
+        }
+        let rect = unsafe { rect.assume_init_ref() };
+        Size::new_pixels(rect.right as _, rect.bottom as _)
+    }
+
+    #[inline(always)]
+    pub fn client_size(&self) -> Size<LogicalUnit> {
+        self.pixels_client_size().to_logical(unsafe {
+            windows::Win32::UI::HiDpi::GetDpiForWindow(self.hwnd) as f32 / 96.0
+        })
+    }
+
+    #[inline(always)]
+    pub fn show(&self, cmd: SHOW_WINDOW_CMD) {
+        let _ = unsafe { ShowWindow(self.hwnd, cmd) };
+    }
+
+    #[inline(always)]
+    pub unsafe fn set_long_ptr(&mut self, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
+        unsafe { SetWindowLongPtrW(self.hwnd, index, value) }
+    }
+}
+
+#[cfg(windows)]
 pub struct WindowMessageHandlingContext {
     hwnd: HWND,
 }
@@ -3332,31 +3355,11 @@ struct WindowEventHandler<AppFuture> {
     edit_context: Option<CoreTextEditContext>,
 }
 #[cfg(windows)]
-impl<AppFuture> Drop for WindowEventHandler<AppFuture> {
-    fn drop(&mut self) {
-        unsafe {
-            // TODO: detect main window
-            PostQuitMessage(0);
-        }
-    }
-}
-#[cfg(windows)]
 impl<AppFuture> WindowEventHandler<AppFuture> {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
 }
 #[cfg(windows)]
 impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<AppFuture> {
-    #[inline(always)]
-    fn set_for_window(w: &Win32Window, this: Box<Self>) {
-        unsafe {
-            SetWindowLongPtrW(
-                w.0,
-                Self::LONG_PTR_INDEX,
-                Box::into_raw(this) as *mut _ as _,
-            );
-        }
-    }
-
     #[inline(always)]
     fn get_for_window<'a>(w: HWND) -> &'a mut Self {
         unsafe {
@@ -3552,7 +3555,8 @@ impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<AppFuture>
 
         if msg == WM_DESTROY {
             unsafe {
-                drop(Box::from_raw(Self::get_for_window(hwnd)));
+                // TODO: detect main window
+                PostQuitMessage(0);
             }
 
             return LRESULT(0);
