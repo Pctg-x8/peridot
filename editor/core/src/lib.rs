@@ -38,7 +38,7 @@ use crate::{
     graphics::VulkanDevice,
     hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
-    renderer::{NewWindowData, RenderThread},
+    rendering::{NewWindowData, RenderThread},
     text::FontID,
     utils::{Color32, LogicalUnit, PixelsUnit, Point, SafeF32, Size},
 };
@@ -54,7 +54,7 @@ mod hittest;
 mod input;
 mod platform;
 mod proto;
-mod renderer;
+mod rendering;
 mod text;
 mod utils;
 

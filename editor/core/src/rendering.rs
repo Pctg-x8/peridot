@@ -36,6 +36,16 @@ pub struct NewWindowData<'main> {
     pub init_scale: SafeF32,
     pub composite_root: CompositeTreeRef,
 }
+impl NewWindowData<'_> {
+    #[inline(always)]
+    fn make_key(&self) -> WindowKey {
+        WindowKey(self.vk_surface.native_ptr())
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct WindowKey(br::vk::VkSurfaceKHR);
 
 pub struct RenderThread<'main> {
     pub vk_device: &'main VulkanDevice<'main>,
@@ -54,6 +64,12 @@ impl<'main> RenderThread<'main> {
             .queue(self.vk_device.present_queue_family_index(), 0);
 
         let mut composite_tree = CompositeTreeRender::new();
+        let vg_render_formats = GlyphAtlasRenderingFormats {
+            color: br::vk::VK_FORMAT_R8_UNORM,
+            stencil: br::vk::VK_FORMAT_S8_UINT,
+        };
+        let glyph_atlas_manager_common_resources =
+            GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
         struct GlyphAtlasDataPerDpi<'d> {
             manager: GlyphAtlasManager<'d>,
             vector_raster_state: VectorRasterizationState,
@@ -64,43 +80,45 @@ impl<'main> RenderThread<'main> {
         let font_set = RootFontSet::new();
         #[cfg(target_os = "macos")]
         let font_set = FontSet::new();
+        let mut windows: HashMap<WindowKey, WindowRenderer> = HashMap::new();
 
-        let vg_render_formats = GlyphAtlasRenderingFormats {
-            color: br::vk::VK_FORMAT_R8_UNORM,
-            stencil: br::vk::VK_FORMAT_S8_UINT,
-        };
-        let glyph_atlas_manager_common_resources =
-            GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
-        glyph_atlas_per_scale.insert(
-            self.main_window_data.init_scale,
-            GlyphAtlasDataPerDpi {
-                manager: GlyphAtlasManager::new(
-                    &glyph_atlas_manager_common_resources,
-                    &mut render_queue,
-                    self.vk_device.present_queue_family_index(),
-                ),
-                vector_raster_state: VectorRasterizationState::new(),
-                ref_count: 1,
-            },
-        );
-
-        let mut main_window_renderer = WindowRenderer::new(
-            #[cfg(feature = "wayland")]
-            self.main_window_data.committed_state,
-            #[cfg(feature = "wayland")]
-            self.main_window_data
-                .swapchain_externally_invalidation_signal,
-            #[cfg(windows)]
-            self.main_window_data.handle,
-            self.main_window_data.latest_ui_scale_changes,
-            self.main_window_data.init_scale,
-            self.main_window_data.composite_root,
-            self.main_window_data.vk_surface,
-            self.vk_device,
-            glyph_atlas_per_scale[&self.main_window_data.init_scale]
-                .manager
-                .atlas(),
-            &font_set,
+        // register main window
+        let main_window_glyph_atlas =
+            match glyph_atlas_per_scale.entry(self.main_window_data.init_scale) {
+                // use existing
+                std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
+                // create new one
+                std::collections::hash_map::Entry::Vacant(x) => x.insert(GlyphAtlasDataPerDpi {
+                    manager: GlyphAtlasManager::new(
+                        &glyph_atlas_manager_common_resources,
+                        &mut render_queue,
+                        self.vk_device.present_queue_family_index(),
+                    ),
+                    vector_raster_state: VectorRasterizationState::new(),
+                    ref_count: 0,
+                }),
+            };
+        main_window_glyph_atlas.ref_count += 1;
+        windows.insert(
+            self.main_window_data.make_key(),
+            WindowRenderer::new(
+                #[cfg(feature = "wayland")]
+                self.main_window_data.committed_state,
+                #[cfg(feature = "wayland")]
+                self.main_window_data
+                    .swapchain_externally_invalidation_signal,
+                #[cfg(windows)]
+                self.main_window_data.handle,
+                self.main_window_data.latest_ui_scale_changes,
+                self.main_window_data.init_scale,
+                self.main_window_data.composite_root,
+                self.main_window_data.vk_surface,
+                self.vk_device,
+                glyph_atlas_per_scale[&self.main_window_data.init_scale]
+                    .manager
+                    .atlas(),
+                &font_set,
+            ),
         );
 
         let mut any_swapchain_invalidated = false;
@@ -112,9 +130,11 @@ impl<'main> RenderThread<'main> {
             //     w.manual_capture_begin();
             // }
 
-            if main_window_renderer.take_swapchain_externally_invalidation_signal() {
-                main_window_renderer.invalidate_swapchain();
-                any_swapchain_invalidated = true;
+            for x in windows.values_mut() {
+                if x.take_swapchain_externally_invalidation_signal() {
+                    x.invalidate_swapchain();
+                    any_swapchain_invalidated = true;
+                }
             }
 
             if any_swapchain_invalidated {
@@ -131,80 +151,19 @@ impl<'main> RenderThread<'main> {
                 }
 
                 let mut descriptor_writes = Vec::new();
-                main_window_renderer.validate_swapchain(&mut descriptor_writes);
+                for x in windows.values_mut() {
+                    x.validate_swapchain(&mut descriptor_writes);
+                }
                 self.vk_device
                     .update_descriptor_sets(&descriptor_writes, &[]);
 
                 any_swapchain_invalidated = false;
             }
 
-            let backbuffer_index = match main_window_renderer.acquire_backbuffer_with_wait() {
-                Ok(x) => x,
-                Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
-                    main_window_renderer.invalidate_swapchain();
-                    any_swapchain_invalidated = true;
-                    continue 'lp;
-                }
-                Err(e) => Err(e).expect("acquire next"),
-            };
-
             // flush synchronizing buffers
             {
                 let mut renderer_sync = self.renderer_sync.lock().expect("poisoned");
                 renderer_sync.composite_buffer.clean(&mut composite_tree);
-            }
-            let main_window_new_ui_scale = main_window_renderer.take_latest_ui_scale_changes();
-
-            if let Some(scale) = main_window_new_ui_scale {
-                let scale = SafeF32::new(scale).expect("scale.invalid");
-
-                let current = glyph_atlas_per_scale
-                    .get_mut(&main_window_renderer.active_scale())
-                    .expect("invalid state");
-                current.ref_count -= 1;
-                let removed = if current.ref_count == 0 {
-                    // un references
-                    glyph_atlas_per_scale.remove(&main_window_renderer.active_scale())
-                } else {
-                    None
-                };
-
-                let new_atlas_mgr = match glyph_atlas_per_scale.entry(scale) {
-                    std::collections::hash_map::Entry::Occupied(mut o) => {
-                        // reuse existing
-                        o.get_mut().ref_count += 1;
-                        o.into_mut()
-                    }
-                    std::collections::hash_map::Entry::Vacant(v) => match removed {
-                        Some(mut data) => {
-                            // reuse existing with clear
-                            data.manager.clear_atlas();
-                            data.ref_count = 1;
-                            v.insert(data)
-                        }
-                        None => {
-                            // new one
-                            v.insert(GlyphAtlasDataPerDpi {
-                                manager: GlyphAtlasManager::new(
-                                    &glyph_atlas_manager_common_resources,
-                                    &mut render_queue,
-                                    self.vk_device.present_queue_family_index(),
-                                ),
-                                vector_raster_state: VectorRasterizationState::new(),
-                                ref_count: 1,
-                            })
-                        }
-                    },
-                };
-
-                main_window_renderer.rescale(scale);
-                let mut descriptor_writes = Vec::with_capacity(1);
-                main_window_renderer.composite_renderer.rebind_glyph_atlas(
-                    new_atlas_mgr.manager.atlas().as_image_view(),
-                    &mut descriptor_writes,
-                );
-                self.vk_device
-                    .update_descriptor_sets(&descriptor_writes, &[]);
             }
 
             for x in glyph_atlas_per_scale.values_mut() {
@@ -214,26 +173,111 @@ impl<'main> RenderThread<'main> {
             let current_t = self.global_time_base.elapsed();
             composite_tree.update_shared(current_t.as_secs_f32());
 
-            let glyph_atlas_mgr = glyph_atlas_per_scale
-                .get_mut(&main_window_renderer.active_scale())
-                .expect("invalid state");
-            let needs_update_command = main_window_renderer.update(
-                current_t.as_secs_f32(),
-                &mut composite_tree,
-                glyph_atlas_mgr.manager.atlas_mut(),
-                &mut glyph_atlas_mgr.vector_raster_state,
-                self.event_bus,
-            );
+            // いったん最適化とかは考えないで直列でまわす(パフォーマンスきになったらそのとき考える)
+            struct SubmitParameters<'x> {
+                renderer: &'x WindowRenderer<'x>,
+                render_wait_semaphores: Vec<br::VkHandleRef<'x, br::vk::VkSemaphore>>,
+                render_wait_stages: Vec<br::PipelineStageFlags>,
+                render_commands: Vec<br::VkHandleRef<'x, br::vk::VkCommandBuffer>>,
+                render_signal_semaphores: Vec<br::VkHandleRef<'x, br::vk::VkSemaphore>>,
+                present_backbuffer_index: u32,
+            }
+            let mut submit_parameters = Vec::with_capacity(windows.len());
+            for x in windows.values_mut() {
+                let backbuffer_index = match x.acquire_backbuffer_with_wait() {
+                    Ok(x) => x,
+                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                        x.invalidate_swapchain();
+                        any_swapchain_invalidated = true;
+                        continue 'lp;
+                    }
+                    Err(e) => Err(e).expect("acquire next"),
+                };
 
-            let mut render_wait_semaphores = Vec::with_capacity(1);
-            let mut render_wait_stages = Vec::with_capacity(1);
+                let main_window_new_ui_scale = x.take_latest_ui_scale_changes();
 
-            // TODO: いったんめんどうなので毎回更新
-            if true || needs_update_command {
-                main_window_renderer.submit_update_commands(&mut render_queue);
+                if let Some(scale) = main_window_new_ui_scale {
+                    let scale = SafeF32::new(scale).expect("scale.invalid");
 
-                render_wait_semaphores.push(main_window_renderer.update_completion_semaphore_ref());
-                render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
+                    let current = glyph_atlas_per_scale
+                        .get_mut(&x.active_scale())
+                        .expect("invalid state");
+                    current.ref_count -= 1;
+                    let removed = if current.ref_count == 0 {
+                        // un references
+                        glyph_atlas_per_scale.remove(&x.active_scale())
+                    } else {
+                        None
+                    };
+
+                    let new_atlas_mgr = match glyph_atlas_per_scale.entry(scale) {
+                        std::collections::hash_map::Entry::Occupied(mut o) => {
+                            // reuse existing
+                            o.get_mut().ref_count += 1;
+                            o.into_mut()
+                        }
+                        std::collections::hash_map::Entry::Vacant(v) => match removed {
+                            Some(mut data) => {
+                                // reuse existing with clear
+                                data.manager.clear_atlas();
+                                data.ref_count = 1;
+                                v.insert(data)
+                            }
+                            None => {
+                                // new one
+                                v.insert(GlyphAtlasDataPerDpi {
+                                    manager: GlyphAtlasManager::new(
+                                        &glyph_atlas_manager_common_resources,
+                                        &mut render_queue,
+                                        self.vk_device.present_queue_family_index(),
+                                    ),
+                                    vector_raster_state: VectorRasterizationState::new(),
+                                    ref_count: 1,
+                                })
+                            }
+                        },
+                    };
+
+                    x.rescale(scale);
+                    let mut descriptor_writes = Vec::with_capacity(1);
+                    x.composite_renderer.rebind_glyph_atlas(
+                        new_atlas_mgr.manager.atlas().as_image_view(),
+                        &mut descriptor_writes,
+                    );
+                    self.vk_device
+                        .update_descriptor_sets(&descriptor_writes, &[]);
+                }
+
+                let glyph_atlas_mgr = glyph_atlas_per_scale
+                    .get_mut(&x.active_scale())
+                    .expect("invalid state");
+                let needs_update_command = x.update(
+                    current_t.as_secs_f32(),
+                    &mut composite_tree,
+                    glyph_atlas_mgr.manager.atlas_mut(),
+                    &mut glyph_atlas_mgr.vector_raster_state,
+                    self.event_bus,
+                );
+
+                let mut render_wait_semaphores = Vec::with_capacity(1);
+                let mut render_wait_stages = Vec::with_capacity(1);
+
+                // TODO: いったんめんどうなので毎回更新
+                if true || needs_update_command {
+                    x.submit_update_commands(&mut render_queue);
+
+                    render_wait_semaphores.push(x.update_completion_semaphore_ref());
+                    render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
+                }
+
+                submit_parameters.push(SubmitParameters {
+                    renderer: x,
+                    render_wait_semaphores,
+                    render_wait_stages,
+                    render_commands: vec![x.primary_render_commands_ref(backbuffer_index)],
+                    render_signal_semaphores: vec![x.present_ready_semaphore_ref(backbuffer_index)],
+                    present_backbuffer_index: backbuffer_index,
+                });
             }
 
             for x in glyph_atlas_per_scale.values() {
@@ -253,21 +297,38 @@ impl<'main> RenderThread<'main> {
             unsafe {
                 render_queue
                     .submit_raw(
-                        &[br::SubmitInfo::new(
-                            &render_wait_semaphores,
-                            &render_wait_stages,
-                            &[main_window_renderer.primary_render_commands_ref(backbuffer_index)],
-                            &[main_window_renderer.present_ready_semaphore_ref(backbuffer_index)],
-                        )],
+                        &submit_parameters
+                            .iter()
+                            .map(|x| {
+                                br::SubmitInfo::new(
+                                    &x.render_wait_semaphores,
+                                    &x.render_wait_stages,
+                                    &x.render_commands,
+                                    &x.render_signal_semaphores,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
                         None,
                     )
                     .expect("queue submit")
             };
-            let mut results = [br::vk::VK_SUCCESS];
+            let mut results = submit_parameters
+                .iter()
+                .map(|_| br::vk::VK_SUCCESS)
+                .collect::<Vec<_>>();
             match render_queue.present(&br::PresentInfo::new(
-                &[main_window_renderer.present_ready_semaphore_ref(backbuffer_index)],
-                &[main_window_renderer.swapchain_ref()],
-                &[backbuffer_index],
+                &submit_parameters
+                    .iter()
+                    .map(|x| x.render_signal_semaphores[0])
+                    .collect::<Vec<_>>(),
+                &submit_parameters
+                    .iter()
+                    .map(|x| x.renderer.swapchain_ref())
+                    .collect::<Vec<_>>(),
+                &submit_parameters
+                    .iter()
+                    .map(|x| x.present_backbuffer_index)
+                    .collect::<Vec<_>>(),
                 &mut results,
             )) {
                 Ok(_) => (),
@@ -275,9 +336,11 @@ impl<'main> RenderThread<'main> {
                 Err(e) => Err::<(), _>(e).expect("queue present"),
             }
 
-            if results[0] == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
-                main_window_renderer.invalidate_swapchain();
-                any_swapchain_invalidated = true;
+            for (r, w) in results.iter().zip(windows.values_mut()) {
+                if *r == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
+                    w.invalidate_swapchain();
+                    any_swapchain_invalidated = true;
+                }
             }
 
             // unsafe {
