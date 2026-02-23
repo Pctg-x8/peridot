@@ -198,9 +198,9 @@ impl<'main> RenderThread<'main> {
                     Err(e) => Err(e).expect("acquire next"),
                 };
 
-                let main_window_new_ui_scale = x.take_latest_ui_scale_changes();
+                let new_ui_scale = x.take_latest_ui_scale_changes();
 
-                if let Some(scale) = main_window_new_ui_scale {
+                if let Some(scale) = new_ui_scale {
                     let scale = SafeF32::new(scale).expect("scale.invalid");
 
                     let current = glyph_atlas_per_scale
