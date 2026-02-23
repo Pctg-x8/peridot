@@ -960,80 +960,77 @@ impl<'d> GlyphAtlasManager<'d> {
             .rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _);
         let [triangle_fans_pipeline, curve_pipeline, colorize_pipeline] = common_res
             .device
-            .new_graphics_pipeline_array(
-                &[
-                    br::GraphicsPipelineCreateInfo::new(
-                        &common_res.pipeline_layout,
-                        common_res.render_pass.subpass(0),
-                        &[
-                            common_res
-                                .fill_shader_module
-                                .on_stage(br::ShaderStage::Vertex, c"vertMain")
-                                .with_specialization_info(&br::SpecializationInfo::new(
-                                    &FillShaderVertexConstants {
-                                        target_texture_width: atlas.size().width as _,
-                                        target_texture_height: atlas.size().height as _,
-                                    },
-                                )),
-                            common_res
-                                .fill_shader_module
-                                .on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                        ],
-                        Self::VI_STATE_FOR_TRI_FANS,
-                        IA_STATE_TRILIST,
-                        &vp_state,
-                        RASTER_STATE_DEFAULT_FILL_NOCULL,
-                        BLEND_STATE_SINGLE_NONE,
-                    )
-                    .set_multisample_state(&ms_state)
-                    .set_depth_stencil_state(Self::STENCIL_STATE_INVERT),
-                    br::GraphicsPipelineCreateInfo::new(
-                        &common_res.pipeline_layout,
-                        common_res.render_pass.subpass(0),
-                        &[
-                            common_res
-                                .curve_shader_module
-                                .on_stage(br::ShaderStage::Vertex, c"vertMain")
-                                .with_specialization_info(&br::SpecializationInfo::new(
-                                    &CurveShaderVertexConstants {
-                                        target_texture_width: atlas.size().width as _,
-                                        target_texture_height: atlas.size().height as _,
-                                    },
-                                )),
-                            common_res
-                                .curve_shader_module
-                                .on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                        ],
-                        Self::VI_STATE_FOR_CURVE,
-                        IA_STATE_TRILIST,
-                        &vp_state,
-                        RASTER_STATE_DEFAULT_FILL_NOCULL,
-                        BLEND_STATE_SINGLE_NONE,
-                    )
-                    .set_multisample_state(&ms_state)
-                    .set_depth_stencil_state(Self::STENCIL_STATE_INVERT),
-                    br::GraphicsPipelineCreateInfo::new(
-                        &common_res.pipeline_layout,
-                        common_res.render_pass.subpass(1),
-                        &[
-                            common_res
-                                .vec_tri_fill_shader_module
-                                .on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                            common_res
-                                .vec_tri_fill_shader_module
-                                .on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                        ],
-                        VI_STATE_EMPTY,
-                        IA_STATE_TRILIST,
-                        &vp_state,
-                        RASTER_STATE_DEFAULT_FILL_NOCULL,
-                        BLEND_STATE_SINGLE_NONE,
-                    )
-                    .set_multisample_state(&ms_state)
-                    .set_depth_stencil_state(Self::STENCIL_STATE_FILTER_EQ_ONLY),
-                ],
-                None::<&br::PipelineCacheObject<&br::DeviceObject<&br::InstanceObject>>>,
-            )
+            .create_graphics_pipelines_array(&[
+                br::GraphicsPipelineCreateInfo::new(
+                    &common_res.pipeline_layout,
+                    common_res.render_pass.subpass(0),
+                    &[
+                        common_res
+                            .fill_shader_module
+                            .on_stage(br::ShaderStage::Vertex, c"vertMain")
+                            .with_specialization_info(&br::SpecializationInfo::new(
+                                &FillShaderVertexConstants {
+                                    target_texture_width: atlas.size().width as _,
+                                    target_texture_height: atlas.size().height as _,
+                                },
+                            )),
+                        common_res
+                            .fill_shader_module
+                            .on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    Self::VI_STATE_FOR_TRI_FANS,
+                    IA_STATE_TRILIST,
+                    &vp_state,
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&ms_state)
+                .set_depth_stencil_state(Self::STENCIL_STATE_INVERT),
+                br::GraphicsPipelineCreateInfo::new(
+                    &common_res.pipeline_layout,
+                    common_res.render_pass.subpass(0),
+                    &[
+                        common_res
+                            .curve_shader_module
+                            .on_stage(br::ShaderStage::Vertex, c"vertMain")
+                            .with_specialization_info(&br::SpecializationInfo::new(
+                                &CurveShaderVertexConstants {
+                                    target_texture_width: atlas.size().width as _,
+                                    target_texture_height: atlas.size().height as _,
+                                },
+                            )),
+                        common_res
+                            .curve_shader_module
+                            .on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    Self::VI_STATE_FOR_CURVE,
+                    IA_STATE_TRILIST,
+                    &vp_state,
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&ms_state)
+                .set_depth_stencil_state(Self::STENCIL_STATE_INVERT),
+                br::GraphicsPipelineCreateInfo::new(
+                    &common_res.pipeline_layout,
+                    common_res.render_pass.subpass(1),
+                    &[
+                        common_res
+                            .vec_tri_fill_shader_module
+                            .on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        common_res
+                            .vec_tri_fill_shader_module
+                            .on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRILIST,
+                    &vp_state,
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&ms_state)
+                .set_depth_stencil_state(Self::STENCIL_STATE_FILTER_EQ_ONLY),
+            ])
             .expect("create vector rasterize pipelines");
 
         let mut init_cp = br::CommandPoolObject::new(
