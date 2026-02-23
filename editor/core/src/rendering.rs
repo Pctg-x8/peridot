@@ -211,32 +211,28 @@ impl<'main> RenderThread<'main> {
                     };
 
                     let new_atlas_mgr = match glyph_atlas_per_scale.entry(scale) {
-                        std::collections::hash_map::Entry::Occupied(mut o) => {
-                            // reuse existing
-                            o.get_mut().ref_count += 1;
-                            o.into_mut()
-                        }
+                        // reuse existing
+                        std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
                         std::collections::hash_map::Entry::Vacant(v) => match removed {
+                            // reuse existing with clear
                             Some(mut data) => {
-                                // reuse existing with clear
                                 data.manager.clear_atlas();
-                                data.ref_count = 1;
+                                data.ref_count = 0;
                                 v.insert(data)
                             }
-                            None => {
-                                // new one
-                                v.insert(GlyphAtlasDataPerDpi {
-                                    manager: GlyphAtlasManager::new(
-                                        &glyph_atlas_manager_common_resources,
-                                        &mut render_queue,
-                                        self.vk_device.present_queue_family_index(),
-                                    ),
-                                    vector_raster_state: VectorRasterizationState::new(),
-                                    ref_count: 1,
-                                })
-                            }
+                            // new one
+                            None => v.insert(GlyphAtlasDataPerDpi {
+                                manager: GlyphAtlasManager::new(
+                                    &glyph_atlas_manager_common_resources,
+                                    &mut render_queue,
+                                    self.vk_device.present_queue_family_index(),
+                                ),
+                                vector_raster_state: VectorRasterizationState::new(),
+                                ref_count: 0,
+                            }),
                         },
                     };
+                    new_atlas_mgr.ref_count += 1;
 
                     x.rescale(scale);
                     let mut descriptor_writes = Vec::with_capacity(1);
