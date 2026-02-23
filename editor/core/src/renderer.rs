@@ -9,7 +9,7 @@ use bedrock::{
 };
 
 #[cfg(feature = "wayland")]
-use crate::WaylandWindowState;
+use crate::WaylandWindowCommittedState;
 use crate::{
     AppEventBus, Event, RendererSync,
     composite::{
@@ -25,15 +25,16 @@ use crate::{
 };
 
 pub struct NewWindowData<'main> {
+    pub vk_surface: VulkanSurface<'main>,
     #[cfg(feature = "wayland")]
-    pub state: &'main WaylandWindowState,
+    pub committed_state: &'main Mutex<WaylandWindowCommittedState>,
+    #[cfg(feature = "wayland")]
+    pub swapchain_externally_invalidation_signal: &'main AtomicBool,
     #[cfg(windows)]
     pub handle: crate::platform::windows::SendableWindowHandle,
-    #[cfg(windows)]
     pub latest_ui_scale_changes: &'main Mutex<Option<f32>>,
     pub init_scale: SafeF32,
     pub composite_root: CompositeTreeRef,
-    pub vk_surface: VulkanSurface<'main>,
 }
 
 pub struct RenderThread<'main> {
@@ -85,10 +86,12 @@ impl<'main> RenderThread<'main> {
 
         let mut main_window_renderer = WindowRenderer::new(
             #[cfg(feature = "wayland")]
-            main_window_state,
+            self.main_window_data.committed_state,
+            #[cfg(feature = "wayland")]
+            self.main_window_data
+                .swapchain_externally_invalidation_signal,
             #[cfg(windows)]
             self.main_window_data.handle,
-            #[cfg(windows)]
             self.main_window_data.latest_ui_scale_changes,
             self.main_window_data.init_scale,
             self.main_window_data.composite_root,
@@ -283,7 +286,9 @@ impl<'main> RenderThread<'main> {
 
 pub struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
-    w: &'d WaylandWindowState,
+    committed_state: &'d Mutex<WaylandWindowCommittedState>,
+    #[cfg(feature = "wayland")]
+    swapchain_externally_invalidation_signal: &'d AtomicBool,
     #[cfg(windows)]
     w: crate::platform::windows::SendableWindowHandle,
     active_scale: SafeF32,
@@ -311,9 +316,10 @@ pub struct WindowRenderer<'d> {
 }
 impl<'d> WindowRenderer<'d> {
     pub fn new(
-        #[cfg(feature = "wayland")] w: &'d WaylandWindowState,
+        #[cfg(feature = "wayland")] committed_state: &'d Mutex<WaylandWindowCommittedState>,
+        #[cfg(feature = "wayland")] swapchain_externally_invalidation_signal: &'d AtomicBool,
         #[cfg(windows)] w: crate::platform::windows::SendableWindowHandle,
-        #[cfg(windows)] latest_ui_scale_changes: &'d Mutex<Option<f32>>,
+        latest_ui_scale_changes: &'d Mutex<Option<f32>>,
         active_scale: SafeF32,
         composite_root: CompositeTreeRef,
         surface: VulkanSurface<'d>,
@@ -331,7 +337,7 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             || w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || w.committed_state.lock().expect("poisoned").active_size,
+            || committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );
@@ -421,9 +427,13 @@ impl<'d> WindowRenderer<'d> {
         }
 
         Self {
-            w,
-            active_scale,
             #[cfg(windows)]
+            w,
+            #[cfg(feature = "wayland")]
+            committed_state,
+            #[cfg(feature = "wayland")]
+            swapchain_externally_invalidation_signal,
+            active_scale,
             latest_ui_scale_changes,
             font_set,
             vk_device,
@@ -474,7 +484,6 @@ impl<'d> WindowRenderer<'d> {
     }
 
     pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
-        #[cfg(windows)]
         self.latest_ui_scale_changes
             .lock()
             .expect("poisoned")
@@ -539,8 +548,7 @@ impl<'d> WindowRenderer<'d> {
 
     #[cfg(feature = "wayland")]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
-        self.w
-            .swapchain_externally_invalidation_signal
+        self.swapchain_externally_invalidation_signal
             .compare_exchange_weak(
                 true,
                 false,
@@ -576,7 +584,7 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             || self.w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || self.w.committed_state.lock().expect("poisoned").active_size,
+            || self.committed_state.lock().expect("poisoned").active_size,
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );

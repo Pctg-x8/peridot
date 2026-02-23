@@ -417,21 +417,18 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
-    #[cfg(feature = "wayland")]
-    let main_window_init_scale = SafeF32::new(
-        w.event_listener
-            .state
-            .committed_state
-            .get_mut()
-            .expect("poisoned")
-            .active_buffer_scale,
-    )
-    .expect("invalid scale");
-    #[cfg(feature = "wayland")]
-    let main_window_state = &w.event_listener.state;
-
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
+        #[cfg(feature = "wayland")]
+        let init_scale = SafeF32::new(
+            w.event_listener
+                .state
+                .committed_state
+                .get_mut()
+                .expect("poisoned")
+                .active_buffer_scale,
+        )
+        .expect("invalid scale");
         let render_thread = RenderThread {
             vk_device: &vk_device,
             shutdown_signal: &shutdown,
@@ -439,15 +436,28 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             global_time_base: &global_time_base,
             event_bus: &events,
             main_window_data: NewWindowData {
+                vk_surface,
+                #[cfg(feature = "wayland")]
+                committed_state: &w.event_listener.state.committed_state,
+                #[cfg(feature = "wayland")]
+                swapchain_externally_invalidation_signal: &w
+                    .event_listener
+                    .state
+                    .swapchain_externally_invalidation_signal,
+                #[cfg(feature = "wayland")]
+                latest_ui_scale_changes: &w.event_listener.state.latest_ui_scale_changes,
                 #[cfg(windows)]
                 handle: w.make_sendable(),
                 #[cfg(windows)]
                 latest_ui_scale_changes: &w.state_ref().latest_ui_scale_changes,
                 #[cfg(windows)]
                 init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
+                #[cfg(feature = "wayland")]
+                init_scale,
                 #[cfg(windows)]
                 composite_root: w.state_ref().composite_root,
-                vk_surface,
+                #[cfg(feature = "wayland")]
+                composite_root: w.event_listener.state.composite_root,
             },
         };
         let render_thread = std::thread::Builder::new()
