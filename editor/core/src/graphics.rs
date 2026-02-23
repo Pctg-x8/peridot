@@ -1,11 +1,14 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bedrock::{
     self as br, Device, Instance, InstanceChild, PhysicalDevice, ResolverInterface, Swapchain,
     VkHandle, VkRawHandle, VulkanStructure,
 };
 
-use crate::utils::{PixelsUnit, Size};
+use crate::{
+    FileSystem,
+    utils::{PixelsUnit, Size},
+};
 
 pub const VI_STATE_EMPTY: &br::PipelineVertexInputStateCreateInfo =
     &br::PipelineVertexInputStateCreateInfo::new(&[], &[]);
@@ -28,29 +31,36 @@ pub const BLEND_STATE_SINGLE_NONE: &br::PipelineColorBlendStateCreateInfo =
 pub const MS_STATE_EMPTY: &br::PipelineMultisampleStateCreateInfo =
     &br::PipelineMultisampleStateCreateInfo::new();
 
-pub struct VulkanDevice {
+pub struct VulkanDevice<'fs> {
+    fs: &'fs FileSystem,
     native: br::vk::VkDevice,
     adapter: br::vk::VkPhysicalDevice,
     parent: br::InstanceObject,
     memory_properties: br::MemoryProperties,
     graphics_queue: br::vk::VkQueue,
     graphics_queue_family_index: u32,
+    pipeline_cache_path: PathBuf,
+    pipeline_cache: br::vk::VkPipelineCache,
     fp_cmd_pipeline_barrier2: br::vk::PFN_vkCmdPipelineBarrier2KHR,
     fp_create_render_pass2: br::vk::PFN_vkCreateRenderPass2KHR,
     fp_cmd_begin_render_pass2: br::vk::PFN_vkCmdBeginRenderPass2KHR,
     fp_cmd_end_render_pass2: br::vk::PFN_vkCmdEndRenderPass2KHR,
     fp_debug_utils_set_object_name: br::vk::PFN_vkSetDebugUtilsObjectNameEXT,
 }
-unsafe impl Sync for VulkanDevice {}
-unsafe impl Send for VulkanDevice {}
-impl Drop for VulkanDevice {
+unsafe impl Sync for VulkanDevice<'_> {}
+unsafe impl Send for VulkanDevice<'_> {}
+impl Drop for VulkanDevice<'_> {
     fn drop(&mut self) {
+        // writeback pipeline cache for next launch
+        self.writeback_pipeline_cache();
+
         unsafe {
+            br::vkfn::destroy_pipeline_cache(self.native, self.pipeline_cache, core::ptr::null());
             br::vkfn::destroy_device(self.native, core::ptr::null());
         }
     }
 }
-impl br::VkHandle for VulkanDevice {
+impl br::VkHandle for VulkanDevice<'_> {
     type Handle = br::vk::VkDevice;
 
     #[inline(always)]
@@ -58,16 +68,16 @@ impl br::VkHandle for VulkanDevice {
         self.native
     }
 }
-impl br::InstanceChild for VulkanDevice {
+impl br::InstanceChild for VulkanDevice<'_> {
     type ConcreteInstance = br::InstanceObject;
 
     fn instance(&self) -> &Self::ConcreteInstance {
         &self.parent
     }
 }
-impl br::Device for VulkanDevice {}
-impl VulkanDevice {
-    pub fn new() -> Self {
+impl br::Device for VulkanDevice<'_> {}
+impl<'fs> VulkanDevice<'fs> {
+    pub fn new(fs: &'fs FileSystem) -> Self {
         let api_version = match br::instance_version() {
             Ok(v) => {
                 tracing::info!(version = %v, "Vulkan");
@@ -252,7 +262,32 @@ impl VulkanDevice {
 
         let graphics_queue = vk_device.queue(graphics_queue_family_index, 0).unmanage().0;
 
+        let pipeline_cache_path = fs.resolve_cache_path("vk-pipeline-cache");
+        let pipeline_cache = 'try_load_pipeline_cache_binary: {
+            let exists = pipeline_cache_path.try_exists()
+                .inspect_err(|e| tracing::warn!(path = ?pipeline_cache_path, reason = %e, "pipeline_cache.try_exists"))
+                .unwrap_or(false);
+            if !exists {
+                // not found
+                tracing::info!(path = ?pipeline_cache_path, "pipeline_cache.not_found");
+                break 'try_load_pipeline_cache_binary None;
+            }
+
+            let content = std::fs::read(&pipeline_cache_path)
+                .inspect_err(|e| tracing::warn!(path = ?pipeline_cache_path, reason = %e, "pipeline_cache.read"))
+                .ok();
+            let Some(content) = content else {
+                // failed to read file
+                break 'try_load_pipeline_cache_binary None;
+            };
+
+            br::PipelineCacheObject::new(&vk_device, &br::PipelineCacheCreateInfo::new(&content))
+                .inspect_err(|e| tracing::warn!(path = ?pipeline_cache_path, reason = %e, "pipeline_cache.new"))
+                .ok()
+        }.unwrap_or_else(|| br::PipelineCacheObject::new(&vk_device, &br::PipelineCacheCreateInfo::new(&[])).expect("pipeline_cache.new_empty"));
+
         Self {
+            fs,
             fp_create_render_pass2: unsafe {
                 vk_device.native_ptr().load_function_unconstrainted()
             },
@@ -268,6 +303,8 @@ impl VulkanDevice {
             fp_cmd_pipeline_barrier2: unsafe {
                 vk_device.native_ptr().load_function_unconstrainted()
             },
+            pipeline_cache: pipeline_cache.unmanage().0,
+            pipeline_cache_path,
             memory_properties: vk_adapter_memory_properties,
             graphics_queue_family_index,
             graphics_queue,
@@ -278,7 +315,7 @@ impl VulkanDevice {
     }
 
     #[inline(always)]
-    pub const fn primary_adapter_ref<'s>(&'s self) -> VulkanDeviceAdapterRef<'s> {
+    pub const fn primary_adapter_ref<'s>(&'s self) -> VulkanDeviceAdapterRef<'s, 'fs> {
         VulkanDeviceAdapterRef(self.adapter, self)
     }
 
@@ -305,10 +342,11 @@ impl VulkanDevice {
         Ok(unsafe { br::RenderPassObject::manage(h.assume_init(), self) })
     }
 
-    #[tracing::instrument(skip(self), fields(path = ?path.as_ref()))]
+    #[tracing::instrument(skip(self), fields(path = ?path.as_ref(), resolved_path))]
     pub fn require_shader(&self, path: impl AsRef<Path>) -> br::ShaderModuleObject<&Self> {
-        // TODO: resolving resource path
-        let bin = std::fs::read(&std::path::Path::new("../core/resources/").join(&path))
+        let resolved_path = self.fs.resolve_resource_path(&path);
+        tracing::Span::current().record("resolved_path", tracing::field::debug(&resolved_path));
+        let bin = std::fs::read(resolved_path)
             .inspect_err(|e| tracing::error!(reason = %e, "require_shader.read"))
             .expect("require_shader");
         let mut aligned_bin = Vec::with_capacity(bin.len() >> 2);
@@ -337,14 +375,20 @@ impl VulkanDevice {
         &self,
         infos: &[br::GraphicsPipelineCreateInfo; N],
     ) -> br::Result<[br::PipelineObject<&Self>; N]> {
-        self.new_graphics_pipeline_array(infos, None::<&br::PipelineCacheObject<&Self>>)
+        self.new_graphics_pipeline_array(
+            infos,
+            Some(br::VkHandleRef::from_raw_ref(&self.pipeline_cache)),
+        )
     }
 
     pub fn create_graphics_pipelines(
         &self,
         infos: &[br::GraphicsPipelineCreateInfo],
     ) -> br::Result<Vec<br::PipelineObject<&Self>>> {
-        self.new_graphics_pipelines(infos, None::<&br::PipelineCacheObject<&Self>>)
+        self.new_graphics_pipelines(
+            infos,
+            Some(br::VkHandleRef::from_raw_ref(&self.pipeline_cache)),
+        )
     }
 
     pub fn find_lazily_allocatable_device_local_memory_index(
@@ -497,12 +541,43 @@ impl VulkanDevice {
             );
         }
     }
+
+    #[tracing::instrument(skip(self))]
+    fn writeback_pipeline_cache(&self) {
+        let data_length = unsafe {
+            br::vkfn_wrapper::get_pipeline_cache_data_byte_length(self.native, self.pipeline_cache)
+                .inspect_err(|e| tracing::warn!(reason = %e, "pipeline_cache.get_data_byte_length"))
+                .ok()
+        };
+        let Some(data_length) = data_length else {
+            return;
+        };
+
+        let mut data = Vec::with_capacity(data_length);
+        if let Err(e) = unsafe {
+            br::vkfn_wrapper::get_pipeline_cache_data(
+                self.native,
+                self.pipeline_cache,
+                data.spare_capacity_mut(),
+            )
+        } {
+            tracing::warn!(reason = %e, "pipeline_cache.get_data");
+            return;
+        }
+        unsafe {
+            data.set_len(data_length);
+        }
+
+        if let Err(e) = std::fs::write(&self.pipeline_cache_path, &data) {
+            tracing::warn!(path = ?self.pipeline_cache_path, reason = %e, "pipeline_cache.write_file");
+        }
+    }
 }
 
-pub struct VulkanDeviceAdapterRef<'d>(br::vk::VkPhysicalDevice, &'d VulkanDevice);
-unsafe impl Sync for VulkanDeviceAdapterRef<'_> {}
-unsafe impl Send for VulkanDeviceAdapterRef<'_> {}
-impl br::VkHandle for VulkanDeviceAdapterRef<'_> {
+pub struct VulkanDeviceAdapterRef<'d, 'fs>(br::vk::VkPhysicalDevice, &'d VulkanDevice<'fs>);
+unsafe impl Sync for VulkanDeviceAdapterRef<'_, '_> {}
+unsafe impl Send for VulkanDeviceAdapterRef<'_, '_> {}
+impl br::VkHandle for VulkanDeviceAdapterRef<'_, '_> {
     type Handle = br::vk::VkPhysicalDevice;
 
     #[inline(always)]
@@ -510,24 +585,24 @@ impl br::VkHandle for VulkanDeviceAdapterRef<'_> {
         self.0
     }
 }
-impl br::InstanceChild for VulkanDeviceAdapterRef<'_> {
-    type ConcreteInstance = <VulkanDevice as br::InstanceChild>::ConcreteInstance;
+impl<'fs> br::InstanceChild for VulkanDeviceAdapterRef<'_, 'fs> {
+    type ConcreteInstance = <VulkanDevice<'fs> as br::InstanceChild>::ConcreteInstance;
 
     #[inline(always)]
     fn instance(&self) -> &Self::ConcreteInstance {
         self.1.instance()
     }
 }
-impl br::PhysicalDevice for VulkanDeviceAdapterRef<'_> {}
+impl br::PhysicalDevice for VulkanDeviceAdapterRef<'_, '_> {}
 
-pub struct VulkanSwapchain<'d> {
-    device: &'d VulkanDevice,
+pub struct VulkanSwapchain<'d, 'fs> {
+    device: &'d VulkanDevice<'fs>,
     handle: br::vk::VkSwapchainKHR,
     ext: br::Extent2D,
     images: Vec<br::vk::VkImage>,
     image_views: Vec<br::vk::VkImageView>,
 }
-impl Drop for VulkanSwapchain<'_> {
+impl Drop for VulkanSwapchain<'_, '_> {
     fn drop(&mut self) {
         unsafe {
             for x in self.image_views.drain(..) {
@@ -537,7 +612,7 @@ impl Drop for VulkanSwapchain<'_> {
         }
     }
 }
-impl br::VkHandle for VulkanSwapchain<'_> {
+impl br::VkHandle for VulkanSwapchain<'_, '_> {
     type Handle = br::vk::VkSwapchainKHR;
 
     #[inline(always)]
@@ -545,24 +620,24 @@ impl br::VkHandle for VulkanSwapchain<'_> {
         self.handle
     }
 }
-impl br::DeviceChildHandle for VulkanSwapchain<'_> {
+impl br::DeviceChildHandle for VulkanSwapchain<'_, '_> {
     #[inline(always)]
     fn device_handle(&self) -> bedrock::vk::VkDevice {
         self.device.native_ptr()
     }
 }
-impl br::DeviceChild for VulkanSwapchain<'_> {
-    type ConcreteDevice = VulkanDevice;
+impl<'fs> br::DeviceChild for VulkanSwapchain<'_, 'fs> {
+    type ConcreteDevice = VulkanDevice<'fs>;
 
     #[inline(always)]
     fn device(&self) -> &Self::ConcreteDevice {
         self.device
     }
 }
-impl br::Swapchain for VulkanSwapchain<'_> {}
-impl<'d> VulkanSwapchain<'d> {
+impl br::Swapchain for VulkanSwapchain<'_, '_> {}
+impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
     pub fn new(
-        surface: &VulkanSurface<'d>,
+        surface: &VulkanSurface<'d, 'fs>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) -> Self {
         let ext = if surface.caps.currentExtent.width == 0xffffffff
@@ -635,7 +710,7 @@ impl<'d> VulkanSwapchain<'d> {
 
     pub fn recreate(
         &mut self,
-        surface: &VulkanSurface<'d>,
+        surface: &VulkanSurface<'d, 'fs>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) {
         // release pre-created resources
@@ -730,14 +805,14 @@ impl<'d> VulkanSwapchain<'d> {
     }
 }
 
-pub struct VulkanSurface<'d> {
-    device: &'d VulkanDevice,
+pub struct VulkanSurface<'d, 'fs> {
+    device: &'d VulkanDevice<'fs>,
     handle: br::vk::VkSurfaceKHR,
     selected_format: br::SurfaceFormat,
     selected_present_mode: br::PresentMode,
     caps: br::SurfaceCapabilities,
 }
-impl Drop for VulkanSurface<'_> {
+impl Drop for VulkanSurface<'_, '_> {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_surface(
@@ -748,7 +823,7 @@ impl Drop for VulkanSurface<'_> {
         }
     }
 }
-impl br::VkHandle for VulkanSurface<'_> {
+impl br::VkHandle for VulkanSurface<'_, '_> {
     type Handle = br::vk::VkSurfaceKHR;
 
     #[inline(always)]
@@ -756,19 +831,19 @@ impl br::VkHandle for VulkanSurface<'_> {
         self.handle
     }
 }
-unsafe impl Sync for VulkanSurface<'_> {}
-unsafe impl Send for VulkanSurface<'_> {}
-impl br::InstanceChild for VulkanSurface<'_> {
-    type ConcreteInstance = <VulkanDevice as br::InstanceChild>::ConcreteInstance;
+unsafe impl Sync for VulkanSurface<'_, '_> {}
+unsafe impl Send for VulkanSurface<'_, '_> {}
+impl<'fs> br::InstanceChild for VulkanSurface<'_, 'fs> {
+    type ConcreteInstance = <VulkanDevice<'fs> as br::InstanceChild>::ConcreteInstance;
 
     #[inline(always)]
     fn instance(&self) -> &Self::ConcreteInstance {
         self.device.instance()
     }
 }
-impl br::Surface for VulkanSurface<'_> {}
-impl<'d> VulkanSurface<'d> {
-    pub fn new(device: &'d VulkanDevice, handle: br::vk::VkSurfaceKHR) -> Self {
+impl br::Surface for VulkanSurface<'_, '_> {}
+impl<'d, 'fs> VulkanSurface<'d, 'fs> {
+    pub fn new(device: &'d VulkanDevice<'fs>, handle: br::vk::VkSurfaceKHR) -> Self {
         match unsafe {
             br::vkfn_wrapper::get_physical_device_surface_support(
                 device.primary_adapter_ref().native_ptr(),

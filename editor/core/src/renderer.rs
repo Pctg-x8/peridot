@@ -25,7 +25,7 @@ use crate::{
 };
 
 pub struct NewWindowData<'main> {
-    pub vk_surface: VulkanSurface<'main>,
+    pub vk_surface: VulkanSurface<'main, 'main>,
     #[cfg(feature = "wayland")]
     pub committed_state: &'main Mutex<WaylandWindowCommittedState>,
     #[cfg(feature = "wayland")]
@@ -38,7 +38,7 @@ pub struct NewWindowData<'main> {
 }
 
 pub struct RenderThread<'main> {
-    pub vk_device: &'main VulkanDevice,
+    pub vk_device: &'main VulkanDevice<'main>,
     pub shutdown_signal: &'main AtomicBool,
     pub renderer_sync: &'main Mutex<RendererSync>,
     pub global_time_base: &'main std::time::Instant,
@@ -301,25 +301,25 @@ pub struct WindowRenderer<'d> {
     w: crate::platform::windows::SendableWindowHandle,
     active_scale: SafeF32,
     latest_ui_scale_changes: &'d Mutex<Option<f32>>,
-    vk_device: &'d VulkanDevice,
+    vk_device: &'d VulkanDevice<'d>,
     swapchain_invalidated: bool,
     composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
     last_composite_render_data: CompositeRenderingData,
-    update_cp: br::CommandPoolObject<&'d VulkanDevice>,
-    update_cb: br::CommandBufferObject<&'d VulkanDevice>,
-    update_completion_fence: br::FenceObject<&'d VulkanDevice>,
-    update_completion_semaphore: br::SemaphoreObject<&'d VulkanDevice>,
+    update_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
+    update_cb: br::CommandBufferObject<&'d VulkanDevice<'d>>,
+    update_completion_fence: br::FenceObject<&'d VulkanDevice<'d>>,
+    update_completion_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
     updating: bool,
-    render_cp: br::CommandPoolObject<&'d VulkanDevice>,
-    render_cb: Vec<br::CommandBufferObject<&'d VulkanDevice>>,
+    render_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
+    render_cb: Vec<br::CommandBufferObject<&'d VulkanDevice<'d>>>,
     render_cb_invalid: bool,
-    present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice>>,
-    backbuffer_ready_fence: br::FenceObject<&'d VulkanDevice>,
-    primary_framebuffers: Vec<br::FramebufferObject<'d, &'d VulkanDevice>>,
-    primary_render_pass: br::RenderPassObject<&'d VulkanDevice>,
-    swapchain: VulkanSwapchain<'d>,
-    surface: VulkanSurface<'d>,
+    present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
+    backbuffer_ready_fence: br::FenceObject<&'d VulkanDevice<'d>>,
+    primary_framebuffers: Vec<br::FramebufferObject<'d, &'d VulkanDevice<'d>>>,
+    primary_render_pass: br::RenderPassObject<&'d VulkanDevice<'d>>,
+    swapchain: VulkanSwapchain<'d, 'd>,
+    surface: VulkanSurface<'d, 'd>,
     font_set: PerWindowFontSet<'d>,
 }
 impl<'d> WindowRenderer<'d> {
@@ -330,7 +330,7 @@ impl<'d> WindowRenderer<'d> {
         latest_ui_scale_changes: &'d Mutex<Option<f32>>,
         active_scale: SafeF32,
         composite_root: CompositeTreeRef,
-        surface: VulkanSurface<'d>,
+        surface: VulkanSurface<'d, 'd>,
         vk_device: &'d VulkanDevice,
         glyph_atlas: &GlyphAtlas,
         root_font_set: &'d RootFontSet,
@@ -779,12 +779,12 @@ pub struct GlyphAtlasRenderingFormats {
 }
 
 pub struct GlyphAtlasManagerCommonResources<'d> {
-    device: &'d VulkanDevice,
-    fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice>,
-    curve_shader_module: br::ShaderModuleObject<&'d VulkanDevice>,
-    vec_tri_fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice>,
-    render_pass: br::RenderPassObject<&'d VulkanDevice>,
-    pipeline_layout: br::PipelineLayoutObject<&'d VulkanDevice>,
+    device: &'d VulkanDevice<'d>,
+    fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
+    curve_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
+    vec_tri_fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
+    render_pass: br::RenderPassObject<&'d VulkanDevice<'d>>,
+    pipeline_layout: br::PipelineLayoutObject<&'d VulkanDevice<'d>>,
 }
 impl<'d> GlyphAtlasManagerCommonResources<'d> {
     pub fn new(vk_device: &'d VulkanDevice, formats: &GlyphAtlasRenderingFormats) -> Self {
@@ -871,11 +871,11 @@ impl<'d> GlyphAtlasManagerCommonResources<'d> {
 }
 
 pub struct GlyphAtlasManager<'d> {
-    device: &'d VulkanDevice,
+    device: &'d VulkanDevice<'d>,
     atlas: GlyphAtlas,
-    triangle_fans_pipeline: br::PipelineObject<&'d VulkanDevice>,
-    curve_pipeline: br::PipelineObject<&'d VulkanDevice>,
-    colorize_pipeline: br::PipelineObject<&'d VulkanDevice>,
+    triangle_fans_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
+    curve_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
+    colorize_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
 }
 impl Drop for GlyphAtlasManager<'_> {
     fn drop(&mut self) {

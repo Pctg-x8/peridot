@@ -805,7 +805,7 @@ impl CompositeInstanceManager {
 pub struct CompositeInstanceMappedStagingMemory<'m, 'g>(
     *mut core::ffi::c_void,
     &'m mut CompositeInstanceManager,
-    &'g VulkanDevice,
+    &'g VulkanDevice<'g>,
 );
 impl Drop for CompositeInstanceMappedStagingMemory<'_, '_> {
     fn drop(&mut self) {
@@ -823,7 +823,7 @@ impl CompositeInstanceMappedStagingMemory<'_, '_> {
 pub struct CompositeInstanceMappedStreamingMemory<'m, 'g>(
     *mut core::ffi::c_void,
     &'m mut CompositeInstanceManager,
-    &'g VulkanDevice,
+    &'g VulkanDevice<'g>,
 );
 impl Drop for CompositeInstanceMappedStreamingMemory<'_, '_> {
     fn drop(&mut self) {
@@ -4887,7 +4887,7 @@ impl CompositeRenderer {
 
 pub struct BoundCompositeRenderer<'d> {
     core: CompositeRenderer,
-    device: &'d VulkanDevice,
+    device: &'d VulkanDevice<'d>,
 }
 impl Drop for BoundCompositeRenderer<'_> {
     fn drop(&mut self) {
@@ -5090,13 +5090,13 @@ impl BackdropEffectBlurProcessor {
     }
 
     fn create_pipelines<'x>(
-        gfx: &'x VulkanDevice,
+        gfx: &'x VulkanDevice<'x>,
         rt_size: br::Extent2D,
         pipeline_layout: &(impl br::VkHandle<Handle = br::vk::VkPipelineLayout> + ?Sized),
         render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
     ) -> (
-        Vec<br::PipelineObject<&'x VulkanDevice>>,
-        Vec<br::PipelineObject<&'x VulkanDevice>>,
+        Vec<br::PipelineObject<&'x VulkanDevice<'x>>>,
+        Vec<br::PipelineObject<&'x VulkanDevice<'x>>>,
     ) {
         let downsample_shader = gfx.require_shader("dual_kawase_filter/downsample.spv");
         let upsample_shader = gfx.require_shader("dual_kawase_filter/upsample.spv");
@@ -5171,11 +5171,11 @@ impl BackdropEffectBlurProcessor {
     }
 
     fn create_temporal_buffers<'x>(
-        gfx: &'x VulkanDevice,
+        gfx: &'x VulkanDevice<'x>,
         rt_size: br::Extent2D,
         rt_format: br::Format,
-        object_sink: &mut Vec<br::ImageViewObject<br::ImageObject<&'x VulkanDevice>>>,
-    ) -> br::DeviceMemoryObject<&'x VulkanDevice> {
+        object_sink: &mut Vec<br::ImageViewObject<br::ImageObject<&'x VulkanDevice<'x>>>>,
+    ) -> br::DeviceMemoryObject<&'x VulkanDevice<'x>> {
         let mut resources_offsets = Vec::with_capacity(BLUR_SAMPLE_STEPS);
         let mut top = 0;
         let mut memory_index_mask = !0u32;
@@ -5219,13 +5219,13 @@ impl BackdropEffectBlurProcessor {
 
     /// returns: (downsample, upsample_fixed(only for temporal buffers))
     fn create_framebuffers<'r, 'x>(
-        gfx: &'x VulkanDevice,
-        temporal_buffers: &'r [br::ImageViewObject<br::ImageObject<&'x VulkanDevice>>],
+        gfx: &'x VulkanDevice<'x>,
+        temporal_buffers: &'r [br::ImageViewObject<br::ImageObject<&'x VulkanDevice<'x>>>],
         render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
         rt_size: br::Extent2D,
     ) -> (
-        Vec<br::FramebufferObject<'r, &'x VulkanDevice>>,
-        Vec<br::FramebufferObject<'r, &'x VulkanDevice>>,
+        Vec<br::FramebufferObject<'r, &'x VulkanDevice<'x>>>,
+        Vec<br::FramebufferObject<'r, &'x VulkanDevice<'x>>>,
     ) {
         let mut downsample_pass_fbs = Vec::with_capacity(temporal_buffers.len());
         let mut upsample_pass_fixed_fbs = Vec::with_capacity(temporal_buffers.len() - 1);
@@ -5725,7 +5725,7 @@ impl CompositionSurfaceAtlas {
 }
 
 pub struct BoundCompositionSurfaceAtlas<'d> {
-    gfx: &'d VulkanDevice,
+    gfx: &'d VulkanDevice<'d>,
     raw: CompositionSurfaceAtlas,
 }
 impl Drop for BoundCompositionSurfaceAtlas<'_> {

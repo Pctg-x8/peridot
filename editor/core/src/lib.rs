@@ -16,6 +16,7 @@ use std::os::fd::AsRawFd;
 use std::{collections::HashMap, sync::RwLock};
 use std::{
     collections::VecDeque,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 #[cfg(windows)]
@@ -128,6 +129,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
 ) {
+    let fs = FileSystem::new();
     let events = AppEventBus {
         queue: std::sync::Mutex::new(VecDeque::new()),
         #[cfg(target_os = "linux")]
@@ -289,7 +291,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(target_os = "macos")]
     w.make_primary_window();
 
-    let vk_device = VulkanDevice::new();
+    let vk_device = VulkanDevice::new(&fs);
 
     #[cfg(windows)]
     if !vk_device
@@ -2607,6 +2609,58 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
         } else {
             self.remove(watch);
         }
+    }
+}
+
+pub struct FileSystem {
+    resources_base_path: PathBuf,
+    cache_base_path: PathBuf,
+}
+impl FileSystem {
+    #[tracing::instrument]
+    pub fn new() -> Self {
+        // TODO: リリース版だとresourcesの場所はかわる
+        let resources_base_path = std::env::current_exe()
+            .expect("fs.resources_base_path.current_exe")
+            .parent()
+            .expect("fs.resources_base_path.current_exe.parent")
+            .join("../../../core/resources");
+        #[cfg(target_os = "linux")]
+        let cache_base_path = 'cache_base_path: {
+            if let Some(p) = std::env::var_os("XDG_CACHE_HOME") {
+                break 'cache_base_path PathBuf::from(p).join("io.ct2.peridot.editor");
+            }
+
+            if let Some(p) = std::env::var_os("HOME") {
+                break 'cache_base_path PathBuf::from(p).join(".cache/io.ct2.peridot.editor");
+            }
+
+            tracing::warn!(
+                "neither XDG_CACHE_HOME nor HOME is set, generating cache into current working directory"
+            );
+            std::env::current_dir()
+                .expect("fs.cache_base_path.current_dir")
+                .join(".cache/io.ct2.peridot.editor")
+        };
+
+        if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
+            tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");
+        }
+
+        Self {
+            resources_base_path,
+            cache_base_path,
+        }
+    }
+
+    #[inline(always)]
+    pub fn resolve_resource_path(&self, path: impl AsRef<Path>) -> PathBuf {
+        self.resources_base_path.join(path)
+    }
+
+    #[inline(always)]
+    pub fn resolve_cache_path(&self, path: impl AsRef<Path>) -> PathBuf {
+        self.cache_base_path.join(path)
     }
 }
 
