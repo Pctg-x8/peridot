@@ -169,17 +169,18 @@ impl<'main> RenderThread<'main> {
                     None
                 };
 
-                match glyph_atlas_per_scale.entry(scale) {
+                let new_atlas_mgr = match glyph_atlas_per_scale.entry(scale) {
                     std::collections::hash_map::Entry::Occupied(mut o) => {
                         // reuse existing
                         o.get_mut().ref_count += 1;
+                        o.into_mut()
                     }
                     std::collections::hash_map::Entry::Vacant(v) => match removed {
                         Some(mut data) => {
                             // reuse existing with clear
                             data.manager.clear_atlas();
                             data.ref_count = 1;
-                            v.insert(data);
+                            v.insert(data)
                         }
                         None => {
                             // new one
@@ -191,12 +192,19 @@ impl<'main> RenderThread<'main> {
                                 ),
                                 vector_raster_state: VectorRasterizationState::new(),
                                 ref_count: 1,
-                            });
+                            })
                         }
                     },
-                }
+                };
 
                 main_window_renderer.rescale(scale);
+                let mut descriptor_writes = Vec::with_capacity(1);
+                main_window_renderer.composite_renderer.rebind_glyph_atlas(
+                    new_atlas_mgr.manager.atlas().as_image_view(),
+                    &mut descriptor_writes,
+                );
+                self.vk_device
+                    .update_descriptor_sets(&descriptor_writes, &[]);
             }
 
             for x in glyph_atlas_per_scale.values_mut() {

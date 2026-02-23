@@ -18,6 +18,18 @@ pub struct GlyphRect {
     pub height: u32,
 }
 
+#[repr(transparent)]
+pub struct GlyphAtlasAsImageView(GlyphAtlas);
+impl br::VkHandle for GlyphAtlasAsImageView {
+    type Handle = br::vk::VkImageView;
+
+    #[inline(always)]
+    fn native_ptr(&self) -> Self::Handle {
+        self.0.view
+    }
+}
+impl br::ImageView for GlyphAtlasAsImageView {}
+
 pub struct GlyphAtlas {
     res: br::vk::VkImage,
     mem: br::vk::VkDeviceMemory,
@@ -125,6 +137,11 @@ impl GlyphAtlas {
     #[inline(always)]
     pub const fn view<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImageView> {
         unsafe { br::VkHandleRef::dangling(self.view) }
+    }
+
+    #[inline(always)]
+    pub const fn as_image_view<'a>(&'a self) -> &'a impl br::ImageView {
+        unsafe { core::mem::transmute::<_, &GlyphAtlasAsImageView>(self) }
     }
 }
 

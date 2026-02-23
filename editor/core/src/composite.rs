@@ -3713,20 +3713,7 @@ impl CompositeRenderer {
         )
         .unwrap();
 
-        let shader_binary1 =
-            std::fs::read("../core/resources/composite.spv").expect("composite shader load");
-        let mut shader_binary = Vec::with_capacity(shader_binary1.len() >> 2);
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                shader_binary1.as_ptr(),
-                shader_binary.spare_capacity_mut().as_mut_ptr().cast(),
-                shader_binary1.len(),
-            );
-            shader_binary.set_len(shader_binary1.len() >> 2);
-        }
-        let shader =
-            br::ShaderModuleObject::new(gfx, &br::ShaderModuleCreateInfo::new(&shader_binary))
-                .expect("shader module create");
+        let shader = gfx.require_shader("composite.spv");
         let shader_stages = [
             shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
             shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
@@ -4492,6 +4479,18 @@ impl CompositeRenderer {
 
         self.backdrop_buffers_invalidated = false;
         true
+    }
+
+    pub fn rebind_glyph_atlas<'r>(
+        &'r self,
+        new_atlas: &'r (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'r>>,
+    ) {
+        descriptor_writes.push(CompositeDescriptorSet::set_texture_atlas(
+            self.alphamask_group_input_descriptor_set,
+            br::DescriptorImageInfo::new(new_atlas, br::ImageLayout::ShaderReadOnlyOpt)
+                .with_sampler(br::VkHandleRef::from_raw_ref(&self.sampler)),
+        ));
     }
 
     #[inline]
