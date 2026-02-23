@@ -19,12 +19,14 @@ use windows::Win32::Graphics::{
 use windows_core::*;
 
 use crate::{
-    atlas::{AtlasRect, DynamicAtlasManager},
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, VulkanDevice,
     },
-    text::{FontID, GlyphAtlas, PerWindowFontSet},
+    rendering::{
+        atlas::{AtlasRect, DynamicAtlasManager},
+        text::{FontID, GlyphAtlas, PerWindowFontSet},
+    },
     utils::SafeF32,
 };
 

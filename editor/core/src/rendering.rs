@@ -12,17 +12,21 @@ use bedrock::{
 use crate::WaylandWindowCommittedState;
 use crate::{
     AppEventBus, Event, RendererSync,
-    composite::{
-        BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData, CompositeTreeRef,
-        CompositeTreeRender, VectorRasterizationState,
-    },
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, RASTER_STATE_DEFAULT_FILL_NOCULL,
         VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
     },
-    text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
+    rendering::composite::{
+        BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData, CompositeTreeRef,
+        CompositeTreeRender, VectorRasterizationState,
+    },
+    rendering::text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
     utils::SafeF32,
 };
+
+pub mod atlas;
+pub mod composite;
+pub mod text;
 
 pub struct NewWindowData<'main> {
     pub vk_surface: VulkanSurface<'main, 'main>,

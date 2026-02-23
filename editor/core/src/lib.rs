@@ -29,33 +29,32 @@ use windows::Win32::{
 };
 
 use crate::{
-    composite::{
-        AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
-        CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-        CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
-        CompositeTreeSyncBuffer,
-    },
     graphics::VulkanDevice,
     hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager},
     input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
-    rendering::{NewWindowData, RenderThread},
-    text::FontID,
+    rendering::{
+        NewWindowData, RenderThread,
+        composite::{
+            AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
+            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
+            CompositeTreeSyncBuffer,
+        },
+        text::FontID,
+    },
     utils::{Color32, LogicalUnit, PixelsUnit, Point, SafeF32, Size},
 };
 #[cfg(feature = "wayland")]
 use crate::{graphics::VulkanSurface, hittest::HitTestTreeRef};
 
-mod atlas;
 #[cfg(windows)]
 mod bindgen;
-mod composite;
 mod graphics;
 mod hittest;
 mod input;
 mod platform;
 mod proto;
 mod rendering;
-mod text;
 mod utils;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
