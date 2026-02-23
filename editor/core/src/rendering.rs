@@ -193,7 +193,7 @@ impl<'main> RenderThread<'main> {
                     Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                         x.invalidate_swapchain();
                         any_swapchain_invalidated = true;
-                        continue 'lp;
+                        continue;
                     }
                     Err(e) => Err(e).expect("acquire next"),
                 };
@@ -294,52 +294,54 @@ impl<'main> RenderThread<'main> {
                 );
             }
 
-            unsafe {
-                render_queue
-                    .submit_raw(
-                        &submit_parameters
-                            .iter()
-                            .map(|x| {
-                                br::SubmitInfo::new(
-                                    &x.render_wait_semaphores,
-                                    &x.render_wait_stages,
-                                    &x.render_commands,
-                                    &x.render_signal_semaphores,
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                        None,
-                    )
-                    .expect("queue submit")
-            };
-            let mut results = submit_parameters
-                .iter()
-                .map(|_| br::vk::VK_SUCCESS)
-                .collect::<Vec<_>>();
-            match render_queue.present(&br::PresentInfo::new(
-                &submit_parameters
+            if !submit_parameters.is_empty() {
+                unsafe {
+                    render_queue
+                        .submit_raw(
+                            &submit_parameters
+                                .iter()
+                                .map(|x| {
+                                    br::SubmitInfo::new(
+                                        &x.render_wait_semaphores,
+                                        &x.render_wait_stages,
+                                        &x.render_commands,
+                                        &x.render_signal_semaphores,
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                            None,
+                        )
+                        .expect("queue submit")
+                };
+                let mut results = submit_parameters
                     .iter()
-                    .map(|x| x.render_signal_semaphores[0])
-                    .collect::<Vec<_>>(),
-                &submit_parameters
-                    .iter()
-                    .map(|x| x.renderer.swapchain_ref())
-                    .collect::<Vec<_>>(),
-                &submit_parameters
-                    .iter()
-                    .map(|x| x.present_backbuffer_index)
-                    .collect::<Vec<_>>(),
-                &mut results,
-            )) {
-                Ok(_) => (),
-                Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
-                Err(e) => Err::<(), _>(e).expect("queue present"),
-            }
+                    .map(|_| br::vk::VK_SUCCESS)
+                    .collect::<Vec<_>>();
+                match render_queue.present(&br::PresentInfo::new(
+                    &submit_parameters
+                        .iter()
+                        .map(|x| x.render_signal_semaphores[0])
+                        .collect::<Vec<_>>(),
+                    &submit_parameters
+                        .iter()
+                        .map(|x| x.renderer.swapchain_ref())
+                        .collect::<Vec<_>>(),
+                    &submit_parameters
+                        .iter()
+                        .map(|x| x.present_backbuffer_index)
+                        .collect::<Vec<_>>(),
+                    &mut results,
+                )) {
+                    Ok(_) => (),
+                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
+                    Err(e) => Err::<(), _>(e).expect("queue present"),
+                }
 
-            for (r, w) in results.iter().zip(windows.values_mut()) {
-                if *r == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
-                    w.invalidate_swapchain();
-                    any_swapchain_invalidated = true;
+                for (r, w) in results.iter().zip(windows.values_mut()) {
+                    if *r == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
+                        w.invalidate_swapchain();
+                        any_swapchain_invalidated = true;
+                    }
                 }
             }
 
