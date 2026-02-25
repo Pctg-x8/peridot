@@ -58,7 +58,7 @@ pub struct RenderThread<'main> {
     pub global_time_base: &'main std::time::Instant,
     pub event_bus: &'main AppEventBus,
     // TODO: ウィンドウに関係するデータはあとで別のキューかなんかからもらう形にしたい
-    pub main_window_data: NewWindowData<'main>,
+    pub window_data: Vec<NewWindowData<'main>>,
 }
 impl<'main> RenderThread<'main> {
     pub fn run(self) {
@@ -87,8 +87,8 @@ impl<'main> RenderThread<'main> {
         let mut windows: HashMap<WindowKey, WindowRenderer> = HashMap::new();
 
         // register main window
-        let main_window_glyph_atlas =
-            match glyph_atlas_per_scale.entry(self.main_window_data.init_scale) {
+        for wd in self.window_data {
+            let main_window_glyph_atlas = match glyph_atlas_per_scale.entry(wd.init_scale) {
                 // use existing
                 std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
                 // create new one
@@ -102,28 +102,26 @@ impl<'main> RenderThread<'main> {
                     ref_count: 0,
                 }),
             };
-        main_window_glyph_atlas.ref_count += 1;
-        windows.insert(
-            self.main_window_data.make_key(),
-            WindowRenderer::new(
-                #[cfg(feature = "wayland")]
-                self.main_window_data.committed_state,
-                #[cfg(feature = "wayland")]
-                self.main_window_data
-                    .swapchain_externally_invalidation_signal,
-                #[cfg(windows)]
-                self.main_window_data.handle,
-                self.main_window_data.latest_ui_scale_changes,
-                self.main_window_data.init_scale,
-                self.main_window_data.composite_root,
-                self.main_window_data.vk_surface,
-                self.vk_device,
-                glyph_atlas_per_scale[&self.main_window_data.init_scale]
-                    .manager
-                    .atlas(),
-                &font_set,
-            ),
-        );
+            main_window_glyph_atlas.ref_count += 1;
+            windows.insert(
+                wd.make_key(),
+                WindowRenderer::new(
+                    #[cfg(feature = "wayland")]
+                    wd.committed_state,
+                    #[cfg(feature = "wayland")]
+                    wd.swapchain_externally_invalidation_signal,
+                    #[cfg(windows)]
+                    wd.handle,
+                    wd.latest_ui_scale_changes,
+                    wd.init_scale,
+                    wd.composite_root,
+                    wd.vk_surface,
+                    self.vk_device,
+                    main_window_glyph_atlas.manager.atlas(),
+                    &font_set,
+                ),
+            );
+        }
 
         let mut any_swapchain_invalidated = false;
         'lp: while !self
@@ -177,7 +175,7 @@ impl<'main> RenderThread<'main> {
             let current_t = self.global_time_base.elapsed();
             composite_tree.update_shared(current_t.as_secs_f32());
 
-            // いったん最適化とかは考えないで直列でまわす(パフォーマンスきになったらそのとき考える)
+            // いったん最適化とかは考えないで直列でまわす(パフォーマンス気になったらそのとき考える)
             struct SubmitParameters<'x> {
                 renderer: &'x WindowRenderer<'x>,
                 render_wait_semaphores: Vec<br::VkHandleRef<'x, br::vk::VkSemaphore>>,
@@ -208,7 +206,7 @@ impl<'main> RenderThread<'main> {
                         .expect("invalid state");
                     current.ref_count -= 1;
                     let removed = if current.ref_count == 0 {
-                        // un references
+                        // no references
                         glyph_atlas_per_scale.remove(&x.active_scale())
                     } else {
                         None
@@ -239,6 +237,7 @@ impl<'main> RenderThread<'main> {
                     new_atlas_mgr.ref_count += 1;
 
                     x.rescale(scale);
+                    x.invalidate_render_commands(); // DescriptorSetをかえるときは再度つくりなおす必要がある
                     let mut descriptor_writes = Vec::with_capacity(1);
                     x.composite_renderer.rebind_glyph_atlas(
                         new_atlas_mgr.manager.atlas().as_image_view(),
