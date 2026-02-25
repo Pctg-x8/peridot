@@ -254,6 +254,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
+    let empty_dispatcher = LogicFiberEventDispatcher {
+        event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
+        future_ptr: core::ptr::null_mut(),
+    };
 
     #[cfg(windows)]
     let wc_set = platform::windows::WindowClassSet::register::<AppFuture>(hinstance);
@@ -274,20 +279,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
     #[cfg(feature = "wayland")]
     let w = WaylandWindow::new(
-        &mut window_registry,
-        rt_sender.clone(),
         WindowType::Main {
             termination_event: terminate_event.clone(),
         },
         &wl_interfaces,
         &dbus,
-        LogicFiberEventDispatcher {
-            event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            poll_fn_ptr: unsafe {
-                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
-            },
-            future_ptr: core::ptr::null_mut(),
-        },
+        empty_dispatcher.clone(),
         composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
@@ -304,18 +301,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     window_registry.objects.insert(w.as_key(), w);
     #[cfg(feature = "wayland")]
     let subw = WaylandWindow::new(
-        &mut window_registry,
-        rt_sender.clone(),
         WindowType::Sub,
         &wl_interfaces,
         &dbus,
-        LogicFiberEventDispatcher {
-            event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            poll_fn_ptr: unsafe {
-                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
-            },
-            future_ptr: core::ptr::null_mut(),
-        },
+        empty_dispatcher.clone(),
         composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
@@ -412,21 +401,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .cursor_shape_manager
             .as_ref()
             .map(|x| x.as_ptr()),
-        event_dispatcher: LogicFiberEventDispatcher {
-            event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            poll_fn_ptr: unsafe {
-                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
-            },
-            future_ptr: core::ptr::null_mut(),
-        },
+        event_dispatcher: empty_dispatcher.clone(),
         _pinned: core::marker::PhantomPinned,
     });
 
-    let mut app_event_dispatcher = core::pin::pin!(LogicFiberEventDispatcher {
-        event_store: event_store.as_mut().get_mut() as *mut _ as _,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
-        future_ptr: core::ptr::null_mut(),
-    });
+    let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
     let mut app = core::pin::pin!(run_app(
         global_time_base,
         renderer_sync,
@@ -936,6 +915,9 @@ pub enum Event {
         window: WindowHandle,
         new_scale: f32,
     },
+    SubWindowClose {
+        window: WindowHandle,
+    },
 }
 #[cfg(any(feature = "wayland", windows, target_os = "macos"))]
 unsafe impl Sync for Event {}
@@ -1201,6 +1183,9 @@ async fn run<'sys>(
             Event::WindowResize { window, size } => {
                 pointer_input_manager.set_client_size(window, size);
             }
+            Event::SubWindowClose { window } => {
+                system_link.close_window(window);
+            }
             Event::WindowRescaleUI { window, new_scale } => {
                 if window == main_window {
                     composite_tree.get_mut(app_title).base_scale_factor = new_scale;
@@ -1348,8 +1333,6 @@ impl SystemLink<'_> {
         hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
     ) -> WindowHandle {
         let mut w = WaylandWindow::new(
-            unsafe { &mut *self.window_registry },
-            self.rt_sender.clone(),
             WindowType::Sub,
             unsafe { &*self.wl_global_interfaces },
             unsafe { &*self.dbus },
@@ -1404,6 +1387,25 @@ impl SystemLink<'_> {
         }
 
         window_handle
+    }
+
+    #[cfg(feature = "wayland")]
+    pub fn close_window(&self, window_handle: WindowHandle) {
+        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+        self.rt_sender
+            .send(RenderMessage::DestroyWindow(
+                window_handle,
+                done_event_sender,
+            ))
+            .expect("rt_sender.send.destroy_window");
+        done_event_receiver
+            .recv()
+            .expect("done_event_receiver.recv");
+        unsafe {
+            (*self.window_registry)
+                .objects
+                .remove(&WaylandSurfaceKey(window_handle.0));
+        }
     }
 
     #[cfg(feature = "wayland")]
@@ -2509,8 +2511,6 @@ unsafe impl Send for WaylandWindow {}
 #[cfg(feature = "wayland")]
 impl WaylandWindow {
     fn new(
-        registry_ptr: *mut WaylandWindowRegistry,
-        render_thread_message_sender: std::sync::mpsc::Sender<RenderMessage>,
         r#type: WindowType,
         wl_interfaces: &WaylandGlobalInterfaces,
         dbus: &dbus::Connection,
@@ -2581,8 +2581,6 @@ impl WaylandWindow {
                 latest_ui_scale_changes: Mutex::new(None),
             },
             window_type: r#type,
-            window_registry_ptr: registry_ptr,
-            render_thread_message_sender,
             has_fractional_scale_support: fractional_scale.is_some(),
             pending_configure_size: (None, None),
             pending_configure_buffer_scale: None,
@@ -2665,8 +2663,6 @@ unsafe impl Send for WaylandWindowState {}
 struct WaylandWindowEventListener {
     state: WaylandWindowState,
     window_type: WindowType,
-    render_thread_message_sender: std::sync::mpsc::Sender<RenderMessage>,
-    window_registry_ptr: *mut WaylandWindowRegistry,
     has_fractional_scale_support: bool,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
@@ -2723,20 +2719,9 @@ impl wl::XdgToplevelEventListener for WaylandWindowEventListener {
                 termination_event.inc(1).expect("termination_event.inc");
             }
             WindowType::Sub => {
-                let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-                self.render_thread_message_sender
-                    .send(RenderMessage::DestroyWindow(
-                        WindowHandle(self.state.surface_ptr),
-                        done_event_sender,
-                    ));
-                done_event_receiver
-                    .recv()
-                    .expect("done_event_receiver.recv");
-                unsafe {
-                    (*self.window_registry_ptr)
-                        .objects
-                        .remove(&WaylandSurfaceKey(self.state.surface_ptr));
-                }
+                self.event_dispatcher.dispatch(Event::SubWindowClose {
+                    window: WindowHandle(self.state.surface_ptr),
+                });
             }
         }
     }
