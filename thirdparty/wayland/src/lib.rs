@@ -976,7 +976,7 @@ impl Pointer {
                     ),
                     leave(
                         serial: u32 => serial,
-                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) }
+                        surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() }
                     ),
                     motion(time: u32 => time, surface_x: Fixed => surface_x, surface_y: Fixed => surface_y),
                     button(
@@ -1020,7 +1020,7 @@ pub trait PointerEventListener {
         surface_x: Fixed,
         surface_y: Fixed,
     );
-    fn leave(&mut self, pointer: &mut Pointer, serial: u32, surface: &mut Surface);
+    fn leave(&mut self, pointer: &mut Pointer, serial: u32, surface: Option<&mut Surface>);
     fn motion(&mut self, pointer: &mut Pointer, time: u32, surface_x: Fixed, surface_y: Fixed);
     fn button(
         &mut self,
@@ -1083,7 +1083,7 @@ impl Keyboard {
                         surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) },
                         keys: *mut ffi::Array => unsafe { (*keys).as_slice::<u32>() }
                     ),
-                    leave(serial: u32 => serial, surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) }),
+                    leave(serial: u32 => serial, surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() }),
                     key(serial: u32 => serial, time: u32 => time, key: u32 => key, state: KeyboardKeyState => state),
                     modifiers(
                         serial: u32 => serial,
@@ -1115,7 +1115,7 @@ impl Keyboard {
 pub trait KeyboardEventListener {
     fn keymap(&mut self, sender: &mut Keyboard, format: KeyboardKeymapFormat, fd: i32, size: u32);
     fn enter(&mut self, sender: &mut Keyboard, serial: u32, surface: &mut Surface, keys: &[u32]);
-    fn leave(&mut self, sender: &mut Keyboard, serial: u32, surface: &mut Surface);
+    fn leave(&mut self, sender: &mut Keyboard, serial: u32, surface: Option<&mut Surface>);
     fn key(
         &mut self,
         sender: &mut Keyboard,

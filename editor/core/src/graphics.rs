@@ -640,36 +640,36 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         surface: &VulkanSurface<'d, 'fs>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) -> Self {
-        let ext = if surface.caps.currentExtent.width == 0xffffffff
-            || surface.caps.currentExtent.height == 0xffffffff
+        let ext = if surface.unbound.caps.currentExtent.width == 0xffffffff
+            || surface.unbound.caps.currentExtent.height == 0xffffffff
         {
             let window_ext = query_window_extent();
 
             br::Extent2D {
-                width: if surface.caps.currentExtent.width == 0xffffffff {
+                width: if surface.unbound.caps.currentExtent.width == 0xffffffff {
                     window_ext.width
                 } else {
-                    surface.caps.currentExtent.width
+                    surface.unbound.caps.currentExtent.width
                 },
-                height: if surface.caps.currentExtent.height == 0xffffffff {
+                height: if surface.unbound.caps.currentExtent.height == 0xffffffff {
                     window_ext.height
                 } else {
-                    surface.caps.currentExtent.height
+                    surface.unbound.caps.currentExtent.height
                 },
             }
         } else {
-            surface.caps.currentExtent
+            surface.unbound.caps.currentExtent
         };
 
         tracing::trace!(?ext, "swapchain.create");
         let o = br::SwapchainWithSurfaceBuilder::new(
             surface,
-            surface.caps.minImageCount.max(2),
-            surface.selected_format,
+            surface.unbound.caps.minImageCount.max(2),
+            surface.unbound.selected_format,
             ext,
             br::ImageUsageFlags::COLOR_ATTACHMENT,
         )
-        .present_mode(surface.selected_present_mode)
+        .present_mode(surface.unbound.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)
         .composite_alpha(br::CompositeAlphaFlags::OPAQUE)
         .create(surface.device)
@@ -690,7 +690,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
                         br::VkHandleRef::from_raw_ref(b),
                         br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                         br::vk::VK_IMAGE_VIEW_TYPE_2D,
-                        surface.selected_format.format,
+                        surface.unbound.selected_format.format,
                     ),
                     None,
                 )
@@ -721,36 +721,36 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         }
         self.images.clear();
 
-        self.ext = if surface.caps.currentExtent.width == 0xffffffff
-            || surface.caps.currentExtent.height == 0xffffffff
+        self.ext = if surface.unbound.caps.currentExtent.width == 0xffffffff
+            || surface.unbound.caps.currentExtent.height == 0xffffffff
         {
             let window_ext = query_window_extent();
 
             br::Extent2D {
-                width: if surface.caps.currentExtent.width == 0xffffffff {
+                width: if surface.unbound.caps.currentExtent.width == 0xffffffff {
                     window_ext.width
                 } else {
-                    surface.caps.currentExtent.width
+                    surface.unbound.caps.currentExtent.width
                 },
-                height: if surface.caps.currentExtent.height == 0xffffffff {
+                height: if surface.unbound.caps.currentExtent.height == 0xffffffff {
                     window_ext.height
                 } else {
-                    surface.caps.currentExtent.height
+                    surface.unbound.caps.currentExtent.height
                 },
             }
         } else {
-            surface.caps.currentExtent
+            surface.unbound.caps.currentExtent
         };
 
         tracing::trace!(ext = ?self.ext, "swapchain.recreate");
         let o = br::SwapchainWithSurfaceBuilder::new(
             surface,
-            surface.caps.minImageCount.max(2),
-            surface.selected_format,
+            surface.unbound.caps.minImageCount.max(2),
+            surface.unbound.selected_format,
             self.ext,
             br::ImageUsageFlags::COLOR_ATTACHMENT,
         )
-        .present_mode(surface.selected_present_mode)
+        .present_mode(surface.unbound.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)
         .composite_alpha(br::CompositeAlphaFlags::OPAQUE)
         .enable_clip()
@@ -774,7 +774,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
                     br::VkHandleRef::from_raw_ref(b),
                     br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
-                    surface.selected_format.format,
+                    surface.unbound.selected_format.format,
                 ),
                 None,
             )
@@ -805,21 +805,63 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
     }
 }
 
+pub struct UnboundVulkanSurface {
+    pub handle: br::vk::VkSurfaceKHR,
+    pub selected_format: br::SurfaceFormat,
+    pub selected_present_mode: br::PresentMode,
+    pub caps: br::SurfaceCapabilities,
+}
+impl UnboundVulkanSurface {
+    pub unsafe fn drop(
+        &mut self,
+        instance: &(impl VkHandle<Handle = br::vk::VkInstance> + ?Sized),
+    ) {
+        unsafe {
+            br::vkfn_wrapper::destroy_surface(instance.native_ptr(), self.handle, None);
+        }
+    }
+
+    pub const unsafe fn bound<'d, 'fs>(
+        self,
+        device: &'d VulkanDevice<'fs>,
+    ) -> VulkanSurface<'d, 'fs> {
+        VulkanSurface {
+            device,
+            unbound: self,
+        }
+    }
+
+    pub unsafe fn refresh_caps(
+        &mut self,
+        adapter: &(impl VkHandle<Handle = br::vk::VkPhysicalDevice> + ?Sized),
+    ) {
+        let mut sink = core::mem::MaybeUninit::uninit();
+        unsafe {
+            br::vkfn_wrapper::get_physical_device_surface_capabilities(
+                adapter.native_ptr(),
+                self.handle,
+                &mut sink,
+            )
+            .expect("vk.surface.refresh_caps");
+        }
+        self.caps = unsafe { sink.assume_init() };
+    }
+
+    #[inline(always)]
+    pub const fn format(&self) -> br::Format {
+        self.selected_format.format
+    }
+}
+
 pub struct VulkanSurface<'d, 'fs> {
     device: &'d VulkanDevice<'fs>,
-    handle: br::vk::VkSurfaceKHR,
-    selected_format: br::SurfaceFormat,
-    selected_present_mode: br::PresentMode,
-    caps: br::SurfaceCapabilities,
+    unbound: UnboundVulkanSurface,
 }
 impl Drop for VulkanSurface<'_, '_> {
+    #[inline(always)]
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_surface(
-                self.device.instance().native_ptr(),
-                self.handle,
-                None,
-            );
+            self.unbound.drop(self.device.instance());
         }
     }
 }
@@ -828,7 +870,7 @@ impl br::VkHandle for VulkanSurface<'_, '_> {
 
     #[inline(always)]
     fn native_ptr(&self) -> Self::Handle {
-        self.handle
+        self.unbound.handle
     }
 }
 unsafe impl Sync for VulkanSurface<'_, '_> {}
@@ -911,35 +953,45 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
 
         Self {
             device,
-            handle,
-            selected_format: formats
-                .iter()
-                .find(|f| {
-                    f.colorSpace == br::vk::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
-                        && (f.format == br::vk::VK_FORMAT_B8G8R8A8_SRGB
-                            || f.format == br::vk::VK_FORMAT_R8G8B8A8_SRGB)
-                })
-                .copied()
-                .expect("no suitable surface format"),
-            selected_present_mode: present_modes
-                .iter()
-                .find(|&&x| x == br::PresentMode::FIFO)
-                .copied()
-                .expect("no suitable present mode"),
-            caps,
+            unbound: UnboundVulkanSurface {
+                handle,
+                selected_format: formats
+                    .iter()
+                    .find(|f| {
+                        f.colorSpace == br::vk::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
+                            && (f.format == br::vk::VK_FORMAT_B8G8R8A8_SRGB
+                                || f.format == br::vk::VK_FORMAT_R8G8B8A8_SRGB)
+                    })
+                    .copied()
+                    .expect("no suitable surface format"),
+                selected_present_mode: present_modes
+                    .iter()
+                    .find(|&&x| x == br::PresentMode::FIFO)
+                    .copied()
+                    .expect("no suitable present mode"),
+                caps,
+            },
         }
     }
 
+    pub const fn unbound(self) -> (&'d VulkanDevice<'fs>, UnboundVulkanSurface) {
+        let device = unsafe { core::ptr::read(&self.device) };
+        let unbound = unsafe { core::ptr::read(&self.unbound) };
+        core::mem::forget(self);
+
+        (device, unbound)
+    }
+
+    #[inline(always)]
     pub fn refresh_caps(&mut self) {
-        self.caps = self
-            .device
-            .primary_adapter_ref()
-            .surface_capabilities(self)
-            .expect("vk.surface.refresh_caps");
+        unsafe {
+            self.unbound
+                .refresh_caps(&self.device.primary_adapter_ref());
+        }
     }
 
     #[inline(always)]
     pub const fn format(&self) -> br::Format {
-        self.selected_format.format
+        self.unbound.format()
     }
 }

@@ -8,48 +8,51 @@ use bedrock::{
     ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, Swapchain, VkHandle, VkHandleMut,
 };
 
-#[cfg(feature = "wayland")]
-use crate::WaylandWindowCommittedState;
 use crate::{
-    AppEventBus, Event, RendererSync,
+    AppEventBus, Event, RendererSync, WindowHandle,
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, RASTER_STATE_DEFAULT_FILL_NOCULL,
-        VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
+        UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
     },
-    rendering::composite::{
-        BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData, CompositeTreeRef,
-        CompositeTreeRender, VectorRasterizationState,
+    rendering::{
+        composite::{
+            BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData,
+            CompositeTreeRef, CompositeTreeRender, VectorRasterizationState,
+        },
+        text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
     },
-    rendering::text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
     utils::SafeF32,
 };
+#[cfg(feature = "wayland")]
+use crate::{WaylandWindowCommittedState, utils::UnboundedRef};
 
 pub mod atlas;
 pub mod composite;
 pub mod text;
 
-pub struct NewWindowData<'main> {
-    pub vk_surface: VulkanSurface<'main, 'main>,
+#[repr(transparent)]
+pub struct NewWindowVulkanSurface(pub UnboundVulkanSurface);
+unsafe impl Sync for NewWindowVulkanSurface {}
+unsafe impl Send for NewWindowVulkanSurface {}
+
+pub struct NewWindowData {
+    pub key: WindowHandle,
+    pub vk_surface: NewWindowVulkanSurface,
     #[cfg(feature = "wayland")]
-    pub committed_state: &'main Mutex<WaylandWindowCommittedState>,
+    pub committed_state: UnboundedRef<Mutex<WaylandWindowCommittedState>>,
     #[cfg(feature = "wayland")]
-    pub swapchain_externally_invalidation_signal: &'main AtomicBool,
+    pub swapchain_externally_invalidation_signal: UnboundedRef<AtomicBool>,
     #[cfg(windows)]
     pub handle: crate::platform::windows::SendableWindowHandle,
-    pub latest_ui_scale_changes: &'main Mutex<Option<f32>>,
+    pub latest_ui_scale_changes: UnboundedRef<Mutex<Option<f32>>>,
     pub init_scale: SafeF32,
     pub composite_root: CompositeTreeRef,
 }
-impl NewWindowData<'_> {
-    #[inline(always)]
-    fn make_key(&self) -> WindowKey {
-        WindowKey(self.vk_surface.native_ptr())
-    }
-}
 
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct WindowKey(br::vk::VkSurfaceKHR);
+pub enum RenderMessage {
+    NewWindow(NewWindowData),
+    DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
+}
 
 pub struct RenderThread<'main> {
     pub vk_device: &'main VulkanDevice<'main>,
@@ -57,8 +60,7 @@ pub struct RenderThread<'main> {
     pub renderer_sync: &'main Mutex<RendererSync>,
     pub global_time_base: &'main std::time::Instant,
     pub event_bus: &'main AppEventBus,
-    // TODO: ウィンドウに関係するデータはあとで別のキューかなんかからもらう形にしたい
-    pub window_data: Vec<NewWindowData<'main>>,
+    pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
 }
 impl<'main> RenderThread<'main> {
     pub fn run(self) {
@@ -84,44 +86,7 @@ impl<'main> RenderThread<'main> {
         let font_set = RootFontSet::new();
         #[cfg(target_os = "macos")]
         let font_set = FontSet::new();
-        let mut windows: HashMap<WindowKey, WindowRenderer> = HashMap::new();
-
-        // register main window
-        for wd in self.window_data {
-            let main_window_glyph_atlas = match glyph_atlas_per_scale.entry(wd.init_scale) {
-                // use existing
-                std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
-                // create new one
-                std::collections::hash_map::Entry::Vacant(x) => x.insert(GlyphAtlasDataPerDpi {
-                    manager: GlyphAtlasManager::new(
-                        &glyph_atlas_manager_common_resources,
-                        &mut render_queue,
-                        self.vk_device.present_queue_family_index(),
-                    ),
-                    vector_raster_state: VectorRasterizationState::new(),
-                    ref_count: 0,
-                }),
-            };
-            main_window_glyph_atlas.ref_count += 1;
-            windows.insert(
-                wd.make_key(),
-                WindowRenderer::new(
-                    #[cfg(feature = "wayland")]
-                    wd.committed_state,
-                    #[cfg(feature = "wayland")]
-                    wd.swapchain_externally_invalidation_signal,
-                    #[cfg(windows)]
-                    wd.handle,
-                    wd.latest_ui_scale_changes,
-                    wd.init_scale,
-                    wd.composite_root,
-                    wd.vk_surface,
-                    self.vk_device,
-                    main_window_glyph_atlas.manager.atlas(),
-                    &font_set,
-                ),
-            );
-        }
+        let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
 
         let mut any_swapchain_invalidated = false;
         'lp: while !self
@@ -131,6 +96,65 @@ impl<'main> RenderThread<'main> {
             // unsafe {
             //     w.manual_capture_begin();
             // }
+
+            loop {
+                match self.message_receiver.try_recv() {
+                    Ok(RenderMessage::NewWindow(wd)) => {
+                        let main_window_glyph_atlas =
+                            match glyph_atlas_per_scale.entry(wd.init_scale) {
+                                // use existing
+                                std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
+                                // create new one
+                                std::collections::hash_map::Entry::Vacant(x) => {
+                                    x.insert(GlyphAtlasDataPerDpi {
+                                        manager: GlyphAtlasManager::new(
+                                            &glyph_atlas_manager_common_resources,
+                                            &mut render_queue,
+                                            self.vk_device.present_queue_family_index(),
+                                        ),
+                                        vector_raster_state: VectorRasterizationState::new(),
+                                        ref_count: 0,
+                                    })
+                                }
+                            };
+                        main_window_glyph_atlas.ref_count += 1;
+                        windows.insert(
+                            wd.key,
+                            WindowRenderer::new(
+                                self.vk_device,
+                                wd,
+                                #[cfg(windows)]
+                                wd.handle,
+                                main_window_glyph_atlas.manager.atlas(),
+                                &font_set,
+                            ),
+                        );
+                    }
+                    Ok(RenderMessage::DestroyWindow(window_handle, done_event_bus)) => {
+                        if let Some(x) = windows.remove(&window_handle) {
+                            let current = glyph_atlas_per_scale
+                                .get_mut(&x.active_scale())
+                                .expect("invalid state");
+                            current.ref_count -= 1;
+                            if current.ref_count == 0 {
+                                // no references
+                                glyph_atlas_per_scale.remove(&x.active_scale());
+                            }
+                        }
+
+                        if let Err(e) = done_event_bus.send(()) {
+                            tracing::error!(reason = %e, "done_event_bus.send");
+                        };
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!(reason = %e, "message_receiver.try_recv");
+                        break;
+                    }
+                }
+            }
 
             for x in windows.values_mut() {
                 if x.take_swapchain_externally_invalidation_signal() {
@@ -269,6 +293,9 @@ impl<'main> RenderThread<'main> {
                     render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
                 }
 
+                render_wait_semaphores.push(x.backbuffer_ready_semaphore.as_transparent_ref());
+                render_wait_stages.push(br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
+
                 submit_parameters.push(SubmitParameters {
                     renderer: x,
                     render_wait_semaphores,
@@ -342,6 +369,8 @@ impl<'main> RenderThread<'main> {
                         any_swapchain_invalidated = true;
                     }
                 }
+
+                render_queue.wait().expect("render_queue.wait");
             }
 
             // unsafe {
@@ -356,15 +385,15 @@ impl<'main> RenderThread<'main> {
     }
 }
 
-pub struct WindowRenderer<'d> {
+struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
-    committed_state: &'d Mutex<WaylandWindowCommittedState>,
+    committed_state: *const Mutex<WaylandWindowCommittedState>,
     #[cfg(feature = "wayland")]
-    swapchain_externally_invalidation_signal: &'d AtomicBool,
+    swapchain_externally_invalidation_signal: *const AtomicBool,
     #[cfg(windows)]
     w: crate::platform::windows::SendableWindowHandle,
     active_scale: SafeF32,
-    latest_ui_scale_changes: &'d Mutex<Option<f32>>,
+    latest_ui_scale_changes: *const Mutex<Option<f32>>,
     vk_device: &'d VulkanDevice<'d>,
     swapchain_invalidated: bool,
     composite_root: CompositeTreeRef,
@@ -379,7 +408,7 @@ pub struct WindowRenderer<'d> {
     render_cb: Vec<br::CommandBufferObject<&'d VulkanDevice<'d>>>,
     render_cb_invalid: bool,
     present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
-    backbuffer_ready_fence: br::FenceObject<&'d VulkanDevice<'d>>,
+    backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
     primary_framebuffers: Vec<br::FramebufferObject<'d, &'d VulkanDevice<'d>>>,
     primary_render_pass: br::RenderPassObject<&'d VulkanDevice<'d>>,
     swapchain: VulkanSwapchain<'d, 'd>,
@@ -387,36 +416,37 @@ pub struct WindowRenderer<'d> {
     font_set: PerWindowFontSet<'d>,
 }
 impl<'d> WindowRenderer<'d> {
-    pub fn new(
-        #[cfg(feature = "wayland")] committed_state: &'d Mutex<WaylandWindowCommittedState>,
-        #[cfg(feature = "wayland")] swapchain_externally_invalidation_signal: &'d AtomicBool,
+    fn new(
+        device: &'d VulkanDevice<'d>,
+        create_data: NewWindowData,
         #[cfg(windows)] w: crate::platform::windows::SendableWindowHandle,
-        latest_ui_scale_changes: &'d Mutex<Option<f32>>,
-        active_scale: SafeF32,
-        composite_root: CompositeTreeRef,
-        surface: VulkanSurface<'d, 'd>,
-        vk_device: &'d VulkanDevice,
         glyph_atlas: &GlyphAtlas,
         root_font_set: &'d RootFontSet,
     ) -> Self {
         #[allow(unused_mut)]
         let mut font_set = PerWindowFontSet::new(root_font_set);
         #[cfg(feature = "wayland")]
-        font_set.rescale((active_scale.value() * 72.0) as _);
+        font_set.rescale((create_data.init_scale.value() * 72.0) as _);
 
+        let surface = unsafe { create_data.vk_surface.0.bound(device) };
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
             #[cfg(windows)]
             || w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || committed_state.lock().expect("poisoned").active_size,
+            || unsafe {
+                (*create_data.committed_state.get())
+                    .lock()
+                    .expect("poisoned")
+                    .active_size
+            },
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );
 
         // TODO: 同じ構造のものがあれば使い回したい
         let vk_render_pass = br::RenderPassObject::new(
-            vk_device,
+            device,
             &br::RenderPassCreateInfo2::new(
                 &[br::AttachmentDescription2::new(surface.format())
                     .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)
@@ -443,7 +473,7 @@ impl<'d> WindowRenderer<'d> {
             .image_view_refs()
             .map(|bb| {
                 br::FramebufferObject::new(
-                    vk_device,
+                    device,
                     &br::FramebufferCreateInfo::new(
                         &vk_render_pass,
                         &[bb],
@@ -456,12 +486,12 @@ impl<'d> WindowRenderer<'d> {
             .collect::<Vec<_>>();
 
         let mut update_cp = br::CommandPoolObject::new(
-            vk_device,
-            &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
+            device,
+            &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
         )
         .expect("update_cp.create");
         let [mut update_cb] = br::CommandBufferObject::alloc_array(
-            vk_device,
+            device,
             &br::CommandBufferFixedCountAllocateInfo::new(
                 &mut update_cp,
                 br::CommandBufferLevel::Primary,
@@ -477,12 +507,12 @@ impl<'d> WindowRenderer<'d> {
         }
 
         let mut render_cp = br::CommandPoolObject::new(
-            vk_device,
-            &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()),
+            device,
+            &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
         )
         .expect("command pool create");
         let render_cb = br::CommandBufferObject::alloc(
-            vk_device,
+            device,
             &br::CommandBufferAllocateInfo::new(
                 &mut render_cp,
                 vk_framebuffers.len() as _,
@@ -491,7 +521,7 @@ impl<'d> WindowRenderer<'d> {
         )
         .expect("command buffer alloc");
         for (n, x) in render_cb.iter().enumerate() {
-            vk_device.dbg_set_name(x, &unsafe {
+            device.dbg_set_name(x, &unsafe {
                 std::ffi::CString::from_vec_unchecked(
                     format!("Window Render Commands #{n}").into_bytes(),
                 )
@@ -502,16 +532,18 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             w,
             #[cfg(feature = "wayland")]
-            committed_state,
+            committed_state: create_data.committed_state.get(),
             #[cfg(feature = "wayland")]
-            swapchain_externally_invalidation_signal,
-            active_scale,
-            latest_ui_scale_changes,
+            swapchain_externally_invalidation_signal: create_data
+                .swapchain_externally_invalidation_signal
+                .get(),
+            active_scale: create_data.init_scale,
+            latest_ui_scale_changes: create_data.latest_ui_scale_changes.get(),
             font_set,
-            vk_device,
-            composite_root,
+            vk_device: device,
+            composite_root: create_data.composite_root,
             composite_renderer: BoundCompositeRenderer::new(
-                &vk_device,
+                device,
                 glyph_atlas.view(),
                 surface.format(),
                 vk_swapchain.size(),
@@ -524,10 +556,10 @@ impl<'d> WindowRenderer<'d> {
             },
             update_cp,
             update_cb,
-            update_completion_fence: br::FenceObject::new(vk_device, &br::FenceCreateInfo::new(0))
+            update_completion_fence: br::FenceObject::new(device, &br::FenceCreateInfo::new(0))
                 .expect("update_completion_fence.create"),
             update_completion_semaphore: br::SemaphoreObject::new(
-                vk_device,
+                device,
                 &br::SemaphoreCreateInfo::new(),
             )
             .expect("update_completion_semaphore.create"),
@@ -537,12 +569,15 @@ impl<'d> WindowRenderer<'d> {
             render_cb_invalid: true,
             present_ready_semaphores: (0..vk_framebuffers.len())
                 .map(|_| {
-                    br::SemaphoreObject::new(vk_device, &br::SemaphoreCreateInfo::new())
+                    br::SemaphoreObject::new(device, &br::SemaphoreCreateInfo::new())
                         .expect("rendering_timeline_semaphore create")
                 })
                 .collect::<Vec<_>>(),
-            backbuffer_ready_fence: br::FenceObject::new(vk_device, &br::FenceCreateInfo::new(0))
-                .expect("last render completion fence create"),
+            backbuffer_ready_semaphore: br::SemaphoreObject::new(
+                device,
+                &br::SemaphoreCreateInfo::new(),
+            )
+            .expect("backbuffer_ready_semaphore.create"),
             surface,
             swapchain: vk_swapchain,
             swapchain_invalidated: false,
@@ -556,7 +591,7 @@ impl<'d> WindowRenderer<'d> {
     }
 
     pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
-        self.latest_ui_scale_changes
+        unsafe { &(*self.latest_ui_scale_changes) }
             .lock()
             .expect("poisoned")
             .take()
@@ -620,14 +655,12 @@ impl<'d> WindowRenderer<'d> {
 
     #[cfg(feature = "wayland")]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
-        self.swapchain_externally_invalidation_signal
-            .compare_exchange_weak(
-                true,
-                false,
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            == Ok(true)
+        unsafe { &(*self.swapchain_externally_invalidation_signal) }.compare_exchange_weak(
+            true,
+            false,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        ) == Ok(true)
     }
     #[cfg(not(feature = "wayland"))]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
@@ -656,7 +689,12 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             || self.w.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || self.committed_state.lock().expect("poisoned").active_size,
+            || {
+                unsafe { &(*self.committed_state) }
+                    .lock()
+                    .expect("poisoned")
+                    .active_size
+            },
             #[cfg(target_os = "macos")]
             || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
         );
@@ -689,14 +727,16 @@ impl<'d> WindowRenderer<'d> {
     pub fn acquire_backbuffer_with_wait(&mut self) -> br::Result<u32> {
         let backbuffer_index = self.swapchain.acquire_next(
             None,
-            br::CompletionHandlerMut::Host(self.backbuffer_ready_fence.as_transparent_ref_mut()),
+            br::CompletionHandlerMut::Queue(
+                self.backbuffer_ready_semaphore.as_transparent_ref_mut(),
+            ),
         )?;
-        self.backbuffer_ready_fence
+        /*self.backbuffer_ready_fence
             .wait()
             .expect("last render completion fence wait");
         self.backbuffer_ready_fence
             .reset()
-            .expect("last render completion fence reset");
+            .expect("last render completion fence reset");*/
 
         Ok(backbuffer_index)
     }

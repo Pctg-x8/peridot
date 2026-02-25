@@ -8,6 +8,9 @@ unsafe impl Interface for OrgKdeKwinBlurManager {
 }
 
 impl OrgKdeKwinBlurManager {
+    #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
+    #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
+
     #[inline] pub fn create(&self,surface: &crate::Surface,) -> crate::Result<crate::Owned<crate::OrgKdeKwinBlur>> {
         Ok(unsafe { crate::Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [crate::NEWID_ARG,surface.0.as_arg(),])?) })
     }
@@ -31,6 +34,9 @@ unsafe impl Interface for OrgKdeKwinBlur {
 }
 
 impl OrgKdeKwinBlur {
+    #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
+    #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
+
     #[inline] pub fn commit(&self,) -> crate::Result<()> {
         self.0.marshal_array_void(0, &mut [])
     }

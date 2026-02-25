@@ -1,144 +1,59 @@
-use crate::{Interface, Proxy, ffi};
+use crate::{ffi, Proxy, Interface};
 
-static WP_CONTENT_TYPE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface {
-    name: c"wp_content_type_manager_v1".as_ptr(),
-    version: 1,
-    method_count: 2,
-    methods: const {
-        [
-            ffi::Message {
-                name: c"destroy".as_ptr(),
-                signature: c"".as_ptr(),
-                types: const { [] }.as_ptr(),
-            },
-            ffi::Message {
-                name: c"get_surface_content_type".as_ptr(),
-                signature: c"no".as_ptr(),
-                types: const { [crate::WpContentTypeV1::DEF, crate::Surface::DEF] }.as_ptr(),
-            },
-        ]
-    }
-    .as_ptr(),
-    event_count: 0,
-    events: const { [] }.as_ptr(),
-};
+static WP_CONTENT_TYPE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface { name: c"wp_content_type_manager_v1".as_ptr(), version: 1, method_count: 2, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"get_surface_content_type".as_ptr(), signature: c"no".as_ptr(), types: const { [crate::WpContentTypeV1::DEF,crate::Surface::DEF,] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
-#[repr(transparent)]
-pub struct WpContentTypeManagerV1(pub(crate) Proxy);
+#[repr(transparent)] pub struct WpContentTypeManagerV1(pub(crate) Proxy);
 unsafe impl Interface for WpContentTypeManagerV1 {
     const DEF: *const ffi::Interface = &WP_CONTENT_TYPE_MANAGER_V1_INTERFACE;
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "<WpContentTypeManagerV1 as Interface>::destruct", skip(self))
-    )]
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "<WpContentTypeManagerV1 as Interface>::destruct", skip(self)))]
     unsafe fn destruct(&mut self) {
         self.0.call_simple_dtor(0);
     }
 }
 
 impl WpContentTypeManagerV1 {
-    #[inline(always)]
-    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
-        unsafe {
-            self.0.set_user_data(user_data);
-        }
-    }
-    #[inline(always)]
-    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
-        unsafe { self.0.user_data() } }
-   
+    #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
+    #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
 
-    #[inline]
-    pub fn get_surface_content_type(
-        &self,
-        surface: &crate::Surface,
-    ) -> crate::Result<crate::Owned<crate::WpContentTypeV1>> {
-        Ok(unsafe {
-            crate::Owned::wrap_unchecked(
-                self.0
-                    .marshal_array_typed(1, &mut [crate::NEWID_ARG, surface.0.as_arg()])?,
-            )
-        })
+    #[inline] pub fn get_surface_content_type(&self,surface: &crate::Surface,) -> crate::Result<crate::Owned<crate::WpContentTypeV1>> {
+        Ok(unsafe { crate::Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [crate::NEWID_ARG,surface.0.as_arg(),])?) })
     }
-}
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WpContentTypeManagerV1Error {
+ }
+
+#[repr(u32)] #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum WpContentTypeManagerV1Error {
     AlreadyConstructed = 0,
 }
-impl WpContentTypeManagerV1Error {
-    pub const fn as_arg(&self) -> ffi::Argument {
-        ffi::Argument { u: *self as _ }
-    }
-}
+impl WpContentTypeManagerV1Error { pub const fn as_arg(&self) -> ffi::Argument { ffi::Argument { u: *self as _ } } }
 
-static WP_CONTENT_TYPE_V1_INTERFACE: ffi::Interface = ffi::Interface {
-    name: c"wp_content_type_v1".as_ptr(),
-    version: 1,
-    method_count: 2,
-    methods: const {
-        [
-            ffi::Message {
-                name: c"destroy".as_ptr(),
-                signature: c"".as_ptr(),
-                types: const { [] }.as_ptr(),
-            },
-            ffi::Message {
-                name: c"set_content_type".as_ptr(),
-                signature: c"u".as_ptr(),
-                types: const { [core::ptr::null()] }.as_ptr(),
-            },
-        ]
-    }
-    .as_ptr(),
-    event_count: 0,
-    events: const { [] }.as_ptr(),
-};
+static WP_CONTENT_TYPE_V1_INTERFACE: ffi::Interface = ffi::Interface { name: c"wp_content_type_v1".as_ptr(), version: 1, method_count: 2, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"set_content_type".as_ptr(), signature: c"u".as_ptr(), types: const { [core::ptr::null(),] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
-#[repr(transparent)]
-pub struct WpContentTypeV1(pub(crate) Proxy);
+#[repr(transparent)] pub struct WpContentTypeV1(pub(crate) Proxy);
 unsafe impl Interface for WpContentTypeV1 {
     const DEF: *const ffi::Interface = &WP_CONTENT_TYPE_V1_INTERFACE;
 
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "<WpContentTypeV1 as Interface>::destruct", skip(self))
-    )]
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "<WpContentTypeV1 as Interface>::destruct", skip(self)))]
     unsafe fn destruct(&mut self) {
         self.0.call_simple_dtor(0);
     }
 }
 
 impl WpContentTypeV1 {
-    #[inline(always)]
-    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
-        unsafe {
-            self.0.set_user_data(user_data);
-        }
-    }
-    #[inline(always)]
-    pub fn user_data(&mut self) -> *mut core::ffi::c_void {
-        unsafe { self.0.user_data() } }
-   
+    #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
+    #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
 
-    #[inline]
-    pub fn set_content_type(&self, content_type: WpContentTypeV1Type) -> crate::Result<()> {
-        self.0.marshal_array_void(1, &mut [content_type.as_arg()])
+    #[inline] pub fn set_content_type(&self,content_type: WpContentTypeV1Type,) -> crate::Result<()> {
+        self.0.marshal_array_void(1, &mut [content_type.as_arg(),])
     }
-}
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WpContentTypeV1Type {
+ }
+
+#[repr(u32)] #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum WpContentTypeV1Type {
     None = 0,
     Photo = 1,
     Video = 2,
     Game = 3,
 }
-impl WpContentTypeV1Type {
-    pub const fn as_arg(&self) -> ffi::Argument {
-        ffi::Argument { u: *self as _ }
-    }
-}
+impl WpContentTypeV1Type { pub const fn as_arg(&self) -> ffi::Argument { ffi::Argument { u: *self as _ } } }
+

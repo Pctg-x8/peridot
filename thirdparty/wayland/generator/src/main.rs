@@ -548,18 +548,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "unsafe {{ core::mem::transmute({arg_name}) }},"
                         );
                     }
-                    (Some(o), None, WlWireFormatType::Object, false) => {
-                        let _ = write!(
-                            listener_trait_args,
-                            "{arg_name}: &mut {},",
-                            if_name_to_typeref(o)
-                        );
-                        let _ = write!(
-                            listener_arg_conversions,
-                            "unsafe {{ &mut *({arg_name} as *mut _) }},"
-                        );
-                    }
-                    (Some(o), None, WlWireFormatType::Object, true) => {
+                    // EventのときはObject型はつねにnullableとして扱う(クライアント側で先にdestroyしたオブジェクトがきた場合にnullでわたってくるらしい)
+                    (Some(o), None, WlWireFormatType::Object, _) => {
                         let _ = write!(
                             listener_trait_args,
                             "{arg_name}: Option<&mut {}>,",
@@ -567,7 +557,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         let _ = write!(
                             listener_arg_conversions,
-                            "if {arg_name}.is_null() {{ None }} else {{ Some(unsafe {{ &mut *({arg_name} as *mut _) }}) }},",
+                            "unsafe {{ {arg_name}.cast::<{}>().as_mut() }},",
+                            if_name_to_typeref(o)
                         );
                     }
                     (Some(o), None, WlWireFormatType::NewID, false) => {
