@@ -45,7 +45,11 @@ use crate::{
     utils::{Color32, LogicalUnit, PixelsUnit, Point, SafeF32, Size},
 };
 #[cfg(feature = "wayland")]
-use crate::{graphics::VulkanSurface, hittest::HitTestTreeRef, utils::UnboundedRef};
+use crate::{
+    graphics::VulkanSurface,
+    hittest::{HitTestTreeCreate, HitTestTreeRef},
+    utils::UnboundedRef,
+};
 
 #[cfg(windows)]
 mod bindgen;
@@ -90,6 +94,7 @@ pub fn launch() {
         event_store: event_store.as_mut().get_mut(),
     };
     let global_time_base = std::time::Instant::now();
+    let fs = FileSystem::new();
     main_wrapper(
         move |global_time_base,
               renderer_sync,
@@ -112,6 +117,7 @@ pub fn launch() {
         &Mutex::new(RendererSync {
             composite_buffer: CompositeTreeSyncBuffer::new(),
         }),
+        &fs,
     );
 }
 
@@ -122,13 +128,13 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         CompositeTree<Event>,
         HitTestTreeManager<'sys>,
         WindowHandle,
-        SystemLink,
+        SystemLink<'sys>,
     ) -> AppFuture,
     mut event_store: Pin<&mut Option<Event>>,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
+    fs: &'sys FileSystem,
 ) {
-    let fs = FileSystem::new();
     let events = AppEventBus {
         queue: std::sync::Mutex::new(VecDeque::new()),
         #[cfg(target_os = "linux")]
@@ -270,13 +276,17 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let w = WaylandWindow::new(
         &mut window_registry,
         rt_sender.clone(),
-        WindowType::Main,
+        WindowType::Main {
+            termination_event: terminate_event.clone(),
+        },
         &wl_interfaces,
         &dbus,
-        terminate_event.clone(),
         LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            future: core::ptr::null_mut(),
+            poll_fn_ptr: unsafe {
+                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
+            },
+            future_ptr: core::ptr::null_mut(),
         },
         composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
@@ -299,10 +309,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         WindowType::Sub,
         &wl_interfaces,
         &dbus,
-        terminate_event.clone(),
         LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            future: core::ptr::null_mut(),
+            poll_fn_ptr: unsafe {
+                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
+            },
+            future_ptr: core::ptr::null_mut(),
         },
         composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
@@ -402,11 +414,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .map(|x| x.as_ptr()),
         event_dispatcher: LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            future: core::ptr::null_mut()
+            poll_fn_ptr: unsafe {
+                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
+            },
+            future_ptr: core::ptr::null_mut(),
         },
         _pinned: core::marker::PhantomPinned,
     });
 
+    let mut app_event_dispatcher = core::pin::pin!(LogicFiberEventDispatcher {
+        event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
+        future_ptr: core::ptr::null_mut(),
+    });
     let mut app = core::pin::pin!(run_app(
         global_time_base,
         renderer_sync,
@@ -418,10 +438,20 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         w.make_handle(),
         SystemLink {
             drag_preview_popover,
+            rt_sender: rt_sender.clone(),
+            vk_device: &vk_device,
+            wl_display: wl_display.as_raw().cast(),
+            event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
+            #[cfg(feature = "wayland")]
+            wl_global_interfaces: &wl_interfaces,
+            #[cfg(target_os = "linux")]
+            dbus: &dbus,
             #[cfg(feature = "wayland")]
             pointer_state_ref: unsafe {
                 &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
             },
+            #[cfg(feature = "wayland")]
+            window_registry: &mut window_registry,
         } /*
           #[cfg(target_os = "macos")]
           WindowHandle {
@@ -430,13 +460,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
           drag_preview_popover*/
     ));
 
+    app_event_dispatcher.future_ptr = unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ };
     #[cfg(feature = "wayland")]
     unsafe {
         wl_global_msg
             .as_mut()
             .get_unchecked_mut()
             .event_dispatcher
-            .future = app.as_mut().get_unchecked_mut() as *mut _;
+            .future_ptr = app.as_mut().get_unchecked_mut() as *mut _ as _;
     }
     #[cfg(feature = "wayland")]
     window_registry
@@ -445,7 +476,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .expect("no window")
         .rebind_event_dispatcher(LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ },
+            poll_fn_ptr: unsafe {
+                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
+            },
+            future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
         });
     #[cfg(feature = "wayland")]
     window_registry
@@ -454,7 +488,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .expect("no window")
         .rebind_event_dispatcher(LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            future: unsafe { app.as_mut().get_unchecked_mut() as *mut _ },
+            poll_fn_ptr: unsafe {
+                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
+            },
+            future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
         });
     #[cfg(target_os = "macos")]
     unsafe {
@@ -914,15 +951,18 @@ impl EventQueue {
     }
 }
 
-pub struct LogicFiberEventDispatcher<AppFuture> {
+#[derive(Clone)]
+pub struct LogicFiberEventDispatcher {
     event_store: *mut Option<Event>,
-    future: *mut AppFuture,
+    poll_fn_ptr: fn(*mut core::ffi::c_void, ctx: &mut core::task::Context) -> core::task::Poll<()>,
+    future_ptr: *mut core::ffi::c_void,
 }
-impl<AppFuture: core::future::Future> LogicFiberEventDispatcher<AppFuture> {
+impl LogicFiberEventDispatcher {
     pub fn dispatch(&self, e: Event) {
         unsafe {
             (*self.event_store) = Some(e);
-            let _ = core::pin::Pin::new_unchecked(&mut *self.future).poll(
+            let _ = (self.poll_fn_ptr)(
+                self.future_ptr,
                 &mut core::task::Context::from_waker(&core::task::Waker::new(
                     &(),
                     &APP_WAKER_VTABLE,
@@ -957,7 +997,7 @@ async fn run<'sys>(
     mut composite_tree: CompositeTree<Event>,
     mut ht_manager: HitTestTreeManager<'sys>,
     main_window: WindowHandle,
-    system_link: SystemLink,
+    system_link: SystemLink<'sys>,
 ) {
     tracing::info!("app start");
 
@@ -1135,6 +1175,19 @@ async fn run<'sys>(
             input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
                 | input::EventContinueControl::STOP_PROPAGATION
         }
+
+        fn on_click(
+            &self,
+            sender: HitTestTreeRef,
+            context: &mut hittest::HitTestEventContext,
+            args: &hittest::PointerActionArgs,
+        ) -> input::EventContinueControl {
+            context
+                .system_link
+                .open_window(context.composite_tree, context.ht_create_only_access);
+
+            input::EventContinueControl::STOP_PROPAGATION
+        }
     }
     let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
     ht_manager.set_action_handler(ht_tab_main, &ht_action_handler);
@@ -1149,13 +1202,16 @@ async fn run<'sys>(
                 pointer_input_manager.set_client_size(window, size);
             }
             Event::WindowRescaleUI { window, new_scale } => {
-                composite_tree.get_mut(app_title).base_scale_factor = new_scale;
-                composite_tree.mark_dirty_all(app_title);
-                composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
-                composite_tree.mark_dirty_all(tab_main);
+                if window == main_window {
+                    composite_tree.get_mut(app_title).base_scale_factor = new_scale;
+                    composite_tree.mark_dirty_all(app_title);
+                    composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
+                    composite_tree.mark_dirty_all(tab_main);
 
-                let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                composite_tree.commit(&mut renderer_sync.composite_buffer);
+                    let mut renderer_sync = renderer_sync.lock().expect("poisoned");
+                    composite_tree.commit(&mut renderer_sync.composite_buffer);
+                }
+
                 system_link.notify_ui_scale_changes_to_render(window, new_scale);
             }
             Event::PointerDown {
@@ -1176,6 +1232,7 @@ async fn run<'sys>(
                     drag_preview_popover.bound_window_link = active_window;
                 }
 
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_left_down(
                     &window,
                     &ht_manager,
@@ -1183,6 +1240,8 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
                     },
                     window.ht_root(),
                     &mut keyboard_focus_manager,
@@ -1195,6 +1254,7 @@ async fn run<'sys>(
                 window,
                 client_pos,
             } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_move(
                     window,
                     client_pos,
@@ -1204,6 +1264,8 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
                     },
                     window.ht_root(),
                 );
@@ -1233,6 +1295,7 @@ async fn run<'sys>(
                 }*/
             }
             Event::PointerUp { window } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_left_up(
                     &window,
                     &ht_manager,
@@ -1240,6 +1303,8 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
                     },
                     window.ht_root(),
                 );
@@ -1254,15 +1319,91 @@ async fn run<'sys>(
     main_window.unbind_hittest_managers();
 }
 
-struct SystemLink {
+struct SystemLink<'sys> {
     drag_preview_popover: DragPreviewPopoverHandle,
+    vk_device: *const VulkanDevice<'sys>,
+    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    event_dispatcher: *mut LogicFiberEventDispatcher,
+    #[cfg(feature = "wayland")]
+    wl_display: *mut wl::Display,
+    #[cfg(feature = "wayland")]
+    wl_global_interfaces: *const WaylandGlobalInterfaces,
+    #[cfg(target_os = "linux")]
+    dbus: *const dbus::Connection,
     #[cfg(feature = "wayland")]
     pointer_state_ref: *const Option<WaylandPointerState>,
+    #[cfg(feature = "wayland")]
+    window_registry: *mut WaylandWindowRegistry,
 }
-impl SystemLink {
+impl SystemLink<'_> {
     #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
         &self.drag_preview_popover
+    }
+
+    #[cfg(feature = "wayland")]
+    pub fn open_window<'h>(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
+    ) -> WindowHandle {
+        let mut w = WaylandWindow::new(
+            unsafe { &mut *self.window_registry },
+            self.rt_sender.clone(),
+            WindowType::Sub,
+            unsafe { &*self.wl_global_interfaces },
+            unsafe { &*self.dbus },
+            unsafe { (*self.event_dispatcher).clone() },
+            composite_tree.create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                ..Default::default()
+            }),
+            hit_tree.create(HitTestTreeData {
+                width_adjustment_factor: 1.0,
+                height_adjustment_factor: 1.0,
+                ..Default::default()
+            }),
+        );
+        let window_handle = WindowHandle(w.surface.as_ptr());
+        let vk_surface = VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
+            br::WaylandSurfaceCreateInfo::new(self.wl_display.cast(), w.surface.as_raw().cast())
+                .execute((*self.vk_device).instance(), None)
+                .expect("sub_vk_surface.create")
+        });
+        let init_scale = SafeF32::new(
+            w.event_listener
+                .state
+                .committed_state
+                .get_mut()
+                .expect("poisoned")
+                .active_buffer_scale,
+        )
+        .expect("invalid scale");
+        self.rt_sender
+            .send(RenderMessage::NewWindow(NewWindowData {
+                key: window_handle,
+                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+                committed_state: UnboundedRef::new(&w.event_listener.state.committed_state),
+                swapchain_externally_invalidation_signal: UnboundedRef::new(
+                    &w.event_listener
+                        .state
+                        .swapchain_externally_invalidation_signal,
+                ),
+                latest_ui_scale_changes: UnboundedRef::new(
+                    &w.event_listener.state.latest_ui_scale_changes,
+                ),
+                init_scale,
+                composite_root: w.event_listener.state.composite_root,
+            }))
+            .expect("rt_sender.send");
+        w.commit();
+        unsafe {
+            (*self.window_registry)
+                .objects
+                .insert(WaylandSurfaceKey(w.surface.as_ptr()), w);
+        }
+
+        window_handle
     }
 
     #[cfg(feature = "wayland")]
@@ -1326,9 +1467,11 @@ impl SystemLink {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowType {
-    Main,
+    Main {
+        #[cfg(target_os = "linux")]
+        termination_event: Arc<EventFD>,
+    },
     Sub,
 }
 
@@ -1938,28 +2081,24 @@ struct WaylandKeyboardState {
 }
 
 #[cfg(feature = "wayland")]
-struct WaylandGlobalMessaging<AppFuture: core::future::Future<Output = ()>> {
+struct WaylandGlobalMessaging {
     pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
     pub xkb_context: xkbcommon::Context,
     pub keyboard: Option<WaylandKeyboardState>,
     pub pointer: Option<WaylandPointerState>,
     pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
-    pub event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    pub event_dispatcher: LogicFiberEventDispatcher,
     _pinned: core::marker::PhantomPinned,
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::XdgWmBaseEventListener
-    for WaylandGlobalMessaging<AppFuture>
-{
+impl wl::XdgWmBaseEventListener for WaylandGlobalMessaging {
     #[inline(always)]
     fn ping(&mut self, sender: &mut peridot_tp_wayland::XdgWmBase, serial: u32) {
         sender.pong(serial).expect("xdg_wm_base pong");
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
-    for WaylandGlobalMessaging<AppFuture>
-{
+impl wl::SeatEventListener for WaylandGlobalMessaging {
     fn capabilities(
         &mut self,
         seat: &mut peridot_tp_wayland::Seat,
@@ -2025,9 +2164,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SeatEventListener
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
-    for WaylandGlobalMessaging<AppFuture>
-{
+impl wl::PointerEventListener for WaylandGlobalMessaging {
     #[tracing::instrument(skip(self, _pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn enter(
         &mut self,
@@ -2146,9 +2283,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::PointerEventListener
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
-    for WaylandGlobalMessaging<AppFuture>
-{
+impl wl::KeyboardEventListener for WaylandGlobalMessaging {
     #[tracing::instrument(skip(self, _sender))]
     fn keymap(
         &mut self,
@@ -2276,9 +2411,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::KeyboardEventListener
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListener
-    for WaylandGlobalMessaging<AppFuture>
-{
+impl wl::ZwpTextInputV3EventListener for WaylandGlobalMessaging {
     #[tracing::instrument(skip(self, sender, _surface))]
     fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: Option<&mut wl::Surface>) {
         tracing::trace!("textinputv3::enter");
@@ -2325,9 +2458,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZwpTextInputV3EventListen
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::ZwlrLayerSurfaceV1EventListener
-    for WaylandGlobalMessaging<AppFuture>
-{
+impl wl::ZwlrLayerSurfaceV1EventListener for WaylandGlobalMessaging {
     #[tracing::instrument(skip(self, sender))]
     fn configure(
         &mut self,
@@ -2357,34 +2488,33 @@ unsafe impl Sync for WaylandSurfaceKey {}
 unsafe impl Send for WaylandSurfaceKey {}
 
 #[cfg(feature = "wayland")]
-pub struct WaylandWindowRegistry<AppFuture: core::future::Future<Output = ()>> {
-    objects: HashMap<WaylandSurfaceKey, WaylandWindow<AppFuture>>,
+pub struct WaylandWindowRegistry {
+    objects: HashMap<WaylandSurfaceKey, WaylandWindow>,
 }
 
 #[cfg(feature = "wayland")]
-pub struct WaylandWindow<AppFuture: core::future::Future<Output = ()>> {
+pub struct WaylandWindow {
     surface: wl::Owned<wl::Surface>,
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     fractional_scale: Option<wl::Owned<wl::WpFractionalScaleV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
-    event_listener: Pin<Box<WaylandWindowEventListener<AppFuture>>>,
+    event_listener: Pin<Box<WaylandWindowEventListener>>,
 }
 #[cfg(feature = "wayland")]
-unsafe impl<AppFuture: core::future::Future<Output = ()>> Sync for WaylandWindow<AppFuture> {}
+unsafe impl Sync for WaylandWindow {}
 #[cfg(feature = "wayland")]
-unsafe impl<AppFuture: core::future::Future<Output = ()>> Send for WaylandWindow<AppFuture> {}
+unsafe impl Send for WaylandWindow {}
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
+impl WaylandWindow {
     fn new(
-        registry_ptr: *mut WaylandWindowRegistry<AppFuture>,
+        registry_ptr: *mut WaylandWindowRegistry,
         render_thread_message_sender: std::sync::mpsc::Sender<RenderMessage>,
         r#type: WindowType,
         wl_interfaces: &WaylandGlobalInterfaces,
         dbus: &dbus::Connection,
-        terminate_event: Arc<EventFD>,
-        event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+        event_dispatcher: LogicFiberEventDispatcher,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
     ) -> Self {
@@ -2456,7 +2586,6 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
             has_fractional_scale_support: fractional_scale.is_some(),
             pending_configure_size: (None, None),
             pending_configure_buffer_scale: None,
-            terminate_event,
             event_dispatcher,
         });
         surface
@@ -2500,10 +2629,7 @@ impl<AppFuture: core::future::Future<Output = ()>> WaylandWindow<AppFuture> {
         WaylandSurfaceKey(self.surface.as_ptr())
     }
 
-    pub fn rebind_event_dispatcher(
-        &mut self,
-        event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
-    ) {
+    pub fn rebind_event_dispatcher(&mut self, event_dispatcher: LogicFiberEventDispatcher) {
         self.event_listener.event_dispatcher = event_dispatcher;
     }
 
@@ -2536,21 +2662,18 @@ unsafe impl Send for WaylandWindowState {}
 
 #[cfg(feature = "wayland")]
 #[repr(C)] // place state at 0 always: WaylandWindowEventListener can be reinterpreted as WaylandWindowState
-struct WaylandWindowEventListener<AppFuture: core::future::Future<Output = ()>> {
+struct WaylandWindowEventListener {
     state: WaylandWindowState,
     window_type: WindowType,
     render_thread_message_sender: std::sync::mpsc::Sender<RenderMessage>,
-    window_registry_ptr: *mut WaylandWindowRegistry<AppFuture>,
+    window_registry_ptr: *mut WaylandWindowRegistry,
     has_fractional_scale_support: bool,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
-    terminate_event: std::sync::Arc<EventFD>,
-    event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    event_dispatcher: LogicFiberEventDispatcher,
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
-    for WaylandWindowEventListener<AppFuture>
-{
+impl wl::SurfaceEventListener for WaylandWindowEventListener {
     #[tracing::instrument(skip(self, _surface, _output))]
     fn enter(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {}
 
@@ -2577,9 +2700,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::SurfaceEventListener
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::XdgSurfaceEventListener
-    for WaylandWindowEventListener<AppFuture>
-{
+impl wl::XdgSurfaceEventListener for WaylandWindowEventListener {
     #[tracing::instrument(skip(self, sender))]
     fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
         tracing::trace!("xdg surface configure");
@@ -2591,28 +2712,31 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgSurfaceEventListener
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::XdgToplevelEventListener
-    for WaylandWindowEventListener<AppFuture>
-{
+impl wl::XdgToplevelEventListener for WaylandWindowEventListener {
     #[tracing::instrument(skip(self, _sender))]
     fn close(&mut self, _sender: &mut wl::XdgToplevel) {
         tracing::trace!("xdg toplevel close");
-        if self.window_type == WindowType::Main {
-            self.terminate_event.inc(1).expect("terminate_event.inc");
-        } else {
-            let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-            self.render_thread_message_sender
-                .send(RenderMessage::DestroyWindow(
-                    WindowHandle(self.state.surface_ptr),
-                    done_event_sender,
-                ));
-            done_event_receiver
-                .recv()
-                .expect("done_event_receiver.recv");
-            unsafe {
-                (*self.window_registry_ptr)
-                    .objects
-                    .remove(&WaylandSurfaceKey(self.state.surface_ptr));
+        match self.window_type {
+            WindowType::Main {
+                ref termination_event,
+            } => {
+                termination_event.inc(1).expect("termination_event.inc");
+            }
+            WindowType::Sub => {
+                let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+                self.render_thread_message_sender
+                    .send(RenderMessage::DestroyWindow(
+                        WindowHandle(self.state.surface_ptr),
+                        done_event_sender,
+                    ));
+                done_event_receiver
+                    .recv()
+                    .expect("done_event_receiver.recv");
+                unsafe {
+                    (*self.window_registry_ptr)
+                        .objects
+                        .remove(&WaylandSurfaceKey(self.state.surface_ptr));
+                }
             }
         }
     }
@@ -2651,9 +2775,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::XdgToplevelEventListener
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::ZxdgToplevelDecorationV1EventListener
-    for WaylandWindowEventListener<AppFuture>
-{
+impl wl::ZxdgToplevelDecorationV1EventListener for WaylandWindowEventListener {
     fn configure(
         &mut self,
         _sender: &mut wl::ZxdgToplevelDecorationV1,
@@ -2670,9 +2792,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::ZxdgToplevelDecorationV1E
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> wl::WpFractionalScaleV1EventListener
-    for WaylandWindowEventListener<AppFuture>
-{
+impl wl::WpFractionalScaleV1EventListener for WaylandWindowEventListener {
     #[tracing::instrument(skip(self, _sender))]
     fn preferred_scale(&mut self, _sender: &mut wl::WpFractionalScaleV1, scale: u32) {
         tracing::trace!("fractional scale");
@@ -2680,7 +2800,7 @@ impl<AppFuture: core::future::Future<Output = ()>> wl::WpFractionalScaleV1EventL
     }
 }
 #[cfg(feature = "wayland")]
-impl<AppFuture: core::future::Future<Output = ()>> WaylandWindowEventListener<AppFuture> {
+impl WaylandWindowEventListener {
     fn commit(&mut self) {
         let mut delayed_event_queue = Vec::with_capacity(2);
 

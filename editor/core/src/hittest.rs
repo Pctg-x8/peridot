@@ -59,21 +59,27 @@ struct HitTestTreeRelationData {
     children: Vec<usize>,
 }
 
+pub trait HitTestTreeCreate<'h> {
+    fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef;
+}
+
+pub struct HitTestTreeManagerCreateOnlyAccess<'h> {
+    ptr: *mut HitTestTreeManager<'h>,
+}
+impl<'h> HitTestTreeCreate<'h> for HitTestTreeManagerCreateOnlyAccess<'h> {
+    #[inline(always)]
+    fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
+        unsafe { (*self.ptr).create(data) }
+    }
+}
+
 pub struct HitTestTreeManager<'h> {
     data: Vec<HitTestTreeData<'h>>,
     relations: Vec<HitTestTreeRelationData>,
     free_index: BTreeSet<usize>,
 }
-impl<'h> HitTestTreeManager<'h> {
-    pub fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            relations: Vec::new(),
-            free_index: BTreeSet::new(),
-        }
-    }
-
-    pub fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
+impl<'h> HitTestTreeCreate<'h> for HitTestTreeManager<'h> {
+    fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
         if let Some(x) = self.free_index.pop_first() {
             self.data[x] = data;
             self.relations[x].parent = None;
@@ -89,6 +95,19 @@ impl<'h> HitTestTreeManager<'h> {
         });
 
         HitTestTreeRef(self.data.len() - 1)
+    }
+}
+impl<'h> HitTestTreeManager<'h> {
+    pub fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            relations: Vec::new(),
+            free_index: BTreeSet::new(),
+        }
+    }
+
+    pub const fn derive_create_only_access(&mut self) -> HitTestTreeManagerCreateOnlyAccess<'h> {
+        HitTestTreeManagerCreateOnlyAccess { ptr: self }
     }
 
     #[inline]
@@ -345,10 +364,12 @@ pub struct PointerActionArgs {
     pub client_size: Size<LogicalUnit>,
 }
 
-pub struct HitTestEventContext<'h> {
+pub struct HitTestEventContext<'env, 'h> {
     pub current_sec: f32,
-    pub composite_tree: &'h mut crate::rendering::composite::CompositeTree<Event>,
-    pub drag_preview: &'h DragPreviewPopoverHandle,
+    pub composite_tree: &'env mut crate::rendering::composite::CompositeTree<Event>,
+    pub drag_preview: &'env DragPreviewPopoverHandle,
+    pub system_link: &'env crate::SystemLink<'env>,
+    pub ht_create_only_access: &'env mut HitTestTreeManagerCreateOnlyAccess<'h>,
 }
 
 pub trait HitTestTreeActionHandler {
