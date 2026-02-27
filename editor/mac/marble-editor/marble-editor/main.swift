@@ -59,37 +59,51 @@ final class MainWindowDelegate : NSObject, NSWindowDelegate {
 struct WindowLinkCallbackSet {
     private let funcs: UnsafePointer<WindowLinkCallbacks>
     private let ctx: UnsafeMutableRawPointer
+    private unowned let owner: WindowLink
     
-    init(funcs: UnsafePointer<WindowLinkCallbacks>, ctx: UnsafeMutableRawPointer) {
+    init(funcs: UnsafePointer<WindowLinkCallbacks>, ctx: UnsafeMutableRawPointer, owner: WindowLink) {
         self.funcs = funcs
         self.ctx = ctx
+        self.owner = owner
+    }
+    
+    func getContextPointer() -> UnsafeMutableRawPointer {
+        self.ctx
     }
     
     func notifyResize(_ width: Double, _ height: Double) {
-        self.funcs.pointee.onResize(self.ctx, width, height)
+        self.funcs.pointee.onResize(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), width, height)
     }
     
     func notifyPointerDown(_ x: Double, _ y: Double) {
-        self.funcs.pointee.onPointerDown(self.ctx, x, y)
+        self.funcs.pointee.onPointerDown(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), x, y)
     }
     
     func notifyPointerMove(_ x: Double, _ y: Double) {
-        self.funcs.pointee.onPointerMove(self.ctx, x, y)
+        self.funcs.pointee.onPointerMove(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), x, y)
     }
     
     func notifyPointerUp() {
-        self.funcs.pointee.onPointerUp(self.ctx)
+        self.funcs.pointee.onPointerUp(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()))
     }
+}
+
+struct WindowCreationFlags : OptionSet {
+    let rawValue: UInt32
+    
+    static let main = Self(rawValue: 0x01)
 }
 
 final class WindowLink : NSWindow {
     private var mainWindowDelegate: MainWindowDelegate? = nil
     private var callbacks: WindowLinkCallbackSet? = nil
     
-    init() {
+    init(_ flags: WindowCreationFlags) {
+        var styleMask: StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        
         super.init(
             contentRect: NSRect(x: 0.0, y: 0.0, width: 960.0, height: 540.0),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
@@ -118,8 +132,12 @@ final class WindowLink : NSWindow {
         _ callbacks: UnsafePointer<WindowLinkCallbacks>,
         caller callerContext: UnsafeMutableRawPointer
     ) {
-        self.callbacks = WindowLinkCallbackSet(funcs: callbacks, ctx: callerContext)
+        self.callbacks = WindowLinkCallbackSet(funcs: callbacks, ctx: callerContext, owner: self)
         self.mainView.windowLinkCallbacks = self.callbacks
+    }
+    
+    func getCallbackContextPointer() -> UnsafeMutableRawPointer? {
+        self.callbacks?.getContextPointer()
     }
     
     func unsetCallbacks() {
@@ -155,8 +173,8 @@ final class WindowLink : NSWindow {
 }
 
 @_cdecl("ni_create_window")
-func createWindow() -> UnsafeMutableRawPointer {
-    return Unmanaged.passRetained(WindowLink()).toOpaque()
+func createWindow(flags: UInt32) -> UnsafeMutableRawPointer {
+    return Unmanaged.passRetained(WindowLink(WindowCreationFlags(rawValue: flags))).toOpaque()
 }
 
 @_cdecl("ni_release_window")
@@ -186,6 +204,11 @@ func setWindowCallbacks(
 @_cdecl("ni_unset_window_callbacks")
 func unsetWindowCallbacks(windowLink: UnsafeMutableRawPointer) {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().unsetCallbacks()
+}
+
+@_cdecl("ni_get_window_callback_context")
+func getWindowCallbackContext(windowLink: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? {
+    Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().getCallbackContextPointer()
 }
 
 @_cdecl("ni_get_metal_layer")
@@ -245,4 +268,10 @@ func setCursorShape(shape: UInt8) {
         NSLog("[PeridotMarbleEditor:Warn] invalid CursorShape value: \(shape)")
         break
     }
+}
+
+let filesystemCacheDir = URL.cachesDirectory.path.utf8CString
+@_cdecl("ni_query_filesystem_cachedir_path")
+func queryFilesystemCachedirPath() -> UnsafePointer<CChar> {
+    filesystemCacheDir.withUnsafeBufferPointer { $0.baseAddress! }
 }

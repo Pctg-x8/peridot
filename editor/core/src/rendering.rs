@@ -21,10 +21,8 @@ use crate::{
         },
         text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
     },
-    utils::SafeF32,
+    utils::{SafeF32, UnboundedRef},
 };
-#[cfg(feature = "wayland")]
-use crate::{WaylandWindowCommittedState, utils::UnboundedRef};
 
 pub mod atlas;
 pub mod composite;
@@ -82,10 +80,7 @@ impl<'main> RenderThread<'main> {
             ref_count: u64,
         }
         let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
-        #[cfg(any(feature = "freetype", windows))]
         let font_set = RootFontSet::new();
-        #[cfg(target_os = "macos")]
-        let font_set = FontSet::new();
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
 
         let mut any_swapchain_invalidated = false;
@@ -392,6 +387,8 @@ struct WindowRenderer<'d> {
     swapchain_externally_invalidation_signal: *const AtomicBool,
     #[cfg(windows)]
     w: crate::platform::windows::SendableWindowHandle,
+    #[cfg(target_os = "macos")]
+    w: crate::WindowHandle,
     active_scale: SafeF32,
     latest_ui_scale_changes: *const Mutex<Option<f32>>,
     vk_device: &'d VulkanDevice<'d>,
@@ -441,7 +438,14 @@ impl<'d> WindowRenderer<'d> {
                     .active_size
             },
             #[cfg(target_os = "macos")]
-            || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
+            || unsafe {
+                *create_data
+                    .key
+                    .query_state()
+                    .active_rt_size
+                    .lock()
+                    .expect("poisoned")
+            },
         );
 
         // TODO: 同じ構造のものがあれば使い回したい
@@ -537,6 +541,8 @@ impl<'d> WindowRenderer<'d> {
             swapchain_externally_invalidation_signal: create_data
                 .swapchain_externally_invalidation_signal
                 .get(),
+            #[cfg(target_os = "macos")]
+            w: create_data.key,
             active_scale: create_data.init_scale,
             latest_ui_scale_changes: create_data.latest_ui_scale_changes.get(),
             font_set,
@@ -696,7 +702,14 @@ impl<'d> WindowRenderer<'d> {
                     .active_size
             },
             #[cfg(target_os = "macos")]
-            || *w.dispatcher.state.active_rt_size.lock().expect("poisoned"),
+            || unsafe {
+                *self
+                    .w
+                    .query_state()
+                    .active_rt_size
+                    .lock()
+                    .expect("poisoned")
+            },
         );
 
         // recrease rt resources

@@ -1972,7 +1972,7 @@ impl<Event> CompositeTreeRender<Event> {
             apple_sdk_port::foundation::String::from_str_no_copy(None, "peridot.RunIndex")
         };
         #[cfg(target_os = "macos")]
-        let cat_str = t
+        let cat_str = text_layout
             .runs
             .iter()
             .map(|x| &x.content as &str)
@@ -1989,7 +1989,7 @@ impl<Event> CompositeTreeRender<Event> {
         #[cfg(target_os = "macos")]
         let mut range_head = 0;
         #[cfg(target_os = "macos")]
-        for (n, r) in t.runs.iter().enumerate() {
+        for (n, r) in text_layout.runs.iter().enumerate() {
             let font = font_set.select(r.font_id);
             let range = apple_sdk_port::foundation::Range {
                 location: range_head,
@@ -2088,8 +2088,8 @@ impl<Event> CompositeTreeRender<Event> {
                     },
                     None => 0,
                 };
-                let font_id = t.runs[run_index].font_id;
-                x_shift += t.runs[run_index].spacing_inline_start;
+                let font_id = text_layout.runs[run_index].font_id;
+                x_shift += text_layout.runs[run_index].spacing_inline_start;
 
                 let glyph_count = run.glyph_count();
                 tracing::debug!(count = glyph_count, "run");
@@ -2114,18 +2114,17 @@ impl<Event> CompositeTreeRender<Event> {
                         continue;
                     }
 
-                    let (r, is_new) = mask_atlas.acquire(
+                    let (r, is_new) = glyph_atlas.acquire(
                         (font_id as usize, glyph),
-                        (bounding_rect.size.width as f32 * dip_to_pixels_scaling).ceil() as _,
-                        (bounding_rect.size.height as f32 * dip_to_pixels_scaling).ceil() as _,
+                        (bounding_rect.size.width as f32 * scale_factor).ceil() as _,
+                        (bounding_rect.size.height as f32 * scale_factor).ceil() as _,
                     );
                     let placement_box = GlyphPlacementBox {
-                        left: ((pos.x + bounding_rect.origin.x) as f32 + x_shift)
-                            * dip_to_pixels_scaling,
+                        left: ((pos.x + bounding_rect.origin.x) as f32 + x_shift) * scale_factor,
                         top: (baseline_pos + pos.y
                             - (bounding_rect.size.height + bounding_rect.origin.y))
                             as f32
-                            * dip_to_pixels_scaling,
+                            * scale_factor,
                         tex_left: r.left,
                         tex_top: r.top,
                         width: r.width,
@@ -2151,11 +2150,10 @@ impl<Event> CompositeTreeRender<Event> {
                             .expect("font.create_path_for_glyph");
                         let mut current_figure = None;
                         let mut pen_pos = (0.0, 0.0);
-                        let offset_x =
-                            r.left as f32 - bounding_rect.origin.x as f32 * dip_to_pixels_scaling;
+                        let offset_x = r.left as f32 - bounding_rect.origin.x as f32 * scale_factor;
                         let offset_y = r.top as f32
                             - (bounding_rect.size.height + bounding_rect.origin.y) as f32
-                                * dip_to_pixels_scaling;
+                                * scale_factor;
                         path.apply(|e| match e.r#type {
                             apple_sdk_port::raw::kCGPathElementMoveToPoint => {
                                 let to = unsafe { &*e.points };
@@ -2164,8 +2162,8 @@ impl<Event> CompositeTreeRender<Event> {
                                     Some((to.clone(), vector_raster_state.fill_tri_points.len()));
                                 pen_pos = (to.x, to.y);
                                 vector_raster_state.fill_tri_points.push([
-                                    to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                    to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                    to.x as f32 * scale_factor + offset_x,
+                                    to.y as f32 * scale_factor + offset_y,
                                 ]);
                             }
                             apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
@@ -2176,8 +2174,8 @@ impl<Event> CompositeTreeRender<Event> {
 
                                 let filltri_index1 = vector_raster_state.fill_tri_points.len() - 1;
                                 vector_raster_state.fill_tri_points.push([
-                                    to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                    to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                    to.x as f32 * scale_factor + offset_x,
+                                    to.y as f32 * scale_factor + offset_y,
                                 ]);
                                 vector_raster_state.fill_tri_indices.extend([
                                     filltri_index0 as u16,
@@ -2194,8 +2192,8 @@ impl<Event> CompositeTreeRender<Event> {
 
                                 let filltri_index1 = vector_raster_state.fill_tri_points.len() - 1;
                                 vector_raster_state.fill_tri_points.push([
-                                    points[1].x as f32 * dip_to_pixels_scaling + offset_x,
-                                    points[1].y as f32 * dip_to_pixels_scaling + offset_y,
+                                    points[1].x as f32 * scale_factor + offset_x,
+                                    points[1].y as f32 * scale_factor + offset_y,
                                 ]);
                                 vector_raster_state.fill_tri_indices.extend([
                                     filltri_index0 as u16,
@@ -2204,20 +2202,20 @@ impl<Event> CompositeTreeRender<Event> {
                                 ]);
                                 vector_raster_state.curve_tris.extend([
                                     [
-                                        pen_pos.0 as f32 * dip_to_pixels_scaling + offset_x,
-                                        pen_pos.1 as f32 * dip_to_pixels_scaling + offset_y,
+                                        pen_pos.0 as f32 * scale_factor + offset_x,
+                                        pen_pos.1 as f32 * scale_factor + offset_y,
                                         0.0,
                                         0.0,
                                     ],
                                     [
-                                        points[0].x as f32 * dip_to_pixels_scaling + offset_x,
-                                        points[0].y as f32 * dip_to_pixels_scaling + offset_y,
+                                        points[0].x as f32 * scale_factor + offset_x,
+                                        points[0].y as f32 * scale_factor + offset_y,
                                         0.5,
                                         0.0,
                                     ],
                                     [
-                                        points[1].x as f32 * dip_to_pixels_scaling + offset_x,
-                                        points[1].y as f32 * dip_to_pixels_scaling + offset_y,
+                                        points[1].x as f32 * scale_factor + offset_x,
+                                        points[1].y as f32 * scale_factor + offset_y,
                                         1.0,
                                         1.0,
                                     ],
@@ -2242,8 +2240,8 @@ impl<Event> CompositeTreeRender<Event> {
                                         let filltri_index1 =
                                             vector_raster_state.fill_tri_points.len() - 1;
                                         vector_raster_state.fill_tri_points.push([
-                                            q.to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                            q.to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                            q.to.x as f32 * scale_factor + offset_x,
+                                            q.to.y as f32 * scale_factor + offset_y,
                                         ]);
                                         vector_raster_state.fill_tri_indices.extend([
                                             filltri_index0 as u16,
@@ -2252,20 +2250,20 @@ impl<Event> CompositeTreeRender<Event> {
                                         ]);
                                         vector_raster_state.curve_tris.extend([
                                             [
-                                                pen_pos.0 as f32 * dip_to_pixels_scaling + offset_x,
-                                                pen_pos.1 as f32 * dip_to_pixels_scaling + offset_y,
+                                                pen_pos.0 as f32 * scale_factor + offset_x,
+                                                pen_pos.1 as f32 * scale_factor + offset_y,
                                                 0.0,
                                                 0.0,
                                             ],
                                             [
-                                                q.ctrl.x as f32 * dip_to_pixels_scaling + offset_x,
-                                                q.ctrl.y as f32 * dip_to_pixels_scaling + offset_y,
+                                                q.ctrl.x as f32 * scale_factor + offset_x,
+                                                q.ctrl.y as f32 * scale_factor + offset_y,
                                                 0.5,
                                                 0.0,
                                             ],
                                             [
-                                                q.to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                                q.to.y as f32 * dip_to_pixels_scaling + offset_y,
+                                                q.to.x as f32 * scale_factor + offset_x,
+                                                q.to.y as f32 * scale_factor + offset_y,
                                                 1.0,
                                                 1.0,
                                             ],
@@ -2283,8 +2281,8 @@ impl<Event> CompositeTreeRender<Event> {
 
                                 let filltri_index1 = vector_raster_state.fill_tri_points.len() - 1;
                                 vector_raster_state.fill_tri_points.push([
-                                    start_point.x as f32 * dip_to_pixels_scaling + offset_x,
-                                    start_point.y as f32 * dip_to_pixels_scaling + offset_y,
+                                    start_point.x as f32 * scale_factor + offset_x,
+                                    start_point.y as f32 * scale_factor + offset_y,
                                 ]);
                                 vector_raster_state.fill_tri_indices.extend([
                                     filltri_index0 as u16,
@@ -2843,7 +2841,7 @@ impl<Event> CompositeTreeRender<Event> {
             }
         }
 
-        #[cfg(target_os = "macos")]
+        /*#[cfg(target_os = "macos")]
         let framesetter = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
             .expect("Framesetter.create");
         #[cfg(target_os = "macos")]
@@ -3126,7 +3124,7 @@ impl<Event> CompositeTreeRender<Event> {
                     }
                 }
             }
-        }
+        }*/
     }
 }
 

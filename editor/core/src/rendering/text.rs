@@ -323,6 +323,10 @@ pub struct PerWindowFontSet<'d> {
     ui_title_project_name_shaping: core::ptr::NonNull<hb::ffi::hb_font_t>,
     #[cfg(feature = "freetype")]
     _marker: core::marker::PhantomData<&'d [ft::raw::FT_Byte]>,
+    #[cfg(target_os = "macos")]
+    ui_default: &'d apple_sdk_port::text::Font,
+    #[cfg(target_os = "macos")]
+    ui_title_project_name: &'d apple_sdk_port::text::Font,
 }
 impl Drop for PerWindowFontSet<'_> {
     fn drop(&mut self) {
@@ -391,6 +395,10 @@ impl<'d> PerWindowFontSet<'d> {
             ui_title_project_name_shaping,
             #[cfg(feature = "freetype")]
             _marker: core::marker::PhantomData,
+            #[cfg(target_os = "macos")]
+            ui_default: &root_set.ui_default,
+            #[cfg(target_os = "macos")]
+            ui_title_project_name: &root_set.ui_title_project_name,
         }
     }
 
