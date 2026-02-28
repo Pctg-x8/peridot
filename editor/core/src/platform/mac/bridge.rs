@@ -41,9 +41,10 @@ bitflags! {
 unsafe extern "C" {
     pub fn nsapp_run();
 
-    pub fn ni_create_window(flags: WindowCreationFlags) -> *mut WindowLink;
+    pub fn ni_create_window(flags: u32) -> *mut WindowLink;
     pub fn ni_release_window(window_link: *mut WindowLink);
     pub fn ni_make_primary_window(window_link: *mut WindowLink);
+    pub fn ni_show_window(window_link: *mut WindowLink);
     pub fn ni_get_content_scale(window_link: *mut WindowLink) -> c_float;
     pub fn ni_set_window_callbacks(
         window_link: *mut WindowLink,

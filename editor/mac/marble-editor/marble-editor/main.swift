@@ -52,11 +52,15 @@ func manualCaptureEnd() {
 
 final class AppMainDelegate : NSObject, NSApplicationDelegate {}
 
-final class MainWindowDelegate : NSObject, NSWindowDelegate {
+protocol AppWindowDelegate : NSWindowDelegate {}
+
+final class MainWindowDelegate : NSObject, AppWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         app.terminate(nil)
     }
 }
+
+final class SubWindowDelegate : NSObject, AppWindowDelegate {}
 
 struct WindowLinkCallbackSet {
     private let funcs: UnsafePointer<WindowLinkCallbacks>
@@ -97,7 +101,7 @@ struct WindowCreationFlags : OptionSet {
 }
 
 final class WindowLink : NSWindow {
-    private var mainWindowDelegate: MainWindowDelegate? = nil
+    private var windowDelegate: AppWindowDelegate? = nil
     private var callbacks: WindowLinkCallbackSet? = nil
     
     init(_ flags: WindowCreationFlags) {
@@ -117,6 +121,11 @@ final class WindowLink : NSWindow {
         let mainView = MainView()
         mainView.setup()
         self.contentView = mainView
+        
+        if !flags.contains(.main) {
+            self.windowDelegate = SubWindowDelegate()
+            self.delegate = self.windowDelegate
+        }
     }
     
     var mainView: MainView {
@@ -148,10 +157,14 @@ final class WindowLink : NSWindow {
     }
     
     func makePrimaryWindow() {
-        self.mainWindowDelegate = MainWindowDelegate()
-        self.delegate = self.mainWindowDelegate
+        self.windowDelegate = MainWindowDelegate()
+        self.delegate = self.windowDelegate
         self.center()
         self.makeKeyAndOrderFront(nil)
+    }
+    
+    func show() {
+        self.orderFront(nil)
     }
     
     override func mouseDown(with event: NSEvent) {
@@ -187,6 +200,11 @@ func releaseWindow(p: UnsafeMutableRawPointer) {
 @_cdecl("ni_make_primary_window")
 func makePrimaryWindow(windowLink: UnsafeMutableRawPointer) {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().makePrimaryWindow()
+}
+
+@_cdecl("ni_show_window")
+func showWindow(windowLink: UnsafeMutableRawPointer) {
+    Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().show()
 }
 
 @_cdecl("ni_get_content_scale")

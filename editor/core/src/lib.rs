@@ -334,22 +334,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(target_os = "macos")]
     let main_window_handle = w.make_handle();
     #[cfg(target_os = "macos")]
-    let mut subw = MacWindow::new(
-        platform::mac::bridge::WindowCreationFlags::empty(),
-        empty_dispatcher.clone(),
-        composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        }),
-        ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        }),
-    );
-    #[cfg(target_os = "macos")]
-    let sub_window_handle = subw.make_handle();
-    #[cfg(target_os = "macos")]
     w.make_primary_window();
 
     #[cfg(windows)]
@@ -407,12 +391,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(target_os = "macos")]
     let vk_surface = VulkanSurface::new(&vk_device, unsafe {
         br::MetalSurfaceCreateInfo::new(w.metal_layer())
-            .execute(vk_device.instance(), None)
-            .expect("vk_surface.create")
-    });
-    #[cfg(target_os = "macos")]
-    let sub_vk_surface = VulkanSurface::new(&vk_device, unsafe {
-        br::MetalSurfaceCreateInfo::new(subw.metal_layer())
             .execute(vk_device.instance(), None)
             .expect("vk_surface.create")
     });
@@ -502,12 +480,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         });
     #[cfg(any(windows, target_os = "macos"))]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
-        event_store: event_store.as_mut().get_mut() as *mut _ as _,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
-        future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
-    });
-    #[cfg(any(windows, target_os = "macos"))]
-    subw.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store: event_store.as_mut().get_mut() as *mut _ as _,
         poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
         future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
@@ -629,64 +601,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 composite_root: w.state_ref().composite_root,
                 #[cfg(feature = "wayland")]
                 composite_root: window_registry.objects[&WaylandSurfaceKey(main_window_handle.0)]
-                    .event_listener
-                    .state
-                    .composite_root,
-            }))
-            .expect("rt_sender.send");
-        rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                #[cfg(target_os = "macos")]
-                init_scale: SafeF32::new(
-                    *subw
-                        .dispatcher
-                        .state
-                        .active_buffer_scale
-                        .lock()
-                        .expect("poisoned"),
-                )
-                .expect("invalid scale"),
-                #[cfg(target_os = "macos")]
-                composite_root: subw.dispatcher.state.composite_root,
-                #[cfg(target_os = "macos")]
-                latest_ui_scale_changes: UnboundedRef::new(
-                    &subw.dispatcher.state.latest_ui_scale_changes,
-                ),
-                key: sub_window_handle,
-                vk_surface: NewWindowVulkanSurface(sub_vk_surface.unbound().1),
-                #[cfg(feature = "wayland")]
-                committed_state: UnboundedRef::new(
-                    &window_registry.objects[&WaylandSurfaceKey(sub_window_handle.0)]
-                        .event_listener
-                        .state
-                        .committed_state,
-                ),
-                #[cfg(feature = "wayland")]
-                swapchain_externally_invalidation_signal: UnboundedRef::new(
-                    &window_registry.objects[&WaylandSurfaceKey(sub_window_handle.0)]
-                        .event_listener
-                        .state
-                        .swapchain_externally_invalidation_signal,
-                ),
-                #[cfg(feature = "wayland")]
-                latest_ui_scale_changes: UnboundedRef::new(
-                    &window_registry.objects[&WaylandSurfaceKey(sub_window_handle.0)]
-                        .event_listener
-                        .state
-                        .latest_ui_scale_changes,
-                ),
-                #[cfg(windows)]
-                handle: subw.make_sendable(),
-                #[cfg(windows)]
-                latest_ui_scale_changes: &subw.state_ref().latest_ui_scale_changes,
-                #[cfg(windows)]
-                init_scale: SafeF32::new(subw.dpi() as f32 / 96.0).expect("invalid scale"),
-                #[cfg(feature = "wayland")]
-                init_scale: init_scale2,
-                #[cfg(windows)]
-                composite_root: subw.state_ref().composite_root,
-                #[cfg(feature = "wayland")]
-                composite_root: window_registry.objects[&WaylandSurfaceKey(sub_window_handle.0)]
                     .event_listener
                     .state
                     .composite_root,
@@ -1432,7 +1346,7 @@ impl SystemLink<'_> {
         composite_tree: &mut CompositeTree<Event>,
         hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
     ) -> WindowHandle {
-        let w = MacWindow::new(
+        let mut w = MacWindow::new(
             platform::mac::bridge::WindowCreationFlags::empty(),
             unsafe { (*self.event_dispatcher).clone() },
             composite_tree.create(CompositeRect {
@@ -1446,6 +1360,7 @@ impl SystemLink<'_> {
             }),
         );
         let handle = w.make_handle();
+        w.show();
 
         let vk_surface = VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
             br::MetalSurfaceCreateInfo::new(w.metal_layer())
@@ -3154,7 +3069,7 @@ impl MacWindow {
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
     ) -> Self {
-        let native_ptr = unsafe { platform::mac::bridge::ni_create_window(flags) };
+        let native_ptr = unsafe { platform::mac::bridge::ni_create_window(flags.bits()) };
         let init_scale = unsafe { platform::mac::bridge::ni_get_content_scale(native_ptr) };
         let mut dispatcher = Box::pin(MacWindowDispatcher {
             event_dispatcher,
@@ -3208,6 +3123,13 @@ impl MacWindow {
     pub fn make_primary_window(&mut self) {
         unsafe {
             platform::mac::bridge::ni_make_primary_window(self.native_ptr);
+        }
+    }
+
+    #[inline(always)]
+    pub fn show(&mut self) {
+        unsafe {
+            platform::mac::bridge::ni_show_window(self.native_ptr);
         }
     }
 
