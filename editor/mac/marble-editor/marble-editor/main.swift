@@ -4,6 +4,8 @@ let app = NSApplication.shared
 let delegate = AppMainDelegate()
 app.delegate = delegate
 
+let filesystemCacheDir = URL.cachesDirectory.path.utf8CString
+
 let menu = NSMenu()
 let appMenu = NSMenu(title: "Peridot Marble Editor")
 let quitMenuItem = appMenu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate), keyEquivalent: "q")
@@ -270,7 +272,6 @@ func setCursorShape(shape: UInt8) {
     }
 }
 
-let filesystemCacheDir = URL.cachesDirectory.path.utf8CString
 @_cdecl("ni_query_filesystem_cachedir_path")
 func queryFilesystemCachedirPath() -> UnsafePointer<CChar> {
     filesystemCacheDir.withUnsafeBufferPointer { $0.baseAddress! }

@@ -3065,11 +3065,18 @@ impl FileSystem {
     #[tracing::instrument]
     pub fn new() -> Self {
         // TODO: リリース版だとresourcesの場所はかわる
+        #[cfg(not(target_os = "macos"))]
         let resources_base_path = std::env::current_exe()
             .expect("fs.resources_base_path.current_exe")
             .parent()
             .expect("fs.resources_base_path.current_exe.parent")
             .join("../../../core/resources");
+        #[cfg(target_os = "macos")] // macのはこれで確定（bundleするときにここにコピーしてる）
+        let resources_base_path = std::env::current_exe()
+            .expect("fs.resources._base_path.current_exe")
+            .parent()
+            .expect("fs.resources_base_pat.current_exe.parent")
+            .join("../Resources/resources");
         #[cfg(target_os = "linux")]
         let cache_base_path = 'cache_base_path: {
             if let Some(p) = std::env::var_os("XDG_CACHE_HOME") {

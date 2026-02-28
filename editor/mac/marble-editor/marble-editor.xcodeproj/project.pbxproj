@@ -8,10 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		4B4CC2232F03996D00B80F44 /* libperidot_marble_editor.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B4CC2222F03996D00B80F44 /* libperidot_marble_editor.a */; };
+		4B9CA8F72F5269BE00E4C4D5 /* resources in Resources */ = {isa = PBXBuildFile; fileRef = 4B9CA8F62F5269B000E4C4D5 /* resources */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		4B4CC2222F03996D00B80F44 /* libperidot_marble_editor.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libperidot_marble_editor.a; sourceTree = "<group>"; };
+		4B9CA8F62F5269B000E4C4D5 /* resources */ = {isa = PBXFileReference; lastKnownFileType = folder; name = resources; path = ../../core/resources; sourceTree = SOURCE_ROOT; };
 		4BCE80212F03951B0063E63C /* marble-editor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "marble-editor.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -47,6 +49,7 @@
 		4BCE80182F03951B0063E63C = {
 			isa = PBXGroup;
 			children = (
+				4B9CA8F62F5269B000E4C4D5 /* resources */,
 				4B4CC2212F03991100B80F44 /* rust-artifact */,
 				4BCE80232F03951B0063E63C /* marble-editor */,
 				4BCE80222F03951B0063E63C /* Products */,
@@ -126,6 +129,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B9CA8F72F5269BE00E4C4D5 /* resources in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
