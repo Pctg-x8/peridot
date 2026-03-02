@@ -266,6 +266,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(windows)]
     let mut w = platform::windows::NativeWindow::new(
         &wc_set,
+        WindowType::Main {},
         composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
@@ -1424,6 +1425,7 @@ impl SystemLink<'_> {
     ) -> WindowHandle {
         let w = platform::windows::NativeWindow::new(
             unsafe { &*self.window_class_set },
+            WindowType::Sub,
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
@@ -1480,6 +1482,17 @@ impl SystemLink<'_> {
 
     #[cfg(windows)]
     pub fn close_window(&self, mut window_handle: WindowHandle) {
+        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+        self.rt_sender
+            .send(RenderMessage::DestroyWindow(
+                window_handle,
+                done_event_sender,
+            ))
+            .expect("rt_sender.send.destroy_window");
+        done_event_receiver
+            .recv()
+            .expect("done_event_receiver.recv");
+
         window_handle.destroy();
     }
 

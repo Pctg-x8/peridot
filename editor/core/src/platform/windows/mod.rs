@@ -23,11 +23,11 @@ use windows::{
                 SHOW_WINDOW_CMD, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOWNOACTIVATE,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
                 SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE, WA_CLICKACTIVE,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DPICHANGED,
-                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE,
-                WM_NCHITTEST, WM_SETFOCUS, WM_SIZE, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
-                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
+                WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                WM_NCCALCSIZE, WM_NCHITTEST, WM_SETFOCUS, WM_SIZE, WNDCLASS_STYLES, WNDCLASSEXW,
+                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -39,7 +39,7 @@ use core::pin::Pin;
 use std::sync::Mutex;
 
 use crate::{
-    Event, LogicFiberEventDispatcher,
+    Event, LogicFiberEventDispatcher, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
     hittest::{HitTestTreeManager, HitTestTreeRef},
@@ -203,16 +203,14 @@ impl WindowClassSet {
     }
 }
 
-pub struct NativeWindow<'h> {
+pub struct NativeWindow {
     hinstance: HINSTANCE,
     hwnd: HWND,
-    event_handler: Pin<Box<WindowEventHandler<'h>>>,
 }
-unsafe impl Sync for NativeWindow<'_> {}
-unsafe impl Send for NativeWindow<'_> {}
-impl<'h> NativeWindow<'h> {
+impl NativeWindow {
     pub fn new(
         wc_set: &WindowClassSet,
+        window_type: WindowType,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
@@ -234,8 +232,9 @@ impl<'h> NativeWindow<'h> {
             )
             .expect("CreateWindowExW")
         };
-        let mut event_handler = Box::pin(WindowEventHandler {
+        let event_handler = Box::new(WindowEventHandler {
             state: WindowState {
+                r#type: window_type,
                 pointer_input_manager_ptr: core::ptr::null(),
                 ht_manager_ptr: core::ptr::null(),
                 content_scale: unsafe {
@@ -253,14 +252,13 @@ impl<'h> NativeWindow<'h> {
             SetWindowLongPtrW(
                 w,
                 WindowEventHandler::LONG_PTR_INDEX,
-                event_handler.as_mut().get_mut() as *mut _ as _,
+                Box::into_raw(event_handler).addr().cast_signed(),
             );
         }
 
         Self {
             hinstance: wc_set.hinstance,
             hwnd: w,
-            event_handler,
         }
     }
 
@@ -281,7 +279,7 @@ impl<'h> NativeWindow<'h> {
 
     #[inline(always)]
     pub fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher) {
-        self.event_handler.event_dispatcher = dispatcher;
+        WindowEventHandler::get_for_window(self.hwnd).event_dispatcher = dispatcher;
     }
 
     #[inline(always)]
@@ -290,8 +288,8 @@ impl<'h> NativeWindow<'h> {
     }
 
     #[inline(always)]
-    pub fn state_ref<'a>(&'a self) -> &'a WindowState<'h> {
-        &self.event_handler.state
+    pub fn state_ref<'a>(&'a self) -> &'a WindowState {
+        &WindowEventHandler::get_for_window(self.hwnd).state
     }
 
     #[inline(always)]
@@ -306,6 +304,7 @@ impl<'h> NativeWindow<'h> {
 }
 
 pub struct WindowState<'h> {
+    r#type: WindowType,
     pointer_input_manager_ptr: *const PointerInputManager,
     ht_manager_ptr: *const HitTestTreeManager<'h>,
     content_scale: f32,
@@ -481,9 +480,29 @@ impl WindowEventHandler<'_> {
         lparam: LPARAM,
     ) -> LRESULT {
         if msg == WM_CLOSE {
+            let Some(e) = Self::try_get_for_window(hwnd) else {
+                return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+            };
+
+            match e.state.r#type {
+                WindowType::Main {} => unsafe {
+                    PostQuitMessage(0);
+                },
+                WindowType::Sub => e.event_dispatcher.dispatch(Event::SubWindowClose {
+                    window: WindowHandle(hwnd),
+                }),
+            }
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_DESTROY {
             unsafe {
-                // TODO: detect main window
-                PostQuitMessage(0);
+                drop(Box::from_raw(
+                    core::ptr::with_exposed_provenance_mut::<Self>(
+                        GetWindowLongPtrW(hwnd, Self::LONG_PTR_INDEX).cast_unsigned(),
+                    ),
+                ));
             }
 
             return LRESULT(0);
