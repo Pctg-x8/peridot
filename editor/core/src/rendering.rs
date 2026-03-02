@@ -40,8 +40,6 @@ pub struct NewWindowData {
     pub committed_state: UnboundedRef<Mutex<WaylandWindowCommittedState>>,
     #[cfg(feature = "wayland")]
     pub swapchain_externally_invalidation_signal: UnboundedRef<AtomicBool>,
-    #[cfg(windows)]
-    pub handle: crate::platform::windows::SendableWindowHandle,
     pub latest_ui_scale_changes: UnboundedRef<Mutex<Option<f32>>>,
     pub init_scale: SafeF32,
     pub composite_root: CompositeTreeRef,
@@ -118,8 +116,6 @@ impl<'main> RenderThread<'main> {
                             WindowRenderer::new(
                                 self.vk_device,
                                 wd,
-                                #[cfg(windows)]
-                                wd.handle,
                                 main_window_glyph_atlas.manager.atlas(),
                                 &font_set,
                             ),
@@ -386,7 +382,7 @@ struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
     swapchain_externally_invalidation_signal: *const AtomicBool,
     #[cfg(windows)]
-    w: crate::platform::windows::SendableWindowHandle,
+    w: crate::WindowHandle,
     #[cfg(target_os = "macos")]
     w: crate::WindowHandle,
     active_scale: SafeF32,
@@ -416,7 +412,6 @@ impl<'d> WindowRenderer<'d> {
     fn new(
         device: &'d VulkanDevice<'d>,
         create_data: NewWindowData,
-        #[cfg(windows)] w: crate::platform::windows::SendableWindowHandle,
         glyph_atlas: &GlyphAtlas,
         root_font_set: &'d RootFontSet,
     ) -> Self {
@@ -429,7 +424,7 @@ impl<'d> WindowRenderer<'d> {
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
             #[cfg(windows)]
-            || w.pixels_client_size(),
+            || create_data.key.pixels_client_size(),
             #[cfg(feature = "wayland")]
             || unsafe {
                 (*create_data.committed_state.get())
@@ -534,7 +529,7 @@ impl<'d> WindowRenderer<'d> {
 
         Self {
             #[cfg(windows)]
-            w,
+            w: create_data.key,
             #[cfg(feature = "wayland")]
             committed_state: create_data.committed_state.get(),
             #[cfg(feature = "wayland")]

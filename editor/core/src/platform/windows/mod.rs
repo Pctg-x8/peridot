@@ -41,15 +41,17 @@ use std::sync::Mutex;
 use crate::{
     Event, LogicFiberEventDispatcher,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
-    composite::CompositeTreeRef,
     graphics::{VulkanDevice, VulkanSurface},
     hittest::{HitTestTreeManager, HitTestTreeRef},
     input::{PointerInputManager, PointerInputUnit, ShellPointerActions},
+    rendering::composite::CompositeTreeRef,
     utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::register_class},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct WindowHandle(HWND);
+unsafe impl Send for WindowHandle {}
+unsafe impl Sync for WindowHandle {}
 impl core::hash::Hash for WindowHandle {
     #[inline(always)]
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -62,10 +64,17 @@ impl WindowHandle {
     }
 
     #[inline(always)]
+    pub fn destroy(&mut self) {
+        if let Err(e) = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0) } {
+            tracing::error!(reason = %e, "window.destroy");
+        }
+    }
+
+    #[inline(always)]
     fn state<'a, 'h>(&'a self) -> &'a WindowState<'h> {
         unsafe {
             &*core::ptr::with_exposed_provenance(
-                GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
+                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
             )
         }
     }
@@ -78,7 +87,7 @@ impl WindowHandle {
     ) {
         let st = unsafe {
             &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
-                GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
+                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
             )
         };
         st.pointer_input_manager_ptr = pointer_input_manager;
@@ -89,7 +98,7 @@ impl WindowHandle {
     pub fn unbind_hittest_managers(&self) {
         let st = unsafe {
             &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
-                GetWindowLongPtrW(self.0, WindowEventHandler::<()>::LONG_PTR_INDEX).cast_unsigned(),
+                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
             )
         };
         st.pointer_input_manager_ptr = core::ptr::null();
@@ -109,6 +118,16 @@ impl WindowHandle {
         let rc = unsafe { rc.assume_init_ref() };
         Size::new_pixels(rc.right as _, rc.bottom as _)
             .to_logical(unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.0) as f32 / 96.0 })
+    }
+
+    #[inline(always)]
+    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
+        let mut rect = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(self.0, rect.as_mut_ptr()).expect("GetClientRect");
+        }
+        let rect = unsafe { rect.assume_init_ref() };
+        Size::new_pixels(rect.right as _, rect.bottom as _)
     }
 
     #[inline(always)]
@@ -145,7 +164,7 @@ impl ShellPointerActions for WindowHandle {
 #[derive(Clone, Copy)]
 pub struct PointerID();
 
-impl crate::SystemLink {
+impl crate::SystemLink<'_> {
     #[inline(always)]
     pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
         *window
@@ -161,14 +180,14 @@ pub struct WindowClassSet {
     main: u16,
 }
 impl WindowClassSet {
-    pub fn register<AppFuture: core::future::Future<Output = ()>>(hinstance: HINSTANCE) -> Self {
+    pub fn register(hinstance: HINSTANCE) -> Self {
         let main = unsafe {
             register_class(&WNDCLASSEXW {
                 cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
                 style: WNDCLASS_STYLES(0),
                 cbClsExtra: 0,
                 cbWndExtra: core::mem::size_of::<[usize; 3]>() as _,
-                lpfnWndProc: Some(WindowEventHandler::<AppFuture>::handle_messages),
+                lpfnWndProc: Some(WindowEventHandler::handle_messages),
                 hInstance: hinstance,
                 hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
                 hCursor: HCURSOR(core::ptr::null_mut()),
@@ -184,36 +203,19 @@ impl WindowClassSet {
     }
 }
 
-#[repr(transparent)]
-#[derive(Clone, Copy)]
-pub struct SendableWindowHandle(HWND);
-unsafe impl Sync for SendableWindowHandle {}
-unsafe impl Send for SendableWindowHandle {}
-impl SendableWindowHandle {
-    #[inline(always)]
-    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
-        let mut rect = core::mem::MaybeUninit::uninit();
-        unsafe {
-            GetClientRect(self.0, rect.as_mut_ptr()).expect("GetClientRect");
-        }
-        let rect = unsafe { rect.assume_init_ref() };
-        Size::new_pixels(rect.right as _, rect.bottom as _)
-    }
-}
-
-pub struct NativeWindow<'h, AppFuture> {
+pub struct NativeWindow<'h> {
     hinstance: HINSTANCE,
     hwnd: HWND,
-    event_handler: Pin<Box<WindowEventHandler<'h, AppFuture>>>,
+    event_handler: Pin<Box<WindowEventHandler<'h>>>,
 }
-unsafe impl<AppFuture> Sync for NativeWindow<'_, AppFuture> {}
-unsafe impl<AppFuture> Send for NativeWindow<'_, AppFuture> {}
-impl<'h, AppFuture> NativeWindow<'h, AppFuture> {
+unsafe impl Sync for NativeWindow<'_> {}
+unsafe impl Send for NativeWindow<'_> {}
+impl<'h> NativeWindow<'h> {
     pub fn new(
         wc_set: &WindowClassSet,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
-        event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+        event_dispatcher: LogicFiberEventDispatcher,
     ) -> Self {
         let w = unsafe {
             CreateWindowExW(
@@ -250,7 +252,7 @@ impl<'h, AppFuture> NativeWindow<'h, AppFuture> {
         unsafe {
             SetWindowLongPtrW(
                 w,
-                WindowEventHandler::<()>::LONG_PTR_INDEX,
+                WindowEventHandler::LONG_PTR_INDEX,
                 event_handler.as_mut().get_mut() as *mut _ as _,
             );
         }
@@ -263,7 +265,10 @@ impl<'h, AppFuture> NativeWindow<'h, AppFuture> {
     }
 
     #[inline(always)]
-    pub fn create_vk_surface<'d>(&self, device: &'d VulkanDevice) -> VulkanSurface<'d> {
+    pub fn create_vk_surface<'d, 'fs>(
+        &self,
+        device: &'d VulkanDevice<'fs>,
+    ) -> VulkanSurface<'d, 'fs> {
         VulkanSurface::new(device, unsafe {
             br::Win32SurfaceCreateInfo::new(
                 core::mem::transmute(self.hinstance),
@@ -275,18 +280,13 @@ impl<'h, AppFuture> NativeWindow<'h, AppFuture> {
     }
 
     #[inline(always)]
-    pub fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher<AppFuture>) {
+    pub fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher) {
         self.event_handler.event_dispatcher = dispatcher;
     }
 
     #[inline(always)]
     pub const fn make_handle(&self) -> WindowHandle {
         WindowHandle(self.hwnd)
-    }
-
-    #[inline(always)]
-    pub const fn make_sendable(&self) -> SendableWindowHandle {
-        SendableWindowHandle(self.hwnd)
     }
 
     #[inline(always)]
@@ -317,16 +317,16 @@ unsafe impl Sync for WindowState<'_> {}
 unsafe impl Send for WindowState<'_> {}
 
 #[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
-pub struct WindowEventHandler<'h, AppFuture> {
+pub struct WindowEventHandler<'h> {
     state: WindowState<'h>,
-    event_dispatcher: LogicFiberEventDispatcher<AppFuture>,
+    event_dispatcher: LogicFiberEventDispatcher,
     text_services_mgr: Option<CoreTextServicesManager>,
     edit_context: Option<CoreTextEditContext>,
 }
-impl<AppFuture> WindowEventHandler<'_, AppFuture> {
+impl WindowEventHandler<'_> {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
 }
-impl<AppFuture: core::future::Future<Output = ()>> WindowEventHandler<'_, AppFuture> {
+impl WindowEventHandler<'_> {
     #[inline(always)]
     fn get_for_window<'a>(w: HWND) -> &'a mut Self {
         unsafe {

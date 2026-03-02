@@ -28,6 +28,8 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, SW_SHOWNORMAL, TranslateMessage},
 };
 
+#[cfg(windows)]
+use crate::platform::windows::WindowClassSet;
 use crate::{
     graphics::{VulkanDevice, VulkanSurface},
     hittest::{
@@ -86,7 +88,7 @@ pub fn launch() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let mut event_store = core::pin::pin!(None);
+    let mut event_store = core::pin::pin!(VecDeque::new());
     let event_queue = EventQueue {
         event_store: event_store.as_mut().get_mut(),
     };
@@ -127,7 +129,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         WindowHandle,
         SystemLink<'sys>,
     ) -> AppFuture,
-    mut event_store: Pin<&mut Option<Event>>,
+    mut event_store: Pin<&mut VecDeque<Event>>,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
     fs: &'sys FileSystem,
@@ -251,24 +253,39 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
+    let mut polling = core::pin::pin!(false);
     let empty_dispatcher = LogicFiberEventDispatcher {
         event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        polling: polling.as_mut().get_mut(),
         poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
         future_ptr: core::ptr::null_mut(),
     };
 
     #[cfg(windows)]
-    let wc_set = platform::windows::WindowClassSet::register::<AppFuture>(hinstance);
+    let wc_set = platform::windows::WindowClassSet::register(hinstance);
     #[cfg(windows)]
     let mut w = platform::windows::NativeWindow::new(
         &wc_set,
-        main_window_composite_root,
-        main_window_ht_root,
+        composite_tree.create(CompositeRect {
+            relative_size_adjustment: [1.0, 1.0],
+            ..Default::default()
+        }),
+        ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        }),
         LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            future: core::ptr::null_mut(),
+            polling: polling.as_mut().get_mut(),
+            poll_fn_ptr: unsafe {
+                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
+            },
+            future_ptr: core::ptr::null_mut(),
         },
     );
+    #[cfg(windows)]
+    let main_window_handle = w.make_handle();
 
     #[cfg(feature = "wayland")]
     let mut window_registry = WaylandWindowRegistry {
@@ -424,6 +441,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             drag_preview_popover,
             rt_sender: rt_sender.clone(),
             vk_device: &vk_device,
+            #[cfg(windows)]
+            window_class_set: &wc_set,
             #[cfg(feature = "wayland")]
             wl_display: wl_display.as_raw().cast(),
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
@@ -461,6 +480,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .expect("no window")
         .rebind_event_dispatcher(LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
+            polling: polling.as_mut().get_mut(),
             poll_fn_ptr: unsafe {
                 core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
             },
@@ -473,6 +493,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .expect("no window")
         .rebind_event_dispatcher(LogicFiberEventDispatcher {
             event_store: event_store.as_mut().get_mut() as *mut _ as _,
+            polling: polling.as_mut().get_mut(),
             poll_fn_ptr: unsafe {
                 core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
             },
@@ -481,6 +502,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(any(windows, target_os = "macos"))]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store: event_store.as_mut().get_mut() as *mut _ as _,
+        polling: polling.as_mut().get_mut(),
         poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
         future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
     });
@@ -590,9 +612,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         .latest_ui_scale_changes,
                 ),
                 #[cfg(windows)]
-                handle: w.make_sendable(),
-                #[cfg(windows)]
-                latest_ui_scale_changes: &w.state_ref().latest_ui_scale_changes,
+                latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
                 #[cfg(windows)]
                 init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
                 #[cfg(feature = "wayland")]
@@ -846,7 +866,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             platform::mac::bridge::nsapp_run();
         }
 
-        *event_store = Some(Event::Quit);
+        event_store.push_back(Event::Quit);
         while app
             .as_mut()
             .poll(&mut core::task::Context::from_waker(&unsafe {
@@ -899,7 +919,7 @@ unsafe impl Sync for Event {}
 unsafe impl Send for Event {}
 
 struct EventQueue {
-    event_store: *mut Option<Event>,
+    event_store: *mut VecDeque<Event>,
 }
 impl EventQueue {
     pub async fn next_event(&self) -> Event {
@@ -909,21 +929,26 @@ impl EventQueue {
 
 #[derive(Clone)]
 pub struct LogicFiberEventDispatcher {
-    event_store: *mut Option<Event>,
+    event_store: *mut VecDeque<Event>,
+    polling: *mut bool,
     poll_fn_ptr: fn(*mut core::ffi::c_void, ctx: &mut core::task::Context) -> core::task::Poll<()>,
     future_ptr: *mut core::ffi::c_void,
 }
 impl LogicFiberEventDispatcher {
     pub fn dispatch(&self, e: Event) {
         unsafe {
-            (*self.event_store) = Some(e);
-            let _ = (self.poll_fn_ptr)(
-                self.future_ptr,
-                &mut core::task::Context::from_waker(&core::task::Waker::new(
-                    &(),
-                    &APP_WAKER_VTABLE,
-                )),
-            );
+            (*self.event_store).push_back(e);
+            if !*self.polling {
+                *self.polling = true;
+                let _ = (self.poll_fn_ptr)(
+                    self.future_ptr,
+                    &mut core::task::Context::from_waker(&core::task::Waker::new(
+                        &(),
+                        &APP_WAKER_VTABLE,
+                    )),
+                );
+                *self.polling = false;
+            }
         }
     }
 }
@@ -938,7 +963,7 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
         self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        match unsafe { (&mut *self.get_mut().q.event_store).take() } {
+        match unsafe { (&mut *self.get_mut().q.event_store).pop_front() } {
             None => core::task::Poll::Pending,
             Some(x) => core::task::Poll::Ready(x),
         }
@@ -1260,6 +1285,8 @@ struct SystemLink<'sys> {
     vk_device: *const VulkanDevice<'sys>,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
+    #[cfg(windows)]
+    window_class_set: *const platform::windows::WindowClassSet,
     #[cfg(feature = "wayland")]
     wl_display: *mut wl::Display,
     #[cfg(feature = "wayland")]
@@ -1389,6 +1416,42 @@ impl SystemLink<'_> {
         handle
     }
 
+    #[cfg(windows)]
+    pub fn open_window<'h>(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
+    ) -> WindowHandle {
+        let w = platform::windows::NativeWindow::new(
+            unsafe { &*self.window_class_set },
+            composite_tree.create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                ..Default::default()
+            }),
+            hit_tree.create(HitTestTreeData {
+                width_adjustment_factor: 1.0,
+                height_adjustment_factor: 1.0,
+                ..Default::default()
+            }),
+            unsafe { &*self.event_dispatcher }.clone(),
+        );
+        let h = w.make_handle();
+        w.show(windows::Win32::UI::WindowsAndMessaging::SW_SHOW);
+
+        let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
+        self.rt_sender
+            .send(RenderMessage::NewWindow(NewWindowData {
+                key: h,
+                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+                latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
+                init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
+                composite_root: w.state_ref().composite_root,
+            }))
+            .expect("rt_sender.send");
+
+        h
+    }
+
     #[cfg(feature = "wayland")]
     pub fn close_window(&self, window_handle: WindowHandle) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
@@ -1413,6 +1476,11 @@ impl SystemLink<'_> {
         unsafe {
             platform::mac::bridge::ni_release_window(window_handle.0);
         }
+    }
+
+    #[cfg(windows)]
+    pub fn close_window(&self, mut window_handle: WindowHandle) {
+        window_handle.destroy();
     }
 
     #[cfg(feature = "wayland")]
@@ -3017,6 +3085,14 @@ impl FileSystem {
             .to_str()
             .expect("fs.cache_base_path.invalid_str")
         });
+        #[cfg(windows)]
+        let cache_base_path = {
+            let base =
+                PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("fs.cache_base_path.no_env"));
+            let p = base.join("peridot/.editor");
+
+            p
+        };
 
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
             tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");
