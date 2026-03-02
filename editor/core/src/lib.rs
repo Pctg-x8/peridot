@@ -28,8 +28,6 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, SW_SHOWNORMAL, TranslateMessage},
 };
 
-#[cfg(windows)]
-use crate::platform::windows::WindowClassSet;
 use crate::{
     graphics::{VulkanDevice, VulkanSurface},
     hittest::{
@@ -438,6 +436,15 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         main_window_handle,
         #[cfg(windows)]
         w.make_handle(),
+        #[cfg(windows)]
+        SystemLink {
+            drag_preview_popover,
+            rt_sender: rt_sender.clone(),
+            vk_device: &vk_device,
+            event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
+            window_class_set: &wc_set,
+        },
+        #[cfg(not(windows))]
         SystemLink {
             drag_preview_popover,
             rt_sender: rt_sender.clone(),
@@ -457,12 +464,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             },
             #[cfg(feature = "wayland")]
             window_registry: &mut window_registry,
-        } /*
-          #[cfg(target_os = "macos")]
-          WindowHandle {
-              state_ref: &mut w.dispatcher.state as *mut _
-          },
-          drag_preview_popover*/
+        }
     ));
 
     app_event_dispatcher.future_ptr = unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ };
@@ -1285,6 +1287,10 @@ async fn run<'sys>(
     }
 }
 
+#[cfg(windows)]
+pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
+
+#[cfg(not(windows))]
 struct SystemLink<'sys> {
     drag_preview_popover: DragPreviewPopoverHandle,
     vk_device: *const VulkanDevice<'sys>,
@@ -1303,6 +1309,7 @@ struct SystemLink<'sys> {
     #[cfg(feature = "wayland")]
     window_registry: *mut WaylandWindowRegistry,
 }
+#[cfg(not(windows))]
 impl SystemLink<'_> {
     #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {

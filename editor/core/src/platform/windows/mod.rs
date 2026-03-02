@@ -41,11 +41,19 @@ use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
-    hittest::{HitTestTreeManager, HitTestTreeRef},
+    hittest::{CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     input::{PointerInputManager, PointerInputUnit, ShellPointerActions},
-    rendering::composite::CompositeTreeRef,
-    utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::register_class},
+    rendering::{
+        NewWindowData, NewWindowVulkanSurface, RenderMessage,
+        composite::{CompositeRect, CompositeTreeRef},
+    },
+    utils::{
+        LogicalUnit, PixelsUnit, Point, SafeF32, Size, UnboundedRef,
+        platform::windows::register_class,
+    },
 };
+#[cfg(windows)]
+use crate::{hittest::HitTestTreeCreate, rendering::composite::CompositeTree};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct WindowHandle(HWND);
@@ -136,17 +144,6 @@ impl ShellPointerActions for WindowHandle {
 
 #[derive(Clone, Copy)]
 pub struct PointerID();
-
-impl crate::SystemLink<'_> {
-    #[inline(always)]
-    pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
-        *window
-            .state()
-            .latest_ui_scale_changes
-            .lock()
-            .expect("poisoned") = Some(new_scale);
-    }
-}
 
 pub struct WindowClassSet {
     hinstance: HINSTANCE,
@@ -1046,5 +1043,115 @@ impl DragPreviewPopoverHandle {
 
     extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+}
+
+pub struct SystemLink<'sys> {
+    pub drag_preview_popover: DragPreviewPopoverHandle,
+    pub vk_device: *const VulkanDevice<'sys>,
+    pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    pub event_dispatcher: *mut LogicFiberEventDispatcher,
+    pub window_class_set: *const WindowClassSet,
+}
+impl SystemLink<'_> {
+    #[inline(always)]
+    pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
+        &self.drag_preview_popover
+    }
+
+    pub fn open_window<'h>(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
+    ) -> WindowHandle {
+        let w = NativeWindow::new(
+            unsafe { &*self.window_class_set },
+            WindowType::Sub,
+            composite_tree.create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                ..Default::default()
+            }),
+            hit_tree.create(HitTestTreeData {
+                width_adjustment_factor: 1.0,
+                height_adjustment_factor: 1.0,
+                ..Default::default()
+            }),
+            unsafe { &*self.event_dispatcher }.clone(),
+        );
+        let h = w.make_handle();
+        w.show(windows::Win32::UI::WindowsAndMessaging::SW_SHOW);
+
+        let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
+        self.rt_sender
+            .send(RenderMessage::NewWindow(NewWindowData {
+                key: h,
+                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+                latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
+                init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
+                composite_root: w.state_ref().composite_root,
+            }))
+            .expect("rt_sender.send");
+
+        h
+    }
+
+    pub fn close_window(&self, mut window_handle: WindowHandle) {
+        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+        self.rt_sender
+            .send(RenderMessage::DestroyWindow(
+                window_handle,
+                done_event_sender,
+            ))
+            .expect("rt_sender.send.destroy_window");
+        done_event_receiver
+            .recv()
+            .expect("done_event_receiver.recv");
+
+        window_handle.destroy();
+    }
+
+    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
+        unsafe {
+            // TODO: 必要そうならキャッシュする
+            windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor {
+                CursorShape::Default => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::Pointer => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::IBeam => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+                CursorShape::ResizeHorizontal => Some(
+                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
+                        None,
+                        windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
+                    )
+                    .expect("load_cursor.default"),
+                ),
+            });
+        }
+    }
+
+    #[inline(always)]
+    pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
+        *window
+            .state()
+            .latest_ui_scale_changes
+            .lock()
+            .expect("poisoned") = Some(new_scale);
     }
 }
