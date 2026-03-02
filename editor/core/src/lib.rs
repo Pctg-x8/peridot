@@ -989,7 +989,9 @@ async fn run<'sys>(
 
     // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
     #[cfg(windows)]
-    main_window.bind_hittest_managers(&pointer_input_manager, &ht_manager);
+    unsafe {
+        platform::windows::locate_non_client_hittest_managers(&pointer_input_manager, &ht_manager);
+    }
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -1278,7 +1280,9 @@ async fn run<'sys>(
 
     tracing::info!("app finish");
     #[cfg(windows)]
-    main_window.unbind_hittest_managers();
+    unsafe {
+        platform::windows::unlocate_non_client_hittest_managers();
+    }
 }
 
 struct SystemLink<'sys> {

@@ -70,38 +70,12 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    fn state<'a, 'h>(&'a self) -> &'a WindowState<'h> {
+    fn state<'a>(&'a self) -> &'a WindowState {
         unsafe {
             &*core::ptr::with_exposed_provenance(
                 GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
             )
         }
-    }
-
-    #[inline(always)]
-    pub fn bind_hittest_managers(
-        &self,
-        pointer_input_manager: &PointerInputManager,
-        ht_manager: &HitTestTreeManager,
-    ) {
-        let st = unsafe {
-            &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
-                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
-            )
-        };
-        st.pointer_input_manager_ptr = pointer_input_manager;
-        st.ht_manager_ptr = ht_manager;
-    }
-
-    #[inline(always)]
-    pub fn unbind_hittest_managers(&self) {
-        let st = unsafe {
-            &mut *core::ptr::with_exposed_provenance_mut::<WindowState>(
-                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
-            )
-        };
-        st.pointer_input_manager_ptr = core::ptr::null();
-        st.ht_manager_ptr = core::ptr::null();
     }
 
     #[inline(always)]
@@ -234,8 +208,6 @@ impl NativeWindow {
         let event_handler = Box::new(WindowEventHandler {
             state: WindowState {
                 r#type: window_type,
-                pointer_input_manager_ptr: core::ptr::null(),
-                ht_manager_ptr: core::ptr::null(),
                 content_scale: unsafe {
                     windows::Win32::UI::HiDpi::GetDpiForWindow(w) as f32 / 96.0
                 },
@@ -287,7 +259,7 @@ impl NativeWindow {
     }
 
     #[inline(always)]
-    pub fn state_ref<'a, 'h>(&'a self) -> &'a WindowState<'h> {
+    pub fn state_ref<'a>(&'a self) -> &'a WindowState {
         &WindowEventHandler::get_for_window(self.hwnd).state
     }
 
@@ -302,26 +274,43 @@ impl NativeWindow {
     }
 }
 
-pub struct WindowState<'h> {
+pub struct WindowState {
     r#type: WindowType,
-    pointer_input_manager_ptr: *const PointerInputManager,
-    ht_manager_ptr: *const HitTestTreeManager<'h>,
     content_scale: f32,
     pub composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
 }
-unsafe impl Sync for WindowState<'_> {}
-unsafe impl Send for WindowState<'_> {}
+unsafe impl Sync for WindowState {}
+unsafe impl Send for WindowState {}
+
+// WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタをグローバルにおいて参照もたせる（実際どうするかはあとで考える）
+static mut POINTER_INPUT_MANAGER_PTR: *const PointerInputManager = core::ptr::null();
+static mut HIT_TEST_TREE_MANAGER_PTR: *const HitTestTreeManager<'static> = core::ptr::null();
+pub unsafe fn locate_non_client_hittest_managers(
+    pointer_input_manager: &PointerInputManager,
+    ht_manager: &HitTestTreeManager,
+) {
+    unsafe {
+        POINTER_INPUT_MANAGER_PTR = pointer_input_manager;
+        HIT_TEST_TREE_MANAGER_PTR = core::mem::transmute(ht_manager);
+    }
+}
+pub unsafe fn unlocate_non_client_hittest_managers() {
+    unsafe {
+        POINTER_INPUT_MANAGER_PTR = core::ptr::null();
+        HIT_TEST_TREE_MANAGER_PTR = core::ptr::null();
+    }
+}
 
 #[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
-pub struct WindowEventHandler<'h> {
-    state: WindowState<'h>,
+pub struct WindowEventHandler {
+    state: WindowState,
     event_dispatcher: LogicFiberEventDispatcher,
     text_services_mgr: Option<CoreTextServicesManager>,
     edit_context: Option<CoreTextEditContext>,
 }
-impl WindowEventHandler<'_> {
+impl WindowEventHandler {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
 
     #[inline(always)]
@@ -444,12 +433,12 @@ impl WindowEventHandler<'_> {
             return Some(windows::Win32::UI::WindowsAndMessaging::HTTOP);
         }
 
-        if self.state.pointer_input_manager_ptr.is_null() {
+        if unsafe { POINTER_INPUT_MANAGER_PTR.is_null() } {
             // unlinked from logic fiber
             return Some(HTCLIENT);
         }
 
-        let pointer_input_manager = unsafe { &*self.state.pointer_input_manager_ptr };
+        let pointer_input_manager = unsafe { &*POINTER_INPUT_MANAGER_PTR };
         match pointer_input_manager.role(
             &client_pos.to_logical(self.state.content_scale),
             &Size::new_pixels(
@@ -457,7 +446,7 @@ impl WindowEventHandler<'_> {
                 (client_size.bottom - client_size.top) as _,
             )
             .to_logical(self.state.content_scale),
-            unsafe { &*self.state.ht_manager_ptr },
+            unsafe { &*HIT_TEST_TREE_MANAGER_PTR },
             self.state.ht_root,
         ) {
             None => Some(HTCLIENT),
