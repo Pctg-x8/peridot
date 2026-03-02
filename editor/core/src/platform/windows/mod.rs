@@ -35,7 +35,6 @@ use windows::{
 use windows_core::{IInspectable, Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
-use core::pin::Pin;
 use std::sync::Mutex;
 
 use crate::{
@@ -288,7 +287,7 @@ impl NativeWindow {
     }
 
     #[inline(always)]
-    pub fn state_ref<'a>(&'a self) -> &'a WindowState {
+    pub fn state_ref<'a, 'h>(&'a self) -> &'a WindowState<'h> {
         &WindowEventHandler::get_for_window(self.hwnd).state
     }
 
@@ -324,8 +323,7 @@ pub struct WindowEventHandler<'h> {
 }
 impl WindowEventHandler<'_> {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
-}
-impl WindowEventHandler<'_> {
+
     #[inline(always)]
     fn get_for_window<'a>(w: HWND) -> &'a mut Self {
         unsafe {
