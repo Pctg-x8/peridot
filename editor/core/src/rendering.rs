@@ -37,7 +37,7 @@ pub struct NewWindowData {
     pub key: WindowHandle,
     pub vk_surface: NewWindowVulkanSurface,
     #[cfg(feature = "wayland")]
-    pub committed_state: UnboundedRef<Mutex<WaylandWindowCommittedState>>,
+    pub committed_state: UnboundedRef<Mutex<crate::WaylandWindowCommittedState>>,
     #[cfg(feature = "wayland")]
     pub swapchain_externally_invalidation_signal: UnboundedRef<AtomicBool>,
     pub latest_ui_scale_changes: UnboundedRef<Mutex<Option<f32>>>,
@@ -378,7 +378,7 @@ impl<'main> RenderThread<'main> {
 
 struct WindowRenderer<'d> {
     #[cfg(feature = "wayland")]
-    committed_state: *const Mutex<WaylandWindowCommittedState>,
+    committed_state: *const Mutex<crate::WaylandWindowCommittedState>,
     #[cfg(feature = "wayland")]
     swapchain_externally_invalidation_signal: *const AtomicBool,
     #[cfg(windows)]

@@ -511,8 +511,8 @@ unsafe impl Interface for Surface {
     const DEF: *const ffi::Interface = unsafe { &wl_surface_interface };
 }
 impl Surface {
-    pub const fn as_raw(&mut self) -> *mut ffi::Proxy {
-        &mut self.0 as *mut _ as _
+    pub const fn as_raw(&self) -> *mut ffi::Proxy {
+        self.0.0.get()
     }
 
     #[inline]

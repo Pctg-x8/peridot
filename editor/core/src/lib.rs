@@ -312,26 +312,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let main_window_handle = WindowHandle(w.surface.as_ptr());
     #[cfg(feature = "wayland")]
     window_registry.objects.insert(w.as_key(), w);
-    #[cfg(feature = "wayland")]
-    let subw = WaylandWindow::new(
-        WindowType::Sub,
-        &wl_interfaces,
-        &dbus,
-        empty_dispatcher.clone(),
-        composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        }),
-        ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        }),
-    );
-    #[cfg(feature = "wayland")]
-    let sub_window_handle = WindowHandle(subw.surface.as_ptr());
-    #[cfg(feature = "wayland")]
-    window_registry.objects.insert(subw.as_key(), subw);
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new(
@@ -374,35 +354,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         panic!("wayland presentation not supported on graphics queue");
     }
     #[cfg(feature = "wayland")]
-    let vk_surface = VulkanSurface::new(&vk_device, unsafe {
-        br::WaylandSurfaceCreateInfo::new(
-            wl_display.as_raw().cast(),
-            window_registry
-                .objects
-                .get_mut(&WaylandSurfaceKey(main_window_handle.0))
-                .expect("no window")
-                .surface
-                .as_raw()
-                .cast(),
-        )
-        .execute(vk_device.instance(), None)
-        .expect("vk_surface.create")
-    });
-    #[cfg(feature = "wayland")]
-    let sub_vk_surface = VulkanSurface::new(&vk_device, unsafe {
-        br::WaylandSurfaceCreateInfo::new(
-            wl_display.as_raw().cast(),
-            window_registry
-                .objects
-                .get_mut(&WaylandSurfaceKey(sub_window_handle.0))
-                .expect("no window")
-                .surface
-                .as_raw()
-                .cast(),
-        )
-        .execute(vk_device.instance(), None)
-        .expect("sub_vk_surface.create")
-    });
+    let vk_surface = window_registry.objects[&WaylandSurfaceKey(main_window_handle.0)]
+        .create_vk_surface(&wl_display, &vk_device);
 
     #[cfg(target_os = "macos")]
     let vk_surface = VulkanSurface::new(&vk_device, unsafe {
@@ -489,19 +442,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             },
             future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
         });
-    #[cfg(feature = "wayland")]
-    window_registry
-        .objects
-        .get_mut(&WaylandSurfaceKey(sub_window_handle.0))
-        .expect("no window")
-        .rebind_event_dispatcher(LogicFiberEventDispatcher {
-            event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            polling: polling.as_mut().get_mut(),
-            poll_fn_ptr: unsafe {
-                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
-            },
-            future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
-        });
     #[cfg(any(windows, target_os = "macos"))]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store: event_store.as_mut().get_mut() as *mut _ as _,
@@ -532,40 +472,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     window_registry.objects[&WaylandSurfaceKey(main_window_handle.0)].commit();
     #[cfg(feature = "wayland")]
-    window_registry.objects[&WaylandSurfaceKey(sub_window_handle.0)].commit();
-    #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
-        #[cfg(feature = "wayland")]
-        let init_scale = SafeF32::new(
-            window_registry
-                .objects
-                .get_mut(&WaylandSurfaceKey(main_window_handle.0))
-                .expect("no window")
-                .event_listener
-                .state
-                .committed_state
-                .get_mut()
-                .expect("poisoned")
-                .active_buffer_scale,
-        )
-        .expect("invalid scale");
-        #[cfg(feature = "wayland")]
-        let init_scale2 = SafeF32::new(
-            window_registry
-                .objects
-                .get_mut(&WaylandSurfaceKey(sub_window_handle.0))
-                .expect("no window")
-                .event_listener
-                .state
-                .committed_state
-                .get_mut()
-                .expect("poisoned")
-                .active_buffer_scale,
-        )
-        .expect("invalid scale");
         let render_thread = RenderThread {
             vk_device: &vk_device,
             shutdown_signal: &shutdown,
@@ -585,6 +495,20 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         .expect("poisoned"),
                 )
                 .expect("invalid scale"),
+                #[cfg(feature = "wayland")]
+                init_scale: SafeF32::new(
+                    window_registry
+                        .objects
+                        .get_mut(&WaylandSurfaceKey(main_window_handle.0))
+                        .expect("no window")
+                        .event_listener_mut()
+                        .state
+                        .committed_state
+                        .get_mut()
+                        .expect("poisoned")
+                        .active_buffer_scale,
+                )
+                .expect("invalid scale"),
                 #[cfg(target_os = "macos")]
                 composite_root: w.dispatcher.state.composite_root,
                 #[cfg(target_os = "macos")]
@@ -596,21 +520,21 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 #[cfg(feature = "wayland")]
                 committed_state: UnboundedRef::new(
                     &window_registry.objects[&WaylandSurfaceKey(main_window_handle.0)]
-                        .event_listener
+                        .event_listener()
                         .state
                         .committed_state,
                 ),
                 #[cfg(feature = "wayland")]
                 swapchain_externally_invalidation_signal: UnboundedRef::new(
                     &window_registry.objects[&WaylandSurfaceKey(main_window_handle.0)]
-                        .event_listener
+                        .event_listener()
                         .state
                         .swapchain_externally_invalidation_signal,
                 ),
                 #[cfg(feature = "wayland")]
                 latest_ui_scale_changes: UnboundedRef::new(
                     &window_registry.objects[&WaylandSurfaceKey(main_window_handle.0)]
-                        .event_listener
+                        .event_listener()
                         .state
                         .latest_ui_scale_changes,
                 ),
@@ -618,13 +542,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
                 #[cfg(windows)]
                 init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
-                #[cfg(feature = "wayland")]
-                init_scale,
                 #[cfg(windows)]
                 composite_root: w.state_ref().composite_root,
                 #[cfg(feature = "wayland")]
                 composite_root: window_registry.objects[&WaylandSurfaceKey(main_window_handle.0)]
-                    .event_listener
+                    .event_listener()
                     .state
                     .composite_root,
             }))
@@ -1344,7 +1266,7 @@ impl SystemLink<'_> {
                 .expect("sub_vk_surface.create")
         });
         let init_scale = SafeF32::new(
-            w.event_listener
+            w.event_listener_mut()
                 .state
                 .committed_state
                 .get_mut()
@@ -1356,17 +1278,17 @@ impl SystemLink<'_> {
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: window_handle,
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-                committed_state: UnboundedRef::new(&w.event_listener.state.committed_state),
+                committed_state: UnboundedRef::new(&w.event_listener().state.committed_state),
                 swapchain_externally_invalidation_signal: UnboundedRef::new(
-                    &w.event_listener
+                    &w.event_listener()
                         .state
                         .swapchain_externally_invalidation_signal,
                 ),
                 latest_ui_scale_changes: UnboundedRef::new(
-                    &w.event_listener.state.latest_ui_scale_changes,
+                    &w.event_listener().state.latest_ui_scale_changes,
                 ),
                 init_scale,
-                composite_root: w.event_listener.state.composite_root,
+                composite_root: w.event_listener().state.composite_root,
             }))
             .expect("rt_sender.send");
         w.commit();
@@ -2648,12 +2570,18 @@ pub struct WaylandWindow {
     deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     fractional_scale: Option<wl::Owned<wl::WpFractionalScaleV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
-    event_listener: Pin<Box<WaylandWindowEventListener>>,
 }
 #[cfg(feature = "wayland")]
 unsafe impl Sync for WaylandWindow {}
 #[cfg(feature = "wayland")]
 unsafe impl Send for WaylandWindow {}
+#[cfg(feature = "wayland")]
+impl Drop for WaylandWindow {
+    #[inline(always)]
+    fn drop(&mut self) {
+        drop(self.unbind_listener());
+    }
+}
 #[cfg(feature = "wayland")]
 impl WaylandWindow {
     fn new(
@@ -2712,7 +2640,7 @@ impl WaylandWindow {
             None
         };
 
-        let mut event_listener = Box::pin(WaylandWindowEventListener {
+        let mut event_listener = Box::new(WaylandWindowEventListener {
             state: WaylandWindowState {
                 surface_ptr: surface.as_ptr(),
                 xdg_surface_ptr: xdg_surface.as_ptr(),
@@ -2733,27 +2661,29 @@ impl WaylandWindow {
             event_dispatcher,
         });
         surface
-            .set_listener(event_listener.as_mut().get_mut())
+            .set_listener(event_listener.as_mut())
             .into_result()
             .expect("wl_surface set listener");
         xdg_surface
-            .set_listener(event_listener.as_mut().get_mut())
+            .set_listener(event_listener.as_mut())
             .into_result()
             .expect("xdg_surface set listener");
         xdg_toplevel
-            .set_listener(event_listener.as_mut().get_mut())
+            .set_listener(event_listener.as_mut())
             .into_result()
             .expect("xdg_toplevel set listener");
         if let Some(ref mut x) = deco {
-            x.set_listener(event_listener.as_mut().get_mut())
+            x.set_listener(event_listener.as_mut())
                 .into_result()
                 .expect("zxdg_toplevel_decoration_v1.set_listener");
         }
         if let Some(ref mut x) = fractional_scale {
-            x.set_listener(event_listener.as_mut().get_mut())
+            x.set_listener(event_listener.as_mut())
                 .into_result()
                 .expect("wp_fractional_scale_v1.set_listener");
         }
+        // owns EventListener in wl_surface
+        surface.set_user_data(Box::into_raw(event_listener).cast());
 
         // commits initial state
         surface.commit().expect("wl_surface.commit");
@@ -2765,8 +2695,51 @@ impl WaylandWindow {
             _appmenu: appmenu,
             deco,
             fractional_scale,
-            event_listener,
         }
+    }
+
+    pub fn unbind_listener(&mut self) -> Box<WaylandWindowEventListener> {
+        let p = unsafe {
+            Box::from_raw(
+                self.surface
+                    .user_data()
+                    .cast::<WaylandWindowEventListener>(),
+            )
+        };
+        self.surface.set_user_data(core::ptr::null_mut());
+        p
+    }
+
+    #[inline]
+    pub fn event_listener(&self) -> &WaylandWindowEventListener {
+        unsafe {
+            &*self
+                .surface
+                .user_data()
+                .cast::<WaylandWindowEventListener>()
+        }
+    }
+
+    #[inline]
+    pub fn event_listener_mut(&mut self) -> &mut WaylandWindowEventListener {
+        unsafe {
+            &mut *self
+                .surface
+                .user_data()
+                .cast::<WaylandWindowEventListener>()
+        }
+    }
+
+    pub fn create_vk_surface<'d, 'fs>(
+        &self,
+        dp: &wl::Display,
+        vk_device: &'d VulkanDevice<'fs>,
+    ) -> VulkanSurface<'d, 'fs> {
+        VulkanSurface::new(&vk_device, unsafe {
+            br::WaylandSurfaceCreateInfo::new(dp.as_raw().cast(), self.surface.as_raw().cast())
+                .execute(vk_device.instance(), None)
+                .expect("vk_surface.create")
+        })
     }
 
     pub const fn as_key(&self) -> WaylandSurfaceKey {
@@ -2774,7 +2747,13 @@ impl WaylandWindow {
     }
 
     pub fn rebind_event_dispatcher(&mut self, event_dispatcher: LogicFiberEventDispatcher) {
-        self.event_listener.event_dispatcher = event_dispatcher;
+        unsafe {
+            (*self
+                .surface
+                .user_data()
+                .cast::<WaylandWindowEventListener>())
+            .event_dispatcher = event_dispatcher;
+        }
     }
 
     fn commit(&self) {
@@ -2806,7 +2785,7 @@ unsafe impl Send for WaylandWindowState {}
 
 #[cfg(feature = "wayland")]
 #[repr(C)] // place state at 0 always: WaylandWindowEventListener can be reinterpreted as WaylandWindowState
-struct WaylandWindowEventListener {
+pub struct WaylandWindowEventListener {
     state: WaylandWindowState,
     window_type: WindowType,
     has_fractional_scale_support: bool,
