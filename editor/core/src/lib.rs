@@ -1018,6 +1018,95 @@ async fn run<'sys>(
     let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
     ht_manager.set_action_handler(ht_tab_main, &ht_action_handler);
 
+    let ct_alert_btn = composite_tree.create(CompositeRect {
+        base_scale_factor: init_scale,
+        size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(24.0)],
+        offset: [AnimatableFloat::Value(200.0), AnimatableFloat::Value(64.0)],
+        text: Some(CompositeRectText {
+            runs: vec![CompositeRectTextRun {
+                font_id: FontID::UIDefault,
+                content: "Test Alert".into(),
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+            ..Default::default()
+        }),
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+        ..Default::default()
+    });
+    let ht_alert_btn = ht_manager.create(HitTestTreeData {
+        left: 200.0,
+        top: 64.0,
+        width: 64.0,
+        height: 24.0,
+        cursor_shape: CursorShape::Pointer,
+        ..Default::default()
+    });
+    composite_tree.add_child(main_window.composite_root(), ct_alert_btn);
+    ht_manager.add_child(main_window.ht_root(), ht_alert_btn);
+
+    struct AlertButtonActionHandler {
+        ct: CompositeTreeRef,
+    }
+    impl HitTestTreeActionHandler for AlertButtonActionHandler {
+        fn on_pointer_enter(
+            &self,
+            sender: HitTestTreeRef,
+            context: &mut hittest::HitTestEventContext,
+            args: &hittest::PointerActionArgs,
+        ) -> input::EventContinueControl {
+            context.composite_tree.get_mut(self.ct).composite_mode =
+                CompositeMode::FillColor(AnimatableColor::Animated {
+                    start_sec: context.current_sec,
+                    end_sec: context.current_sec + 0.1,
+                    from_value: [1.0, 1.0, 1.0, 0.0],
+                    to_value: [1.0, 1.0, 1.0, 0.25],
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                });
+            context.composite_tree.mark_dirty(self.ct);
+
+            input::EventContinueControl::STOP_PROPAGATION
+        }
+
+        fn on_pointer_leave(
+            &self,
+            sender: HitTestTreeRef,
+            context: &mut hittest::HitTestEventContext,
+            args: &hittest::PointerActionArgs,
+        ) -> input::EventContinueControl {
+            context.composite_tree.get_mut(self.ct).composite_mode =
+                CompositeMode::FillColor(AnimatableColor::Animated {
+                    start_sec: context.current_sec,
+                    end_sec: context.current_sec + 0.1,
+                    from_value: [1.0, 1.0, 1.0, 0.25],
+                    to_value: [1.0, 1.0, 1.0, 0.0],
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                });
+            context.composite_tree.mark_dirty(self.ct);
+
+            input::EventContinueControl::STOP_PROPAGATION
+        }
+
+        fn on_click(
+            &self,
+            sender: HitTestTreeRef,
+            context: &mut hittest::HitTestEventContext,
+            args: &hittest::PointerActionArgs,
+        ) -> input::EventContinueControl {
+            tracing::debug!("todo: show alert popup");
+
+            input::EventContinueControl::STOP_PROPAGATION
+        }
+    }
+    let ht_alert_btn_action_handler =
+        std::rc::Rc::new(AlertButtonActionHandler { ct: ct_alert_btn });
+    ht_manager.set_action_handler(ht_alert_btn, &ht_alert_btn_action_handler);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
@@ -1036,6 +1125,8 @@ async fn run<'sys>(
                     composite_tree.mark_dirty_all(app_title);
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
+                    composite_tree.get_mut(ct_alert_btn).base_scale_factor = new_scale;
+                    composite_tree.mark_dirty_all(ct_alert_btn);
 
                     let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                     composite_tree.commit(&mut renderer_sync.composite_buffer);
