@@ -324,6 +324,14 @@ impl<'fs> VulkanDevice<'fs> {
         self.graphics_queue_family_index
     }
 
+    #[cfg(feature = "wayland")]
+    pub fn presentation_support(&self, dp: &peridot_tp_wayland::Display) -> bool {
+        unsafe {
+            self.primary_adapter_ref()
+                .wayland_presentation_support(self.present_queue_family_index(), dp.as_raw().cast())
+        }
+    }
+
     pub fn create_render_pass(
         &self,
         info: &br::RenderPassCreateInfo2,

@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
@@ -11,13 +11,15 @@ use peridot_tp_xkbcommon as xkbcommon;
 use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
-    hittest::{CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeRef},
+    hittest::{
+        CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+    },
     input::PointerInputUnit,
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, PixelsUnit, Point, SafeF32, Size, UnboundedRef},
+    utils::{LogicalUnit, PixelsUnit, Point, Size},
 };
 
 pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
@@ -28,7 +30,7 @@ unsafe impl Send for WindowHandle {}
 unsafe impl Sync for WindowHandle {}
 impl WindowHandle {
     #[inline(always)]
-    fn state(&self) -> &WindowState {
+    pub fn state(&self) -> &WindowState {
         unsafe { &*(*self.0).user_data().cast() }
     }
 
@@ -221,17 +223,69 @@ impl DragPreviewPopoverHandle {
     }
 }
 
+pub struct DisplayServerLink {
+    pub wl_display: *mut wl::Display,
+    pub wl_global_interfaces: *const GlobalInterfaces,
+    pub pointer_state_ref: *const Option<PointerState>,
+    pub window_registry: *mut WindowRegistry,
+}
+
 impl crate::SystemLink<'_> {
+    pub fn init_main_window(
+        dp: &wl::Display,
+        wl_interfaces: &GlobalInterfaces,
+        window_registry: &mut WindowRegistry,
+        dbus: &dbus::Connection,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        dispatcher: LogicFiberEventDispatcher,
+        #[cfg(target_os = "linux")] terminate_event: &Arc<linux_eventfd::EventFD>,
+        vk_device: &VulkanDevice,
+        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
+    ) -> WindowHandle {
+        let w = Window::new(
+            WindowType::Main {
+                #[cfg(target_os = "linux")]
+                termination_event: terminate_event.clone(),
+            },
+            &wl_interfaces,
+            &dbus,
+            dispatcher,
+            composite_tree.create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                ..Default::default()
+            }),
+            ht_manager.create(HitTestTreeData {
+                width_adjustment_factor: 1.0,
+                height_adjustment_factor: 1.0,
+                ..Default::default()
+            }),
+        );
+        let main_window_handle = w.make_handle();
+
+        let vk_surface = w.create_vk_surface(dp, vk_device);
+        rt_sender
+            .send(RenderMessage::NewWindow(NewWindowData {
+                key: main_window_handle,
+                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            }))
+            .expect("rt_sender.send");
+        w.commit();
+
+        window_registry.objects.insert(main_window_handle, w);
+        main_window_handle
+    }
+
     pub fn open_window<'h>(
         &self,
         composite_tree: &mut CompositeTree<Event>,
         hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
     ) -> WindowHandle {
-        let mut w = Window::new(
+        let w = Window::new(
             WindowType::Sub,
-            unsafe { &*self.wl_global_interfaces },
+            unsafe { &*self.display_server.wl_global_interfaces },
             unsafe { &*self.dbus },
-            unsafe { (*self.event_dispatcher).clone() },
+            unsafe { &*self.event_dispatcher }.clone(),
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
@@ -242,40 +296,24 @@ impl crate::SystemLink<'_> {
                 ..Default::default()
             }),
         );
-        let window_handle = WindowHandle(w.surface.as_ptr());
-        let vk_surface = VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
-            br::WaylandSurfaceCreateInfo::new(self.wl_display.cast(), w.surface.as_raw().cast())
-                .execute((*self.vk_device).instance(), None)
-                .expect("sub_vk_surface.create")
+        let window_handle = w.make_handle();
+
+        let vk_surface = w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+            &*self.vk_device
         });
-        let init_scale = SafeF32::new(
-            w.state_mut()
-                .committed_state
-                .get_mut()
-                .expect("poisoned")
-                .active_buffer_scale,
-        )
-        .expect("invalid scale");
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: window_handle,
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-                committed_state: UnboundedRef::new(&w.state().committed_state),
-                swapchain_externally_invalidation_signal: UnboundedRef::new(
-                    &w.state().swapchain_externally_invalidation_signal,
-                ),
-                latest_ui_scale_changes: UnboundedRef::new(&w.state().latest_ui_scale_changes),
-                init_scale,
-                composite_root: w.state().composite_root,
             }))
             .expect("rt_sender.send");
         w.commit();
-        unsafe {
-            (*self.window_registry)
-                .objects
-                .insert(WindowHandle(w.surface.as_ptr()), w);
-        }
 
+        unsafe {
+            (*self.display_server.window_registry)
+                .objects
+                .insert(window_handle, w);
+        }
         window_handle
     }
 
@@ -291,7 +329,9 @@ impl crate::SystemLink<'_> {
             .recv()
             .expect("done_event_receiver.recv");
         unsafe {
-            (*self.window_registry).objects.remove(&window_handle);
+            (*self.display_server.window_registry)
+                .objects
+                .remove(&window_handle);
         }
     }
 
@@ -300,7 +340,7 @@ impl crate::SystemLink<'_> {
             enter_state: Some(PointerEnterState { serial, .. }),
             cursor: Some(ref shape_device),
             ..
-        }) = unsafe { (*self.pointer_state_ref).as_ref() }
+        }) = unsafe { (*self.display_server.pointer_state_ref).as_ref() }
         {
             shape_device
                 .set_shape(serial, cursor.as_wayland())
@@ -315,6 +355,24 @@ impl crate::SystemLink<'_> {
             .lock()
             .expect("poisoned") = Some(new_scale);
     }
+}
+
+pub fn dp_prepare_read(dp: &mut wl::Display) -> Result<(), ()> {
+    loop {
+        match dp.prepare_read() {
+            Ok(_) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                dp.dispatch_pending().expect("wl.display.dispatch_pending");
+            }
+            Err(e) => {
+                tracing::error!(reason = ?e, "wl.display.prepare_read");
+                return Err(());
+            }
+        }
+    }
+
+    dp.flush().expect("wl.display.flush");
+    Ok(())
 }
 
 pub struct WindowCommittedState {
@@ -350,7 +408,7 @@ impl Drop for Window {
     }
 }
 impl Window {
-    pub fn new(
+    fn new(
         r#type: WindowType,
         wl_interfaces: &GlobalInterfaces,
         dbus: &dbus::Connection,
@@ -465,7 +523,7 @@ impl Window {
     }
 
     #[inline(always)]
-    pub const fn make_handle(&self) -> WindowHandle {
+    const fn make_handle(&self) -> WindowHandle {
         WindowHandle(self.surface.as_ptr())
     }
 
@@ -475,17 +533,7 @@ impl Window {
         p
     }
 
-    #[inline]
-    pub fn state(&self) -> &WindowState {
-        &unsafe { &*self.surface.user_data().cast::<WindowEventListener>() }.state
-    }
-
-    #[inline]
-    pub fn state_mut(&mut self) -> &mut WindowState {
-        &mut unsafe { &mut *self.surface.user_data().cast::<WindowEventListener>() }.state
-    }
-
-    pub fn create_vk_surface<'d, 'fs>(
+    fn create_vk_surface<'d, 'fs>(
         &self,
         dp: &wl::Display,
         vk_device: &'d VulkanDevice<'fs>,
@@ -504,7 +552,7 @@ impl Window {
         }
     }
 
-    pub fn commit(&self) {
+    fn commit(&self) {
         self.surface.commit().expect("wl_surface.commit");
     }
 }
@@ -698,11 +746,6 @@ impl WindowRegistry {
         Self {
             objects: HashMap::new(),
         }
-    }
-
-    #[inline(always)]
-    pub fn register(&mut self, w: Window) {
-        self.objects.insert(w.make_handle(), w);
     }
 
     #[inline(always)]

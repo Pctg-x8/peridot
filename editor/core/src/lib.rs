@@ -177,8 +177,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     let mut wl_display = wl::Display::connect().expect("wl_display connect");
     #[cfg(feature = "wayland")]
+    if !vk_device.presentation_support(&wl_display) {
+        panic!("wayland presentation not supported on graphics queue");
+    }
+    #[cfg(feature = "wayland")]
     let mut wl_interfaces = platform::unix::wayland::GlobalInterfaces::collect_sync(&wl_display)
         .expect("wl_interfaces.collect_sync");
+    #[cfg(feature = "wayland")]
+    let mut window_registry = platform::unix::wayland::WindowRegistry::new();
 
     #[cfg(feature = "wayland")]
     let popover_buf = if let Some(ref spb) = wl_interfaces.single_pixel_buffer_manager {
@@ -287,29 +293,18 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let main_window_handle = w.make_handle();
 
     #[cfg(feature = "wayland")]
-    let mut window_registry = platform::unix::wayland::WindowRegistry::new();
-    #[cfg(feature = "wayland")]
-    let w = platform::unix::wayland::Window::new(
-        WindowType::Main {
-            termination_event: terminate_event.clone(),
-        },
+    let main_window_handle = SystemLink::init_main_window(
+        &wl_display,
         &wl_interfaces,
+        &mut window_registry,
         &dbus,
+        &mut composite_tree,
+        &mut ht_manager,
         empty_dispatcher.clone(),
-        composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        }),
-        ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        }),
+        &terminate_event,
+        &vk_device,
+        &rt_sender,
     );
-    #[cfg(feature = "wayland")]
-    let main_window_handle = w.make_handle();
-    #[cfg(feature = "wayland")]
-    window_registry.register(w);
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new(
@@ -340,29 +335,39 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(windows)]
     let vk_surface = w.create_vk_surface(&vk_device);
 
-    #[cfg(feature = "wayland")]
-    if !unsafe {
-        vk_device
-            .primary_adapter_ref()
-            .wayland_presentation_support(
-                vk_device.present_queue_family_index(),
-                wl_display.as_raw().cast(),
-            )
-    } {
-        panic!("wayland presentation not supported on graphics queue");
-    }
-    #[cfg(feature = "wayland")]
-    let vk_surface = window_registry
-        .get(main_window_handle)
-        .expect("no window")
-        .create_vk_surface(&wl_display, &vk_device);
-
     #[cfg(target_os = "macos")]
     let vk_surface = VulkanSurface::new(&vk_device, unsafe {
         br::MetalSurfaceCreateInfo::new(w.metal_layer())
             .execute(vk_device.instance(), None)
             .expect("vk_surface.create")
     });
+
+    #[cfg(not(feature = "wayland"))]
+    rt_sender
+        .send(RenderMessage::NewWindow(NewWindowData {
+            #[cfg(target_os = "macos")]
+            init_scale: SafeF32::new(
+                *w.dispatcher
+                    .state
+                    .active_buffer_scale
+                    .lock()
+                    .expect("poisoned"),
+            )
+            .expect("invalid scale"),
+            #[cfg(target_os = "macos")]
+            latest_ui_scale_changes: UnboundedRef::new(&w.dispatcher.state.latest_ui_scale_changes),
+            key: main_window_handle,
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            #[cfg(windows)]
+            latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
+            #[cfg(windows)]
+            init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
+            #[cfg(windows)]
+            composite_root: w.state_ref().composite_root,
+            #[cfg(target_os = "macos")]
+            composite_root: w.dispatcher.state.composite_root,
+        }))
+        .expect("rt_sender.send");
 
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging {
@@ -402,21 +407,18 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             drag_preview_popover,
             rt_sender: rt_sender.clone(),
             vk_device: &vk_device,
-            #[cfg(windows)]
-            window_class_set: &wc_set,
-            #[cfg(feature = "wayland")]
-            wl_display: wl_display.as_raw().cast(),
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
-            #[cfg(feature = "wayland")]
-            wl_global_interfaces: &wl_interfaces,
             #[cfg(target_os = "linux")]
             dbus: &dbus,
             #[cfg(feature = "wayland")]
-            pointer_state_ref: unsafe {
-                &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
-            },
-            #[cfg(feature = "wayland")]
-            window_registry: &mut window_registry,
+            display_server: platform::unix::DisplayServerLink {
+                wl_display: &mut wl_display,
+                wl_global_interfaces: &wl_interfaces,
+                pointer_state_ref: unsafe {
+                    &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
+                },
+                window_registry: &mut window_registry,
+            }
         }
     ));
 
@@ -469,11 +471,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }));
 
     #[cfg(feature = "wayland")]
-    window_registry
-        .get(main_window_handle)
-        .expect("no window")
-        .commit();
-    #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
     let shutdown = std::sync::atomic::AtomicBool::new(false);
@@ -486,71 +483,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_bus: &events,
             message_receiver: rt_receiver,
         };
-        rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                #[cfg(target_os = "macos")]
-                init_scale: SafeF32::new(
-                    *w.dispatcher
-                        .state
-                        .active_buffer_scale
-                        .lock()
-                        .expect("poisoned"),
-                )
-                .expect("invalid scale"),
-                #[cfg(feature = "wayland")]
-                init_scale: SafeF32::new(
-                    window_registry
-                        .get_mut(main_window_handle)
-                        .expect("no window")
-                        .state_mut()
-                        .committed_state
-                        .get_mut()
-                        .expect("poisoned")
-                        .active_buffer_scale,
-                )
-                .expect("invalid scale"),
-                #[cfg(target_os = "macos")]
-                composite_root: w.dispatcher.state.composite_root,
-                #[cfg(target_os = "macos")]
-                latest_ui_scale_changes: UnboundedRef::new(
-                    &w.dispatcher.state.latest_ui_scale_changes,
-                ),
-                key: main_window_handle,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-                #[cfg(feature = "wayland")]
-                committed_state: UnboundedRef::new(
-                    &window_registry
-                        .get(main_window_handle)
-                        .expect("no window")
-                        .state()
-                        .committed_state,
-                ),
-                #[cfg(feature = "wayland")]
-                swapchain_externally_invalidation_signal: UnboundedRef::new(
-                    &window_registry
-                        .get(main_window_handle)
-                        .expect("no window")
-                        .state()
-                        .swapchain_externally_invalidation_signal,
-                ),
-                #[cfg(feature = "wayland")]
-                latest_ui_scale_changes: UnboundedRef::new(
-                    &window_registry
-                        .get(main_window_handle)
-                        .expect("no window")
-                        .state()
-                        .latest_ui_scale_changes,
-                ),
-                #[cfg(windows)]
-                latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
-                #[cfg(windows)]
-                init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
-                #[cfg(windows)]
-                composite_root: w.state_ref().composite_root,
-                #[cfg(feature = "wayland")]
-                composite_root: main_window_handle.composite_root(),
-            }))
-            .expect("rt_sender.send");
         let render_thread = std::thread::Builder::new()
             .name("Render".into())
             .spawn_scoped(thread_scope, || render_thread.run())
@@ -580,22 +512,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(target_os = "linux")]
         'app: loop {
             #[cfg(feature = "wayland")]
-            'prepare_loop: loop {
-                match wl_display.prepare_read() {
-                    Ok(_) => break 'prepare_loop,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        wl_display
-                            .dispatch_pending()
-                            .expect("wl_display.dispatch_pending");
-                    }
-                    Err(e) => {
-                        tracing::error!(reason = ?e, "wl_display.prepare_read");
-                        break 'app;
-                    }
-                }
+            if platform::unix::wayland::dp_prepare_read(&mut wl_display).is_err() {
+                break 'app;
             }
-            #[cfg(feature = "wayland")]
-            wl_display.flush().expect("wl_display.flush");
             let active_events = epoll.wait(&mut events, None).expect("epoll.wait");
 
             let mut wl_display_signal = false;
@@ -841,10 +760,6 @@ pub enum Event {
         window: WindowHandle,
     },
 }
-#[cfg(any(feature = "wayland", windows, target_os = "macos"))]
-unsafe impl Sync for Event {}
-#[cfg(any(feature = "wayland", windows, target_os = "macos"))]
-unsafe impl Send for Event {}
 
 struct EventQueue {
     event_store: *mut VecDeque<Event>,
@@ -1221,18 +1136,10 @@ struct SystemLink<'sys> {
     vk_device: *const VulkanDevice<'sys>,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
-    #[cfg(windows)]
-    window_class_set: *const platform::windows::WindowClassSet,
-    #[cfg(feature = "wayland")]
-    wl_display: *mut wl::Display,
-    #[cfg(feature = "wayland")]
-    wl_global_interfaces: *const platform::unix::wayland::GlobalInterfaces,
+    #[cfg(unix)]
+    display_server: platform::unix::DisplayServerLink,
     #[cfg(target_os = "linux")]
     dbus: *const dbus::Connection,
-    #[cfg(feature = "wayland")]
-    pointer_state_ref: *const Option<platform::unix::wayland::PointerState>,
-    #[cfg(feature = "wayland")]
-    window_registry: *mut platform::unix::wayland::WindowRegistry,
 }
 #[cfg(not(windows))]
 impl SystemLink<'_> {
@@ -1410,7 +1317,7 @@ impl SystemLink<'_> {
 pub enum WindowType {
     Main {
         #[cfg(target_os = "linux")]
-        termination_event: Arc<EventFD>,
+        termination_event: Arc<linux_eventfd::EventFD>,
     },
     Sub,
 }

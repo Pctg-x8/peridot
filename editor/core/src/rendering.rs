@@ -36,13 +36,10 @@ unsafe impl Send for NewWindowVulkanSurface {}
 pub struct NewWindowData {
     pub key: WindowHandle,
     pub vk_surface: NewWindowVulkanSurface,
-    #[cfg(feature = "wayland")]
-    pub committed_state: UnboundedRef<Mutex<crate::platform::unix::wayland::WindowCommittedState>>,
-    #[cfg(feature = "wayland")]
-    pub swapchain_externally_invalidation_signal: UnboundedRef<AtomicBool>,
+    #[cfg(not(feature = "wayland"))]
     pub latest_ui_scale_changes: UnboundedRef<Mutex<Option<f32>>>,
+    #[cfg(not(feature = "wayland"))]
     pub init_scale: SafeF32,
-    pub composite_root: CompositeTreeRef,
 }
 
 pub enum RenderMessage {
@@ -93,29 +90,43 @@ impl<'main> RenderThread<'main> {
             loop {
                 match self.message_receiver.try_recv() {
                     Ok(RenderMessage::NewWindow(wd)) => {
-                        let main_window_glyph_atlas =
-                            match glyph_atlas_per_scale.entry(wd.init_scale) {
-                                // use existing
-                                std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
-                                // create new one
-                                std::collections::hash_map::Entry::Vacant(x) => {
-                                    x.insert(GlyphAtlasDataPerDpi {
-                                        manager: GlyphAtlasManager::new(
-                                            &glyph_atlas_manager_common_resources,
-                                            &mut render_queue,
-                                            self.vk_device.present_queue_family_index(),
-                                        ),
-                                        vector_raster_state: VectorRasterizationState::new(),
-                                        ref_count: 0,
-                                    })
-                                }
-                            };
+                        #[cfg(feature = "wayland")]
+                        let init_scale = SafeF32::new(
+                            wd.key
+                                .state()
+                                .committed_state
+                                .lock()
+                                .expect("poisoned")
+                                .active_buffer_scale,
+                        )
+                        .expect("invalid scale");
+                        #[cfg(not(feature = "wayland"))]
+                        let init_scale = wd.init_scale;
+
+                        let main_window_glyph_atlas = match glyph_atlas_per_scale.entry(init_scale)
+                        {
+                            // use existing
+                            std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
+                            // create new one
+                            std::collections::hash_map::Entry::Vacant(x) => {
+                                x.insert(GlyphAtlasDataPerDpi {
+                                    manager: GlyphAtlasManager::new(
+                                        &glyph_atlas_manager_common_resources,
+                                        &mut render_queue,
+                                        self.vk_device.present_queue_family_index(),
+                                    ),
+                                    vector_raster_state: VectorRasterizationState::new(),
+                                    ref_count: 0,
+                                })
+                            }
+                        };
                         main_window_glyph_atlas.ref_count += 1;
                         windows.insert(
                             wd.key,
                             WindowRenderer::new(
                                 self.vk_device,
                                 wd,
+                                init_scale,
                                 main_window_glyph_atlas.manager.atlas(),
                                 &font_set,
                             ),
@@ -412,13 +423,14 @@ impl<'d> WindowRenderer<'d> {
     fn new(
         device: &'d VulkanDevice<'d>,
         create_data: NewWindowData,
+        init_scale: SafeF32,
         glyph_atlas: &GlyphAtlas,
         root_font_set: &'d RootFontSet,
     ) -> Self {
         #[allow(unused_mut)]
         let mut font_set = PerWindowFontSet::new(root_font_set);
         #[cfg(feature = "wayland")]
-        font_set.rescale((create_data.init_scale.value() * 72.0) as _);
+        font_set.rescale((init_scale.value() * 72.0) as _);
 
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         let vk_swapchain = VulkanSwapchain::new(
@@ -426,8 +438,11 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             || create_data.key.pixels_client_size(),
             #[cfg(feature = "wayland")]
-            || unsafe {
-                (*create_data.committed_state.get())
+            || {
+                create_data
+                    .key
+                    .state()
+                    .committed_state
                     .lock()
                     .expect("poisoned")
                     .active_size
@@ -531,18 +546,22 @@ impl<'d> WindowRenderer<'d> {
             #[cfg(windows)]
             w: create_data.key,
             #[cfg(feature = "wayland")]
-            committed_state: create_data.committed_state.get(),
+            committed_state: &create_data.key.state().committed_state,
             #[cfg(feature = "wayland")]
-            swapchain_externally_invalidation_signal: create_data
-                .swapchain_externally_invalidation_signal
-                .get(),
+            swapchain_externally_invalidation_signal: &create_data
+                .key
+                .state()
+                .swapchain_externally_invalidation_signal,
             #[cfg(target_os = "macos")]
             w: create_data.key,
+            #[cfg(feature = "wayland")]
+            active_scale: init_scale,
+            #[cfg(not(feature = "wayland"))]
             active_scale: create_data.init_scale,
-            latest_ui_scale_changes: create_data.latest_ui_scale_changes.get(),
+            latest_ui_scale_changes: &create_data.key.state().latest_ui_scale_changes,
             font_set,
             vk_device: device,
-            composite_root: create_data.composite_root,
+            composite_root: create_data.key.composite_root(),
             composite_renderer: BoundCompositeRenderer::new(
                 device,
                 glyph_atlas.view(),
