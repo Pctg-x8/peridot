@@ -19,9 +19,10 @@ use windows::{
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, GetClientRect, GetSystemMetrics,
                 GetWindowLongPtrW, HCURSOR, HICON, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON,
-                HTMINBUTTON, IDI_APPLICATION, LoadIconW, NCCALCSIZE_PARAMS, PostQuitMessage,
-                SHOW_WINDOW_CMD, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOWNOACTIVATE,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+                HTMINBUTTON, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE, IDI_APPLICATION,
+                LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostQuitMessage, SM_CXSIZEFRAME,
+                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
                 SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE, WA_CLICKACTIVE,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
                 WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -41,16 +42,16 @@ use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
-    hittest::{CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
+    hittest::{
+        CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+    },
     input::{PointerInputManager, PointerInputUnit, ShellPointerActions},
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
-        composite::{CompositeRect, CompositeTreeRef},
+        composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::register_class},
 };
-#[cfg(windows)]
-use crate::{hittest::HitTestTreeCreate, rendering::composite::CompositeTree};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct WindowHandle(HWND);
@@ -171,7 +172,7 @@ pub struct NativeWindow {
     hwnd: HWND,
 }
 impl NativeWindow {
-    pub fn new(
+    fn new(
         wc_set: &WindowClassSet,
         window_type: WindowType,
         composite_root: CompositeTreeRef,
@@ -224,10 +225,7 @@ impl NativeWindow {
     }
 
     #[inline(always)]
-    pub fn create_vk_surface<'d, 'fs>(
-        &self,
-        device: &'d VulkanDevice<'fs>,
-    ) -> VulkanSurface<'d, 'fs> {
+    fn create_vk_surface<'d, 'fs>(&self, device: &'d VulkanDevice<'fs>) -> VulkanSurface<'d, 'fs> {
         VulkanSurface::new(device, unsafe {
             br::Win32SurfaceCreateInfo::new(
                 core::mem::transmute(self.hinstance),
@@ -239,18 +237,8 @@ impl NativeWindow {
     }
 
     #[inline(always)]
-    pub fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher) {
-        WindowEventHandler::get_for_window(self.hwnd).event_dispatcher = dispatcher;
-    }
-
-    #[inline(always)]
-    pub const fn make_handle(&self) -> WindowHandle {
+    const fn make_handle(&self) -> WindowHandle {
         WindowHandle(self.hwnd)
-    }
-
-    #[inline(always)]
-    pub fn show(&self, cmd: SHOW_WINDOW_CMD) {
-        let _ = unsafe { ShowWindow(self.hwnd, cmd) };
     }
 }
 
@@ -261,8 +249,6 @@ pub struct WindowState {
     ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
 }
-unsafe impl Sync for WindowState {}
-unsafe impl Send for WindowState {}
 
 // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタをグローバルにおいて参照もたせる（実際どうするかはあとで考える）
 static mut POINTER_INPUT_MANAGER_PTR: *const PointerInputManager = core::ptr::null();
@@ -284,7 +270,7 @@ pub unsafe fn unlocate_non_client_hittest_managers() {
 }
 
 #[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
-pub struct WindowEventHandler {
+struct WindowEventHandler {
     state: WindowState,
     event_dispatcher: LogicFiberEventDispatcher,
     text_services_mgr: Option<CoreTextServicesManager>,
@@ -1037,6 +1023,51 @@ pub struct SystemLink<'sys> {
     pub window_class_set: *const WindowClassSet,
 }
 impl SystemLink<'_> {
+    pub fn init_main_window(
+        vk_device: &VulkanDevice,
+        dispatcher: LogicFiberEventDispatcher,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
+        wc_set: &WindowClassSet,
+    ) -> WindowHandle {
+        let w = NativeWindow::new(
+            &wc_set,
+            WindowType::Main {},
+            composite_tree.create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                ..Default::default()
+            }),
+            ht_manager.create(HitTestTreeData {
+                width_adjustment_factor: 1.0,
+                height_adjustment_factor: 1.0,
+                ..Default::default()
+            }),
+            dispatcher,
+        );
+        let main_window_handle = w.make_handle();
+
+        let vk_surface = w.create_vk_surface(vk_device);
+        rt_sender
+            .send(RenderMessage::NewWindow(NewWindowData {
+                key: main_window_handle,
+                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            }))
+            .expect("rt_sender.send");
+
+        main_window_handle
+    }
+
+    pub fn postinit_main_window(
+        handle: WindowHandle,
+        canonical_dispatcher: LogicFiberEventDispatcher,
+    ) {
+        WindowEventHandler::get_for_window(handle.0).event_dispatcher = canonical_dispatcher;
+        unsafe {
+            let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
+        }
+    }
+
     #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
         &self.drag_preview_popover
@@ -1062,7 +1093,6 @@ impl SystemLink<'_> {
             unsafe { &*self.event_dispatcher }.clone(),
         );
         let h = w.make_handle();
-        w.show(windows::Win32::UI::WindowsAndMessaging::SW_SHOW);
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
         self.rt_sender
@@ -1072,6 +1102,9 @@ impl SystemLink<'_> {
             }))
             .expect("rt_sender.send");
 
+        unsafe {
+            let _ = ShowWindow(w.hwnd, SW_SHOW);
+        }
         h
     }
 
@@ -1093,35 +1126,19 @@ impl SystemLink<'_> {
     pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
         unsafe {
             // TODO: 必要そうならキャッシュする
-            windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor {
-                CursorShape::Default => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::Pointer => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::IBeam => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::ResizeHorizontal => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
-                    )
-                    .expect("load_cursor.default"),
-                ),
+            SetCursor(match cursor {
+                CursorShape::Default => {
+                    Some(LoadCursorW(None, IDC_ARROW).expect("load_cursor.default"))
+                }
+                CursorShape::Pointer => {
+                    Some(LoadCursorW(None, IDC_HAND).expect("load_cursor.pointer"))
+                }
+                CursorShape::IBeam => {
+                    Some(LoadCursorW(None, IDC_IBEAM).expect("load_cursor.ibeam"))
+                }
+                CursorShape::ResizeHorizontal => {
+                    Some(LoadCursorW(None, IDC_SIZEWE).expect("load_cursor.resize_horizontal"))
+                }
             });
         }
     }

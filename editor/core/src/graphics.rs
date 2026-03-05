@@ -332,6 +332,13 @@ impl<'fs> VulkanDevice<'fs> {
         }
     }
 
+    #[cfg(windows)]
+    #[inline]
+    pub fn presentation_support(&self) -> bool {
+        self.primary_adapter_ref()
+            .win32_presentation_support(self.present_queue_family_index())
+    }
+
     pub fn create_render_pass(
         &self,
         info: &br::RenderPassCreateInfo2,

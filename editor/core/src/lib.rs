@@ -25,7 +25,7 @@ use windows::Win32::{
         CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
         DispatcherQueueOptions,
     },
-    UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, SW_SHOWNORMAL, TranslateMessage},
+    UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, TranslateMessage},
 };
 
 use crate::{
@@ -145,9 +145,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
     let vk_device = VulkanDevice::new(&fs);
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
+    #[cfg(windows)]
+    assert!(
+        vk_device.presentation_support(),
+        "win32 presentation not supported on graphics queue"
+    );
 
     #[cfg(windows)]
     let hinstance = utils::platform::windows::current_instance_handle();
+    #[cfg(windows)]
+    let wc_set = platform::windows::WindowClassSet::register(hinstance);
     #[cfg(windows)]
     let app_runtime = utils::platform::windows::WindowsAppRuntimeBootstrap::init();
     #[cfg(windows)]
@@ -166,9 +173,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
-    #[cfg(windows)]
-    let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
-
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
@@ -177,14 +181,18 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     let mut wl_display = wl::Display::connect().expect("wl_display connect");
     #[cfg(feature = "wayland")]
-    if !vk_device.presentation_support(&wl_display) {
-        panic!("wayland presentation not supported on graphics queue");
-    }
+    assert!(
+        vk_device.presentation_support(&wl_display),
+        "wayland presentation not supported on graphics queue"
+    );
     #[cfg(feature = "wayland")]
     let mut wl_interfaces = platform::unix::wayland::GlobalInterfaces::collect_sync(&wl_display)
         .expect("wl_interfaces.collect_sync");
     #[cfg(feature = "wayland")]
     let mut window_registry = platform::unix::wayland::WindowRegistry::new();
+
+    #[cfg(windows)]
+    let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
 
     #[cfg(feature = "wayland")]
     let popover_buf = if let Some(ref spb) = wl_interfaces.single_pixel_buffer_manager {
@@ -266,31 +274,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
 
     #[cfg(windows)]
-    let wc_set = platform::windows::WindowClassSet::register(hinstance);
-    #[cfg(windows)]
-    let mut w = platform::windows::NativeWindow::new(
+    let main_window_handle = SystemLink::init_main_window(
+        &vk_device,
+        empty_dispatcher.clone(),
+        &mut composite_tree,
+        &mut ht_manager,
+        &rt_sender,
         &wc_set,
-        WindowType::Main {},
-        composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        }),
-        ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        }),
-        LogicFiberEventDispatcher {
-            event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            polling: polling.as_mut().get_mut(),
-            poll_fn_ptr: unsafe {
-                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
-            },
-            future_ptr: core::ptr::null_mut(),
-        },
     );
-    #[cfg(windows)]
-    let main_window_handle = w.make_handle();
 
     #[cfg(feature = "wayland")]
     let main_window_handle = SystemLink::init_main_window(
@@ -325,16 +316,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(target_os = "macos")]
     w.make_primary_window();
 
-    #[cfg(windows)]
-    if !vk_device
-        .primary_adapter_ref()
-        .win32_presentation_support(vk_device.present_queue_family_index())
-    {
-        panic!("win32 presentation not supported on graphics queue");
-    }
-    #[cfg(windows)]
-    let vk_surface = w.create_vk_surface(&vk_device);
-
     #[cfg(target_os = "macos")]
     let vk_surface = VulkanSurface::new(&vk_device, unsafe {
         br::MetalSurfaceCreateInfo::new(w.metal_layer())
@@ -342,7 +323,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .expect("vk_surface.create")
     });
 
-    #[cfg(not(feature = "wayland"))]
+    #[cfg(target_os = "macos")]
     rt_sender
         .send(RenderMessage::NewWindow(NewWindowData {
             #[cfg(target_os = "macos")]
@@ -384,10 +365,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         renderer_sync,
         composite_tree,
         ht_manager,
-        #[cfg(any(feature = "wayland", target_os = "macos"))]
         main_window_handle,
-        #[cfg(windows)]
-        w.make_handle(),
         #[cfg(windows)]
         SystemLink {
             drag_preview_popover,
@@ -437,7 +415,19 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             },
             future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
         });
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(windows)]
+    SystemLink::postinit_main_window(
+        main_window_handle,
+        LogicFiberEventDispatcher {
+            event_store: event_store.as_mut().get_mut() as *mut _ as _,
+            polling: polling.as_mut().get_mut(),
+            poll_fn_ptr: unsafe {
+                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
+            },
+            future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
+        },
+    );
+    #[cfg(target_os = "macos")]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store: event_store.as_mut().get_mut() as *mut _ as _,
         polling: polling.as_mut().get_mut(),
@@ -681,9 +671,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 }
             }
         }
-
-        #[cfg(windows)]
-        w.show(SW_SHOWNORMAL);
 
         #[cfg(windows)]
         let mut msg = core::mem::MaybeUninit::uninit();
