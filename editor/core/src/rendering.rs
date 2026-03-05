@@ -36,9 +36,9 @@ unsafe impl Send for NewWindowVulkanSurface {}
 pub struct NewWindowData {
     pub key: WindowHandle,
     pub vk_surface: NewWindowVulkanSurface,
-    #[cfg(not(feature = "wayland"))]
+    #[cfg(not(any(feature = "wayland", windows)))]
     pub latest_ui_scale_changes: UnboundedRef<Mutex<Option<f32>>>,
-    #[cfg(not(feature = "wayland"))]
+    #[cfg(not(any(feature = "wayland", windows)))]
     pub init_scale: SafeF32,
 }
 
@@ -100,7 +100,10 @@ impl<'main> RenderThread<'main> {
                                 .active_buffer_scale,
                         )
                         .expect("invalid scale");
-                        #[cfg(not(feature = "wayland"))]
+                        #[cfg(windows)]
+                        let init_scale =
+                            SafeF32::new(wd.key.ui_scale_factor()).expect("invalid scale");
+                        #[cfg(not(any(feature = "wayland", windows)))]
                         let init_scale = wd.init_scale;
 
                         let main_window_glyph_atlas = match glyph_atlas_per_scale.entry(init_scale)
@@ -554,9 +557,9 @@ impl<'d> WindowRenderer<'d> {
                 .swapchain_externally_invalidation_signal,
             #[cfg(target_os = "macos")]
             w: create_data.key,
-            #[cfg(feature = "wayland")]
+            #[cfg(any(feature = "wayland", windows))]
             active_scale: init_scale,
-            #[cfg(not(feature = "wayland"))]
+            #[cfg(not(any(feature = "wayland", windows)))]
             active_scale: create_data.init_scale,
             latest_ui_scale_changes: &create_data.key.state().latest_ui_scale_changes,
             font_set,

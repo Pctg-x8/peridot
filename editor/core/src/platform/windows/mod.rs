@@ -47,10 +47,7 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTreeRef},
     },
-    utils::{
-        LogicalUnit, PixelsUnit, Point, SafeF32, Size, UnboundedRef,
-        platform::windows::register_class,
-    },
+    utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::register_class},
 };
 #[cfg(windows)]
 use crate::{hittest::HitTestTreeCreate, rendering::composite::CompositeTree};
@@ -66,10 +63,6 @@ impl core::hash::Hash for WindowHandle {
     }
 }
 impl WindowHandle {
-    pub const unsafe fn from_native(hwnd: HWND) -> Self {
-        Self(hwnd)
-    }
-
     #[inline(always)]
     pub fn destroy(&mut self) {
         if let Err(e) = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0) } {
@@ -78,7 +71,7 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    fn state<'a>(&'a self) -> &'a WindowState {
+    pub fn state<'a>(&'a self) -> &'a WindowState {
         unsafe {
             &*core::ptr::with_exposed_provenance(
                 GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
@@ -253,16 +246,6 @@ impl NativeWindow {
     #[inline(always)]
     pub const fn make_handle(&self) -> WindowHandle {
         WindowHandle(self.hwnd)
-    }
-
-    #[inline(always)]
-    pub fn state_ref<'a>(&'a self) -> &'a WindowState {
-        &WindowEventHandler::get_for_window(self.hwnd).state
-    }
-
-    #[inline(always)]
-    pub fn dpi(&self) -> u32 {
-        unsafe { GetDpiForWindow(self.hwnd) }
     }
 
     #[inline(always)]
@@ -1086,9 +1069,6 @@ impl SystemLink<'_> {
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: h,
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-                latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
-                init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
-                composite_root: w.state_ref().composite_root,
             }))
             .expect("rt_sender.send");
 

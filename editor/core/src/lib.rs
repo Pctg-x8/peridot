@@ -358,12 +358,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             latest_ui_scale_changes: UnboundedRef::new(&w.dispatcher.state.latest_ui_scale_changes),
             key: main_window_handle,
             vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            #[cfg(windows)]
-            latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
-            #[cfg(windows)]
-            init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
-            #[cfg(windows)]
-            composite_root: w.state_ref().composite_root,
             #[cfg(target_os = "macos")]
             composite_root: w.dispatcher.state.composite_root,
         }))
