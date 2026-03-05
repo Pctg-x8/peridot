@@ -1,7 +1,7 @@
 //! UI Rect Compositioning
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -18,6 +18,8 @@ use windows::Win32::Graphics::{
 #[cfg(windows)]
 use windows_core::*;
 
+#[cfg(windows)]
+use crate::rendering::MaskTextureAtlasManager;
 use crate::{
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
@@ -25,7 +27,7 @@ use crate::{
     },
     rendering::{
         atlas::{AtlasRect, DynamicAtlasManager},
-        text::{FontID, GlyphAtlas, PerWindowFontSet},
+        text::{FontID, PerWindowFontSet},
     },
     utils::SafeF32,
 };
@@ -62,6 +64,10 @@ pub struct CompositeInstanceData {
     pub pos_height_animation_data: [f32; 4],
     /// h_p1x, h_p1y, h_p2x, h_p2y
     pub pos_height_curve_control_points: [f32; 4],
+    /// lt, rt, lb, rb (in pixels)
+    pub corner_radius_x: [f32; 4],
+    /// lt, rt, lb, rb (in pixels)
+    pub corner_radius_y: [f32; 4],
 }
 
 #[repr(C)]
@@ -542,9 +548,39 @@ impl<Event> Default for CompositeRectText<Event> {
 }
 
 #[derive(Debug, Clone)]
+pub struct CornerRadius {
+    pub left_top: [f32; 2],
+    pub right_top: [f32; 2],
+    pub left_bottom: [f32; 2],
+    pub right_bottom: [f32; 2],
+}
+impl Default for CornerRadius {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            left_top: [0.0, 0.0],
+            right_top: [0.0, 0.0],
+            left_bottom: [0.0, 0.0],
+            right_bottom: [0.0, 0.0],
+        }
+    }
+}
+impl CornerRadius {
+    pub const fn all(radius: f32) -> Self {
+        Self {
+            left_top: [radius, radius],
+            right_top: [radius, radius],
+            left_bottom: [radius, radius],
+            right_bottom: [radius, radius],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CompositeRect<Event> {
     pub has_bitmap: bool,
     pub base_scale_factor: f32,
+    pub corner_radius: CornerRadius,
     pub offset: [AnimatableFloat<Event>; 2],
     pub size: [AnimatableFloat<Event>; 2],
     pub relative_offset_adjustment: [f32; 2],
@@ -567,6 +603,7 @@ impl<Event> Default for CompositeRect<Event> {
         Self {
             has_bitmap: false,
             base_scale_factor: 1.0,
+            corner_radius: CornerRadius::default(),
             offset: [const { AnimatableFloat::Value(0.0) }; 2],
             size: [const { AnimatableFloat::Value(0.0) }; 2],
             relative_offset_adjustment: [0.0, 0.0],
@@ -1309,6 +1346,7 @@ pub struct VectorRasterizationState {
     pub fill_tri_indices: Vec<u16>,
     pub curve_tris: Vec<[f32; 4]>,
     pub updated_rects: Vec<br::Rect2D>,
+    pub rounded_fill_rect_radius_requests: HashMap<SafeF32, AtlasRect>,
 }
 impl VectorRasterizationState {
     pub fn new() -> Self {
@@ -1317,6 +1355,7 @@ impl VectorRasterizationState {
             fill_tri_indices: Vec::new(),
             curve_tris: Vec::new(),
             updated_rects: Vec::new(),
+            rounded_fill_rect_radius_requests: HashMap::new(),
         }
     }
 
@@ -1325,11 +1364,14 @@ impl VectorRasterizationState {
         self.fill_tri_indices.clear();
         self.curve_tris.clear();
         self.updated_rects.clear();
+        self.rounded_fill_rect_radius_requests.clear();
     }
 
     pub fn is_empty(&self) -> bool {
         // self.fill_tri_points.is_empty() == self.fill_tri_indices.is_empty()
-        self.fill_tri_points.is_empty() && self.curve_tris.is_empty()
+        self.fill_tri_points.is_empty()
+            && self.curve_tris.is_empty()
+            && self.rounded_fill_rect_radius_requests.is_empty()
     }
 }
 
@@ -1374,7 +1416,7 @@ impl<Event> CompositeTreeRender<Event> {
         current_sec: f32,
         mapped_head: *mut core::ffi::c_void,
         font_set: &PerWindowFontSet,
-        mask_atlas: &mut GlyphAtlas,
+        mask_atlas: &mut MaskTextureAtlasManager,
         vector_raster_state: &mut VectorRasterizationState,
         mut on_event: impl FnMut(Event),
     ) {
@@ -1485,20 +1527,20 @@ impl<Event> CompositeTreeRender<Event> {
                             uv_st: [
                                 ((r.texatlas_rect.right as f32 - r.texatlas_rect.left as f32)
                                     - 1.0)
-                                    / mask_atlas.size().width as f32,
+                                    / mask_atlas.atlas().size().width as f32,
                                 ((r.texatlas_rect.bottom as f32 - r.texatlas_rect.top as f32)
                                     - 1.0)
-                                    / mask_atlas.size().height as f32,
+                                    / mask_atlas.atlas().size().height as f32,
                                 (r.texatlas_rect.left as f32 + 0.5)
-                                    / mask_atlas.size().width as f32,
+                                    / mask_atlas.atlas().size().width as f32,
                                 (r.texatlas_rect.top as f32 + 0.5)
-                                    / mask_atlas.size().height as f32,
+                                    / mask_atlas.atlas().size().height as f32,
                             ],
                             position_modifier_matrix: matrix.clone().transpose(),
                             slice_borders: r.slice_borders,
                             tex_size_pixels: [
-                                mask_atlas.size().width as _,
-                                mask_atlas.size().height as _,
+                                mask_atlas.atlas().size().width as _,
+                                mask_atlas.atlas().size().height as _,
                             ],
                             composite_mode: r.composite_mode.shader_mode_value(),
                             opacity,
@@ -1525,6 +1567,18 @@ impl<Event> CompositeTreeRender<Event> {
                             pos_width_curve_control_points: [0.0; 4],
                             pos_height_animation_data: [0.0; 4],
                             pos_height_curve_control_points: [0.0; 4],
+                            corner_radius_x: [
+                                r.corner_radius.left_top[0] * r.base_scale_factor,
+                                r.corner_radius.right_top[0] * r.base_scale_factor,
+                                r.corner_radius.left_bottom[0] * r.base_scale_factor,
+                                r.corner_radius.right_bottom[0] * r.base_scale_factor,
+                            ],
+                            corner_radius_y: [
+                                r.corner_radius.left_top[1] * r.base_scale_factor,
+                                r.corner_radius.right_top[1] * r.base_scale_factor,
+                                r.corner_radius.left_bottom[1] * r.base_scale_factor,
+                                r.corner_radius.right_bottom[1] * r.base_scale_factor,
+                            ],
                         },
                     );
                 }
@@ -1597,16 +1651,16 @@ impl<Event> CompositeTreeRender<Event> {
                                     b.top + y_offset,
                                 ],
                                 uv_st: [
-                                    b.width as f32 / mask_atlas.size().width as f32,
-                                    b.height as f32 / mask_atlas.size().height as f32,
-                                    b.tex_left as f32 / mask_atlas.size().width as f32,
-                                    b.tex_top as f32 / mask_atlas.size().height as f32,
+                                    b.width as f32 / mask_atlas.atlas().size().width as f32,
+                                    b.height as f32 / mask_atlas.atlas().size().height as f32,
+                                    b.tex_left as f32 / mask_atlas.atlas().size().width as f32,
+                                    b.tex_top as f32 / mask_atlas.atlas().size().height as f32,
                                 ],
                                 position_modifier_matrix: matrix.clone().transpose(),
                                 slice_borders: [0.0; 4],
                                 tex_size_pixels: [
-                                    mask_atlas.size().width as _,
-                                    mask_atlas.size().height as _,
+                                    mask_atlas.atlas().size().width as _,
+                                    mask_atlas.atlas().size().height as _,
                                 ],
                                 composite_mode: 1.0,
                                 opacity,
@@ -1621,6 +1675,8 @@ impl<Event> CompositeTreeRender<Event> {
                                 pos_width_curve_control_points: [0.0; 4],
                                 pos_height_animation_data: [0.0; 4],
                                 pos_height_curve_control_points: [0.0; 4],
+                                corner_radius_x: [0.0; 4],
+                                corner_radius_y: [0.0; 4],
                             },
                         );
                     }
@@ -1693,7 +1749,7 @@ impl<Event> CompositeTreeRender<Event> {
         text_layout: &CompositeRectText<Event>,
         scale_factor: f32,
         font_set: &PerWindowFontSet,
-        glyph_atlas: &mut GlyphAtlas,
+        glyph_atlas: &mut MaskTextureAtlasManager,
         vector_raster_state: &mut VectorRasterizationState,
     ) {
         tracing::trace!("relayout text");
@@ -2435,14 +2491,14 @@ impl<Event> CompositeTreeRender<Event> {
 
         #[cfg(windows)]
         #[implement(IDWriteTextRenderer)]
-        pub struct TextLayoutRenderer {
+        pub struct TextLayoutRenderer<'d> {
             dip_to_pixels_scaling: f32,
             vector_raster_state: *mut VectorRasterizationState,
-            atlas: *mut GlyphAtlas,
+            atlas: *mut MaskTextureAtlasManager<'d>,
             cache: *mut CompositeRectCache,
         }
         #[cfg(windows)]
-        impl IDWritePixelSnapping_Impl for TextLayoutRenderer_Impl {
+        impl IDWritePixelSnapping_Impl for TextLayoutRenderer_Impl<'_> {
             fn GetCurrentTransform(
                 &self,
                 _clientdrawingcontext: *const core::ffi::c_void,
@@ -2477,7 +2533,7 @@ impl<Event> CompositeTreeRender<Event> {
             }
         }
         #[cfg(windows)]
-        impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl {
+        impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl<'_> {
             fn DrawGlyphRun(
                 &self,
                 _clientdrawingcontext: *const core::ffi::c_void,
@@ -2533,7 +2589,7 @@ impl<Event> CompositeTreeRender<Event> {
                         / design_unit as f32;
 
                     let (r, is_new) = unsafe {
-                        (*self.atlas).acquire(
+                        (*self.atlas).acquire_for_glyph(
                             (var.font_id() as _, *glyphrun.glyphIndices.add(n)),
                             glyph_width.ceil() as _,
                             glyph_height.ceil() as _,
@@ -2554,8 +2610,8 @@ impl<Event> CompositeTreeRender<Event> {
                             * self.dip_to_pixels_scaling,
                         tex_left: r.left,
                         tex_top: r.top,
-                        width: r.width,
-                        height: r.height,
+                        width: r.width(),
+                        height: r.height(),
                     };
                     tracing::debug!(
                         met = ?glyph_metrics[n],
@@ -2571,16 +2627,7 @@ impl<Event> CompositeTreeRender<Event> {
                     }
                     if is_new {
                         unsafe {
-                            (*self.vector_raster_state).updated_rects.push(br::Rect2D {
-                                offset: br::Offset2D {
-                                    x: r.left as _,
-                                    y: r.top as _,
-                                },
-                                extent: br::Extent2D {
-                                    width: r.width,
-                                    height: r.height,
-                                },
-                            });
+                            (*self.vector_raster_state).updated_rects.push(r.vk_rect());
                         }
 
                         use windows::Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink;
@@ -2592,7 +2639,7 @@ impl<Event> CompositeTreeRender<Event> {
                                         * glyphrun.fontEmSize
                                         * self.dip_to_pixels_scaling
                                         / design_unit as f32,
-                                Y: r.top as f32
+                                Y: -(r.top as f32)
                                     - (glyph_metrics[n].verticalOriginY as f32
                                         - glyph_metrics[n].topSideBearing as f32)
                                         * glyphrun.fontEmSize
@@ -3936,7 +3983,7 @@ impl CompositeRenderer {
         root: CompositeTreeRef,
         rt_size: br::Extent2D,
         font_set: &PerWindowFontSet,
-        mask_atlas: &mut GlyphAtlas,
+        mask_atlas: &mut MaskTextureAtlasManager,
         vector_raster_state: &mut VectorRasterizationState,
         on_event: impl FnMut(Event),
         current_sec: f32,

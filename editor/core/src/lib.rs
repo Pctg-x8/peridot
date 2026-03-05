@@ -41,7 +41,7 @@ use crate::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
-            CompositeTreeSyncBuffer,
+            CompositeTreeSyncBuffer, CornerRadius,
         },
         text::FontID,
     },
@@ -1016,6 +1016,7 @@ async fn run<'sys>(
         }),
         has_bitmap: true,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+        corner_radius: CornerRadius::all(8.0),
         ..Default::default()
     });
     let ht_alert_btn = ht_manager.create(HitTestTreeData {
@@ -1269,100 +1270,10 @@ impl SystemLink<'_> {
         handle
     }
 
-    #[cfg(windows)]
-    pub fn open_window<'h>(
-        &self,
-        composite_tree: &mut CompositeTree<Event>,
-        hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
-    ) -> WindowHandle {
-        let w = platform::windows::NativeWindow::new(
-            unsafe { &*self.window_class_set },
-            WindowType::Sub,
-            composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-            hit_tree.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            }),
-            unsafe { &*self.event_dispatcher }.clone(),
-        );
-        let h = w.make_handle();
-        w.show(windows::Win32::UI::WindowsAndMessaging::SW_SHOW);
-
-        let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
-        self.rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                key: h,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-                latest_ui_scale_changes: UnboundedRef::new(&w.state_ref().latest_ui_scale_changes),
-                init_scale: SafeF32::new(w.dpi() as f32 / 96.0).expect("invalid scale"),
-                composite_root: w.state_ref().composite_root,
-            }))
-            .expect("rt_sender.send");
-
-        h
-    }
-
     #[cfg(target_os = "macos")]
     pub fn close_window(&self, window_handle: WindowHandle) {
         unsafe {
             platform::mac::bridge::ni_release_window(window_handle.0);
-        }
-    }
-
-    #[cfg(windows)]
-    pub fn close_window(&self, mut window_handle: WindowHandle) {
-        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-        self.rt_sender
-            .send(RenderMessage::DestroyWindow(
-                window_handle,
-                done_event_sender,
-            ))
-            .expect("rt_sender.send.destroy_window");
-        done_event_receiver
-            .recv()
-            .expect("done_event_receiver.recv");
-
-        window_handle.destroy();
-    }
-
-    #[cfg(windows)]
-    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
-        unsafe {
-            // TODO: 必要そうならキャッシュする
-            windows::Win32::UI::WindowsAndMessaging::SetCursor(match cursor {
-                CursorShape::Default => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_ARROW,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::Pointer => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_HAND,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::IBeam => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_IBEAM,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-                CursorShape::ResizeHorizontal => Some(
-                    windows::Win32::UI::WindowsAndMessaging::LoadCursorW(
-                        None,
-                        windows::Win32::UI::WindowsAndMessaging::IDC_SIZEWE,
-                    )
-                    .expect("load_cursor.default"),
-                ),
-            });
         }
     }
 

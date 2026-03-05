@@ -1,4 +1,6 @@
-use bedrock as br;
+use bedrock::{self as br, ImageChild, MemoryBound, VkHandle};
+
+use crate::graphics::VulkanDevice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasRect {
@@ -33,33 +35,136 @@ impl AtlasRect {
     pub const fn vk_rect(&self) -> br::Rect2D {
         self.extent().into_rect(self.lt_offset())
     }
+}
 
-    fn vsplit(&mut self, width: u32) -> Self {
-        assert!(width <= self.width());
+pub struct TextureAtlas {
+    res: br::vk::VkImage,
+    mem: br::vk::VkDeviceMemory,
+    view: br::vk::VkImageView,
+    max: br::Extent2D,
+    internal: DynamicAtlasManager,
+}
+impl TextureAtlas {
+    pub const MULTISAMPLE_LEVEL: u32 = 4;
+    const SPACING: u32 = 1;
 
-        let r = Self {
-            left: self.left + width,
-            right: self.right,
-            top: self.top,
-            bottom: self.bottom,
-        };
-        self.right = self.left + width;
-        r
+    pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image_view(gfx.native_ptr(), self.view, None);
+            br::vkfn_wrapper::destroy_image(gfx.native_ptr(), self.res, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.mem, None);
+        }
     }
 
-    fn hsplit(&mut self, height: u32) -> Self {
-        assert!(height <= self.height());
+    pub fn new(gfx: &VulkanDevice) -> Self {
+        let size = br::Extent2D::spread1(4096);
 
-        let r = Self {
-            left: self.left,
-            right: self.right,
-            top: self.top + height,
-            bottom: self.bottom,
-        };
-        self.bottom = self.top + height;
-        r
+        let mut res = br::ImageObject::new(
+            gfx,
+            &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).set_usage(
+                br::ImageUsageFlags::SAMPLED
+                    | br::ImageUsageFlags::COLOR_ATTACHMENT
+                    | br::ImageUsageFlags::TRANSFER_DEST,
+            ),
+        )
+        .expect("res create");
+        let memory_requirements = res.requirements();
+        let mem = br::DeviceMemoryObject::new(
+            gfx,
+            &br::MemoryAllocateInfo::new(
+                memory_requirements.size,
+                gfx.find_device_local_memory_index(memory_requirements.memoryTypeBits)
+                    .expect("no suitable memory"),
+            ),
+        )
+        .expect("res malloc");
+        res.bind(&mem, 0).expect("res mem bind");
+        let view = br::ImageViewBuilder::new(
+            res,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .expect("res view create");
+
+        gfx.dbg_set_name(view.image(), c"Glyph Atlas");
+        gfx.dbg_set_name(&view, c"Glyph Atlas [View]");
+        gfx.dbg_set_name(&mem, c"Glyph Atlas [Backing Memory]");
+
+        let mut internal = DynamicAtlasManager::new();
+        internal.free(AtlasRect {
+            left: 0,
+            top: 0,
+            right: size.width,
+            bottom: size.height,
+        });
+
+        let (view, res) = view.unmanage();
+        let (res, _, _, _, _) = res.unmanage();
+        let (mem, _) = mem.unmanage();
+        Self {
+            res,
+            mem,
+            view,
+            internal,
+            max: size,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.internal.clear();
+        // register entire region as free
+        self.internal.free(AtlasRect {
+            left: 0,
+            top: 0,
+            right: self.max.width,
+            bottom: self.max.height,
+        });
+        // TODO: clear atlas content?
+    }
+
+    pub fn acquire(&mut self, width: u32, height: u32) -> AtlasRect {
+        self.internal
+            .alloc(width + Self::SPACING, height + Self::SPACING)
+            .expect("no space left")
+    }
+
+    #[inline(always)]
+    pub const fn size(&self) -> &br::Extent2D {
+        &self.max
+    }
+
+    #[inline(always)]
+    pub const fn image<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImage> {
+        unsafe { br::VkHandleRef::dangling(self.res) }
+    }
+
+    #[inline(always)]
+    pub const fn image_range_entire(&self) -> br::ImageSubresourceRange {
+        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)
+    }
+
+    #[inline(always)]
+    pub const fn view<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImageView> {
+        unsafe { br::VkHandleRef::dangling(self.view) }
+    }
+
+    #[inline(always)]
+    pub const fn as_image_view<'a>(&'a self) -> &'a impl br::ImageView {
+        unsafe { core::mem::transmute::<_, &TextureAtlasAsImageView>(self) }
     }
 }
+
+#[repr(transparent)]
+pub struct TextureAtlasAsImageView(TextureAtlas);
+impl br::VkHandle for TextureAtlasAsImageView {
+    type Handle = br::vk::VkImageView;
+
+    #[inline(always)]
+    fn native_ptr(&self) -> Self::Handle {
+        self.0.view
+    }
+}
+impl br::ImageView for TextureAtlasAsImageView {}
 
 pub struct DynamicAtlasManager {
     /// width -> (height -> [rect])
@@ -72,9 +177,13 @@ impl DynamicAtlasManager {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.available_regions.clear();
+    }
+
     #[tracing::instrument(name = "DynamicAtlasManager::alloc", skip(self))]
     pub fn alloc(&mut self, width: u32, height: u32) -> Option<AtlasRect> {
-        tracing::debug!(available_regions = ?self.available_regions, "alloc state");
+        // tracing::debug!(available_regions = ?self.available_regions, "alloc state");
         // find best match
         let mut match_index_by_width = match self
             .available_regions
@@ -381,24 +490,31 @@ impl DynamicAtlasManager {
 
     /// simply insert a rect into correct position(no merging performed)
     fn register_rect(&mut self, rect: AtlasRect) -> (usize, usize) {
-        tracing::trace!(?rect, "insrect");
+        // tracing::trace!(?rect, "insrect");
         match self
             .available_regions
             .binary_search_by_key(&rect.width(), |&(w, _)| w)
         {
             Ok(width_index) => {
                 let width_line = &mut self.available_regions[width_index].1;
-                if let Some(nh) = width_line.iter().position(|(_, r)| r == &rect) {
-                    // already registered
-                    return (width_index, nh);
+
+                let rh = rect.height();
+                for (n, p) in width_line.iter().enumerate() {
+                    if p.1 == rect {
+                        // already registered
+                        return (width_index, n);
+                    }
+
+                    if p.0 > rh {
+                        // insert here
+                        width_line.insert(n, (rh, rect));
+                        return (width_index, n);
+                    }
                 }
 
-                let height_insert_point = width_line
-                    .binary_search_by_key(&rect.height(), |&(h, _)| h)
-                    .map_or_else(|x| x, |x| x);
-                width_line.insert(height_insert_point, (rect.height(), rect));
-
-                (width_index, height_insert_point)
+                // push(tallest block)
+                width_line.push((rh, rect));
+                return (width_index, width_line.len() - 1);
             }
             Err(insert_point) => {
                 // unique for this width

@@ -15,11 +15,12 @@ use crate::{
         UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
     },
     rendering::{
+        atlas::{AtlasRect, TextureAtlas},
         composite::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData,
             CompositeTreeRef, CompositeTreeRender, VectorRasterizationState,
         },
-        text::{GlyphAtlas, PerWindowFontSet, RootFontSet},
+        text::{PerWindowFontSet, RootFontSet},
     },
     utils::{SafeF32, UnboundedRef},
 };
@@ -70,7 +71,7 @@ impl<'main> RenderThread<'main> {
         let glyph_atlas_manager_common_resources =
             GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
         struct GlyphAtlasDataPerDpi<'d> {
-            manager: GlyphAtlasManager<'d>,
+            manager: MaskTextureAtlasManager<'d>,
             vector_raster_state: VectorRasterizationState,
             ref_count: u64,
         }
@@ -113,7 +114,7 @@ impl<'main> RenderThread<'main> {
                             // create new one
                             std::collections::hash_map::Entry::Vacant(x) => {
                                 x.insert(GlyphAtlasDataPerDpi {
-                                    manager: GlyphAtlasManager::new(
+                                    manager: MaskTextureAtlasManager::new(
                                         &glyph_atlas_manager_common_resources,
                                         &mut render_queue,
                                         self.vk_device.present_queue_family_index(),
@@ -247,13 +248,13 @@ impl<'main> RenderThread<'main> {
                         std::collections::hash_map::Entry::Vacant(v) => match removed {
                             // reuse existing with clear
                             Some(mut data) => {
-                                data.manager.clear_atlas();
+                                data.manager.clear();
                                 data.ref_count = 0;
                                 v.insert(data)
                             }
                             // new one
                             None => v.insert(GlyphAtlasDataPerDpi {
-                                manager: GlyphAtlasManager::new(
+                                manager: MaskTextureAtlasManager::new(
                                     &glyph_atlas_manager_common_resources,
                                     &mut render_queue,
                                     self.vk_device.present_queue_family_index(),
@@ -282,7 +283,7 @@ impl<'main> RenderThread<'main> {
                 let needs_update_command = x.update(
                     current_t.as_secs_f32(),
                     &mut composite_tree,
-                    glyph_atlas_mgr.manager.atlas_mut(),
+                    &mut glyph_atlas_mgr.manager,
                     &mut glyph_atlas_mgr.vector_raster_state,
                     self.event_bus,
                 );
@@ -427,7 +428,7 @@ impl<'d> WindowRenderer<'d> {
         device: &'d VulkanDevice<'d>,
         create_data: NewWindowData,
         init_scale: SafeF32,
-        glyph_atlas: &GlyphAtlas,
+        glyph_atlas: &TextureAtlas,
         root_font_set: &'d RootFontSet,
     ) -> Self {
         #[allow(unused_mut)]
@@ -631,7 +632,7 @@ impl<'d> WindowRenderer<'d> {
         &mut self,
         current_sec: f32,
         composite_tree: &mut CompositeTreeRender<Event>,
-        glyph_atlas: &mut GlyphAtlas,
+        glyph_atlas: &mut MaskTextureAtlasManager,
         vector_raster_state: &mut VectorRasterizationState,
         events: &AppEventBus,
     ) -> bool {
@@ -936,14 +937,14 @@ impl<'d> GlyphAtlasManagerCommonResources<'d> {
                             br::ImageLayout::Undefined,
                             br::ImageLayout::DepthStencilReadOnlyOpt,
                         )
-                        .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
+                        .samples(TextureAtlas::MULTISAMPLE_LEVEL),
                     br::AttachmentDescription2::new(formats.color)
                         .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
                         .layout_transition(
                             br::ImageLayout::Undefined,
                             br::ImageLayout::TransferSrcOpt,
                         )
-                        .samples(GlyphAtlas::MULTISAMPLE_LEVEL),
+                        .samples(TextureAtlas::MULTISAMPLE_LEVEL),
                 ],
                 &[
                     br::SubpassDescription2::new()
@@ -1004,21 +1005,23 @@ impl<'d> GlyphAtlasManagerCommonResources<'d> {
     }
 }
 
-pub struct GlyphAtlasManager<'d> {
+pub struct MaskTextureAtlasManager<'d> {
     device: &'d VulkanDevice<'d>,
-    atlas: GlyphAtlas,
+    atlas: TextureAtlas,
+    acquired_glyph_rects: HashMap<(usize, u16), AtlasRect>,
+    rounded_fill_rects_by_radius: HashMap<SafeF32, AtlasRect>,
     triangle_fans_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
     curve_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
     colorize_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
 }
-impl Drop for GlyphAtlasManager<'_> {
+impl Drop for MaskTextureAtlasManager<'_> {
     fn drop(&mut self) {
         unsafe {
             self.atlas.drop(self.device);
         }
     }
 }
-impl<'d> GlyphAtlasManager<'d> {
+impl<'d> MaskTextureAtlasManager<'d> {
     const VI_STATE_FOR_TRI_FANS: &'static br::PipelineVertexInputStateCreateInfo<'static> =
         &br::PipelineVertexInputStateCreateInfo::new(
             &[br::VertexInputBindingDescription::per_vertex_typed::<
@@ -1082,7 +1085,7 @@ impl<'d> GlyphAtlasManager<'d> {
         init_worker_queue: &mut (impl br::QueueMut + ?Sized),
         init_worker_queue_family_index: u32,
     ) -> Self {
-        let atlas = GlyphAtlas::new(common_res.device);
+        let atlas = TextureAtlas::new(common_res.device);
 
         let viewports = [atlas
             .size()
@@ -1091,7 +1094,7 @@ impl<'d> GlyphAtlasManager<'d> {
         let scissors = [atlas.size().into_rect(br::Offset2D::ZERO)];
         let vp_state = br::PipelineViewportStateCreateInfo::new(&viewports, &scissors);
         let ms_state = br::PipelineMultisampleStateCreateInfo::new()
-            .rasterization_samples(GlyphAtlas::MULTISAMPLE_LEVEL as _);
+            .rasterization_samples(TextureAtlas::MULTISAMPLE_LEVEL as _);
         let [triangle_fans_pipeline, curve_pipeline, colorize_pipeline] = common_res
             .device
             .create_graphics_pipelines_array(&[
@@ -1252,9 +1255,39 @@ impl<'d> GlyphAtlasManager<'d> {
         Self {
             device: common_res.device,
             atlas,
+            acquired_glyph_rects: HashMap::new(),
+            rounded_fill_rects_by_radius: HashMap::new(),
             triangle_fans_pipeline,
             curve_pipeline,
             colorize_pipeline,
+        }
+    }
+
+    pub fn acquire_for_glyph(
+        &mut self,
+        key: (usize, u16),
+        width: u32,
+        height: u32,
+    ) -> (AtlasRect, bool) {
+        match self.acquired_glyph_rects.entry(key) {
+            std::collections::hash_map::Entry::Vacant(x) => {
+                (x.insert(self.atlas.acquire(width, height)).clone(), true)
+            }
+            std::collections::hash_map::Entry::Occupied(x) => (x.get().clone(), false),
+        }
+    }
+
+    pub fn acquire_for_rounded_fill_rect(&mut self, radius: SafeF32) -> (AtlasRect, bool) {
+        match self.rounded_fill_rects_by_radius.entry(radius) {
+            std::collections::hash_map::Entry::Vacant(x) => (
+                x.insert(self.atlas.acquire(
+                    (radius.value() * 2.0 + 1.0).ceil() as _,
+                    (radius.value() * 2.0 + 1.0).ceil() as _,
+                ))
+                .clone(),
+                true,
+            ),
+            std::collections::hash_map::Entry::Occupied(x) => (x.get().clone(), false),
         }
     }
 
@@ -1367,7 +1400,7 @@ impl<'d> GlyphAtlasManager<'d> {
                 .set_usage(
                     br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::TRANSFER_SRC,
                 )
-                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                .sample_counts(TextureAtlas::MULTISAMPLE_LEVEL),
         )
         .expect("vector color_ms buffer create");
         self.device
@@ -1376,7 +1409,7 @@ impl<'d> GlyphAtlasManager<'d> {
             self.device,
             &br::ImageCreateInfo::new(*self.atlas.size(), formats.stencil)
                 .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                .sample_counts(GlyphAtlas::MULTISAMPLE_LEVEL),
+                .sample_counts(TextureAtlas::MULTISAMPLE_LEVEL),
         )
         .expect("vector stencil buffer create");
         self.device
@@ -1599,15 +1632,16 @@ impl<'d> GlyphAtlasManager<'d> {
         render_worker_queue.wait().expect("vector render wait");
     }
 
-    pub const fn atlas(&self) -> &GlyphAtlas {
+    pub const fn atlas(&self) -> &TextureAtlas {
         &self.atlas
     }
 
-    pub fn atlas_mut(&mut self) -> &mut GlyphAtlas {
+    pub fn atlas_mut(&mut self) -> &mut TextureAtlas {
         &mut self.atlas
     }
 
-    pub fn clear_atlas(&mut self) {
+    pub fn clear(&mut self) {
         self.atlas.clear();
+        self.acquired_glyph_rects.clear();
     }
 }
