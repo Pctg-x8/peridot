@@ -2189,16 +2189,7 @@ impl<Event> CompositeTreeRender<Event> {
                     cache.text_rects.push(placement_box);
 
                     if is_new {
-                        vector_raster_state.updated_rects.push(br::Rect2D {
-                            offset: br::Offset2D {
-                                x: r.left as _,
-                                y: r.top as _,
-                            },
-                            extent: br::Extent2D {
-                                width: r.width(),
-                                height: r.height(),
-                            },
-                        });
+                        vector_raster_state.updated_rects.push(r.vk_rect());
 
                         let path = font
                             .create_path_for_glyph(glyph, None)
@@ -2206,7 +2197,7 @@ impl<Event> CompositeTreeRender<Event> {
                         let mut current_figure = None;
                         let mut pen_pos = (0.0, 0.0);
                         let offset_x = r.left as f32 - bounding_rect.origin.x as f32 * scale_factor;
-                        let offset_y = r.top as f32
+                        let offset_y = -(r.top as f32)
                             - (bounding_rect.size.height + bounding_rect.origin.y) as f32
                                 * scale_factor;
                         path.apply(|e| match e.r#type {
