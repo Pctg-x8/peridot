@@ -339,8 +339,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             latest_ui_scale_changes: UnboundedRef::new(&w.dispatcher.state.latest_ui_scale_changes),
             key: main_window_handle,
             vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            #[cfg(target_os = "macos")]
-            composite_root: w.dispatcher.state.composite_root,
         }))
         .expect("rt_sender.send");
 
@@ -1209,7 +1207,7 @@ struct SystemLink<'sys> {
     vk_device: *const VulkanDevice<'sys>,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     display_server: platform::unix::DisplayServerLink,
     #[cfg(target_os = "linux")]
     dbus: *const dbus::Connection,
@@ -1258,7 +1256,6 @@ impl SystemLink<'_> {
                         .expect("poisoned"),
                 )
                 .expect("invalid scale"),
-                composite_root: w.dispatcher.state.composite_root,
                 latest_ui_scale_changes: UnboundedRef::new(
                     &w.dispatcher.state.latest_ui_scale_changes,
                 ),
@@ -1330,7 +1327,7 @@ unsafe impl Send for WindowHandle {}
 #[cfg(target_os = "macos")]
 impl WindowHandle {
     #[inline(always)]
-    pub unsafe fn query_state(&self) -> &MacWindowState {
+    pub fn state(&self) -> &MacWindowState {
         unsafe {
             &(*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
                 .cast::<MacWindowDispatcher>())
@@ -1340,7 +1337,7 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
-        let state = unsafe { self.query_state() };
+        let state = self.state();
 
         state
             .active_rt_size
@@ -1351,23 +1348,17 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
-        unsafe {
-            *self
-                .query_state()
-                .active_buffer_scale
-                .lock()
-                .expect("poisoned")
-        }
+        *self.state().active_buffer_scale.lock().expect("poisoned")
     }
 
     #[inline(always)]
     pub fn composite_root(&self) -> CompositeTreeRef {
-        unsafe { self.query_state() }.composite_root
+        self.state().composite_root
     }
 
     #[inline(always)]
     pub fn ht_root(&self) -> HitTestTreeRef {
-        unsafe { self.query_state() }.ht_root
+        self.state().ht_root
     }
 }
 #[cfg(target_os = "macos")]

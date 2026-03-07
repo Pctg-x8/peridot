@@ -452,10 +452,10 @@ impl<'d> WindowRenderer<'d> {
                     .active_size
             },
             #[cfg(target_os = "macos")]
-            || unsafe {
+            || {
                 *create_data
                     .key
-                    .query_state()
+                    .state()
                     .active_rt_size
                     .lock()
                     .expect("poisoned")
@@ -720,14 +720,7 @@ impl<'d> WindowRenderer<'d> {
                     .active_size
             },
             #[cfg(target_os = "macos")]
-            || unsafe {
-                *self
-                    .w
-                    .query_state()
-                    .active_rt_size
-                    .lock()
-                    .expect("poisoned")
-            },
+            || *self.w.state().active_rt_size.lock().expect("poisoned"),
         );
 
         // recrease rt resources

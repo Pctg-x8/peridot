@@ -18,14 +18,13 @@ use windows::Win32::Graphics::{
 #[cfg(windows)]
 use windows_core::*;
 
-#[cfg(windows)]
-use crate::rendering::MaskTextureAtlasManager;
 use crate::{
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, VulkanDevice,
     },
     rendering::{
+        MaskTextureAtlasManager,
         atlas::{AtlasRect, DynamicAtlasManager},
         text::{FontID, PerWindowFontSet},
     },
@@ -2170,7 +2169,7 @@ impl<Event> CompositeTreeRender<Event> {
                         continue;
                     }
 
-                    let (r, is_new) = glyph_atlas.acquire(
+                    let (r, is_new) = glyph_atlas.acquire_for_glyph(
                         (font_id as usize, glyph),
                         (bounding_rect.size.width as f32 * scale_factor).ceil() as _,
                         (bounding_rect.size.height as f32 * scale_factor).ceil() as _,
@@ -2183,8 +2182,8 @@ impl<Event> CompositeTreeRender<Event> {
                             * scale_factor,
                         tex_left: r.left,
                         tex_top: r.top,
-                        width: r.width,
-                        height: r.height,
+                        width: r.width(),
+                        height: r.height(),
                     };
                     cache.text_width = cache.text_width.max(placement_box.right());
                     cache.text_rects.push(placement_box);
@@ -2196,8 +2195,8 @@ impl<Event> CompositeTreeRender<Event> {
                                 y: r.top as _,
                             },
                             extent: br::Extent2D {
-                                width: r.width,
-                                height: r.height,
+                                width: r.width(),
+                                height: r.height(),
                             },
                         });
 
