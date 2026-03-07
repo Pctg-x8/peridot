@@ -10,6 +10,8 @@ pub struct WindowLink(
 
 #[repr(C)]
 pub struct WindowLinkCallbacks {
+    pub destructor: extern "C" fn(this: *mut c_void),
+    pub on_window_close: extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink),
     pub on_resize: extern "C" fn(
         caller_context: *mut c_void,
         window: *mut WindowLink,
@@ -51,8 +53,12 @@ unsafe extern "C" {
         callbacks: *const WindowLinkCallbacks,
         caller_context: *mut c_void,
     );
-    pub fn ni_unset_window_callbacks(window_link: *mut WindowLink);
     pub fn ni_get_window_callback_context(window_link: *mut WindowLink) -> *mut c_void;
+    pub fn ni_get_size_logical(
+        window_link: *mut WindowLink,
+        width: *mut c_double,
+        height: *mut c_double,
+    );
     pub fn ni_get_metal_layer(window_link: *mut WindowLink) -> *mut c_void;
     pub fn ni_convert_point_to_screen(
         window_link: *mut WindowLink,
@@ -66,6 +72,9 @@ unsafe extern "C" {
     pub fn ni_move_drag_preview(x: c_double, y: c_double);
 
     pub fn ni_query_filesystem_cachedir_path() -> *const c_char;
+
+    pub fn ni_degreade_thread_priroity_temporarily() -> *mut c_void;
+    pub fn ni_restore_thread_priority(context_ptr: *mut c_void);
 
     pub fn manual_capture_begin(window_link: *mut WindowLink);
     pub fn manual_capture_end();

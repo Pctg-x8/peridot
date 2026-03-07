@@ -299,6 +299,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new(
+        WindowType::Main {},
         platform::mac::bridge::WindowCreationFlags::MAIN,
         empty_dispatcher.clone(),
         composite_tree.create(CompositeRect {
@@ -328,7 +329,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .send(RenderMessage::NewWindow(NewWindowData {
             #[cfg(target_os = "macos")]
             init_scale: SafeF32::new(
-                *w.dispatcher
+                *w.dispatcher()
                     .state
                     .active_buffer_scale
                     .lock()
@@ -336,7 +337,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             )
             .expect("invalid scale"),
             #[cfg(target_os = "macos")]
-            latest_ui_scale_changes: UnboundedRef::new(&w.dispatcher.state.latest_ui_scale_changes),
+            latest_ui_scale_changes: UnboundedRef::new(
+                &w.dispatcher().state.latest_ui_scale_changes,
+            ),
             key: main_window_handle,
             vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
         }))
@@ -1097,6 +1100,7 @@ async fn run<'sys>(
                 pointer_input_manager.set_client_size(window, size);
             }
             Event::SubWindowClose { window } => {
+                tracing::trace!("subWindowClose");
                 system_link.close_window(window);
             }
             Event::WindowRescaleUI { window, new_scale } => {
@@ -1226,6 +1230,7 @@ impl SystemLink<'_> {
         hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
     ) -> WindowHandle {
         let mut w = MacWindow::new(
+            WindowType::Sub,
             platform::mac::bridge::WindowCreationFlags::empty(),
             unsafe { (*self.event_dispatcher).clone() },
             composite_tree.create(CompositeRect {
@@ -1240,6 +1245,22 @@ impl SystemLink<'_> {
         );
         let handle = w.make_handle();
         w.show();
+        // notify resize on show(register to pointer input manager)
+        let mut width = core::mem::MaybeUninit::uninit();
+        let mut height = core::mem::MaybeUninit::uninit();
+        unsafe {
+            platform::mac::bridge::ni_get_size_logical(
+                w.native_ptr,
+                width.as_mut_ptr(),
+                height.as_mut_ptr(),
+            )
+        }
+        unsafe { &*self.event_dispatcher }.dispatch(Event::WindowResize {
+            window: handle,
+            size: Size::new_logical(unsafe { width.assume_init() as _ }, unsafe {
+                height.assume_init() as _
+            }),
+        });
 
         let vk_surface = VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
             br::MetalSurfaceCreateInfo::new(w.metal_layer())
@@ -1249,7 +1270,7 @@ impl SystemLink<'_> {
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
                 init_scale: SafeF32::new(
-                    *w.dispatcher
+                    *w.dispatcher()
                         .state
                         .active_buffer_scale
                         .lock()
@@ -1257,7 +1278,7 @@ impl SystemLink<'_> {
                 )
                 .expect("invalid scale"),
                 latest_ui_scale_changes: UnboundedRef::new(
-                    &w.dispatcher.state.latest_ui_scale_changes,
+                    &w.dispatcher().state.latest_ui_scale_changes,
                 ),
                 key: handle,
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
@@ -1269,6 +1290,21 @@ impl SystemLink<'_> {
 
     #[cfg(target_os = "macos")]
     pub fn close_window(&self, window_handle: WindowHandle) {
+        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+        self.rt_sender
+            .send(RenderMessage::DestroyWindow(
+                window_handle,
+                done_event_sender,
+            ))
+            .expect("rt_sender.send.destroy_window");
+        let tpctx = unsafe { platform::mac::bridge::ni_degreade_thread_priroity_temporarily() };
+        done_event_receiver
+            .recv()
+            .expect("done_event_receiver.recv");
+        unsafe {
+            platform::mac::bridge::ni_restore_thread_priority(tpctx);
+        }
+
         unsafe {
             platform::mac::bridge::ni_release_window(window_handle.0);
         }
@@ -1641,16 +1677,6 @@ pub struct PointerID();
 #[cfg(target_os = "macos")]
 pub struct MacWindow {
     native_ptr: *mut platform::mac::bridge::WindowLink,
-    dispatcher: Pin<Box<MacWindowDispatcher>>,
-}
-#[cfg(target_os = "macos")]
-impl Drop for MacWindow {
-    fn drop(&mut self) {
-        unsafe {
-            platform::mac::bridge::ni_unset_window_callbacks(self.native_ptr);
-            platform::mac::bridge::ni_release_window(self.native_ptr);
-        }
-    }
 }
 #[cfg(target_os = "macos")]
 unsafe impl Sync for MacWindow {}
@@ -1659,6 +1685,7 @@ unsafe impl Send for MacWindow {}
 #[cfg(target_os = "macos")]
 impl MacWindow {
     pub fn new(
+        window_type: WindowType,
         flags: platform::mac::bridge::WindowCreationFlags,
         event_dispatcher: LogicFiberEventDispatcher,
         composite_root: CompositeTreeRef,
@@ -1666,8 +1693,9 @@ impl MacWindow {
     ) -> Self {
         let native_ptr = unsafe { platform::mac::bridge::ni_create_window(flags.bits()) };
         let init_scale = unsafe { platform::mac::bridge::ni_get_content_scale(native_ptr) };
-        let mut dispatcher = Box::pin(MacWindowDispatcher {
+        let dispatcher = Box::new(MacWindowDispatcher {
             event_dispatcher,
+            window_type,
             state: MacWindowState {
                 wlink: native_ptr,
                 swapchain_externally_invalidation_signal: std::sync::Arc::new(
@@ -1685,6 +1713,8 @@ impl MacWindow {
         });
         let callbacks: &'static platform::mac::bridge::WindowLinkCallbacks =
             &platform::mac::bridge::WindowLinkCallbacks {
+                destructor: MacWindowDispatcher::destructor,
+                on_window_close: MacWindowDispatcher::on_window_close,
                 on_resize: MacWindowDispatcher::on_resize,
                 on_pointer_down: MacWindowDispatcher::on_pointer_down,
                 on_pointer_move: MacWindowDispatcher::on_pointer_move,
@@ -1694,14 +1724,11 @@ impl MacWindow {
             platform::mac::bridge::ni_set_window_callbacks(
                 native_ptr,
                 callbacks,
-                dispatcher.as_mut().get_mut() as *mut _ as _,
+                Box::into_raw(dispatcher) as _,
             );
         }
 
-        Self {
-            native_ptr,
-            dispatcher,
-        }
+        Self { native_ptr }
     }
 
     #[inline(always)]
@@ -1710,8 +1737,20 @@ impl MacWindow {
     }
 
     #[inline(always)]
+    pub fn dispatcher(&self) -> &MacWindowDispatcher {
+        unsafe { &*platform::mac::bridge::ni_get_window_callback_context(self.native_ptr).cast() }
+    }
+
+    #[inline(always)]
+    pub fn dispatcher_mut(&mut self) -> &mut MacWindowDispatcher {
+        unsafe {
+            &mut *platform::mac::bridge::ni_get_window_callback_context(self.native_ptr).cast()
+        }
+    }
+
+    #[inline(always)]
     pub fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher) {
-        self.dispatcher.event_dispatcher = dispatcher;
+        self.dispatcher_mut().event_dispatcher = dispatcher;
     }
 
     #[inline(always)]
@@ -1744,6 +1783,7 @@ impl MacWindow {
 #[cfg(target_os = "macos")]
 struct MacWindowDispatcher {
     event_dispatcher: LogicFiberEventDispatcher,
+    window_type: WindowType,
     state: MacWindowState,
 }
 #[cfg(target_os = "macos")]
@@ -1752,6 +1792,23 @@ unsafe impl Sync for MacWindowDispatcher {}
 unsafe impl Send for MacWindowDispatcher {}
 #[cfg(target_os = "macos")]
 impl MacWindowDispatcher {
+    extern "C" fn destructor(this: *mut core::ffi::c_void) {
+        tracing::trace!(?this, "window_dispatcher.destruct");
+        drop(unsafe { Box::from_raw(this.cast::<Self>()) });
+    }
+
+    extern "C" fn on_window_close(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut platform::mac::bridge::WindowLink,
+    ) {
+        let this = unsafe { &*caller_context.cast::<Self>() };
+        if let WindowType::Sub = this.window_type {
+            this.event_dispatcher.dispatch(Event::SubWindowClose {
+                window: WindowHandle(window),
+            });
+        }
+    }
+
     extern "C" fn on_resize(
         caller_context: *mut core::ffi::c_void,
         window: *mut crate::platform::mac::bridge::WindowLink,

@@ -16,6 +16,12 @@ final class MainView : NSView {
         self.layer = layer
     }
     
+    var backingSize: CGSize {
+        get {
+            return self.convertToBacking(self.frame.size)
+        }
+    }
+    
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
 //        NSLog("Resize \(newSize)")
