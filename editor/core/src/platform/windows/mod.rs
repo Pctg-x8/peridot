@@ -2,7 +2,10 @@ use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use windows::{
     Foundation::TypedEventHandler,
     UI::{
-        Composition::CompositionEffectSourceParameter,
+        Composition::{
+            CompositionEffectSourceParameter, Compositor, Desktop::DesktopWindowTarget,
+            SpriteVisual,
+        },
         Text::Core::{
             CoreTextCompositionCompletedEventArgs, CoreTextCompositionStartedEventArgs,
             CoreTextEditContext, CoreTextFormatUpdatingEventArgs, CoreTextLayoutRequestedEventArgs,
@@ -16,10 +19,11 @@ use windows::{
         System::WinRT::Composition::ICompositorDesktopInterop,
         UI::{
             HiDpi::GetDpiForWindow,
+            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
                 GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTCAPTION, HTCLIENT, HTCLOSE,
-                HTMAXBUTTON, HTMINBUTTON, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
+                HTMAXBUTTON, HTMINBUTTON, HTTOP, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
                 IDI_APPLICATION, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostQuitMessage,
                 SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
@@ -129,16 +133,14 @@ impl WindowHandle {
     #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
         let mut rc = core::mem::MaybeUninit::uninit();
-        if let Err(e) = unsafe {
-            windows::Win32::UI::WindowsAndMessaging::GetClientRect(self.0, rc.as_mut_ptr())
-        } {
+        if let Err(e) = unsafe { GetClientRect(self.0, rc.as_mut_ptr()) } {
             tracing::error!(reason = %e, "get_client_rect");
             return Size::new_logical(0.0, 0.0);
         }
 
         let rc = unsafe { rc.assume_init_ref() };
         Size::new_pixels(rc.right as _, rc.bottom as _)
-            .to_logical(unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.0) as f32 / 96.0 })
+            .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
     }
 
     #[inline(always)]
@@ -153,7 +155,7 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
-        unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(self.0) as f32 / 96.0 }
+        unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
     }
 
     #[inline(always)]
@@ -170,13 +172,13 @@ impl ShellPointerActions for WindowHandle {
     #[inline(always)]
     fn capture_pointer(&self) {
         unsafe {
-            windows::Win32::UI::Input::KeyboardAndMouse::SetCapture(self.0);
+            SetCapture(self.0);
         }
     }
 
     #[inline(always)]
     fn release_pointer(&self) {
-        if let Err(e) = unsafe { windows::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture() } {
+        if let Err(e) = unsafe { ReleaseCapture() } {
             tracing::error!(reason = %e, "release_capture");
         }
     }
@@ -191,23 +193,7 @@ pub struct WindowClassSet {
 }
 impl WindowClassSet {
     pub fn register(hinstance: HINSTANCE) -> Self {
-        let main = unsafe {
-            register_class(&WNDCLASSEXW {
-                cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
-                style: WNDCLASS_STYLES(0),
-                cbClsExtra: 0,
-                cbWndExtra: NativeWindow::EXTRA_STORAGE_SIZE as _,
-                lpfnWndProc: Some(WindowEventHandler::handle_messages),
-                hInstance: hinstance,
-                hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
-                hCursor: HCURSOR(core::ptr::null_mut()),
-                hbrBackground: HBRUSH(core::ptr::null_mut()),
-                lpszMenuName: PCWSTR::null(),
-                lpszClassName: w!("MainWindow"),
-                hIconSm: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
-            })
-            .expect("register_class.main")
-        };
+        let main = NativeWindow::register_class(hinstance);
 
         Self { hinstance, main }
     }
@@ -223,6 +209,26 @@ impl NativeWindow {
     const APP_POINTER_LONG_PTR_OFFSET: WINDOW_LONG_PTR_INDEX =
         WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _);
     const EXTRA_STORAGE_SIZE: usize = core::mem::size_of::<[usize; 2]>();
+
+    fn register_class(hinstance: HINSTANCE) -> u16 {
+        unsafe {
+            register_class(&WNDCLASSEXW {
+                cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
+                style: WNDCLASS_STYLES(0),
+                cbClsExtra: 0,
+                cbWndExtra: NativeWindow::EXTRA_STORAGE_SIZE as _,
+                lpfnWndProc: Some(WindowEventHandler::handle_messages),
+                hInstance: hinstance,
+                hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
+                hCursor: HCURSOR(core::ptr::null_mut()),
+                hbrBackground: HBRUSH(core::ptr::null_mut()),
+                lpszMenuName: PCWSTR::null(),
+                lpszClassName: w!("MainWindow"),
+                hIconSm: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
+            })
+            .expect("register_class.main")
+        }
+    }
 
     fn new(
         wc_set: &WindowClassSet,
@@ -251,9 +257,7 @@ impl NativeWindow {
         let event_handler = Box::new(WindowEventHandler {
             state: WindowState {
                 r#type: window_type,
-                content_scale: unsafe {
-                    windows::Win32::UI::HiDpi::GetDpiForWindow(w) as f32 / 96.0
-                },
+                content_scale: unsafe { GetDpiForWindow(w) as f32 / 96.0 },
                 composite_root,
                 ht_root,
                 latest_ui_scale_changes: Mutex::new(None),
@@ -298,7 +302,7 @@ pub struct WindowState {
     r#type: WindowType,
     content_scale: f32,
     pub composite_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
+    pub ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
 }
 
@@ -448,7 +452,7 @@ impl WindowEventHandler {
 
         let resize_h = unsafe { GetSystemMetrics(SM_CYSIZEFRAME) };
         if client_pos.y < resize_h {
-            return Some(windows::Win32::UI::WindowsAndMessaging::HTTOP);
+            return Some(HTTOP);
         }
 
         if unsafe { POINTER_INPUT_MANAGER_PTR.is_null() } {
@@ -853,13 +857,13 @@ impl WindowEventHandler {
 pub struct DragPreviewPopoverHandle {
     w: HWND,
     base_window_handle: core::cell::Cell<HWND>,
-    _composition_target: windows::UI::Composition::Desktop::DesktopWindowTarget,
-    root_visual: windows::UI::Composition::SpriteVisual,
+    _composition_target: DesktopWindowTarget,
+    root_visual: SpriteVisual,
 }
 impl Drop for DragPreviewPopoverHandle {
     #[inline(always)]
     fn drop(&mut self) {
-        if let Err(e) = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.w) } {
+        if let Err(e) = unsafe { DestroyWindow(self.w) } {
             tracing::error!(reason = %e, "dragPreviewPopover.destroyNative");
         }
     }
@@ -869,10 +873,7 @@ impl DragPreviewPopoverHandle {
         self.base_window_handle.set(window.0);
     }
 
-    pub fn new(
-        hinstance: HINSTANCE,
-        native_compositor: &windows::UI::Composition::Compositor,
-    ) -> Self {
+    pub fn new(hinstance: HINSTANCE, native_compositor: &Compositor) -> Self {
         let atom_drag_floating = unsafe {
             register_class(&WNDCLASSEXW {
                 cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
