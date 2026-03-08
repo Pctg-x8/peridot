@@ -372,7 +372,7 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   if (col.w > 0.0 && input.compositeMode.requiresBackdropComposition) {
     // blend with backdrop(forced alpha = 1)
     let backdrop = backdropTexture.Sample(input.screenUV);
-    col = blendAlphaPremultipliedColor(backdrop, col);
+    col = blendAlphaPremultipliedColor(col, backdrop);
     col.w = 1.0;
   }
 
