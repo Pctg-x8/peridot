@@ -30,11 +30,13 @@ use windows::Win32::{
 
 use crate::{
     graphics::{VulkanDevice, VulkanSurface},
-    hittest::{
-        CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
-        HitTestTreeManager, HitTestTreeRef,
+    input::{
+        KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions,
+        hittest::{
+            CursorShape, HitTestEventContext, HitTestTreeActionHandler, HitTestTreeCreate,
+            HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
+        },
     },
-    input::{KeyboardFocusManager, PointerInputManager, PointerInputUnit, ShellPointerActions},
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderThread,
         composite::{
@@ -51,7 +53,6 @@ use crate::{
 #[cfg(windows)]
 mod bindgen;
 mod graphics;
-mod hittest;
 mod input;
 mod platform;
 mod proto;
@@ -868,7 +869,7 @@ impl WindowHeaderView {
         let ht_root = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height: Self::THICKNESS,
-            role: Some(crate::hittest::Role::TitleBar),
+            role: Some(crate::input::hittest::Role::TitleBar),
             ..Default::default()
         });
 
@@ -973,7 +974,7 @@ async fn run<'sys>(
         top: 100.0,
         width: 100.0,
         height: 36.0,
-        cursor_shape: hittest::CursorShape::Pointer,
+        cursor_shape: CursorShape::Pointer,
         ..Default::default()
     });
     ht_manager.add_child(main_window.ht_root(), ht_tab_main);
@@ -984,9 +985,9 @@ async fn run<'sys>(
     impl HitTestTreeActionHandler for TabHitAction {
         fn on_pointer_enter(
             &self,
-            sender: hittest::HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            sender: HitTestTreeRef,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.composite_tree.get_mut(self.ct).composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Animated {
@@ -1004,9 +1005,9 @@ async fn run<'sys>(
 
         fn on_pointer_leave(
             &self,
-            sender: hittest::HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            sender: HitTestTreeRef,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.composite_tree.get_mut(self.ct).composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Animated {
@@ -1024,9 +1025,9 @@ async fn run<'sys>(
 
         fn on_drag_start(
             &self,
-            sender: hittest::HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            sender: HitTestTreeRef,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context
                 .drag_preview
@@ -1038,9 +1039,9 @@ async fn run<'sys>(
 
         fn on_drag_move(
             &self,
-            sender: hittest::HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            sender: HitTestTreeRef,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.drag_preview.r#move(&args.client_pos);
 
@@ -1049,9 +1050,9 @@ async fn run<'sys>(
 
         fn on_drag_end(
             &self,
-            sender: hittest::HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            sender: HitTestTreeRef,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.drag_preview.hide();
 
@@ -1062,8 +1063,8 @@ async fn run<'sys>(
         fn on_click(
             &self,
             sender: HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context
                 .system_link
@@ -1117,8 +1118,8 @@ async fn run<'sys>(
         fn on_pointer_enter(
             &self,
             sender: HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.composite_tree.get_mut(self.ct).composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Animated {
@@ -1137,8 +1138,8 @@ async fn run<'sys>(
         fn on_pointer_leave(
             &self,
             sender: HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.composite_tree.get_mut(self.ct).composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Animated {
@@ -1157,8 +1158,8 @@ async fn run<'sys>(
         fn on_click(
             &self,
             sender: HitTestTreeRef,
-            context: &mut hittest::HitTestEventContext,
-            args: &hittest::PointerActionArgs,
+            context: &mut HitTestEventContext,
+            args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             tracing::debug!("todo: show alert popup");
 
@@ -1175,9 +1176,6 @@ async fn run<'sys>(
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
-            Event::WindowResize { window, size } => {
-                pointer_input_manager.set_client_size(window, size);
-            }
             Event::SubWindowOpen { mut window } => {
                 composite_tree.get_mut(window.composite_root()).has_bitmap = true;
                 composite_tree
@@ -1212,6 +1210,9 @@ async fn run<'sys>(
                     drop(window.take_extra_data::<PerWindowView>());
                 }
                 system_link.close_window(window, &mut composite_tree, &mut ht_manager);
+            }
+            Event::WindowResize { window, size } => {
+                pointer_input_manager.set_client_size(window, size);
             }
             Event::WindowRescaleUI { window, new_scale } => {
                 unsafe {
@@ -1250,7 +1251,7 @@ async fn run<'sys>(
                 pointer_input_manager.handle_mouse_left_down(
                     &window,
                     &ht_manager,
-                    &mut crate::hittest::HitTestEventContext {
+                    &mut HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -1274,7 +1275,7 @@ async fn run<'sys>(
                     client_pos,
                     &window,
                     &ht_manager,
-                    &mut crate::hittest::HitTestEventContext {
+                    &mut HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -1294,7 +1295,7 @@ async fn run<'sys>(
                 pointer_input_manager.handle_mouse_left_up(
                     &window,
                     &ht_manager,
-                    &mut crate::hittest::HitTestEventContext {
+                    &mut HitTestEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),

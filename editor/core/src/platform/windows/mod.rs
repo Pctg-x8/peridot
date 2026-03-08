@@ -46,10 +46,12 @@ use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
-    hittest::{
-        CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+    input::{
+        PointerInputManager, PointerInputUnit, ShellPointerActions,
+        hittest::{
+            CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+        },
     },
-    input::{PointerInputManager, PointerInputUnit, ShellPointerActions},
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
@@ -472,13 +474,13 @@ impl WindowEventHandler {
             self.state.ht_root,
         ) {
             None => Some(HTCLIENT),
-            Some(crate::hittest::Role::TitleBar) => Some(HTCAPTION),
-            Some(crate::hittest::Role::ForceClient) => Some(HTCLIENT),
-            Some(crate::hittest::Role::CloseButton) => Some(HTCLOSE),
-            Some(crate::hittest::Role::MaximizeButton) => Some(HTMAXBUTTON),
-            Some(crate::hittest::Role::MinimizeButton) => Some(HTMINBUTTON),
+            Some(crate::input::hittest::Role::TitleBar) => Some(HTCAPTION),
+            Some(crate::input::hittest::Role::ForceClient) => Some(HTCLIENT),
+            Some(crate::input::hittest::Role::CloseButton) => Some(HTCLOSE),
+            Some(crate::input::hittest::Role::MaximizeButton) => Some(HTMAXBUTTON),
+            Some(crate::input::hittest::Role::MinimizeButton) => Some(HTMINBUTTON),
             // Windowsだと同じ位置にあるので同じものを返す
-            Some(crate::hittest::Role::RestoreButton) => Some(HTMAXBUTTON),
+            Some(crate::input::hittest::Role::RestoreButton) => Some(HTMAXBUTTON),
         }
     }
 

@@ -4,13 +4,14 @@ use bitflags::bitflags;
 
 use crate::{
     WindowHandle,
-    hittest::{
+    input::hittest::{
         CursorShape, HitTestEventContext, HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
         Role,
     },
     utils::{LogicalUnit, Point, Size},
 };
 
+pub mod hittest;
 pub type PointerInputUnit = LogicalUnit;
 
 bitflags! {
