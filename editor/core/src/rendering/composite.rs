@@ -3307,6 +3307,14 @@ impl<Event> CompositeTree<Event> {
         self.dirty_rects.insert(index.0, DirtyRect::Deleted);
     }
 
+    pub fn free_all(&mut self, index: CompositeTreeRef) {
+        let mut stack = vec![index.0];
+        while let Some(c) = stack.pop() {
+            stack.extend(self.rects[c].children.drain(..));
+            self.free(CompositeTreeRef(c));
+        }
+    }
+
     pub fn acquire_custom_render_token(&mut self) -> CustomRenderToken {
         if let Some(x) = self.custom_render_unused.pop_first() {
             return CustomRenderToken(x);

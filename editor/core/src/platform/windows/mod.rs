@@ -1104,11 +1104,17 @@ impl SystemLink<'_> {
 
         unsafe {
             let _ = ShowWindow(w.hwnd, SW_SHOW);
+            (*self.event_dispatcher).dispatch(Event::SubWindowOpen { window: h });
         }
         h
     }
 
-    pub fn close_window(&self, mut window_handle: WindowHandle) {
+    pub fn close_window(
+        &self,
+        mut window_handle: WindowHandle,
+        composite_tree: &mut CompositeTree<Event>,
+        hit_tree: &mut HitTestTreeManager,
+    ) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         self.rt_sender
             .send(RenderMessage::DestroyWindow(
@@ -1120,6 +1126,8 @@ impl SystemLink<'_> {
             .recv()
             .expect("done_event_receiver.recv");
 
+        composite_tree.free_all(window_handle.composite_root());
+        hit_tree.free_all(window_handle.ht_root());
         window_handle.destroy();
     }
 

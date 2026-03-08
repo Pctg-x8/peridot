@@ -110,6 +110,18 @@ impl<'h> HitTestTreeManager<'h> {
         HitTestTreeManagerCreateOnlyAccess { ptr: self }
     }
 
+    pub fn free(&mut self, r: HitTestTreeRef) {
+        self.free_index.insert(r.0);
+    }
+
+    pub fn free_all(&mut self, r: HitTestTreeRef) {
+        let mut stack = vec![r.0];
+        while let Some(c) = stack.pop() {
+            stack.extend(self.relations[c].children.drain(..));
+            self.free(HitTestTreeRef(c));
+        }
+    }
+
     #[inline]
     pub fn get_data<'d>(&'d self, r: HitTestTreeRef) -> &'d HitTestTreeData<'h> {
         &self.data[r.0]

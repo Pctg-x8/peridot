@@ -738,6 +738,9 @@ pub enum Event {
         window: WindowHandle,
         new_scale: f32,
     },
+    SubWindowOpen {
+        window: WindowHandle,
+    },
     SubWindowClose {
         window: WindowHandle,
     },
@@ -795,6 +798,81 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
+struct WindowHeaderView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl WindowHeaderView {
+    #[cfg(target_os = "macos")]
+    const THICKNESS: f32 = 32.0;
+    #[cfg(not(target_os = "macos"))]
+    const THICKNESS: f32 = 24.0;
+
+    pub fn new(
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        init_scale: f32,
+    ) -> Self {
+        let ct_root = composite_tree.create(CompositeRect {
+            has_bitmap: true,
+            base_scale_factor: init_scale,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                1.0, 1.0, 1.0, 0.125,
+            ])),
+            relative_size_adjustment: [1.0, 0.0],
+            size: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(Self::THICKNESS),
+            ],
+            text: Some(CompositeRectText {
+                runs: vec![
+                    CompositeRectTextRun {
+                        font_id: FontID::UIDefault,
+                        content: "Peridot Marble Editor".into(),
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    },
+                    CompositeRectTextRun {
+                        font_id: FontID::UITitleProjectName,
+                        content: "New Project".into(),
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        spacing_inline_start: 4.0,
+                        ..Default::default()
+                    },
+                ],
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height: Self::THICKNESS,
+            role: Some(crate::hittest::Role::TitleBar),
+            ..Default::default()
+        });
+
+        Self { ct_root, ht_root }
+    }
+
+    pub fn mount(
+        &self,
+        ct_parent: CompositeTreeRef,
+        ht_parent: HitTestTreeRef,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager<'_>,
+    ) {
+        composite_tree.add_child(ct_parent, self.ct_root);
+        ht_manager.add_child(ht_parent, self.ht_root);
+    }
+
+    pub fn rescale(&self, scale_factor: f32, composite_tree: &mut CompositeTree<Event>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = scale_factor;
+        composite_tree.mark_dirty(self.ct_root);
+    }
+}
+
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
 async fn run<'sys>(
     event_queue: EventQueue,
@@ -827,50 +905,14 @@ async fn run<'sys>(
 
     let init_scale = main_window.ui_scale_factor();
 
-    // app title view
-    #[cfg(target_os = "macos")]
-    let title_bar_thickness = 32.0;
-    #[cfg(not(target_os = "macos"))]
-    let title_bar_thickness = 24.0;
-    let app_title = composite_tree.create(CompositeRect {
-        has_bitmap: true,
-        base_scale_factor: init_scale,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.125])),
-        relative_size_adjustment: [1.0, 0.0],
-        size: [
-            AnimatableFloat::Value(0.0),
-            AnimatableFloat::Value(title_bar_thickness),
-        ],
-        text: Some(CompositeRectText {
-            runs: vec![
-                CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: "Peridot Marble Editor".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                },
-                CompositeRectTextRun {
-                    font_id: FontID::UITitleProjectName,
-                    content: "New Project".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    spacing_inline_start: 4.0,
-                    ..Default::default()
-                },
-            ],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-    composite_tree.add_child(main_window.composite_root(), app_title);
-    let ht_caption_bar = ht_manager.create(HitTestTreeData {
-        width_adjustment_factor: 1.0,
-        height: title_bar_thickness,
-        role: Some(crate::hittest::Role::TitleBar),
-        ..Default::default()
-    });
-    ht_manager.add_child(main_window.ht_root(), ht_caption_bar);
+    let window_header_view =
+        WindowHeaderView::new(&mut composite_tree, &mut ht_manager, init_scale);
+    window_header_view.mount(
+        main_window.composite_root(),
+        main_window.ht_root(),
+        &mut composite_tree,
+        &mut ht_manager,
+    );
 
     // tab view
     let tab_main = composite_tree.create(CompositeRect {
@@ -1103,14 +1145,33 @@ async fn run<'sys>(
             Event::WindowResize { window, size } => {
                 pointer_input_manager.set_client_size(window, size);
             }
+            Event::SubWindowOpen { window } => {
+                composite_tree.get_mut(window.composite_root()).has_bitmap = true;
+                composite_tree
+                    .get_mut(window.composite_root())
+                    .composite_mode =
+                    CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
+                composite_tree.mark_dirty(window.composite_root());
+
+                let window_header_view =
+                    WindowHeaderView::new(&mut composite_tree, &mut ht_manager, init_scale);
+                window_header_view.mount(
+                    window.composite_root(),
+                    window.ht_root(),
+                    &mut composite_tree,
+                    &mut ht_manager,
+                );
+
+                let mut renderer_sync = renderer_sync.lock().expect("poisoned");
+                composite_tree.commit(&mut renderer_sync.composite_buffer);
+            }
             Event::SubWindowClose { window } => {
                 tracing::trace!("subWindowClose");
-                system_link.close_window(window);
+                system_link.close_window(window, &mut composite_tree, &mut ht_manager);
             }
             Event::WindowRescaleUI { window, new_scale } => {
                 if window == main_window {
-                    composite_tree.get_mut(app_title).base_scale_factor = new_scale;
-                    composite_tree.mark_dirty_all(app_title);
+                    window_header_view.rescale(new_scale, &mut composite_tree);
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     composite_tree.get_mut(ct_alert_btn).base_scale_factor = new_scale;
