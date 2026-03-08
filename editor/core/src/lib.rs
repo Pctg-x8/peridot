@@ -38,7 +38,7 @@ use crate::{
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderThread,
         composite::{
-            AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
+            AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
             CompositeTreeSyncBuffer, CornerRadius,
@@ -1017,6 +1017,10 @@ async fn run<'sys>(
         has_bitmap: true,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
         corner_radius: CornerRadius::all(8.0),
+        border: Some(Border {
+            thickness: 1.0,
+            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+        }),
         ..Default::default()
     });
     let ht_alert_btn = ht_manager.create(HitTestTreeData {

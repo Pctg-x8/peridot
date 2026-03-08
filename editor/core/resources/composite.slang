@@ -38,9 +38,16 @@ struct CompositeInstanceData {
   float4 cornerRadiusX;
   /// lt, rt, lb, rb (in pixels)
   float4 cornerRadiusY;
+  float4 borderColor;
+  /// border_thickness, .., .., ..
+  float4 miscValues2;
 
   property texSlicedSizedPixels : float2 {
     inline get { return this.uvSTStatic.xy * this.uvSTStatic.zw; }
+  }
+
+  property borderThickness : float {
+    inline get { return this.miscValues2.x; }
   }
 
   inline func globalUV(p01: float2)->float2 {
@@ -140,6 +147,9 @@ VertexOutput vertMain(uint vindex: SV_VertexID, uint iindex: SV_InstanceID) {
   vo.fragmentInput.texSlicedSizePixels.zw = 0.0;
   vo.fragmentInput.cornerRadiusX = instanceDataArray[iindex].cornerRadiusX;
   vo.fragmentInput.cornerRadiusY = instanceDataArray[iindex].cornerRadiusY;
+  vo.fragmentInput.borderColor =
+      premultiplyAlpha(instanceDataArray[iindex].borderColor);
+  vo.fragmentInput.packedValues4.x = instanceDataArray[iindex].borderThickness;
 
   return vo;
 }
@@ -168,6 +178,8 @@ struct FragmentInput {
   float4 packedValues2;
   /// relativePixelCoord.xy, renderSizePixels.xy
   float4 packedValues3;
+  /// borderThickness, .., .., ..
+  float4 packedValues4;
   float4 sliceBordersLTRB;
   float4 colorTint;
   float4 texSlicedSizePixels;
@@ -176,6 +188,7 @@ struct FragmentInput {
   float4 cornerRadiusX;
   /// lt, rt, lb, rb (in pixels)
   float4 cornerRadiusY;
+  float4 borderColor;
 
   property relativePixelCoord : float2 {
     inline get { return this.packedValues3.xy; }
@@ -248,6 +261,10 @@ struct FragmentInput {
   property opacity : float {
     inline get { return this.packedValues.w; }
   }
+
+  property borderThickness : float {
+    inline get { return this.packedValues4.x; }
+  }
 }
 
 [shader("fragment")]
@@ -288,38 +305,66 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
     col = input.colorTint;
   }
 
-  // compute corner radius alphamask
-  // TODO: GPU負荷大きそうならテクスチャマスクにするのも考える
-  let leftEdgeRadius =
-      select(input.renderingPixelCoordTop <= input.cornerRadiusLT.y,
-             input.cornerRadiusLT.x, input.cornerRadiusLB.x);
-  let rightEdgeRadius =
-      select(input.renderingPixelCoordTop <= input.cornerRadiusRT.y,
-             input.cornerRadiusRT.x, input.cornerRadiusRB.x);
-  let topEdgeRadius =
-      select(input.renderingPixelCoordLeft <= input.cornerRadiusLT.x,
-             input.cornerRadiusLT.y, input.cornerRadiusRT.y);
-  let bottomEdgeRadius =
-      select(input.renderingPixelCoordLeft <= input.cornerRadiusLB.x,
-             input.cornerRadiusLB.y, input.cornerRadiusRB.y);
-  let distanceFromEdge =
-      float2(max(saturate(1.0 - input.renderingPixelCoordLeft /
-                                    (leftEdgeRadius + 0.0000001)),
-                 saturate(1.0 - input.renderingPixelCoordRight /
-                                    (rightEdgeRadius + 0.0000001))),
-             max(saturate(1.0 - input.renderingPixelCoordTop /
-                                    (topEdgeRadius + 0.0000001)),
-                 saturate(1.0 - input.renderingPixelCoordBottom /
-                                    (bottomEdgeRadius + 0.0000001))));
-  let cornerAlpha =
-      1.0 - smoothstep(1.0 - 1.0 / pushConstants.screenSize.x,
-                       1.0 + 1.0 / pushConstants.screenSize.y,
-                       sqrt(dot(distanceFromEdge, distanceFromEdge)));
+  // compute distance from edge
+  // TODO: GPU負荷大きそうならテクスチャにするのも考える
+  var distanceFromEdge
+      : float = min(
+            min(input.renderingPixelCoordLeft, input.renderingPixelCoordRight),
+            min(input.renderingPixelCoordTop, input.renderingPixelCoordBottom));
+  if (input.renderingPixelCoordLeft < input.cornerRadiusLT.x &&
+      input.renderingPixelCoordTop < input.cornerRadiusLT.y) {
+    let roundedDistance = (1.0 - length((float2(input.renderingPixelCoordLeft,
+                                                input.renderingPixelCoordTop) -
+                                         input.cornerRadiusLT) /
+                                        input.cornerRadiusLT)) *
+                          maxElement(input.cornerRadiusLT.x);
+    distanceFromEdge = min(roundedDistance, distanceFromEdge);
+  }
+  if (input.renderingPixelCoordRight < input.cornerRadiusRT.x &&
+      input.renderingPixelCoordTop < input.cornerRadiusRT.y) {
+    let roundedDistance = (1.0 - length((float2(input.renderingPixelCoordRight,
+                                                input.renderingPixelCoordTop) -
+                                         input.cornerRadiusRT) /
+                                        input.cornerRadiusRT)) *
+                          maxElement(input.cornerRadiusRT.x);
+    distanceFromEdge = min(roundedDistance, distanceFromEdge);
+  }
+  if (input.renderingPixelCoordLeft < input.cornerRadiusLB.x &&
+      input.renderingPixelCoordBottom < input.cornerRadiusLB.y) {
+    let roundedDistance =
+        (1.0 - length((float2(input.renderingPixelCoordLeft,
+                              input.renderingPixelCoordBottom) -
+                       input.cornerRadiusLB) /
+                      input.cornerRadiusLB)) *
+        maxElement(input.cornerRadiusLB.x);
+    distanceFromEdge = min(roundedDistance, distanceFromEdge);
+  }
+  if (input.renderingPixelCoordRight < input.cornerRadiusRB.x &&
+      input.renderingPixelCoordBottom < input.cornerRadiusRB.y) {
+    let roundedDistance =
+        (1.0 - length((float2(input.renderingPixelCoordRight,
+                              input.renderingPixelCoordBottom) -
+                       input.cornerRadiusRB) /
+                      input.cornerRadiusRB)) *
+        maxElement(input.cornerRadiusRB.x);
+    distanceFromEdge = min(roundedDistance, distanceFromEdge);
+  }
+  // let x = 1.0 - abs(distanceFromEdge) / 32.0;
+  // return float4(x, x, x, 1.0);
+
+  let cornerAlpha = smoothstep(0.0, 1.0, distanceFromEdge);
 
   // apply softmask, opacity and premultiply
   col.w *=
       rectMaskInUV.softmaskRate(input.screenUV) * input.opacity * cornerAlpha;
   col.xyz *= col.w;
+
+  // blend with borderline
+  let borderAlpha =
+      smoothstep(0.0, 1.0, distanceFromEdge) *
+      (1.0 - smoothstep(0.0 + input.borderThickness,
+                        1.0 + input.borderThickness, distanceFromEdge));
+  col = blendAlphaPremultipliedColor(input.borderColor * borderAlpha, col);
 
   if (col.w > 0.0 && input.compositeMode.requiresBackdropComposition) {
     // blend with backdrop(forced alpha = 1)
@@ -331,6 +376,16 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
 }
 
 // Helper functions
+
+inline func maxElement(float2 v)->float { return max(v.x, v.y); }
+
+inline func premultiplyAlpha(float4 c)->float4 {
+  return float4(c.xyz * c.w, c.w);
+}
+inline func blendAlphaPremultipliedColor(source: float4, dest: float4)->float4 {
+  return float4(source.xyz + dest.xyz * (1.0 - source.w),
+                source.w + dest.w * (1.0 - source.w));
+}
 
 func interpolateCurve(p1: float2, p2: float2, x: float)->float {
   // p01 = mix(vec2(0.0), p1, t) = p1 * t

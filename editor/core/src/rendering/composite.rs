@@ -1,7 +1,7 @@
 //! UI Rect Compositioning
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -68,6 +68,9 @@ pub struct CompositeInstanceData {
     pub corner_radius_x: [f32; 4],
     /// lt, rt, lb, rb (in pixels)
     pub corner_radius_y: [f32; 4],
+    pub border_color: [f32; 4],
+    pub border_thickness: f32,
+    pub _padding: [f32; 3],
 }
 
 #[repr(C)]
@@ -577,10 +580,25 @@ impl CornerRadius {
 }
 
 #[derive(Debug, Clone)]
+pub struct Border<Event> {
+    pub thickness: f32,
+    pub color: AnimatableColor<Event>,
+}
+impl<Event> Default for Border<Event> {
+    fn default() -> Self {
+        Self {
+            thickness: 0.0,
+            color: AnimatableColor::Value([0.0, 0.0, 0.0, 0.0]),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CompositeRect<Event> {
     pub has_bitmap: bool,
     pub base_scale_factor: f32,
     pub corner_radius: CornerRadius,
+    pub border: Option<Border<Event>>,
     pub offset: [AnimatableFloat<Event>; 2],
     pub size: [AnimatableFloat<Event>; 2],
     pub relative_offset_adjustment: [f32; 2],
@@ -604,6 +622,7 @@ impl<Event> Default for CompositeRect<Event> {
             has_bitmap: false,
             base_scale_factor: 1.0,
             corner_radius: CornerRadius::default(),
+            border: None,
             offset: [const { AnimatableFloat::Value(0.0) }; 2],
             size: [const { AnimatableFloat::Value(0.0) }; 2],
             relative_offset_adjustment: [0.0, 0.0],
@@ -1482,6 +1501,11 @@ impl<Event> CompositeTreeRender<Event> {
                     1.0,
                 )) * Matrix4::translation(Vector3(-r.pivot[0] * w, -r.pivot[1] * h, 0.0)));
 
+            let border_color = match r.border {
+                Some(ref b) => b.color.evaluate(current_sec, &self.parameter_store),
+                None => [0.0; 4],
+            };
+
             r.offset[0].process_on_complete(current_sec, &mut on_event);
             r.offset[1].process_on_complete(current_sec, &mut on_event);
             r.size[0].process_on_complete(current_sec, &mut on_event);
@@ -1505,6 +1529,9 @@ impl<Event> CompositeTreeRender<Event> {
                     t.process_on_complete(current_sec, &mut on_event);
                     stdev.process_on_complete(current_sec, &mut on_event);
                 }
+            }
+            if let Some(ref mut b) = r.border {
+                b.color.process_on_complete(current_sec, &mut on_event);
             }
 
             if let Some((clip_rect_px, clip_config)) = active_clip {
@@ -1579,6 +1606,9 @@ impl<Event> CompositeTreeRender<Event> {
                                 r.corner_radius.left_bottom[1] * r.base_scale_factor,
                                 r.corner_radius.right_bottom[1] * r.base_scale_factor,
                             ],
+                            border_color,
+                            border_thickness: r.border.as_ref().map_or(0.0, |b| b.thickness),
+                            _padding: [0.0; 3],
                         },
                     );
                 }
@@ -1677,6 +1707,9 @@ impl<Event> CompositeTreeRender<Event> {
                                 pos_height_curve_control_points: [0.0; 4],
                                 corner_radius_x: [0.0; 4],
                                 corner_radius_y: [0.0; 4],
+                                border_thickness: 0.0,
+                                border_color: [0.0; 4],
+                                _padding: [0.0; 3],
                             },
                         );
                     }
