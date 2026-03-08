@@ -1174,6 +1174,113 @@ async fn run<'sys>(
         std::rc::Rc::new(AlertButtonActionHandler { ct: ct_alert_btn });
     ht_manager.set_action_handler(ht_alert_btn, &ht_alert_btn_action_handler);
 
+    let ct_popup_base = composite_tree.create(CompositeRect {
+        relative_size_adjustment: [1.0, 1.0],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColorBackdropBlur(
+            AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
+            AnimatableFloat::Value(3.0),
+        ),
+        ..Default::default()
+    });
+    let ct_popup_frame = composite_tree.create(CompositeRect {
+        base_scale_factor: init_scale,
+        relative_offset_adjustment: [0.5, 0.5],
+        size: [AnimatableFloat::Value(160.0), AnimatableFloat::Value(88.0)],
+        offset: [AnimatableFloat::Value(-80.0), AnimatableFloat::Value(-44.0)],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+            0.025, 0.025, 0.025, 1.0,
+        ])),
+        corner_radius: CornerRadius::all(16.0),
+        border: Some(Border {
+            thickness: 1.0,
+            color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
+        }),
+        ..Default::default()
+    });
+    let ct_alert_dialog_message = composite_tree.create(CompositeRect {
+        base_scale_factor: init_scale,
+        size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(16.0)],
+        relative_offset_adjustment: [0.5, 0.0],
+        offset: [AnimatableFloat::Value(-32.0), AnimatableFloat::Value(16.0)],
+        text: Some(CompositeRectText {
+            runs: vec![CompositeRectTextRun {
+                font_id: FontID::UIDefault,
+                content: "てすとめっせーじ".into(),
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                spacing_inline_start: 0.0,
+            }],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let ct_popup_confirm_button = composite_tree.create(CompositeRect {
+        base_scale_factor: init_scale,
+        size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(24.0)],
+        relative_offset_adjustment: [0.5, 1.0],
+        offset: [
+            AnimatableFloat::Value(-32.0),
+            AnimatableFloat::Value(-24.0 - 16.0),
+        ],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+        corner_radius: CornerRadius::all(8.0),
+        border: Some(Border {
+            thickness: 1.5,
+            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+        }),
+        text: Some(CompositeRectText {
+            runs: vec![CompositeRectTextRun {
+                font_id: FontID::UIDefault,
+                content: "OK".into(),
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                spacing_inline_start: 0.0,
+            }],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    composite_tree.add_child(ct_popup_frame, ct_alert_dialog_message);
+    composite_tree.add_child(ct_popup_frame, ct_popup_confirm_button);
+    composite_tree.add_child(ct_popup_base, ct_popup_frame);
+    composite_tree.add_child(main_window.composite_root(), ct_popup_base);
+    let ht_popup_mask = ht_manager.create(HitTestTreeData {
+        width_adjustment_factor: 1.0,
+        height_adjustment_factor: 1.0,
+        // WindowHeaderのぶん開ける(ドラッグ判定がこない)
+        height: -WindowHeaderView::THICKNESS,
+        top: WindowHeaderView::THICKNESS,
+        ..Default::default()
+    });
+    let ht_popup_frame = ht_manager.create(HitTestTreeData {
+        width: 160.0,
+        height: 88.0,
+        left_adjustment_factor: 0.5,
+        top_adjustment_factor: 0.5,
+        left: -80.0,
+        // maskでヘッダ分開けてるのをここで補正
+        top: -44.0 - WindowHeaderView::THICKNESS * 0.5,
+        ..Default::default()
+    });
+    let ht_popup_confirm_button = ht_manager.create(HitTestTreeData {
+        width: 64.0,
+        height: 24.0,
+        left_adjustment_factor: 0.5,
+        top_adjustment_factor: 1.0,
+        left: -32.0,
+        top: -24.0 - 16.0,
+        cursor_shape: CursorShape::Pointer,
+        ..Default::default()
+    });
+    ht_manager.add_child(ht_popup_frame, ht_popup_confirm_button);
+    ht_manager.add_child(ht_popup_mask, ht_popup_frame);
+    ht_manager.add_child(main_window.ht_root(), ht_popup_mask);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
