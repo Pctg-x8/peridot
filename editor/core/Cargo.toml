@@ -75,13 +75,15 @@ features = [
     "xdg-decoration-unstable-v1",
     "text-input-unstable-v3",
     "cursor-shape-v1",
-    "fractional-scale-v1"
+    "fractional-scale-v1",
 ]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-eventfd = { path = "../../platform/linux/eventfd" }
 linux-epoll = { path = "../../platform/linux/epoll" }
-libc = "0.2"
 peridot-tp-dbus = { path = "../../thirdparty/dbus" }
 peridot-tp-xkbcommon = { path = "../../thirdparty/xkbcommon" }
 

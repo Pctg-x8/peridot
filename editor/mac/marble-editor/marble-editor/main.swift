@@ -60,9 +60,16 @@ final class MainWindowDelegate : NSObject, AppWindowDelegate {
     }
 }
 
-final class SubWindowDelegate : NSObject, AppWindowDelegate {}
+final class SubWindowDelegate : NSObject, AppWindowDelegate {
+    unowned var callbacks: WindowLinkCallbackSet? = nil
+    
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        self.callbacks?.performCloseAction()
+        return true
+    }
+}
 
-struct WindowLinkCallbackSet {
+final class WindowLinkCallbackSet {
     private let funcs: UnsafePointer<WindowLinkCallbacks>
     private let ctx: UnsafeMutableRawPointer
     private unowned let owner: WindowLink
@@ -73,8 +80,16 @@ struct WindowLinkCallbackSet {
         self.owner = owner
     }
     
+    deinit {
+        self.funcs.pointee.destructor(self.ctx)
+    }
+    
     func getContextPointer() -> UnsafeMutableRawPointer {
         self.ctx
+    }
+    
+    func performCloseAction() {
+        self.funcs.pointee.onWindowClose(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()))
     }
     
     func notifyResize(_ width: Double, _ height: Double) {
@@ -145,6 +160,9 @@ final class WindowLink : NSWindow {
     ) {
         self.callbacks = WindowLinkCallbackSet(funcs: callbacks, ctx: callerContext, owner: self)
         self.mainView.windowLinkCallbacks = self.callbacks
+        if let subWindowDelegate = self.delegate as? SubWindowDelegate {
+            subWindowDelegate.callbacks = self.callbacks
+        }
     }
     
     func getCallbackContextPointer() -> UnsafeMutableRawPointer? {
@@ -194,7 +212,7 @@ func createWindow(flags: UInt32) -> UnsafeMutableRawPointer {
 
 @_cdecl("ni_release_window")
 func releaseWindow(p: UnsafeMutableRawPointer) {
-    Unmanaged<WindowLink>.fromOpaque(p).release()
+    Unmanaged<WindowLink>.fromOpaque(p).takeUnretainedValue().close()
 }
 
 @_cdecl("ni_make_primary_window")
@@ -221,14 +239,16 @@ func setWindowCallbacks(
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().setCallbacks(callbacks, caller: callerContext)
 }
 
-@_cdecl("ni_unset_window_callbacks")
-func unsetWindowCallbacks(windowLink: UnsafeMutableRawPointer) {
-    Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().unsetCallbacks()
-}
-
 @_cdecl("ni_get_window_callback_context")
 func getWindowCallbackContext(windowLink: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().getCallbackContextPointer()
+}
+
+@_cdecl("ni_get_size_logical")
+func getSizePixels(windowLink: UnsafeMutableRawPointer, width: UnsafeMutablePointer<CDouble>, height: UnsafeMutablePointer<CDouble>) {
+    let size = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().mainView.backingSize
+    width.pointee = size.width
+    height.pointee = size.height
 }
 
 @_cdecl("ni_get_metal_layer")
@@ -293,4 +313,26 @@ func setCursorShape(shape: UInt8) {
 @_cdecl("ni_query_filesystem_cachedir_path")
 func queryFilesystemCachedirPath() -> UnsafePointer<CChar> {
     filesystemCacheDir.withUnsafeBufferPointer { $0.baseAddress! }
+}
+
+final class ThreadPriorityContext {
+    let threadPriority: Double
+    
+    init(threadPriority: Double) {
+        self.threadPriority = threadPriority
+    }
+}
+
+@_cdecl("ni_degreade_thread_priroity_temporarily")
+func degradeThreadPriorityTemporarily() -> UnsafeMutableRawPointer {
+    let context = Unmanaged.passRetained(ThreadPriorityContext(threadPriority: Thread.current.threadPriority))
+    Thread.current.threadPriority = 0.5
+    return context.toOpaque()
+}
+
+@_cdecl("ni_restore_thread_priority")
+func restoreThreadPriority(contextPtr: UnsafeMutableRawPointer) {
+    let context = Unmanaged<ThreadPriorityContext>.fromOpaque(contextPtr).takeUnretainedValue()
+    Thread.current.threadPriority = context.threadPriority
+    Unmanaged<ThreadPriorityContext>.fromOpaque(contextPtr).release()
 }

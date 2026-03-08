@@ -6,6 +6,8 @@ extern "C" {
 
 typedef struct WindowLink_* WindowLink;
 typedef struct {
+    void (*destructor)(void* callerContext);
+    void (*onWindowClose)(void* callerContext, WindowLink window);
     void (*onResize)(void* callerContext, WindowLink window, double width, double height);
     void (*onPointerDown)(void* callerContext, WindowLink window, double x, double y);
     void (*onPointerMove)(void* callerContext, WindowLink window, double x, double y);

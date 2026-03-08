@@ -43,7 +43,14 @@ impl TemporalSharedMemory {
                 libc::shm_open(
                     shm_name.as_ptr().cast(),
                     libc::O_EXCL | libc::O_CREAT | oflag,
-                    mode,
+                    #[cfg(target_os = "macos")]
+                    {
+                        mode as core::ffi::c_uint
+                    },
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        mode
+                    },
                 )
             };
             if fd < 0 {
