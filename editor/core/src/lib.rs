@@ -450,6 +450,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .into_result()
         .expect("seat set_listener");
 
+    // initial poll
     let _ = app
         .as_mut()
         .poll(&mut core::task::Context::from_waker(&unsafe {
@@ -681,7 +682,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             match unsafe { GetMessageW(msg.as_mut_ptr(), None, 0, 0) } {
                 windows_core::BOOL(0) => break 'app,
                 windows_core::BOOL(-1) => {
-                    Err::<(), _>(std::io::Error::last_os_error()).expect("GetMessageW")
+                    panic!(
+                        "unrecoverable GetMessageW error: {}",
+                        std::io::Error::last_os_error()
+                    );
                 }
                 _ => unsafe {
                     let msg = msg.assume_init_ref();
@@ -707,10 +711,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
-
-        #[cfg(windows)]
-        app_runtime.shutdown();
     });
+
+    #[cfg(windows)]
+    app_runtime.shutdown();
 }
 
 struct RendererSync {
