@@ -24,6 +24,7 @@ bitflags! {
     }
 }
 
+#[derive(Debug)]
 enum PointerFocusState {
     None,
     Entering(HitTestTreeRef),

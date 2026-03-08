@@ -46,6 +46,20 @@ pub struct NewWindowData {
 pub enum RenderMessage {
     NewWindow(NewWindowData),
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
+    RegisterNormalized2DStaticMeshTexture {
+        id: usize,
+        vertices: &'static [[f32; 2]],
+        indices: &'static [u16],
+        width: f32,
+        height: f32,
+    },
+}
+
+struct Normalized2DStaticMeshTextureEntry {
+    width: f32,
+    height: f32,
+    vertices: &'static [[f32; 2]],
+    indices: &'static [u16],
 }
 
 pub struct RenderThread<'main> {
@@ -72,12 +86,17 @@ impl<'main> RenderThread<'main> {
             GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
         struct GlyphAtlasDataPerDpi<'d> {
             manager: MaskTextureAtlasManager<'d>,
+            atlas_rects: Vec<AtlasRect>,
             vector_raster_state: VectorRasterizationState,
             ref_count: u64,
         }
         let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
         let font_set = RootFontSet::new();
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
+        let mut normalized_2d_static_mesh_textures: HashMap<
+            usize,
+            Normalized2DStaticMeshTextureEntry,
+        > = HashMap::new();
 
         let mut any_swapchain_invalidated = false;
         'lp: while !self
@@ -118,6 +137,7 @@ impl<'main> RenderThread<'main> {
                                         &mut render_queue,
                                         self.vk_device.present_queue_family_index(),
                                     ),
+                                    atlas_rects: Vec::new(),
                                     vector_raster_state: VectorRasterizationState::new(),
                                     ref_count: 0,
                                 })
@@ -150,6 +170,23 @@ impl<'main> RenderThread<'main> {
                         if let Err(e) = done_event_bus.send(()) {
                             tracing::error!(reason = %e, "done_event_bus.send");
                         };
+                    }
+                    Ok(RenderMessage::RegisterNormalized2DStaticMeshTexture {
+                        id,
+                        vertices,
+                        indices,
+                        width,
+                        height,
+                    }) => {
+                        normalized_2d_static_mesh_textures.insert(
+                            id,
+                            Normalized2DStaticMeshTextureEntry {
+                                width,
+                                height,
+                                vertices,
+                                indices,
+                            },
+                        );
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
                         break;
@@ -248,6 +285,7 @@ impl<'main> RenderThread<'main> {
                             // reuse existing with clear
                             Some(mut data) => {
                                 data.manager.clear();
+                                data.atlas_rects.clear();
                                 data.ref_count = 0;
                                 v.insert(data)
                             }
@@ -258,6 +296,7 @@ impl<'main> RenderThread<'main> {
                                     &mut render_queue,
                                     self.vk_device.present_queue_family_index(),
                                 ),
+                                atlas_rects: Vec::new(),
                                 vector_raster_state: VectorRasterizationState::new(),
                                 ref_count: 0,
                             }),
@@ -279,10 +318,42 @@ impl<'main> RenderThread<'main> {
                 let glyph_atlas_mgr = glyph_atlas_per_scale
                     .get_mut(&x.active_scale())
                     .expect("invalid state");
+                // TODO: ここも重いようならあとで改善する
+                for (&id, e) in &normalized_2d_static_mesh_textures {
+                    if glyph_atlas_mgr.atlas_rects.get(id).is_none_or(|x| {
+                        x == &AtlasRect {
+                            left: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                        }
+                    }) {
+                        tracing::trace!(id, "rasterize mesh");
+                        let rect = glyph_atlas_mgr.manager.acquire(
+                            (e.width * x.active_scale().value()).ceil() as _,
+                            (e.height * x.active_scale().value()).ceil() as _,
+                        );
+                        if glyph_atlas_mgr.atlas_rects.len() <= id {
+                            // extend with zero
+                            glyph_atlas_mgr
+                                .atlas_rects
+                                .resize_with(id + 1, || AtlasRect {
+                                    left: 0,
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                });
+                        }
+                        glyph_atlas_mgr.atlas_rects[id] = rect;
+
+                        // TODO: rasterize mesh
+                    }
+                }
                 let needs_update_command = x.update(
                     current_t.as_secs_f32(),
                     &mut composite_tree,
                     &mut glyph_atlas_mgr.manager,
+                    &mut glyph_atlas_mgr.atlas_rects,
                     &mut glyph_atlas_mgr.vector_raster_state,
                     self.event_bus,
                 );
@@ -632,6 +703,7 @@ impl<'d> WindowRenderer<'d> {
         current_sec: f32,
         composite_tree: &mut CompositeTreeRender<Event>,
         glyph_atlas: &mut MaskTextureAtlasManager,
+        mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
         events: &AppEventBus,
     ) -> bool {
@@ -642,6 +714,7 @@ impl<'d> WindowRenderer<'d> {
             self.swapchain.size(),
             &self.font_set,
             glyph_atlas,
+            mask_atlas_rects,
             vector_raster_state,
             |e| events.push(e),
             current_sec,
@@ -1253,6 +1326,11 @@ impl<'d> MaskTextureAtlasManager<'d> {
             curve_pipeline,
             colorize_pipeline,
         }
+    }
+
+    #[inline(always)]
+    pub fn acquire(&mut self, width: u32, height: u32) -> AtlasRect {
+        self.atlas.acquire(width, height)
     }
 
     pub fn acquire_for_glyph(

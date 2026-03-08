@@ -22,17 +22,19 @@ use windows::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTCAPTION, HTCLIENT, HTCLOSE,
-                HTMAXBUTTON, HTMINBUTTON, HTTOP, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
+                GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
+                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
+                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
                 IDI_APPLICATION, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostQuitMessage,
                 SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
                 SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE, WA_CLICKACTIVE,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
                 WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_NCCALCSIZE, WM_NCHITTEST, WM_SETFOCUS, WM_SIZE, WNDCLASS_STYLES, WNDCLASSEXW,
-                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE,
+                WM_SETFOCUS, WM_SIZE, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+                WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -822,6 +824,43 @@ impl WindowEventHandler {
             return LRESULT(result as _);
         }
 
+        if (msg == WM_NCMOUSEMOVE || msg == WM_NCLBUTTONDOWN || msg == WM_NCLBUTTONUP)
+            && (wparam.0 == HTTOP as _
+                || wparam.0 == HTBOTTOM as _
+                || wparam.0 == HTLEFT as _
+                || wparam.0 == HTRIGHT as _
+                || wparam.0 == HTTOPLEFT as _
+                || wparam.0 == HTTOPRIGHT as _
+                || wparam.0 == HTBOTTOMLEFT as _
+                || wparam.0 == HTBOTTOMRIGHT as _)
+        {
+            // リサイズ境界上の処理はシステムにおまかせ
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        }
+
+        if (msg == WM_NCLBUTTONDOWN || msg == WM_NCLBUTTONUP) && wparam.0 == HTCAPTION as _ {
+            // TitleBarの挙動はシステムにおまかせ
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        }
+
+        if msg == WM_LBUTTONDOWN || msg == WM_NCLBUTTONDOWN {
+            Self::get_for_window(hwnd).left_button_down(
+                hwnd,
+                Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                ),
+            );
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_LBUTTONUP || msg == WM_NCLBUTTONUP {
+            Self::get_for_window(hwnd).left_button_up(hwnd);
+
+            return LRESULT(0);
+        }
+
         if msg == WM_MOUSEMOVE {
             Self::get_for_window(hwnd).mouse_move(
                 hwnd,
@@ -834,22 +873,18 @@ impl WindowEventHandler {
             return LRESULT(0);
         }
 
-        if msg == WM_LBUTTONDOWN {
-            Self::get_for_window(hwnd).left_button_down(
-                hwnd,
-                Point::new_pixels(
-                    (lparam.0 & 0xffff) as i16 as _,
-                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                ),
-            );
+        if msg == WM_NCMOUSEMOVE {
+            // NCMOUSEMOVEはスクリーン座標で来る(TODO: 他のNCマウスイベントもかも？)
+            let mut p = [POINT {
+                x: (lparam.0 & 0xffff) as i16 as _,
+                y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            }];
+            unsafe {
+                MapWindowPoints(None, Some(hwnd), &mut p);
+            }
 
-            return LRESULT(0);
-        }
-
-        if msg == WM_LBUTTONUP {
-            Self::get_for_window(hwnd).left_button_up(hwnd);
-
-            return LRESULT(0);
+            Self::get_for_window(hwnd).mouse_move(hwnd, Point::new_pixels(p[0].x, p[0].y));
+            // Note: NCMOUSEMOVEはデフォルト動作もさせる
         }
 
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -1121,6 +1156,11 @@ impl SystemLink<'_> {
         unsafe {
             let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
         }
+    }
+
+    #[inline(always)]
+    pub fn rt_sender(&self) -> &std::sync::mpsc::Sender<RenderMessage> {
+        &self.rt_sender
     }
 
     #[inline(always)]

@@ -603,7 +603,7 @@ pub struct CompositeRect<Event> {
     pub relative_offset_adjustment: [f32; 2],
     pub relative_size_adjustment: [f32; 2],
     pub clip_child: Option<ClipConfig>,
-    pub texatlas_rect: AtlasRect,
+    pub texatlas_rect_id: Option<usize>,
     pub slice_borders: [f32; 4],
     pub composite_mode: CompositeMode<Event>,
     pub custom_render_token: Option<CustomRenderToken>,
@@ -627,12 +627,7 @@ impl<Event> Default for CompositeRect<Event> {
             relative_offset_adjustment: [0.0, 0.0],
             relative_size_adjustment: [0.0, 0.0],
             clip_child: None,
-            texatlas_rect: AtlasRect {
-                left: 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-            },
+            texatlas_rect_id: None,
             slice_borders: [0.0, 0.0, 0.0, 0.0],
             composite_mode: CompositeMode::DirectSourceOver,
             custom_render_token: None,
@@ -1435,6 +1430,7 @@ impl<Event> CompositeTreeRender<Event> {
         mapped_head: *mut core::ffi::c_void,
         font_set: &PerWindowFontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
+        mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
         mut on_event: impl FnMut(Event),
     ) {
@@ -1539,6 +1535,18 @@ impl<Event> CompositeTreeRender<Event> {
                 inst_builder.clear_clip();
             }
 
+            let texatlas_rect = r.texatlas_rect_id.map_or(
+                &const {
+                    AtlasRect {
+                        left: 0,
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                    }
+                },
+                |n| &mask_atlas_rects[n],
+            );
+
             if let Some(t) = r.custom_render_token {
                 // Custom Renderがある場合はそっちのみ
                 inst_builder.insert_custom_render_commands(t);
@@ -1551,15 +1559,13 @@ impl<Event> CompositeTreeRender<Event> {
                         CompositeInstanceData {
                             pos_st: [w, h, 0.0, 0.0],
                             uv_st: [
-                                ((r.texatlas_rect.right as f32 - r.texatlas_rect.left as f32)
-                                    - 1.0)
+                                ((texatlas_rect.right as f32 - texatlas_rect.left as f32) - 1.0)
                                     / mask_atlas.atlas().size().width as f32,
-                                ((r.texatlas_rect.bottom as f32 - r.texatlas_rect.top as f32)
-                                    - 1.0)
+                                ((texatlas_rect.bottom as f32 - texatlas_rect.top as f32) - 1.0)
                                     / mask_atlas.atlas().size().height as f32,
-                                (r.texatlas_rect.left as f32 + 0.5)
+                                (texatlas_rect.left as f32 + 0.5)
                                     / mask_atlas.atlas().size().width as f32,
-                                (r.texatlas_rect.top as f32 + 0.5)
+                                (texatlas_rect.top as f32 + 0.5)
                                     / mask_atlas.atlas().size().height as f32,
                             ],
                             position_modifier_matrix: matrix.clone().transpose(),
@@ -4015,6 +4021,7 @@ impl CompositeRenderer {
         rt_size: br::Extent2D,
         font_set: &PerWindowFontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
+        mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
         on_event: impl FnMut(Event),
         current_sec: f32,
@@ -4037,6 +4044,7 @@ impl CompositeRenderer {
                 ptr.ptr(),
                 font_set,
                 mask_atlas,
+                mask_atlas_rects,
                 vector_raster_state,
                 on_event,
             )
