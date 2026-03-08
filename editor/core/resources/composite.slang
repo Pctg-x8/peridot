@@ -123,7 +123,10 @@ struct VertexOutput {
 }
 
 [shader("vertex")]
-VertexOutput vertMain(uint vindex: SV_VertexID, uint iindex: SV_InstanceID) {
+func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
+              uint iindexBase: SV_StartInstanceLocation)
+    ->VertexOutput {
+  let iindex = iindexBase + iindexOffset;
   let p = float2((vindex & 0x01) == 0 ? 0.0 : 1.0,
                  (vindex & 0x02) == 0.0 ? 0.0 : 1.0);
   let posST = instanceDataArray[iindex].posST(streamingData.currentSec);
@@ -369,7 +372,8 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   if (col.w > 0.0 && input.compositeMode.requiresBackdropComposition) {
     // blend with backdrop(forced alpha = 1)
     let backdrop = backdropTexture.Sample(input.screenUV);
-    col = float4(col.xyz * backdrop.xyz * (1.0 - col.w), 1.0);
+    col = blendAlphaPremultipliedColor(backdrop, col);
+    col.w = 1.0;
   }
 
   return col;
