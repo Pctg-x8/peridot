@@ -21,6 +21,12 @@ impl core::hash::Hash for SafeF32 {
         f32::to_ne_bytes(self.0).hash(state)
     }
 }
+impl core::fmt::Display for SafeF32 {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
 impl SafeF32 {
     pub const fn new(v: f32) -> Option<Self> {
         if v.is_nan() { None } else { Some(Self(v)) }

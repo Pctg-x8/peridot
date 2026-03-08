@@ -107,8 +107,7 @@ impl<'main> RenderThread<'main> {
                         #[cfg(not(any(feature = "wayland", windows)))]
                         let init_scale = wd.init_scale;
 
-                        let main_window_glyph_atlas = match glyph_atlas_per_scale.entry(init_scale)
-                        {
+                        let window_glyph_atlas = match glyph_atlas_per_scale.entry(init_scale) {
                             // use existing
                             std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
                             // create new one
@@ -124,14 +123,14 @@ impl<'main> RenderThread<'main> {
                                 })
                             }
                         };
-                        main_window_glyph_atlas.ref_count += 1;
+                        window_glyph_atlas.ref_count += 1;
                         windows.insert(
                             wd.key,
                             WindowRenderer::new(
                                 self.vk_device,
                                 wd,
                                 init_scale,
-                                main_window_glyph_atlas.manager.atlas(),
+                                window_glyph_atlas.manager.atlas(),
                                 &font_set,
                             ),
                         );

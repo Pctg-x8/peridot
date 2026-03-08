@@ -17,11 +17,11 @@ use windows::{
         UI::{
             HiDpi::GetDpiForWindow,
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, GetClientRect, GetSystemMetrics,
-                GetWindowLongPtrW, HCURSOR, HICON, HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON,
-                HTMINBUTTON, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE, IDI_APPLICATION,
-                LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostQuitMessage, SM_CXSIZEFRAME,
-                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
+                GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTCAPTION, HTCLIENT, HTCLOSE,
+                HTMAXBUTTON, HTMINBUTTON, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
+                IDI_APPLICATION, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostQuitMessage,
+                SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
                 SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE, WA_CLICKACTIVE,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
@@ -66,9 +66,55 @@ impl core::hash::Hash for WindowHandle {
 impl WindowHandle {
     #[inline(always)]
     pub fn destroy(&mut self) {
-        if let Err(e) = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0) } {
+        if let Err(e) = unsafe { DestroyWindow(self.0) } {
             tracing::error!(reason = %e, "window.destroy");
         }
+    }
+
+    #[inline(always)]
+    pub fn associate_extra_data<T>(&mut self, data: Box<T>) {
+        unsafe {
+            SetWindowLongPtrW(
+                self.0,
+                NativeWindow::APP_POINTER_LONG_PTR_OFFSET,
+                Box::into_raw(data).addr().cast_signed(),
+            );
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn extra_data_ref<'a, T>(&'a self) -> &'a T {
+        unsafe {
+            &*core::ptr::with_exposed_provenance(
+                GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
+                    .cast_unsigned(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn extra_data_ref_mut<'a, T>(&'a self) -> &'a mut T {
+        unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut(
+                GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
+                    .cast_unsigned(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
+        let data = unsafe {
+            Box::from_raw(core::ptr::with_exposed_provenance_mut(
+                GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
+                    .cast_unsigned(),
+            ))
+        };
+        unsafe {
+            SetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET, 0);
+        }
+
+        data
     }
 
     #[inline(always)]
@@ -150,7 +196,7 @@ impl WindowClassSet {
                 cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
                 style: WNDCLASS_STYLES(0),
                 cbClsExtra: 0,
-                cbWndExtra: core::mem::size_of::<[usize; 3]>() as _,
+                cbWndExtra: NativeWindow::EXTRA_STORAGE_SIZE as _,
                 lpfnWndProc: Some(WindowEventHandler::handle_messages),
                 hInstance: hinstance,
                 hIcon: LoadIconW(None, IDI_APPLICATION).expect("LoadIconW"),
@@ -172,6 +218,12 @@ pub struct NativeWindow {
     hwnd: HWND,
 }
 impl NativeWindow {
+    // extra storage assignment
+    const EVENT_HANDLER_LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+    const APP_POINTER_LONG_PTR_OFFSET: WINDOW_LONG_PTR_INDEX =
+        WINDOW_LONG_PTR_INDEX(core::mem::size_of::<usize>() as _);
+    const EXTRA_STORAGE_SIZE: usize = core::mem::size_of::<[usize; 2]>();
+
     fn new(
         wc_set: &WindowClassSet,
         window_type: WindowType,
@@ -277,7 +329,7 @@ struct WindowEventHandler {
     edit_context: Option<CoreTextEditContext>,
 }
 impl WindowEventHandler {
-    const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+    const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = NativeWindow::EVENT_HANDLER_LONG_PTR_INDEX;
 
     #[inline(always)]
     fn get_for_window<'a>(w: HWND) -> &'a mut Self {

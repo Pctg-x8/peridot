@@ -798,6 +798,11 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
+enum WindowCaption {
+    Main { project_name: String },
+    Sub,
+}
+
 struct WindowHeaderView {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
@@ -809,6 +814,7 @@ impl WindowHeaderView {
     const THICKNESS: f32 = 24.0;
 
     pub fn new(
+        init_caption: WindowCaption,
         composite_tree: &mut CompositeTree<Event>,
         ht_manager: &mut HitTestTreeManager,
         init_scale: f32,
@@ -824,26 +830,39 @@ impl WindowHeaderView {
                 AnimatableFloat::Value(0.0),
                 AnimatableFloat::Value(Self::THICKNESS),
             ],
-            text: Some(CompositeRectText {
-                runs: vec![
-                    CompositeRectTextRun {
+            text: match init_caption {
+                WindowCaption::Main { project_name } => Some(CompositeRectText {
+                    runs: vec![
+                        CompositeRectTextRun {
+                            font_id: FontID::UIDefault,
+                            content: "Peridot Marble Editor".into(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        },
+                        CompositeRectTextRun {
+                            font_id: FontID::UITitleProjectName,
+                            content: project_name,
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            spacing_inline_start: 4.0,
+                            ..Default::default()
+                        },
+                    ],
+                    horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                    vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                    ..Default::default()
+                }),
+                WindowCaption::Sub => Some(CompositeRectText {
+                    runs: vec![CompositeRectTextRun {
                         font_id: FontID::UIDefault,
-                        content: "Peridot Marble Editor".into(),
+                        content: "EditorWindow".into(),
                         color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                         ..Default::default()
-                    },
-                    CompositeRectTextRun {
-                        font_id: FontID::UITitleProjectName,
-                        content: "New Project".into(),
-                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                        spacing_inline_start: 4.0,
-                        ..Default::default()
-                    },
-                ],
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                ..Default::default()
-            }),
+                    }],
+                    horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                    vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                    ..Default::default()
+                }),
+            },
             ..Default::default()
         });
         let ht_root = ht_manager.create(HitTestTreeData {
@@ -869,8 +888,12 @@ impl WindowHeaderView {
 
     pub fn rescale(&self, scale_factor: f32, composite_tree: &mut CompositeTree<Event>) {
         composite_tree.get_mut(self.ct_root).base_scale_factor = scale_factor;
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree.mark_dirty_all(self.ct_root);
     }
+}
+
+struct PerWindowView {
+    header: WindowHeaderView,
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
@@ -880,7 +903,7 @@ async fn run<'sys>(
     renderer_sync: &'sys Mutex<RendererSync>,
     mut composite_tree: CompositeTree<Event>,
     mut ht_manager: HitTestTreeManager<'sys>,
-    main_window: WindowHandle,
+    mut main_window: WindowHandle,
     system_link: SystemLink<'sys>,
 ) {
     tracing::info!("app start");
@@ -905,14 +928,24 @@ async fn run<'sys>(
 
     let init_scale = main_window.ui_scale_factor();
 
-    let window_header_view =
-        WindowHeaderView::new(&mut composite_tree, &mut ht_manager, init_scale);
+    let window_header_view = WindowHeaderView::new(
+        WindowCaption::Main {
+            project_name: "New Project".into(),
+        },
+        &mut composite_tree,
+        &mut ht_manager,
+        init_scale,
+    );
     window_header_view.mount(
         main_window.composite_root(),
         main_window.ht_root(),
         &mut composite_tree,
         &mut ht_manager,
     );
+
+    main_window.associate_extra_data(Box::new(PerWindowView {
+        header: window_header_view,
+    }));
 
     // tab view
     let tab_main = composite_tree.create(CompositeRect {
@@ -1145,7 +1178,7 @@ async fn run<'sys>(
             Event::WindowResize { window, size } => {
                 pointer_input_manager.set_client_size(window, size);
             }
-            Event::SubWindowOpen { window } => {
+            Event::SubWindowOpen { mut window } => {
                 composite_tree.get_mut(window.composite_root()).has_bitmap = true;
                 composite_tree
                     .get_mut(window.composite_root())
@@ -1153,8 +1186,12 @@ async fn run<'sys>(
                     CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
                 composite_tree.mark_dirty(window.composite_root());
 
-                let window_header_view =
-                    WindowHeaderView::new(&mut composite_tree, &mut ht_manager, init_scale);
+                let window_header_view = WindowHeaderView::new(
+                    WindowCaption::Sub,
+                    &mut composite_tree,
+                    &mut ht_manager,
+                    init_scale,
+                );
                 window_header_view.mount(
                     window.composite_root(),
                     window.ht_root(),
@@ -1162,25 +1199,37 @@ async fn run<'sys>(
                     &mut ht_manager,
                 );
 
+                window.associate_extra_data(Box::new(PerWindowView {
+                    header: window_header_view,
+                }));
+
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                 composite_tree.commit(&mut renderer_sync.composite_buffer);
             }
-            Event::SubWindowClose { window } => {
+            Event::SubWindowClose { mut window } => {
                 tracing::trace!("subWindowClose");
+                unsafe {
+                    drop(window.take_extra_data::<PerWindowView>());
+                }
                 system_link.close_window(window, &mut composite_tree, &mut ht_manager);
             }
             Event::WindowRescaleUI { window, new_scale } => {
+                unsafe {
+                    window
+                        .extra_data_ref::<PerWindowView>()
+                        .header
+                        .rescale(new_scale, &mut composite_tree);
+                }
+
                 if window == main_window {
-                    window_header_view.rescale(new_scale, &mut composite_tree);
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     composite_tree.get_mut(ct_alert_btn).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(ct_alert_btn);
-
-                    let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                    composite_tree.commit(&mut renderer_sync.composite_buffer);
                 }
 
+                let mut renderer_sync = renderer_sync.lock().expect("poisoned");
+                composite_tree.commit(&mut renderer_sync.composite_buffer);
                 system_link.notify_ui_scale_changes_to_render(window, new_scale);
             }
             Event::PointerDown { window } => {
