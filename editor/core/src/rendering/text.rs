@@ -94,8 +94,8 @@ impl<'d> PerWindowFontSet<'d> {
         let ui_default = root_set
             .ui_common_font_data
             .iter()
-            .map(|&(ref f, ix)| unsafe {
-                ft::new_memory_face(root_set.ft_lib.0, f, ix as _)
+            .map(|&(f, ix)| unsafe {
+                ft::new_memory_face(root_set.ft_lib.0, &root_set.font_binaries[f], ix as _)
                     .expect("FreeType.new_face.ui_default")
             })
             .collect::<Vec<_>>();
@@ -103,8 +103,8 @@ impl<'d> PerWindowFontSet<'d> {
         let ui_title_project_name = root_set
             .ui_common_font_data
             .iter()
-            .map(|&(ref f, ix)| unsafe {
-                ft::new_memory_face(root_set.ft_lib.0, f, ix as _)
+            .map(|&(f, ix)| unsafe {
+                ft::new_memory_face(root_set.ft_lib.0, &root_set.font_binaries[f], ix as _)
                     .expect("FreeType.new_face.ui_title_project_name")
             })
             .collect::<Vec<_>>();
@@ -243,7 +243,9 @@ pub struct RootFontSet {
     #[cfg(feature = "freetype")]
     ft_lib: FreeType,
     #[cfg(feature = "freetype")]
-    ui_common_font_data: Vec<(Vec<ft::raw::FT_Byte>, core::ffi::c_int)>,
+    font_binaries: Vec<Vec<ft::raw::FT_Byte>>,
+    #[cfg(feature = "freetype")]
+    ui_common_font_data: Vec<(usize, core::ffi::c_int)>,
     #[cfg(windows)]
     dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     #[cfg(windows)]
@@ -321,9 +323,10 @@ impl RootFontSet {
 
     #[cfg(feature = "freetype")]
     pub fn new() -> Self {
+        let mut font_binaries = Vec::new();
         #[cfg(feature = "fontconfig")]
-        let ui_common_fonts = unsafe {
-            use std::collections::HashSet;
+        let ui_common_font_data = unsafe {
+            use std::collections::{HashMap, HashSet};
 
             fc::init().expect("FontConfig.init");
             let mut pat = fc::Pattern::new().expect("FcPattern.create");
@@ -350,7 +353,8 @@ impl RootFontSet {
             )
             .expect("FontConfig.sort");
 
-            let mut selected_font_paths = HashSet::new();
+            let mut selected_fonts = HashSet::new();
+            let mut loaded_fonts = HashMap::new();
             let mut fonts_ordered = Vec::new();
             for n in 0..fonts.as_ref().nfont {
                 let f = *fonts.as_ref().fonts.add(n as usize);
@@ -364,29 +368,39 @@ impl RootFontSet {
                     .expect("FcPattern.get.index")
                     .expect("FcPattern.get.not_exist.index");
 
-                if !selected_font_paths.insert((file.clone(), index)) {
-                    // すでにロードしたフォント
-                    continue;
-                }
+                let font_binary_index = match loaded_fonts.entry(file) {
+                    std::collections::hash_map::Entry::Occupied(x) => *x.get(),
+                    std::collections::hash_map::Entry::Vacant(x) => {
+                        font_binaries.push(
+                            std::fs::read(x.key().to_str().expect("cstr.to_str"))
+                                .expect("font.readfile"),
+                        );
+                        *x.insert(font_binaries.len() - 1)
+                    }
+                };
 
-                fonts_ordered.push((file, index));
+                if selected_fonts.insert((font_binary_index, index)) {
+                    // 未知のフォント
+                    fonts_ordered.push((font_binary_index, index));
+                }
             }
 
             fonts_ordered
         };
 
-        let ui_common_font_data = ui_common_fonts
-            .into_iter()
-            .map(|(f, ix)| {
-                (
-                    std::fs::read(f.to_str().expect("cstr.to_str")).expect("font.readfile"),
-                    ix,
-                )
-            })
-            .collect::<Vec<_>>();
+        tracing::info!(
+            total_data_bytes = %crate::utils::ByteLengthFormatter(
+                font_binaries
+                    .iter()
+                    .map(|b| b.len())
+                    .sum::<usize>()
+            ),
+            "RootFontSet stats"
+        );
 
         Self {
             ft_lib: FreeType::init().expect("freetype.init"),
+            font_binaries,
             ui_common_font_data,
         }
     }

@@ -57,3 +57,29 @@ impl<T> UnboundedRef<T> {
         self.0
     }
 }
+
+#[repr(transparent)]
+pub struct ByteLengthFormatter(pub usize);
+impl core::fmt::Display for ByteLengthFormatter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (mut v, mut u) = (self.0 as f64, "bytes");
+        if v >= 1000.0 {
+            v /= 1024.0;
+            u = "KB";
+        }
+        if v >= 1000.0 {
+            v /= 1024.0;
+            u = "MB";
+        }
+        if v >= 1000.0 {
+            v /= 1024.0;
+            u = "GB";
+        }
+
+        if u == "bytes" {
+            write!(f, "{} bytes", self.0)
+        } else {
+            write!(f, "{v:.3} {u}")
+        }
+    }
+}
