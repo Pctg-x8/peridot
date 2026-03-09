@@ -22,12 +22,17 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub struct Error(pub(crate) raw::FT_Error);
 impl core::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FT_Error({})", self.0)
+        write!(f, "FT_Error({})", self.0,)
     }
 }
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = unsafe { core::ffi::CStr::from_ptr(raw::FT_Error_String(self.0)) };
+        let p = unsafe { raw::FT_Error_String(self.0) };
+        if p.is_null() {
+            return write!(f, "Unknown error(FT_Error_String() == 0)");
+        }
+
+        let str = unsafe { core::ffi::CStr::from_ptr(p) };
         write!(f, "{}", str.to_str().unwrap_or("Unknown error"))
     }
 }

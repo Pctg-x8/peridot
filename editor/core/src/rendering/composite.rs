@@ -1804,47 +1804,80 @@ impl<Event> CompositeTreeRender<Event> {
         for x in text_layout.runs.iter() {
             #[cfg(feature = "freetype")]
             let font = font_set.select(x.font_id);
-
             #[cfg(feature = "harfbuzz")]
-            let buf = unsafe { peridot_tp_harfbuzz::ffi::hb_buffer_create() };
-            #[cfg(feature = "harfbuzz")]
-            unsafe {
-                peridot_tp_harfbuzz::ffi::hb_buffer_add_utf8(
-                    buf,
-                    x.content.as_ptr().cast(),
-                    x.content.len() as i32,
-                    0,
-                    -1,
-                );
-                peridot_tp_harfbuzz::ffi::hb_buffer_guess_segment_properties(buf);
-                peridot_tp_harfbuzz::ffi::hb_shape(
-                    font_set.select_shaping(x.font_id),
-                    buf,
-                    core::ptr::null(),
-                    0,
-                );
-            }
+            let shaping_set = font_set.select_shaping(x.font_id);
 
-            #[cfg(feature = "harfbuzz")]
-            buffers.push(buf);
-            #[cfg(feature = "freetype")]
-            {
-                baseline_y_offset = baseline_y_offset
-                    .max(unsafe { (*(*font).size).metrics.ascender as f32 / 64.0 });
+            let mut font_index = 0;
+            let mut shaped_bytes = 0usize;
+            while shaped_bytes < x.content.len() {
+                let starting_bytes = shaped_bytes;
+                while shaped_bytes < x.content.len()
+                    && unsafe {
+                        peridot_tp_freetype::raw::FT_Get_Char_Index(
+                            font.faces[font_index],
+                            x.content[shaped_bytes..].chars().next().expect("no char") as _,
+                        ) != 0
+                    }
+                {
+                    shaped_bytes += x.content[shaped_bytes..]
+                        .chars()
+                        .next()
+                        .expect("no char")
+                        .len_utf8();
+                }
 
-                // freetype2のdescenderは符号が逆になってるのでこれで正解
-                // TODO: 複数行になる場合はleadingを行間に足す
-                cache.text_height = cache.text_height.max(unsafe {
-                    ((*(*font).size).metrics.ascender - (*(*font).size).metrics.descender) as f32
-                        / 64.0
-                });
+                if starting_bytes == shaped_bytes {
+                    // no chars available for this font, fallback
+                    font_index += 1;
+                    continue;
+                }
+
+                #[cfg(feature = "harfbuzz")]
+                let buf = unsafe { peridot_tp_harfbuzz::ffi::hb_buffer_create() };
+                #[cfg(feature = "harfbuzz")]
+                unsafe {
+                    peridot_tp_harfbuzz::ffi::hb_buffer_add_utf8(
+                        buf,
+                        x.content.as_ptr().add(starting_bytes).cast(),
+                        (shaped_bytes - starting_bytes) as _,
+                        0,
+                        -1,
+                    );
+                    peridot_tp_harfbuzz::ffi::hb_buffer_guess_segment_properties(buf);
+                    peridot_tp_harfbuzz::ffi::hb_shape(
+                        shaping_set.faces[font_index].as_ptr(),
+                        buf,
+                        core::ptr::null(),
+                        0,
+                    );
+                }
+
+                #[cfg(feature = "harfbuzz")]
+                buffers.push((buf, font_index));
+                #[cfg(feature = "freetype")]
+                {
+                    baseline_y_offset = baseline_y_offset.max(unsafe {
+                        (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
+                    });
+
+                    // freetype2のdescenderは符号が逆になってるのでこれで正解
+                    // TODO: 複数行になる場合はleadingを行間に足す
+                    cache.text_height = cache.text_height.max(unsafe {
+                        ((*(*font.faces[font_index]).size).metrics.ascender
+                            - (*(*font.faces[font_index]).size).metrics.descender)
+                            as f32
+                            / 64.0
+                    });
+                }
+
+                font_index = 0;
             }
         }
 
         #[cfg(feature = "harfbuzz")]
         let mut x_shift = 0.0;
         #[cfg(feature = "harfbuzz")]
-        for (r, &b) in text_layout.runs.iter().zip(buffers.iter()) {
+        for (r, &(b, font_index)) in text_layout.runs.iter().zip(buffers.iter()) {
             #[cfg(feature = "freetype")]
             let font = font_set.select(r.font_id);
 
@@ -1869,19 +1902,16 @@ impl<Event> CompositeTreeRender<Event> {
             for n in 0..unsafe { glyph_positions_len.assume_init() } {
                 let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
-                if glyph_info.codepoint == 0 {
-                    tracing::warn!("no codepoint");
-                }
 
                 unsafe {
                     peridot_tp_freetype::load_glyph(
-                        font,
+                        font.faces[font_index],
                         glyph_info.codepoint,
                         peridot_tp_freetype::LoadFlags::DEFAULT,
                     )
                     .expect("face.load_glyph")
                 };
-                let metrics = unsafe { &(*(*font).glyph).metrics };
+                let metrics = unsafe { &(*(*font.faces[font_index]).glyph).metrics };
                 let glyph_width = metrics.width as f32 / 64.0;
                 let glyph_height = metrics.height as f32 / 64.0;
 
@@ -2033,8 +2063,9 @@ impl<Event> CompositeTreeRender<Event> {
                     }
 
                     unsafe {
+                        let face_ptr = font.faces[font_index];
                         peridot_tp_freetype::outline_decompose(
-                            &mut (*(*font).glyph).outline,
+                            &mut (*(*face_ptr).glyph).outline,
                             &mut OutlineReceiver {
                                 current_figure: None,
                                 pen_pos: peridot_tp_freetype::Vector { x: 0, y: 0 },

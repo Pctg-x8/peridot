@@ -36,6 +36,36 @@ pub enum FontID {
     UITitleProjectName,
 }
 
+#[cfg(feature = "freetype")]
+pub struct FaceSet {
+    pub faces: Vec<ft::Face>,
+}
+#[cfg(feature = "freetype")]
+impl Drop for FaceSet {
+    fn drop(&mut self) {
+        for x in self.faces.drain(..) {
+            if let Err(e) = unsafe { ft::done_face(x) } {
+                tracing::error!(reason = %e, "ft.done_face");
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "freetype", feature = "harfbuzz"))]
+pub struct FaceShapingSet {
+    pub faces: Vec<core::ptr::NonNull<hb::ffi::hb_font_t>>,
+}
+#[cfg(all(feature = "freetype", feature = "harfbuzz"))]
+impl Drop for FaceShapingSet {
+    fn drop(&mut self) {
+        for x in self.faces.drain(..) {
+            unsafe {
+                hb::ffi::hb_font_destroy(x.as_ptr());
+            }
+        }
+    }
+}
+
 pub struct PerWindowFontSet<'d> {
     #[cfg(windows)]
     dw_factory: &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory,
@@ -44,13 +74,13 @@ pub struct PerWindowFontSet<'d> {
     #[cfg(windows)]
     ui_title_project_name: &'d windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
     #[cfg(feature = "freetype")]
-    ui_default: ft::Face,
+    ui_default: FaceSet,
     #[cfg(feature = "freetype")]
-    ui_title_project_name: ft::Face,
+    ui_title_project_name: FaceSet,
     #[cfg(feature = "harfbuzz")]
-    ui_default_shaping: core::ptr::NonNull<hb::ffi::hb_font_t>,
+    ui_default_shaping: FaceShapingSet,
     #[cfg(feature = "harfbuzz")]
-    ui_title_project_name_shaping: core::ptr::NonNull<hb::ffi::hb_font_t>,
+    ui_title_project_name_shaping: FaceShapingSet,
     #[cfg(feature = "freetype")]
     _marker: core::marker::PhantomData<&'d [ft::raw::FT_Byte]>,
     #[cfg(target_os = "macos")]
@@ -58,55 +88,47 @@ pub struct PerWindowFontSet<'d> {
     #[cfg(target_os = "macos")]
     ui_title_project_name: &'d apple_sdk_port::text::Font,
 }
-impl Drop for PerWindowFontSet<'_> {
-    fn drop(&mut self) {
-        #[cfg(feature = "harfbuzz")]
-        unsafe {
-            hb::ffi::hb_font_destroy(self.ui_default_shaping.as_ptr());
-            hb::ffi::hb_font_destroy(self.ui_title_project_name_shaping.as_ptr());
-        }
-        #[cfg(feature = "freetype")]
-        {
-            if let Err(e) = unsafe { ft::done_face(self.ui_title_project_name) } {
-                tracing::error!(reason = %e, "ui_title_project_name.done_face");
-            }
-            if let Err(e) = unsafe { ft::done_face(self.ui_default) } {
-                tracing::error!(reason = %e, "ui_default.done_face");
-            }
-        }
-    }
-}
 impl<'d> PerWindowFontSet<'d> {
     pub fn new(root_set: &'d RootFontSet) -> Self {
         #[cfg(feature = "freetype")]
-        let ui_default = unsafe {
-            ft::new_memory_face(
-                root_set.ft_lib.0,
-                &root_set.ui_common_font_data.0,
-                root_set.ui_common_font_data.1 as _,
-            )
-            .expect("FreeType.new_face.ui_default")
-        };
+        let ui_default = root_set
+            .ui_common_font_data
+            .iter()
+            .map(|&(ref f, ix)| unsafe {
+                ft::new_memory_face(root_set.ft_lib.0, f, ix as _)
+                    .expect("FreeType.new_face.ui_default")
+            })
+            .collect::<Vec<_>>();
         #[cfg(feature = "freetype")]
-        let ui_title_project_name = unsafe {
-            ft::new_memory_face(
-                root_set.ft_lib.0,
-                &root_set.ui_common_font_data.0,
-                root_set.ui_common_font_data.1 as _,
-            )
-            .expect("FreeType.Face.new.ui_title_project_name")
-        };
+        let ui_title_project_name = root_set
+            .ui_common_font_data
+            .iter()
+            .map(|&(ref f, ix)| unsafe {
+                ft::new_memory_face(root_set.ft_lib.0, f, ix as _)
+                    .expect("FreeType.new_face.ui_title_project_name")
+            })
+            .collect::<Vec<_>>();
 
         #[cfg(feature = "harfbuzz")]
-        let ui_default_shaping = core::ptr::NonNull::new(unsafe {
-            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_default)
-        })
-        .expect("hb_ft_font_create_referenced.ui_default");
+        let ui_default_shaping = ui_default
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe {
+                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
+                })
+                .expect("hb_ft_font_create_referenced.ui_default")
+            })
+            .collect::<Vec<_>>();
         #[cfg(feature = "harfbuzz")]
-        let ui_title_project_name_shaping = core::ptr::NonNull::new(unsafe {
-            peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(ui_title_project_name)
-        })
-        .expect("hb_ft_font_create_referenced.ui_title_project_name");
+        let ui_title_project_name_shaping = ui_title_project_name
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe {
+                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
+                })
+                .expect("hb_ft_font_create_referenced.ui_title_project_name")
+            })
+            .collect::<Vec<_>>();
 
         Self {
             #[cfg(windows)]
@@ -116,13 +138,19 @@ impl<'d> PerWindowFontSet<'d> {
             #[cfg(windows)]
             ui_title_project_name: &root_set.ui_title_project_name,
             #[cfg(feature = "freetype")]
-            ui_default,
+            ui_default: FaceSet { faces: ui_default },
             #[cfg(feature = "freetype")]
-            ui_title_project_name,
+            ui_title_project_name: FaceSet {
+                faces: ui_title_project_name,
+            },
             #[cfg(feature = "harfbuzz")]
-            ui_default_shaping,
+            ui_default_shaping: FaceShapingSet {
+                faces: ui_default_shaping,
+            },
             #[cfg(feature = "harfbuzz")]
-            ui_title_project_name_shaping,
+            ui_title_project_name_shaping: FaceShapingSet {
+                faces: ui_title_project_name_shaping,
+            },
             #[cfg(feature = "freetype")]
             _marker: core::marker::PhantomData,
             #[cfg(target_os = "macos")]
@@ -137,25 +165,25 @@ impl<'d> PerWindowFontSet<'d> {
     pub fn rescale(&mut self, dpi: u32) {
         use ft::FractionalExt;
 
-        unsafe {
-            ft::set_char_size(self.ui_default, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi)
-                .expect("FreeType.set_char_size.ui_default")
+        for &x in &self.ui_default.faces {
+            if let Err(e) = unsafe { ft::set_char_size(x, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi) } {
+                tracing::error!(reason = %e, "FreeType.set_char_size.ui_default");
+            }
         }
-        unsafe {
-            ft::set_char_size(
-                self.ui_title_project_name,
-                0,
-                10.0f32.to_f26dot6_lossy(),
-                0,
-                dpi,
-            )
-            .expect("FreeType.set_char_size.ui_title_project_name")
+        for &x in &self.ui_title_project_name.faces {
+            if let Err(e) = unsafe { ft::set_char_size(x, 0, 10.0f32.to_f26dot6_lossy(), 0, dpi) } {
+                tracing::error!(reason = %e, "FreeType.set_char_size.ui_title_project_name");
+            }
         }
 
         #[cfg(feature = "harfbuzz")]
         unsafe {
-            hb::ffi::hb_ft_font_changed(self.ui_default_shaping.as_ptr());
-            hb::ffi::hb_ft_font_changed(self.ui_title_project_name_shaping.as_ptr());
+            for &x in &self.ui_default_shaping.faces {
+                hb::ffi::hb_ft_font_changed(x.as_ptr());
+            }
+            for &x in &self.ui_title_project_name_shaping.faces {
+                hb::ffi::hb_ft_font_changed(x.as_ptr());
+            }
         }
     }
 
@@ -170,19 +198,19 @@ impl<'d> PerWindowFontSet<'d> {
 
     #[cfg(feature = "freetype")]
     #[inline]
-    pub fn select(&self, category: FontID) -> ft::Face {
+    pub fn select(&self, category: FontID) -> &FaceSet {
         match category {
-            FontID::UIDefault => self.ui_default,
-            FontID::UITitleProjectName => self.ui_title_project_name,
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
         }
     }
 
     #[cfg(feature = "harfbuzz")]
     #[inline]
-    pub fn select_shaping(&self, category: FontID) -> *mut peridot_tp_harfbuzz::ffi::hb_font_t {
+    pub fn select_shaping(&self, category: FontID) -> &FaceShapingSet {
         match category {
-            FontID::UIDefault => self.ui_default_shaping.as_ptr(),
-            FontID::UITitleProjectName => self.ui_title_project_name_shaping.as_ptr(),
+            FontID::UIDefault => &self.ui_default_shaping,
+            FontID::UITitleProjectName => &self.ui_title_project_name_shaping,
         }
     }
 
@@ -215,7 +243,7 @@ pub struct RootFontSet {
     #[cfg(feature = "freetype")]
     ft_lib: FreeType,
     #[cfg(feature = "freetype")]
-    ui_common_font_data: (Vec<ft::raw::FT_Byte>, core::ffi::c_int),
+    ui_common_font_data: Vec<(Vec<ft::raw::FT_Byte>, core::ffi::c_int)>,
     #[cfg(windows)]
     dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     #[cfg(windows)]
@@ -294,7 +322,9 @@ impl RootFontSet {
     #[cfg(feature = "freetype")]
     pub fn new() -> Self {
         #[cfg(feature = "fontconfig")]
-        let (font_file_path, face_index) = unsafe {
+        let ui_common_fonts = unsafe {
+            use std::collections::HashSet;
+
             fc::init().expect("FontConfig.init");
             let mut pat = fc::Pattern::new().expect("FcPattern.create");
             pat.as_mut()
@@ -319,37 +349,45 @@ impl RootFontSet {
                 None,
             )
             .expect("FontConfig.sort");
+
+            let mut selected_font_paths = HashSet::new();
+            let mut fonts_ordered = Vec::new();
             for n in 0..fonts.as_ref().nfont {
                 let f = *fonts.as_ref().fonts.add(n as usize);
                 let file: &core::ffi::CStr = (*f)
                     .get(fc::Pattern::KEY_FILE)
                     .expect("FcPattern.get.file")
                     .expect("FcPattern.get.not_exist.file");
-                eprintln!("font {file:?}");
+                let file = file.to_owned();
+                let index: core::ffi::c_int = (*f)
+                    .get(fc::Pattern::KEY_INDEX)
+                    .expect("FcPattern.get.index")
+                    .expect("FcPattern.get.not_exist.index");
+
+                if !selected_font_paths.insert((file.clone(), index)) {
+                    // すでにロードしたフォント
+                    continue;
+                }
+
+                fonts_ordered.push((file, index));
             }
 
-            let mut font = fonts.as_ref().fonts_slice()[0];
-            let file: &core::ffi::CStr = font
-                .as_mut()
-                .get(fc::Pattern::KEY_FILE)
-                .expect("FcPattern.get.file")
-                .expect("FcPattern.get.not_exist.file");
-            let file = file.to_owned();
-            let index: core::ffi::c_int = font
-                .as_mut()
-                .get(fc::Pattern::KEY_INDEX)
-                .expect("FcPattern.get.index")
-                .expect("FcPattern.get.not_exist.index");
-
-            (file, index)
+            fonts_ordered
         };
 
-        let ui_common_font_data_content =
-            std::fs::read(font_file_path.to_str().expect("cstr.to_str")).expect("font.readfile");
+        let ui_common_font_data = ui_common_fonts
+            .into_iter()
+            .map(|(f, ix)| {
+                (
+                    std::fs::read(f.to_str().expect("cstr.to_str")).expect("font.readfile"),
+                    ix,
+                )
+            })
+            .collect::<Vec<_>>();
 
         Self {
             ft_lib: FreeType::init().expect("freetype.init"),
-            ui_common_font_data: (ui_common_font_data_content, face_index),
+            ui_common_font_data,
         }
     }
 
