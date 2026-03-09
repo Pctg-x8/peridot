@@ -1811,19 +1811,16 @@ impl<Event> CompositeTreeRender<Event> {
             let mut shaped_bytes = 0usize;
             while shaped_bytes < x.content.len() {
                 let starting_bytes = shaped_bytes;
-                while shaped_bytes < x.content.len()
-                    && unsafe {
-                        peridot_tp_freetype::raw::FT_Get_Char_Index(
-                            font.faces[font_index],
-                            x.content[shaped_bytes..].chars().next().expect("no char") as _,
-                        ) != 0
+                for c in x.content[starting_bytes..].chars() {
+                    if unsafe {
+                        peridot_tp_freetype::get_char_index(font.faces[font_index], c as _)
+                    } == 0
+                    {
+                        // no char in font, needs fallback
+                        break;
                     }
-                {
-                    shaped_bytes += x.content[shaped_bytes..]
-                        .chars()
-                        .next()
-                        .expect("no char")
-                        .len_utf8();
+
+                    shaped_bytes += c.len_utf8();
                 }
 
                 if starting_bytes == shaped_bytes {
@@ -1870,6 +1867,7 @@ impl<Event> CompositeTreeRender<Event> {
                     });
                 }
 
+                // reset for next chunk
                 font_index = 0;
             }
         }

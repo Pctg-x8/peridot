@@ -157,6 +157,11 @@ pub unsafe fn set_pixel_sizes(face: Face, pixel_width: UInt, pixel_height: UInt)
 }
 
 #[inline(always)]
+pub unsafe fn get_char_index(face: Face, charcode: ULong) -> UInt {
+    unsafe { raw::FT_Get_Char_Index(face, charcode) }
+}
+
+#[inline(always)]
 pub unsafe fn load_glyph(face: Face, glyph_index: UInt, load_flags: LoadFlags) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Load_Glyph(face, glyph_index, load_flags.bits()) })
 }
