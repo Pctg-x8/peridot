@@ -39,7 +39,7 @@ struct CompositeInstanceData {
   /// lt, rt, lb, rb (in pixels)
   float4 cornerRadiusY;
   float4 borderColor;
-  /// border_thickness, .., .., ..
+  /// border_thickness, softedge, .., ..
   float4 miscValues2;
 
   property texSlicedSizedPixels : float2 {
@@ -48,6 +48,10 @@ struct CompositeInstanceData {
 
   property borderThickness : float {
     inline get { return this.miscValues2.x; }
+  }
+
+  property softedge : float {
+    inline get { return this.miscValues2.y; }
   }
 
   inline func globalUV(p01: float2)->float2 {
@@ -153,6 +157,7 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
   vo.fragmentInput.borderColor =
       premultiplyAlpha(instanceDataArray[iindex].borderColor);
   vo.fragmentInput.packedValues4.x = instanceDataArray[iindex].borderThickness;
+  vo.fragmentInput.packedValues4.y = instanceDataArray[iindex].softedge;
 
   return vo;
 }
@@ -181,7 +186,7 @@ struct FragmentInput {
   float4 packedValues2;
   /// relativePixelCoord.xy, renderSizePixels.xy
   float4 packedValues3;
-  /// borderThickness, .., .., ..
+  /// borderThickness, softedge, .., ..
   float4 packedValues4;
   float4 sliceBordersLTRB;
   float4 colorTint;
@@ -268,6 +273,10 @@ struct FragmentInput {
   property borderThickness : float {
     inline get { return this.packedValues4.x; }
   }
+
+  property softedge : float {
+    inline get { return this.packedValues4.y; }
+  }
 }
 
 [shader("fragment")]
@@ -352,14 +361,15 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
         maxElement(input.cornerRadiusRB.x);
     distanceFromEdge = min(roundedDistance, distanceFromEdge);
   }
-  // let x = 1.0 - abs(distanceFromEdge) / 32.0;
+  // let x = 1.0 - abs(distanceFromEdge) / 128.0;
   // return float4(x, x, x, 1.0);
 
   let cornerAlpha = smoothstep(0.0, 1.0, distanceFromEdge);
+  let softEdgeAlpha = smoothstep(0.0, input.softedge, distanceFromEdge);
 
   // apply softmask, opacity and premultiply
-  col.w *=
-      rectMaskInUV.softmaskRate(input.screenUV) * input.opacity * cornerAlpha;
+  col.w *= rectMaskInUV.softmaskRate(input.screenUV) * input.opacity *
+           cornerAlpha * softEdgeAlpha;
   col.xyz *= col.w;
 
   // blend with borderline

@@ -1788,6 +1788,23 @@ async fn run<'sys>(
         ),
         ..Default::default()
     });
+    let ct_popup_frame_shadow = composite_tree.create(CompositeRect {
+        base_scale_factor: init_scale,
+        relative_offset_adjustment: [0.5, 0.5],
+        size: [
+            AnimatableFloat::Value(160.0 + 64.0),
+            AnimatableFloat::Value(88.0 + 64.0),
+        ],
+        offset: [
+            AnimatableFloat::Value(-80.0 - 32.0),
+            AnimatableFloat::Value(-44.0 - 32.0 + 12.0),
+        ],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75])),
+        corner_radius: CornerRadius::all(64.0),
+        softedge: 64.0,
+        ..Default::default()
+    });
     let ct_popup_frame = composite_tree.create(CompositeRect {
         base_scale_factor: init_scale,
         relative_offset_adjustment: [0.5, 0.5],
@@ -1799,7 +1816,7 @@ async fn run<'sys>(
         ])),
         corner_radius: CornerRadius::all(16.0),
         border: Some(Border {
-            thickness: 1.0,
+            thickness: 0.5,
             color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
         }),
         ..Default::default()
@@ -1834,7 +1851,7 @@ async fn run<'sys>(
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
         corner_radius: CornerRadius::all(8.0),
         border: Some(Border {
-            thickness: 1.5,
+            thickness: 1.0,
             color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
         }),
         text: Some(CompositeRectText {
@@ -1852,6 +1869,7 @@ async fn run<'sys>(
     });
     composite_tree.add_child(ct_popup_frame, ct_alert_dialog_message);
     composite_tree.add_child(ct_popup_frame, ct_popup_confirm_button);
+    composite_tree.add_child(ct_popup_base, ct_popup_frame_shadow);
     composite_tree.add_child(ct_popup_base, ct_popup_frame);
     composite_tree.add_child(main_window.composite_root(), ct_popup_base);
     let ht_popup_mask = ht_manager.create(HitTestTreeData {
@@ -1947,6 +1965,10 @@ async fn run<'sys>(
                     composite_tree.mark_dirty_all(ct_alert_btn);
                     composite_tree.get_mut(ct_popup_frame).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(ct_popup_frame);
+                    composite_tree
+                        .get_mut(ct_popup_frame_shadow)
+                        .base_scale_factor = new_scale;
+                    composite_tree.mark_dirty_all(ct_popup_frame_shadow);
                     composite_tree
                         .get_mut(ct_alert_dialog_message)
                         .base_scale_factor = new_scale;

@@ -69,7 +69,8 @@ pub struct CompositeInstanceData {
     pub corner_radius_y: [f32; 4],
     pub border_color: [f32; 4],
     pub border_thickness: f32,
-    pub _padding: [f32; 3],
+    pub softedge: f32,
+    pub _padding: [f32; 2],
 }
 
 #[repr(C)]
@@ -598,6 +599,7 @@ pub struct CompositeRect<Event> {
     pub base_scale_factor: f32,
     pub corner_radius: CornerRadius,
     pub border: Option<Border<Event>>,
+    pub softedge: f32,
     pub offset: [AnimatableFloat<Event>; 2],
     pub size: [AnimatableFloat<Event>; 2],
     pub relative_offset_adjustment: [f32; 2],
@@ -622,6 +624,7 @@ impl<Event> Default for CompositeRect<Event> {
             base_scale_factor: 1.0,
             corner_radius: CornerRadius::default(),
             border: None,
+            softedge: 0.0,
             offset: [const { AnimatableFloat::Value(0.0) }; 2],
             size: [const { AnimatableFloat::Value(0.0) }; 2],
             relative_offset_adjustment: [0.0, 0.0],
@@ -1612,8 +1615,12 @@ impl<Event> CompositeTreeRender<Event> {
                                 r.corner_radius.right_bottom[1] * r.base_scale_factor,
                             ],
                             border_color,
-                            border_thickness: r.border.as_ref().map_or(0.0, |b| b.thickness),
-                            _padding: [0.0; 3],
+                            border_thickness: r
+                                .border
+                                .as_ref()
+                                .map_or(0.0, |b| b.thickness * r.base_scale_factor),
+                            softedge: r.softedge * r.base_scale_factor,
+                            _padding: [0.0; 2],
                         },
                     );
                 }
@@ -1714,7 +1721,8 @@ impl<Event> CompositeTreeRender<Event> {
                                 corner_radius_y: [0.0; 4],
                                 border_thickness: 0.0,
                                 border_color: [0.0; 4],
-                                _padding: [0.0; 3],
+                                softedge: 0.0,
+                                _padding: [0.0; 2],
                             },
                         );
                     }
