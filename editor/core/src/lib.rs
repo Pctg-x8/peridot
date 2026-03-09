@@ -1706,6 +1706,140 @@ impl SimpleButtonView {
     }
 }
 
+pub struct OverlayPopupBasicMaskView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl OverlayPopupBasicMaskView {
+    pub fn new(
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) -> Self {
+        let ct_root = composite_tree.create(CompositeRect {
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColorBackdropBlur(
+                AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
+                AnimatableFloat::Value(3.0),
+            ),
+            ..Default::default()
+        });
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            // WindowHeaderのぶん開ける(ドラッグ判定がこない)
+            height: -WindowHeaderView::THICKNESS,
+            top: WindowHeaderView::THICKNESS,
+            ..Default::default()
+        });
+
+        Self { ct_root, ht_root }
+    }
+
+    pub fn mount(
+        &self,
+        ct_parent: CompositeTreeRef,
+        ht_parent: HitTestTreeRef,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.add_child(ct_parent, self.ct_root);
+        ht_manager.add_child(ht_parent, self.ht_root);
+    }
+}
+
+pub struct OverlayPopupBasicFrameView {
+    ct_root: CompositeTreeRef,
+    ct_shadow: CompositeTreeRef,
+    ct_visual: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl OverlayPopupBasicFrameView {
+    pub fn new(
+        init_scale: f32,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        size: Size<LogicalUnit>,
+    ) -> Self {
+        let ct_root = composite_tree.create(CompositeRect {
+            base_scale_factor: init_scale,
+            relative_offset_adjustment: [0.5, 0.5],
+            size: [AnimatableFloat::Value(160.0), AnimatableFloat::Value(88.0)],
+            offset: [AnimatableFloat::Value(-80.0), AnimatableFloat::Value(-44.0)],
+            ..Default::default()
+        });
+        let ct_shadow = composite_tree.create(CompositeRect {
+            base_scale_factor: init_scale,
+            relative_size_adjustment: [1.0, 1.0],
+            size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(64.0)],
+            offset: [
+                AnimatableFloat::Value(-32.0),
+                AnimatableFloat::Value(-32.0 + 12.0),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75])),
+            corner_radius: CornerRadius::all(64.0),
+            softedge: 64.0,
+            ..Default::default()
+        });
+        let ct_visual = composite_tree.create(CompositeRect {
+            base_scale_factor: init_scale,
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                0.025, 0.025, 0.025, 1.0,
+            ])),
+            corner_radius: CornerRadius::all(16.0),
+            border: Some(Border {
+                thickness: 0.5,
+                color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
+            }),
+            ..Default::default()
+        });
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width: 160.0,
+            height: 88.0,
+            left_adjustment_factor: 0.5,
+            top_adjustment_factor: 0.5,
+            left: -80.0,
+            // maskでヘッダ分開けてるのをここで補正
+            top: -44.0 - WindowHeaderView::THICKNESS * 0.5,
+            ..Default::default()
+        });
+
+        composite_tree.add_child(ct_root, ct_shadow);
+        composite_tree.add_child(ct_root, ct_visual);
+
+        Self {
+            ct_root,
+            ct_shadow,
+            ct_visual,
+            ht_root,
+        }
+    }
+
+    pub fn mount(
+        &self,
+        ct_parent: CompositeTreeRef,
+        ht_parent: HitTestTreeRef,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.add_child(ct_parent, self.ct_root);
+        ht_manager.add_child(ht_parent, self.ht_root);
+    }
+
+    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
+        composite_tree.get_mut(self.ct_shadow).base_scale_factor = scale;
+        composite_tree.get_mut(self.ct_visual).base_scale_factor = scale;
+
+        composite_tree.mark_dirty_all(self.ct_root);
+        composite_tree.mark_dirty_all(self.ct_shadow);
+        composite_tree.mark_dirty_all(self.ct_visual);
+    }
+}
+
 pub struct Positioning {
     pub parent_anchor: [f32; 2],
     pub anchor: [f32; 2],
@@ -1993,48 +2127,29 @@ async fn run<'sys>(
         std::rc::Rc::new(AlertButtonActionHandler { ct: ct_alert_btn });
     ht_manager.set_action_handler(ht_alert_btn, &ht_alert_btn_action_handler);
 
-    let ct_popup_base = composite_tree.create(CompositeRect {
-        relative_size_adjustment: [1.0, 1.0],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColorBackdropBlur(
-            AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
-            AnimatableFloat::Value(3.0),
-        ),
-        ..Default::default()
-    });
-    let ct_popup_frame_shadow = composite_tree.create(CompositeRect {
-        base_scale_factor: init_scale,
-        relative_offset_adjustment: [0.5, 0.5],
-        size: [
-            AnimatableFloat::Value(160.0 + 64.0),
-            AnimatableFloat::Value(88.0 + 64.0),
-        ],
-        offset: [
-            AnimatableFloat::Value(-80.0 - 32.0),
-            AnimatableFloat::Value(-44.0 - 32.0 + 12.0),
-        ],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75])),
-        corner_radius: CornerRadius::all(64.0),
-        softedge: 64.0,
-        ..Default::default()
-    });
-    let ct_popup_frame = composite_tree.create(CompositeRect {
-        base_scale_factor: init_scale,
-        relative_offset_adjustment: [0.5, 0.5],
-        size: [AnimatableFloat::Value(160.0), AnimatableFloat::Value(88.0)],
-        offset: [AnimatableFloat::Value(-80.0), AnimatableFloat::Value(-44.0)],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-            0.025, 0.025, 0.025, 1.0,
-        ])),
-        corner_radius: CornerRadius::all(16.0),
-        border: Some(Border {
-            thickness: 0.5,
-            color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
-        }),
-        ..Default::default()
-    });
+    let popup_mask = OverlayPopupBasicMaskView::new(&mut composite_tree, &mut ht_manager);
+    let popup_frame = OverlayPopupBasicFrameView::new(
+        init_scale,
+        &mut composite_tree,
+        &mut ht_manager,
+        Size::new_logical(160.0, 88.0),
+    );
+    let popup_confirm_button = SimpleButtonView::new(
+        init_scale,
+        &mut composite_tree,
+        &mut ht_manager,
+        "OK".into(),
+        Size::new_logical(64.0, 24.0),
+    );
+    popup_confirm_button.locate(
+        &Positioning {
+            parent_anchor: [0.5, 1.0],
+            anchor: [0.5, 1.0],
+            offset: [0.0, -16.0],
+        },
+        &mut composite_tree,
+        &mut ht_manager,
+    );
     let ct_alert_dialog_message = composite_tree.create(CompositeRect {
         base_scale_factor: init_scale,
         size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(16.0)],
@@ -2053,49 +2168,22 @@ async fn run<'sys>(
         }),
         ..Default::default()
     });
-    let popup_confirm_button = SimpleButtonView::new(
-        init_scale,
-        &mut composite_tree,
-        &mut ht_manager,
-        "OK".into(),
-        Size::new_logical(64.0, 24.0),
-    );
-    popup_confirm_button.locate(
-        &Positioning {
-            parent_anchor: [0.5, 1.0],
-            anchor: [0.5, 1.0],
-            offset: [0.0, -16.0],
-        },
-        &mut composite_tree,
-        &mut ht_manager,
-    );
-    composite_tree.add_child(ct_popup_frame, ct_alert_dialog_message);
-    composite_tree.add_child(ct_popup_base, ct_popup_frame_shadow);
-    composite_tree.add_child(ct_popup_base, ct_popup_frame);
-    composite_tree.add_child(main_window.composite_root(), ct_popup_base);
-    let ht_popup_mask = ht_manager.create(HitTestTreeData {
-        width_adjustment_factor: 1.0,
-        height_adjustment_factor: 1.0,
-        // WindowHeaderのぶん開ける(ドラッグ判定がこない)
-        height: -WindowHeaderView::THICKNESS,
-        top: WindowHeaderView::THICKNESS,
-        ..Default::default()
-    });
-    let ht_popup_frame = ht_manager.create(HitTestTreeData {
-        width: 160.0,
-        height: 88.0,
-        left_adjustment_factor: 0.5,
-        top_adjustment_factor: 0.5,
-        left: -80.0,
-        // maskでヘッダ分開けてるのをここで補正
-        top: -44.0 - WindowHeaderView::THICKNESS * 0.5,
-        ..Default::default()
-    });
-    ht_manager.add_child(ht_popup_mask, ht_popup_frame);
-    ht_manager.add_child(main_window.ht_root(), ht_popup_mask);
+    composite_tree.add_child(popup_frame.ct_root, ct_alert_dialog_message);
     popup_confirm_button.mount(
-        ct_popup_frame,
-        ht_popup_frame,
+        popup_frame.ct_root,
+        popup_frame.ht_root,
+        &mut composite_tree,
+        &mut ht_manager,
+    );
+    popup_frame.mount(
+        popup_mask.ct_root,
+        popup_mask.ht_root,
+        &mut composite_tree,
+        &mut ht_manager,
+    );
+    popup_mask.mount(
+        main_window.composite_root(),
+        main_window.ht_root(),
         &mut composite_tree,
         &mut ht_manager,
     );
@@ -2159,12 +2247,7 @@ async fn run<'sys>(
                     composite_tree.mark_dirty_all(tab_main);
                     composite_tree.get_mut(ct_alert_btn).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(ct_alert_btn);
-                    composite_tree.get_mut(ct_popup_frame).base_scale_factor = new_scale;
-                    composite_tree.mark_dirty_all(ct_popup_frame);
-                    composite_tree
-                        .get_mut(ct_popup_frame_shadow)
-                        .base_scale_factor = new_scale;
-                    composite_tree.mark_dirty_all(ct_popup_frame_shadow);
+                    popup_frame.rescale(new_scale, &mut composite_tree);
                     composite_tree
                         .get_mut(ct_alert_dialog_message)
                         .base_scale_factor = new_scale;
