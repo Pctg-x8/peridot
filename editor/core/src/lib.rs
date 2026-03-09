@@ -1498,6 +1498,220 @@ impl SystemCommandButtonView {
     }
 }
 
+#[derive(Clone, Copy)]
+enum SimpleButtonState {
+    None,
+    Hovering,
+    Pressing,
+}
+
+struct SimpleButtonActionHandler {
+    ct_root: CompositeTreeRef,
+    state: core::cell::Cell<SimpleButtonState>,
+}
+impl HitTestTreeActionHandler for SimpleButtonActionHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        self.transit(
+            SimpleButtonState::Hovering,
+            context.composite_tree,
+            context.current_sec,
+        );
+
+        input::EventContinueControl::empty()
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        self.transit(
+            SimpleButtonState::None,
+            context.composite_tree,
+            context.current_sec,
+        );
+
+        input::EventContinueControl::empty()
+    }
+
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        self.transit(
+            SimpleButtonState::Pressing,
+            context.composite_tree,
+            context.current_sec,
+        );
+
+        input::EventContinueControl::empty()
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        self.transit(
+            SimpleButtonState::Hovering,
+            context.composite_tree,
+            context.current_sec,
+        );
+
+        input::EventContinueControl::empty()
+    }
+}
+impl SimpleButtonActionHandler {
+    const fn alpha(state: SimpleButtonState) -> f32 {
+        match state {
+            SimpleButtonState::None => 0.0,
+            SimpleButtonState::Hovering => 0.125,
+            SimpleButtonState::Pressing => 0.25,
+        }
+    }
+
+    fn transit(
+        &self,
+        new_state: SimpleButtonState,
+        composite_tree: &mut CompositeTree<Event>,
+        current_sec: f32,
+    ) {
+        let before = Self::alpha(self.state.get());
+        let after = Self::alpha(new_state);
+
+        if before != after {
+            // transit occured
+            composite_tree.get_mut(self.ct_root).composite_mode =
+                CompositeMode::FillColor(AnimatableColor::Animated {
+                    from_value: [1.0, 1.0, 1.0, before],
+                    to_value: [1.0, 1.0, 1.0, after],
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.05,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                });
+            composite_tree.mark_dirty(self.ct_root);
+        }
+
+        self.state.set(new_state);
+    }
+}
+
+pub struct SimpleButtonView {
+    ht_root: HitTestTreeRef,
+    size: Size<LogicalUnit>,
+    action_handler: Rc<SimpleButtonActionHandler>,
+}
+impl SimpleButtonView {
+    pub fn new(
+        init_scale: f32,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        init_label: String,
+        size: Size<LogicalUnit>,
+    ) -> Self {
+        let ct_root = composite_tree.create(CompositeRect {
+            base_scale_factor: init_scale,
+            size: [
+                AnimatableFloat::Value(size.width),
+                AnimatableFloat::Value(size.height),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            corner_radius: CornerRadius::all(8.0),
+            border: Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+            }),
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    font_id: FontID::UIDefault,
+                    content: init_label,
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    spacing_inline_start: 0.0,
+                }],
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width: size.width,
+            height: size.height,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        let action_handler = Rc::new(SimpleButtonActionHandler {
+            ct_root,
+            state: core::cell::Cell::new(SimpleButtonState::None),
+        });
+        ht_manager.set_action_handler(ht_root, &action_handler);
+
+        Self {
+            ht_root,
+            size,
+            action_handler,
+        }
+    }
+
+    pub fn mount(
+        &self,
+        ct_parent: CompositeTreeRef,
+        ht_parent: HitTestTreeRef,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.add_child(ct_parent, self.action_handler.ct_root);
+        ht_manager.add_child(ht_parent, self.ht_root);
+    }
+
+    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
+        composite_tree
+            .get_mut(self.action_handler.ct_root)
+            .base_scale_factor = scale;
+        composite_tree.mark_dirty_all(self.action_handler.ct_root);
+    }
+
+    pub fn locate(
+        &self,
+        pos: &Positioning,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        let ht = ht_manager.get_data_mut(self.ht_root);
+        let ct = composite_tree.get_mut(self.action_handler.ct_root);
+
+        ht.left_adjustment_factor = pos.parent_anchor[0];
+        ht.top_adjustment_factor = pos.parent_anchor[1];
+        ht.left = pos.offset[0] - self.size.width * pos.anchor[0];
+        ht.top = pos.offset[1] - self.size.height * pos.anchor[1];
+        ct.relative_offset_adjustment = [pos.parent_anchor[0], pos.parent_anchor[1]];
+        ct.offset = [
+            AnimatableFloat::Value(pos.offset[0] - self.size.width * pos.anchor[0]),
+            AnimatableFloat::Value(pos.offset[1] - self.size.height * pos.anchor[1]),
+        ];
+
+        composite_tree.mark_dirty(self.action_handler.ct_root);
+    }
+}
+
+pub struct Positioning {
+    pub parent_anchor: [f32; 2],
+    pub anchor: [f32; 2],
+    pub offset: [f32; 2],
+}
+
 struct PerWindowView {
     header: WindowHeaderView,
 }
@@ -1839,36 +2053,23 @@ async fn run<'sys>(
         }),
         ..Default::default()
     });
-    let ct_popup_confirm_button = composite_tree.create(CompositeRect {
-        base_scale_factor: init_scale,
-        size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(24.0)],
-        relative_offset_adjustment: [0.5, 1.0],
-        offset: [
-            AnimatableFloat::Value(-32.0),
-            AnimatableFloat::Value(-24.0 - 16.0),
-        ],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-        corner_radius: CornerRadius::all(8.0),
-        border: Some(Border {
-            thickness: 1.0,
-            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-        }),
-        text: Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                font_id: FontID::UIDefault,
-                content: "OK".into(),
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                spacing_inline_start: 0.0,
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
+    let popup_confirm_button = SimpleButtonView::new(
+        init_scale,
+        &mut composite_tree,
+        &mut ht_manager,
+        "OK".into(),
+        Size::new_logical(64.0, 24.0),
+    );
+    popup_confirm_button.locate(
+        &Positioning {
+            parent_anchor: [0.5, 1.0],
+            anchor: [0.5, 1.0],
+            offset: [0.0, -16.0],
+        },
+        &mut composite_tree,
+        &mut ht_manager,
+    );
     composite_tree.add_child(ct_popup_frame, ct_alert_dialog_message);
-    composite_tree.add_child(ct_popup_frame, ct_popup_confirm_button);
     composite_tree.add_child(ct_popup_base, ct_popup_frame_shadow);
     composite_tree.add_child(ct_popup_base, ct_popup_frame);
     composite_tree.add_child(main_window.composite_root(), ct_popup_base);
@@ -1890,19 +2091,14 @@ async fn run<'sys>(
         top: -44.0 - WindowHeaderView::THICKNESS * 0.5,
         ..Default::default()
     });
-    let ht_popup_confirm_button = ht_manager.create(HitTestTreeData {
-        width: 64.0,
-        height: 24.0,
-        left_adjustment_factor: 0.5,
-        top_adjustment_factor: 1.0,
-        left: -32.0,
-        top: -24.0 - 16.0,
-        cursor_shape: CursorShape::Pointer,
-        ..Default::default()
-    });
-    ht_manager.add_child(ht_popup_frame, ht_popup_confirm_button);
     ht_manager.add_child(ht_popup_mask, ht_popup_frame);
     ht_manager.add_child(main_window.ht_root(), ht_popup_mask);
+    popup_confirm_button.mount(
+        ct_popup_frame,
+        ht_popup_frame,
+        &mut composite_tree,
+        &mut ht_manager,
+    );
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -1973,10 +2169,7 @@ async fn run<'sys>(
                         .get_mut(ct_alert_dialog_message)
                         .base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(ct_alert_dialog_message);
-                    composite_tree
-                        .get_mut(ct_popup_confirm_button)
-                        .base_scale_factor = new_scale;
-                    composite_tree.mark_dirty_all(ct_popup_confirm_button);
+                    popup_confirm_button.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
