@@ -40,6 +40,7 @@
         pkgs.libxkbcommon
         # required for some asset processing
         pkgs.shaderc
+        pkgs.shader-slang
         # required for workflow generator(also included in githooks)
         pkgs.stack
         # helper scripts

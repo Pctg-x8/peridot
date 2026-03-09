@@ -11,10 +11,12 @@ use peridot_tp_xkbcommon as xkbcommon;
 use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
-    hittest::{
-        CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+    input::{
+        PointerInputUnit,
+        hittest::{
+            CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+        },
     },
-    input::PointerInputUnit,
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
@@ -32,6 +34,34 @@ impl WindowHandle {
     #[inline(always)]
     pub fn state(&self) -> &WindowState {
         unsafe { &*(*self.0).user_data().cast() }
+    }
+
+    #[inline(always)]
+    fn state_mut(&mut self) -> &mut WindowState {
+        unsafe { &mut *(*self.0).user_data().cast() }
+    }
+
+    #[inline(always)]
+    pub fn associate_extra_data<T>(&mut self, data: Box<T>) {
+        self.state_mut().extra_data = Box::into_raw(data) as _;
+    }
+
+    #[inline(always)]
+    pub unsafe fn extra_data_ref<T>(&self) -> &T {
+        unsafe { &*self.state().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn extra_data_mut<T>(&mut self) -> &mut T {
+        unsafe { &mut *self.state_mut().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
+        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
+        self.state_mut().extra_data = core::ptr::null_mut();
+
+        r
     }
 
     #[inline(always)]
@@ -317,7 +347,12 @@ impl crate::SystemLink<'_> {
         window_handle
     }
 
-    pub fn close_window(&self, window_handle: WindowHandle) {
+    pub fn close_window(
+        &self,
+        window_handle: WindowHandle,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         self.rt_sender
             .send(RenderMessage::DestroyWindow(
@@ -328,6 +363,10 @@ impl crate::SystemLink<'_> {
         done_event_receiver
             .recv()
             .expect("done_event_receiver.recv");
+
+        composite_tree.free_all(window_handle.composite_root());
+        ht_manager.free_all(window_handle.ht_root());
+
         unsafe {
             (*self.display_server.window_registry)
                 .objects
@@ -386,6 +425,7 @@ pub struct WindowState {
     xdg_surface_ptr: *mut wl::XdgSurface,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    extra_data: *mut core::ffi::c_void,
     pub committed_state: Mutex<WindowCommittedState>,
     pub swapchain_externally_invalidation_signal: AtomicBool,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
@@ -470,6 +510,7 @@ impl Window {
                 xdg_surface_ptr: xdg_surface.as_ptr(),
                 composite_root,
                 ht_root,
+                extra_data: core::ptr::null_mut(),
                 committed_state: Mutex::new(WindowCommittedState {
                     active_buffer_scale: 1.0,
                     active_size: Size::new_pixels(640, 480),

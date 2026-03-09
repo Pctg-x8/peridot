@@ -947,9 +947,17 @@ impl WindowHeaderView {
         ht_manager.add_child(ht_parent, self.ht_root);
     }
 
-    pub fn rescale(&self, scale_factor: f32, composite_tree: &mut CompositeTree<Event>) {
+    pub fn rescale(
+        &self,
+        scale_factor: f32,
+        composite_tree: &mut CompositeTree<Event>,
+        texture_id_set: &SystemCommandTextureIDSet,
+    ) {
         composite_tree.get_mut(self.ct_root).base_scale_factor = scale_factor;
         composite_tree.mark_dirty_all(self.ct_root);
+        for c in &self.command_buttons {
+            c.rescale(composite_tree, texture_id_set, scale_factor);
+        }
     }
 }
 
@@ -1925,10 +1933,11 @@ async fn run<'sys>(
             }
             Event::WindowRescaleUI { window, new_scale } => {
                 unsafe {
-                    window
-                        .extra_data_ref::<PerWindowView>()
-                        .header
-                        .rescale(new_scale, &mut composite_tree);
+                    window.extra_data_ref::<PerWindowView>().header.rescale(
+                        new_scale,
+                        &mut composite_tree,
+                        &texture_id_set,
+                    );
                 }
 
                 if window == main_window {
@@ -1936,6 +1945,16 @@ async fn run<'sys>(
                     composite_tree.mark_dirty_all(tab_main);
                     composite_tree.get_mut(ct_alert_btn).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(ct_alert_btn);
+                    composite_tree.get_mut(ct_popup_frame).base_scale_factor = new_scale;
+                    composite_tree.mark_dirty_all(ct_popup_frame);
+                    composite_tree
+                        .get_mut(ct_alert_dialog_message)
+                        .base_scale_factor = new_scale;
+                    composite_tree.mark_dirty_all(ct_alert_dialog_message);
+                    composite_tree
+                        .get_mut(ct_popup_confirm_button)
+                        .base_scale_factor = new_scale;
+                    composite_tree.mark_dirty_all(ct_popup_confirm_button);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
@@ -2042,6 +2061,11 @@ struct SystemLink<'sys> {
 }
 #[cfg(not(windows))]
 impl SystemLink<'_> {
+    #[inline(always)]
+    pub const fn rt_sender(&self) -> &std::sync::mpsc::Sender<RenderMessage> {
+        &self.rt_sender
+    }
+
     #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
         &self.drag_preview_popover

@@ -319,10 +319,14 @@ impl RootFontSet {
                 None,
             )
             .expect("FontConfig.sort");
-            // for n in 0..(*fonts).nfont {
-            //     let f = *(*fonts).fonts.add(n as usize);
-            //     fontconfig::FcPatternPrint(f);
-            // }
+            for n in 0..fonts.as_ref().nfont {
+                let f = *fonts.as_ref().fonts.add(n as usize);
+                let file: &core::ffi::CStr = (*f)
+                    .get(fc::Pattern::KEY_FILE)
+                    .expect("FcPattern.get.file")
+                    .expect("FcPattern.get.not_exist.file");
+                eprintln!("font {file:?}");
+            }
 
             let mut font = fonts.as_ref().fonts_slice()[0];
             let file: &core::ffi::CStr = font

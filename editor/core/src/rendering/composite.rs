@@ -1869,6 +1869,9 @@ impl<Event> CompositeTreeRender<Event> {
             for n in 0..unsafe { glyph_positions_len.assume_init() } {
                 let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
+                if glyph_info.codepoint == 0 {
+                    tracing::warn!("no codepoint");
+                }
 
                 unsafe {
                     peridot_tp_freetype::load_glyph(
@@ -1882,7 +1885,7 @@ impl<Event> CompositeTreeRender<Event> {
                 let glyph_width = metrics.width as f32 / 64.0;
                 let glyph_height = metrics.height as f32 / 64.0;
 
-                let (r, is_new) = glyph_atlas.acquire(
+                let (r, is_new) = glyph_atlas.acquire_for_glyph(
                     (r.font_id as _, glyph_info.codepoint as _),
                     glyph_width.ceil() as _,
                     glyph_height.ceil() as _,
@@ -1893,23 +1896,14 @@ impl<Event> CompositeTreeRender<Event> {
                     top: baseline_y - metrics.horiBearingY as f32 / 64.0,
                     tex_left: r.left,
                     tex_top: r.top,
-                    width: r.width,
-                    height: r.height,
+                    width: r.width(),
+                    height: r.height(),
                 };
                 cache.text_width = cache.text_width.max(placement_box.right());
                 cache.text_rects.push(placement_box);
 
                 if is_new {
-                    vector_raster_state.updated_rects.push(br::Rect2D {
-                        offset: br::Offset2D {
-                            x: r.left as _,
-                            y: r.top as _,
-                        },
-                        extent: br::Extent2D {
-                            width: r.width,
-                            height: r.height,
-                        },
-                    });
+                    vector_raster_state.updated_rects.push(r.vk_rect());
 
                     struct OutlineReceiver<'r> {
                         current_figure: Option<(peridot_tp_freetype::Vector, usize)>,
@@ -2046,7 +2040,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 pen_pos: peridot_tp_freetype::Vector { x: 0, y: 0 },
                                 sink: vector_raster_state,
                                 offset_x: r.left as f32 - metrics.horiBearingX as f32 / 64.0,
-                                offset_y: r.top as f32 - metrics.horiBearingY as f32 / 64.0,
+                                offset_y: -(r.top as f32) - metrics.horiBearingY as f32 / 64.0,
                             },
                             0,
                             0,
