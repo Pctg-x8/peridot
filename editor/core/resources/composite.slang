@@ -377,7 +377,8 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
       smoothstep(0.0, 1.0, distanceFromEdge) *
       (1.0 - smoothstep(0.0 + input.borderThickness,
                         1.0 + input.borderThickness, distanceFromEdge));
-  col = blendAlphaPremultipliedColor(input.borderColor * borderAlpha, col);
+  col = blendAlphaPremultipliedColor(
+      input.borderColor * borderAlpha * input.opacity, col);
 
   if (col.w > 0.0 && input.compositeMode.requiresBackdropComposition) {
     // blend with backdrop(forced alpha = 1)

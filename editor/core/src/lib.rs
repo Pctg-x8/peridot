@@ -1851,6 +1851,7 @@ pub struct OverlayPopupBasicFrameView {
     ct_shadow: CompositeTreeRef,
     ct_visual: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    size: Size<LogicalUnit>,
 }
 impl OverlayPopupBasicFrameView {
     pub const ANIMATION_DURATION: f32 = OverlayPopupBasicMaskView::ANIMATION_DURATION;
@@ -1921,6 +1922,7 @@ impl OverlayPopupBasicFrameView {
             ct_shadow,
             ct_visual,
             ht_root,
+            size,
         }
     }
 
@@ -1936,12 +1938,26 @@ impl OverlayPopupBasicFrameView {
     }
 
     pub fn play_open_animation(&self, composite_tree: &mut CompositeTree<Event>, current_sec: f32) {
+        composite_tree.get_mut(self.ct_root).offset[1] = AnimatableFloat::Animated {
+            from_value: -self.size.height * 0.5 + 4.0,
+            to_value: -self.size.height * 0.5,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::CubicBezier {
+                p1: (0.5, 0.5),
+                p2: (0.5, 1.0),
+            },
+            event_on_complete: None,
+        };
         composite_tree.get_mut(self.ct_root).scale_x = AnimatableFloat::Animated {
             from_value: 0.95,
             to_value: 1.0,
             start_sec: current_sec,
             end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::Linear,
+            curve: AnimationCurve::CubicBezier {
+                p1: (0.5, 0.5),
+                p2: (0.5, 1.0),
+            },
             event_on_complete: None,
         };
         composite_tree.get_mut(self.ct_root).scale_y = AnimatableFloat::Animated {
@@ -1949,7 +1965,10 @@ impl OverlayPopupBasicFrameView {
             to_value: 1.0,
             start_sec: current_sec,
             end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::Linear,
+            curve: AnimationCurve::CubicBezier {
+                p1: (0.5, 0.5),
+                p2: (0.5, 1.0),
+            },
             event_on_complete: None,
         };
         composite_tree.get_mut(self.ct_root).opacity = AnimatableFloat::Animated {
@@ -1969,12 +1988,26 @@ impl OverlayPopupBasicFrameView {
         current_sec: f32,
         event_on_complete: Event,
     ) {
+        composite_tree.get_mut(self.ct_root).offset[1] = AnimatableFloat::Animated {
+            from_value: -self.size.height * 0.5,
+            to_value: -self.size.height * 0.5 + 4.0,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::CubicBezier {
+                p1: (0.5, 0.5),
+                p2: (0.5, 1.0),
+            },
+            event_on_complete: None,
+        };
         composite_tree.get_mut(self.ct_root).scale_x = AnimatableFloat::Animated {
             from_value: 1.0,
             to_value: 0.95,
             start_sec: current_sec,
             end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::Linear,
+            curve: AnimationCurve::CubicBezier {
+                p1: (0.5, 0.5),
+                p2: (0.5, 1.0),
+            },
             event_on_complete: None,
         };
         composite_tree.get_mut(self.ct_root).scale_y = AnimatableFloat::Animated {
@@ -1982,7 +2015,10 @@ impl OverlayPopupBasicFrameView {
             to_value: 0.95,
             start_sec: current_sec,
             end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::Linear,
+            curve: AnimationCurve::CubicBezier {
+                p1: (0.5, 0.5),
+                p2: (0.5, 1.0),
+            },
             event_on_complete: None,
         };
         composite_tree.get_mut(self.ct_root).opacity = AnimatableFloat::Animated {
@@ -2047,7 +2083,7 @@ impl AlertDialogPresenter {
             composite_tree,
             ht_manager,
             // TODO: messageの長さにあわせる必要がある どう計測したものか......
-            Size::new_logical(160.0, 88.0),
+            Size::new_logical(200.0, 88.0),
         );
         let confirm_button = SimpleButtonView::new(
             init_scale,
