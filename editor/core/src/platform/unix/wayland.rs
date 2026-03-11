@@ -343,6 +343,9 @@ impl crate::SystemLink<'_> {
             (*self.display_server.window_registry)
                 .objects
                 .insert(window_handle, w);
+            (*self.event_dispatcher).dispatch(Event::SubWindowOpen {
+                window: window_handle,
+            });
         }
         window_handle
     }
