@@ -1795,8 +1795,14 @@ impl OverlayPopupBasicFrameView {
         let ct_root = composite_tree.create(CompositeRect {
             base_scale_factor: init_scale,
             relative_offset_adjustment: [0.5, 0.5],
-            size: [AnimatableFloat::Value(160.0), AnimatableFloat::Value(88.0)],
-            offset: [AnimatableFloat::Value(-80.0), AnimatableFloat::Value(-44.0)],
+            size: [
+                AnimatableFloat::Value(size.width),
+                AnimatableFloat::Value(size.height),
+            ],
+            offset: [
+                AnimatableFloat::Value(-size.width * 0.5),
+                AnimatableFloat::Value(-size.height * 0.5),
+            ],
             ..Default::default()
         });
         let ct_shadow = composite_tree.create(CompositeRect {
@@ -1828,13 +1834,13 @@ impl OverlayPopupBasicFrameView {
             ..Default::default()
         });
         let ht_root = ht_manager.create(HitTestTreeData {
-            width: 160.0,
-            height: 88.0,
+            width: size.width,
+            height: size.height,
             left_adjustment_factor: 0.5,
             top_adjustment_factor: 0.5,
-            left: -80.0,
+            left: -size.width * 0.5,
             // maskでヘッダ分開けてるのをここで補正
-            top: -44.0 - WindowHeaderView::THICKNESS * 0.5,
+            top: -size.height * 0.5 - WindowHeaderView::THICKNESS * 0.5,
             ..Default::default()
         });
 
