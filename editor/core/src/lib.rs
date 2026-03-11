@@ -780,6 +780,7 @@ pub enum Event {
         window: WindowHandle,
     },
     OpenAlertDialog {
+        target_window: WindowHandle,
         message: String,
     },
     PopupClose {
@@ -2048,6 +2049,14 @@ impl OverlayPopupBasicFrameView {
 pub struct PopupID(uuid::Uuid);
 
 pub trait Popup {
+    fn mount(
+        &self,
+        ct_parent: CompositeTreeRef,
+        ht_parent: HitTestTreeRef,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        current_sec: f32,
+    );
     fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>);
     fn close(
         &self,
@@ -2060,6 +2069,85 @@ pub trait Popup {
         composite_tree: &mut CompositeTree<Event>,
         ht_manager: &mut HitTestTreeManager,
     );
+}
+
+pub struct PopupManager {
+    instance_by_id: HashMap<PopupID, (Box<dyn Popup>, WindowHandle)>,
+}
+impl PopupManager {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self {
+            instance_by_id: HashMap::new(),
+        }
+    }
+
+    pub fn open<P: Popup + 'static>(
+        &mut self,
+        ctor: impl FnOnce(PopupID, &mut CompositeTree<Event>, &mut HitTestTreeManager) -> P,
+        window: WindowHandle,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        current_sec: f32,
+    ) -> PopupID {
+        let id = PopupID(uuid::Uuid::new_v4());
+        let instance = ctor(id, composite_tree, ht_manager);
+        instance.mount(
+            window.composite_root(),
+            window.ht_root(),
+            composite_tree,
+            ht_manager,
+            current_sec,
+        );
+        self.instance_by_id.insert(id, (Box::new(instance), window));
+
+        id
+    }
+
+    #[inline(always)]
+    pub fn close(
+        &self,
+        id: PopupID,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        current_sec: f32,
+    ) -> bool {
+        if let Some((instance, _)) = self.instance_by_id.get(&id) {
+            instance.close(composite_tree, ht_manager, current_sec);
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline(always)]
+    pub fn unmount(
+        &mut self,
+        id: PopupID,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) -> bool {
+        if let Some((instance, _)) = self.instance_by_id.remove(&id) {
+            instance.unmount(composite_tree, ht_manager);
+            true
+        } else {
+            false
+        }
+    }
+
+    #[inline(always)]
+    pub fn rescale(
+        &self,
+        for_window: WindowHandle,
+        scale: f32,
+        composite_tree: &mut CompositeTree<Event>,
+    ) {
+        for (x, bound_window) in self.instance_by_id.values() {
+            if bound_window == &for_window {
+                x.rescale(scale, composite_tree);
+            }
+        }
+    }
 }
 
 pub struct AlertDialogPresenter {
@@ -2133,8 +2221,9 @@ impl AlertDialogPresenter {
             confirm_button,
         }
     }
-
-    pub fn mount(
+}
+impl Popup for AlertDialogPresenter {
+    fn mount(
         &self,
         ct_parent: CompositeTreeRef,
         ht_parent: HitTestTreeRef,
@@ -2147,8 +2236,7 @@ impl AlertDialogPresenter {
         self.mask.play_open_animation(composite_tree, current_sec);
         self.frame.play_open_animation(composite_tree, current_sec);
     }
-}
-impl Popup for AlertDialogPresenter {
+
     fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
         self.frame.rescale(scale, composite_tree);
         self.confirm_button.rescale(scale, composite_tree);
@@ -2218,7 +2306,7 @@ async fn run<'sys>(
     let init_scale = main_window.ui_scale_factor();
     let texture_id_set =
         SystemCommandTextureIDSet::new(&mut texture_id_issuer, system_link.rt_sender());
-    let mut popup_by_id: HashMap<PopupID, Box<dyn Popup>> = HashMap::new();
+    let mut popup_manager = PopupManager::new();
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -2383,6 +2471,7 @@ async fn run<'sys>(
         "Test Alert".into(),
         Size::new_logical(64.0, 24.0),
         Some(Event::OpenAlertDialog {
+            target_window: main_window,
             message: "てすとめっせーじ from button".into(),
         }),
     );
@@ -2402,22 +2491,21 @@ async fn run<'sys>(
         &mut ht_manager,
     );
 
-    let alert_dialog_id = PopupID(uuid::Uuid::new_v4());
-    let alert_dialog = AlertDialogPresenter::new(
-        init_scale,
-        &mut composite_tree,
-        &mut ht_manager,
-        alert_dialog_id,
-        "てすとめっせーじ".into(),
-    );
-    alert_dialog.mount(
-        main_window.composite_root(),
-        main_window.ht_root(),
+    popup_manager.open(
+        |id, composite_tree, ht_manager| {
+            AlertDialogPresenter::new(
+                init_scale,
+                composite_tree,
+                ht_manager,
+                id,
+                "てすとめっせーじ".into(),
+            )
+        },
+        main_window,
         &mut composite_tree,
         &mut ht_manager,
         global_time_base.elapsed().as_secs_f32(),
     );
-    popup_by_id.insert(alert_dialog_id, Box::new(alert_dialog));
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -2472,14 +2560,12 @@ async fn run<'sys>(
                         &texture_id_set,
                     );
                 }
+                popup_manager.rescale(window, new_scale, &mut composite_tree);
 
                 if window == main_window {
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
-                    for x in popup_by_id.values() {
-                        x.rescale(new_scale, &mut composite_tree);
-                    }
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
@@ -2560,19 +2646,21 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::OpenAlertDialog { message } => {
-                let alert_dialog_id = PopupID(uuid::Uuid::new_v4());
-
-                let alert_dialog = AlertDialogPresenter::new(
-                    main_window.ui_scale_factor(),
-                    &mut composite_tree,
-                    &mut ht_manager,
-                    alert_dialog_id,
-                    message,
-                );
-                alert_dialog.mount(
-                    main_window.composite_root(),
-                    main_window.ht_root(),
+            Event::OpenAlertDialog {
+                target_window,
+                message,
+            } => {
+                popup_manager.open(
+                    |id, composite_tree, ht_manager| {
+                        AlertDialogPresenter::new(
+                            main_window.ui_scale_factor(),
+                            composite_tree,
+                            ht_manager,
+                            id,
+                            message,
+                        )
+                    },
+                    target_window,
                     &mut composite_tree,
                     &mut ht_manager,
                     global_time_base.elapsed().as_secs_f32(),
@@ -2580,22 +2668,20 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                popup_by_id.insert(alert_dialog_id, Box::new(alert_dialog));
             }
             Event::PopupClose { id } => {
-                if let Some(p) = popup_by_id.get(&id) {
-                    p.close(
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        global_time_base.elapsed().as_secs_f32(),
-                    );
+                if popup_manager.close(
+                    id,
+                    &mut composite_tree,
+                    &mut ht_manager,
+                    global_time_base.elapsed().as_secs_f32(),
+                ) {
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
             Event::PopupUnmount { id } => {
-                if let Some(p) = popup_by_id.remove(&id) {
-                    p.unmount(&mut composite_tree, &mut ht_manager);
+                if popup_manager.unmount(id, &mut composite_tree, &mut ht_manager) {
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
