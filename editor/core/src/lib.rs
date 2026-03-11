@@ -990,6 +990,17 @@ enum SystemCommand {
     Maximize,
     Restore,
 }
+impl SystemCommand {
+    #[inline(always)]
+    const fn role(&self) -> Option<input::hittest::Role> {
+        match self {
+            Self::Close => Some(input::hittest::Role::CloseButton),
+            Self::Maximize => Some(input::hittest::Role::MaximizeButton),
+            Self::Minimize => Some(input::hittest::Role::MinimizeButton),
+            Self::Restore => Some(input::hittest::Role::RestoreButton),
+        }
+    }
+}
 
 struct SystemCommandTextureIDSet {
     pub close: usize,
@@ -1457,6 +1468,7 @@ impl SystemCommandButtonView {
             left_adjustment_factor: 1.0,
             width: Self::WIDTH,
             height_adjustment_factor: 1.0,
+            role: init_cmd.role(),
             ..Default::default()
         });
 
@@ -1506,6 +1518,7 @@ impl SystemCommandButtonView {
     fn replace_cmd(
         &self,
         composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
         texture_id_set: &SystemCommandTextureIDSet,
         cmd: SystemCommand,
     ) {
@@ -1517,6 +1530,7 @@ impl SystemCommandButtonView {
         composite_tree.get_mut(self.ct_icon).texatlas_rect_id = Some(texture_id_set.select(cmd));
         composite_tree.mark_dirty(self.ct_icon);
         composite_tree.mark_dirty(self.ct_hover);
+        ht_manager.get_data_mut(self.ht_root).role = cmd.role();
     }
 }
 
