@@ -441,7 +441,6 @@ pub struct Window {
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
-    fractional_scale: Option<wl::Owned<wl::WpFractionalScaleV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
 }
 impl Drop for Window {
@@ -497,14 +496,30 @@ impl Window {
             None
         };
 
-        let mut fractional_scale = if let Some(ref fs) = wl_interfaces.fractional_scale_manager {
+        let mut window_scaling = if let Some(ref fs) = wl_interfaces.fractional_scale_manager {
             let f = fs
                 .get_fractional_scale(&surface)
                 .expect("fractional_scale.create");
+            let vp = wl_interfaces
+                .viewporter
+                .get_viewport(&surface)
+                .expect("viewporter.get_viewport");
 
-            Some(f)
+            WindowScaling::Manual {
+                fractional_scale: f,
+                viewport: vp,
+            }
         } else {
-            None
+            WindowScaling::Automatic
+        };
+        let fractional_scale_ptr = if let WindowScaling::Manual {
+            ref mut fractional_scale,
+            ..
+        } = window_scaling
+        {
+            fractional_scale.as_ptr()
+        } else {
+            core::ptr::null_mut()
         };
 
         let mut event_listener = Box::new(WindowEventListener {
@@ -523,7 +538,7 @@ impl Window {
                 latest_ui_scale_changes: Mutex::new(None),
             },
             window_type: r#type,
-            has_fractional_scale_support: fractional_scale.is_some(),
+            scaling: window_scaling,
             pending_configure_size: (None, None),
             pending_configure_buffer_scale: None,
             event_dispatcher,
@@ -545,10 +560,13 @@ impl Window {
                 .into_result()
                 .expect("zxdg_toplevel_decoration_v1.set_listener");
         }
-        if let Some(ref mut x) = fractional_scale {
-            x.set_listener(event_listener.as_mut())
-                .into_result()
-                .expect("wp_fractional_scale_v1.set_listener");
+        if !fractional_scale_ptr.is_null() {
+            unsafe {
+                (*fractional_scale_ptr)
+                    .set_listener(event_listener.as_mut())
+                    .into_result()
+                    .expect("wp_fractional_scale_v1.set_listener");
+            }
         }
         // owns EventListener in wl_surface
         surface.set_user_data(Box::into_raw(event_listener).cast());
@@ -562,7 +580,6 @@ impl Window {
             xdg_toplevel,
             _appmenu: appmenu,
             deco,
-            fractional_scale,
         }
     }
 
@@ -601,11 +618,24 @@ impl Window {
     }
 }
 
+enum WindowScaling {
+    Automatic,
+    Manual {
+        fractional_scale: wl::Owned<wl::WpFractionalScaleV1>,
+        viewport: wl::Owned<wl::WpViewport>,
+    },
+}
+impl WindowScaling {
+    #[inline(always)]
+    const fn is_manual(&self) -> bool {
+        matches!(self, Self::Manual { .. })
+    }
+}
 #[repr(C)] // place state at 0 always: WaylandWindowEventListener can be reinterpreted as WaylandWindowState
 pub struct WindowEventListener {
     state: WindowState,
     window_type: WindowType,
-    has_fractional_scale_support: bool,
+    scaling: WindowScaling,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
     event_dispatcher: LogicFiberEventDispatcher,
@@ -619,11 +649,12 @@ impl wl::SurfaceEventListener for WindowEventListener {
 
     #[tracing::instrument(skip(self, _surface))]
     fn preferred_buffer_scale(&mut self, _surface: &mut wl::Surface, factor: i32) {
+        let has_fractional_scale_support = self.scaling.is_manual();
         tracing::trace!(
-            has_fractional_scale = self.has_fractional_scale_support,
+            has_fractional_scale = has_fractional_scale_support,
             "perferred buffer scale"
         );
-        if self.has_fractional_scale_support {
+        if has_fractional_scale_support {
             // fractional_scaleがある場合はこっちは処理しなくていい
             return;
         }
@@ -729,15 +760,18 @@ impl WindowEventListener {
             let mut committed_state_ref = self.state.committed_state.lock().expect("poisoned");
             let mut rescaled = false;
             if let Some(s) = self.pending_configure_buffer_scale.take() {
-                if self.has_fractional_scale_support {
-                    // fractional scaleでは1固定にする必要がある
-                    unsafe { &*self.state.surface_ptr }
-                        .set_buffer_scale(1)
-                        .expect("wl_surface.set_buffer_scale");
-                } else {
-                    unsafe { &*self.state.surface_ptr }
-                        .set_buffer_scale(s as _)
-                        .expect("wl_surface.set_buffer_scale");
+                match self.scaling {
+                    WindowScaling::Automatic => {
+                        unsafe { &*self.state.surface_ptr }
+                            .set_buffer_scale(s as _)
+                            .expect("wl_surface.set_buffer_scale");
+                    }
+                    WindowScaling::Manual { .. } => {
+                        // fractional scaleでは1固定にして、viewporterでスケールを適用する必要がある
+                        unsafe { &*self.state.surface_ptr }
+                            .set_buffer_scale(1)
+                            .expect("wl_surface.set_buffer_scale");
+                    }
                 }
 
                 committed_state_ref.active_buffer_scale = s;
@@ -761,6 +795,20 @@ impl WindowEventListener {
                 let pixels_size =
                     logical_size.to_pixels_ceil(committed_state_ref.active_buffer_scale);
                 if pixels_size != committed_state_ref.active_size {
+                    if let WindowScaling::Manual { ref viewport, .. } = self.scaling {
+                        viewport
+                            .set_source(
+                                wl::Fixed::from_f32_lossy(0.0),
+                                wl::Fixed::from_f32_lossy(0.0),
+                                wl::Fixed::from_f32_lossy(pixels_size.width as _),
+                                wl::Fixed::from_f32_lossy(pixels_size.height as _),
+                            )
+                            .expect("viewport.set_source");
+                        viewport
+                            .set_destination(logical_size.width as _, logical_size.height as _)
+                            .expect("viewport.set_destination");
+                    }
+
                     committed_state_ref.active_size = pixels_size;
                     committed_state_ref.active_size_logical = logical_size;
                     self.state
