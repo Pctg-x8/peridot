@@ -769,6 +769,9 @@ pub enum Event {
     SubWindowClose {
         window: WindowHandle,
     },
+    OpenAlertDialog {
+        message: String,
+    },
     PopupClose {
         id: PopupID,
     },
@@ -2257,7 +2260,9 @@ async fn run<'sys>(
             context: &mut HitTestEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
-            tracing::debug!("todo: show alert popup");
+            unsafe { &*context.system_link.event_dispatcher }.dispatch(Event::OpenAlertDialog {
+                message: "てすとめっせーじ from button".into(),
+            });
 
             input::EventContinueControl::STOP_PROPAGATION
         }
@@ -2423,6 +2428,27 @@ async fn run<'sys>(
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::OpenAlertDialog { message } => {
+                let alert_dialog_id = PopupID(uuid::Uuid::new_v4());
+
+                let alert_dialog = AlertDialogPresenter::new(
+                    main_window.ui_scale_factor(),
+                    &mut composite_tree,
+                    &mut ht_manager,
+                    alert_dialog_id,
+                    message,
+                );
+                alert_dialog.mount(
+                    main_window.composite_root(),
+                    main_window.ht_root(),
+                    &mut composite_tree,
+                    &mut ht_manager,
+                );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                popup_by_id.insert(alert_dialog_id, Box::new(alert_dialog));
             }
             Event::PopupClose { id } => {
                 if let Some(p) = popup_by_id.remove(&id) {
