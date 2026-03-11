@@ -9,7 +9,7 @@ use bedrock::{
 };
 
 use crate::{
-    AppEventBus, Event, RendererSync, WindowHandle,
+    Event, RendererSync, SyncEventBus, WindowHandle,
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, RASTER_STATE_DEFAULT_FILL_NOCULL,
         UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
@@ -67,7 +67,7 @@ pub struct RenderThread<'main> {
     pub shutdown_signal: &'main AtomicBool,
     pub renderer_sync: &'main Mutex<RendererSync>,
     pub global_time_base: &'main std::time::Instant,
-    pub event_bus: &'main AppEventBus,
+    pub event_bus: &'main SyncEventBus,
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
 }
 impl<'main> RenderThread<'main> {
@@ -705,7 +705,7 @@ impl<'d> WindowRenderer<'d> {
         glyph_atlas: &mut MaskTextureAtlasManager,
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
-        events: &AppEventBus,
+        events: &SyncEventBus,
     ) -> bool {
         let composite_render_data = self.composite_renderer.update(
             self.vk_device,

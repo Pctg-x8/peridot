@@ -138,7 +138,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     renderer_sync: &'sys Mutex<RendererSync>,
     fs: &'sys FileSystem,
 ) {
-    let events = AppEventBus {
+    let events = SyncEventBus {
         queue: std::sync::Mutex::new(VecDeque::new()),
         #[cfg(target_os = "linux")]
         efd: linux_eventfd::EventFD::new(0, linux_eventfd::EventFDFlags::empty())
@@ -490,6 +490,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         epoll
             .add(&terminate_event, EpollEventBits::IN, 1)
             .expect("epoll.add.terminate_event");
+        #[cfg(feature = "wayland")]
+        epoll
+            .add(&events.efd, EpollEventBits::IN, 2)
+            .expect("epoll.add.events_efd");
         #[cfg(target_os = "linux")]
         let poll_id_to_watch_ref = core::cell::UnsafeCell::new(HashMap::new());
         #[cfg(target_os = "linux")]
@@ -500,24 +504,27 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             poll_id_to_watch_ref: &poll_id_to_watch_ref,
         }));
         #[cfg(target_os = "linux")]
-        let mut events = [const { core::mem::MaybeUninit::uninit() }; 8];
+        let mut eventbuf = [const { core::mem::MaybeUninit::uninit() }; 8];
         #[cfg(target_os = "linux")]
         'app: loop {
             #[cfg(feature = "wayland")]
             if platform::unix::wayland::dp_prepare_read(&mut wl_display).is_err() {
                 break 'app;
             }
-            let active_events = epoll.wait(&mut events, None).expect("epoll.wait");
+            let active_events = epoll.wait(&mut eventbuf, None).expect("epoll.wait");
 
             let mut wl_display_signal = false;
             let mut terminate_signal = false;
             let mut dbus_signal = false;
+            let mut events_signal = false;
             for n in 0..active_events {
-                let e = unsafe { events[n as usize].assume_init_ref() };
+                let e = unsafe { eventbuf[n as usize].assume_init_ref() };
                 if e.value() == 0 {
                     wl_display_signal = true;
                 } else if e.value() == 1 {
                     terminate_signal = true;
+                } else if e.value() == 2 {
+                    events_signal = true;
                 } else if let Some(&wr) = unsafe { (*poll_id_to_watch_ref.get()).get(&e.value()) } {
                     let mut flags = dbus::WatchFlags::empty();
                     if e.events().contains(EpollEventBits::IN) {
@@ -553,7 +560,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 break 'app;
             }
 
-            #[cfg(target_os = "linux")]
+            if events_signal {
+                events.redispatch(&app_event_dispatcher);
+            }
+
             if dbus_signal {
                 while let Some(m) = dbus.pop_message() {
                     let span = tracing::info_span!(target: "dbus::loop", "dbus message recv", r#type = ?m.r#type(), path = ?m.path(), interface = ?m.interface(), member = ?m.member());
@@ -773,6 +783,9 @@ pub enum Event {
         message: String,
     },
     PopupClose {
+        id: PopupID,
+    },
+    PopupUnmount {
         id: PopupID,
     },
 }
@@ -1726,6 +1739,10 @@ impl SimpleButtonView {
 
         composite_tree.mark_dirty(self.action_handler.ct_root);
     }
+
+    pub fn set_interactive(&self, interactive: bool, ht_manager: &mut HitTestTreeManager) {
+        ht_manager.get_data_mut(self.ht_root).active = interactive;
+    }
 }
 
 pub struct OverlayPopupBasicMaskView {
@@ -1733,6 +1750,8 @@ pub struct OverlayPopupBasicMaskView {
     ht_root: HitTestTreeRef,
 }
 impl OverlayPopupBasicMaskView {
+    pub const ANIMATION_DURATION: f32 = 0.125;
+
     pub fn new(
         composite_tree: &mut CompositeTree<Event>,
         ht_manager: &mut HitTestTreeManager,
@@ -1777,6 +1796,54 @@ impl OverlayPopupBasicMaskView {
         composite_tree.remove_child(self.ct_root);
         ht_manager.remove_child(self.ht_root);
     }
+
+    pub fn play_open_animation(&self, composite_tree: &mut CompositeTree<Event>, current_sec: f32) {
+        composite_tree.get_mut(self.ct_root).composite_mode = CompositeMode::FillColorBackdropBlur(
+            AnimatableColor::Animated {
+                from_value: [0.0, 0.0, 0.0, 0.0],
+                to_value: [0.0, 0.0, 0.0, 0.25],
+                start_sec: current_sec,
+                end_sec: current_sec + Self::ANIMATION_DURATION,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            },
+            AnimatableFloat::Animated {
+                from_value: 0.0,
+                to_value: 3.0,
+                start_sec: current_sec,
+                end_sec: current_sec + Self::ANIMATION_DURATION,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            },
+        );
+        composite_tree.mark_dirty(self.ct_root);
+    }
+
+    pub fn play_close_animation(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        current_sec: f32,
+    ) {
+        composite_tree.get_mut(self.ct_root).composite_mode = CompositeMode::FillColorBackdropBlur(
+            AnimatableColor::Animated {
+                from_value: [0.0, 0.0, 0.0, 0.25],
+                to_value: [0.0, 0.0, 0.0, 0.0],
+                start_sec: current_sec,
+                end_sec: current_sec + Self::ANIMATION_DURATION,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            },
+            AnimatableFloat::Animated {
+                from_value: 3.0,
+                to_value: 0.0,
+                start_sec: current_sec,
+                end_sec: current_sec + Self::ANIMATION_DURATION,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            },
+        );
+        composite_tree.mark_dirty(self.ct_root);
+    }
 }
 
 pub struct OverlayPopupBasicFrameView {
@@ -1786,6 +1853,8 @@ pub struct OverlayPopupBasicFrameView {
     ht_root: HitTestTreeRef,
 }
 impl OverlayPopupBasicFrameView {
+    pub const ANIMATION_DURATION: f32 = OverlayPopupBasicMaskView::ANIMATION_DURATION;
+
     pub fn new(
         init_scale: f32,
         composite_tree: &mut CompositeTree<Event>,
@@ -1866,6 +1935,67 @@ impl OverlayPopupBasicFrameView {
         ht_manager.add_child(ht_parent, self.ht_root);
     }
 
+    pub fn play_open_animation(&self, composite_tree: &mut CompositeTree<Event>, current_sec: f32) {
+        composite_tree.get_mut(self.ct_root).scale_x = AnimatableFloat::Animated {
+            from_value: 0.95,
+            to_value: 1.0,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_root).scale_y = AnimatableFloat::Animated {
+            from_value: 0.95,
+            to_value: 1.0,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_root).opacity = AnimatableFloat::Animated {
+            from_value: 0.0,
+            to_value: 1.0,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.mark_dirty(self.ct_root);
+    }
+
+    pub fn play_close_animation(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        current_sec: f32,
+        event_on_complete: Event,
+    ) {
+        composite_tree.get_mut(self.ct_root).scale_x = AnimatableFloat::Animated {
+            from_value: 1.0,
+            to_value: 0.95,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_root).scale_y = AnimatableFloat::Animated {
+            from_value: 1.0,
+            to_value: 0.95,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_root).opacity = AnimatableFloat::Animated {
+            from_value: 1.0,
+            to_value: 0.0,
+            start_sec: current_sec,
+            end_sec: current_sec + Self::ANIMATION_DURATION,
+            curve: AnimationCurve::Linear,
+            event_on_complete: Some(event_on_complete),
+        };
+        composite_tree.mark_dirty(self.ct_root);
+    }
+
     pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
         composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
         composite_tree.get_mut(self.ct_shadow).base_scale_factor = scale;
@@ -1883,6 +2013,12 @@ pub struct PopupID(uuid::Uuid);
 
 pub trait Popup {
     fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>);
+    fn close(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        current_sec: f32,
+    );
     fn unmount(
         &self,
         composite_tree: &mut CompositeTree<Event>,
@@ -1891,6 +2027,7 @@ pub trait Popup {
 }
 
 pub struct AlertDialogPresenter {
+    id: PopupID,
     mask: OverlayPopupBasicMaskView,
     frame: OverlayPopupBasicFrameView,
     ct_message: CompositeTreeRef,
@@ -1909,6 +2046,7 @@ impl AlertDialogPresenter {
             init_scale,
             composite_tree,
             ht_manager,
+            // TODO: messageの長さにあわせる必要がある どう計測したものか......
             Size::new_logical(160.0, 88.0),
         );
         let confirm_button = SimpleButtonView::new(
@@ -1952,6 +2090,7 @@ impl AlertDialogPresenter {
         frame.mount(mask.ct_root, mask.ht_root, composite_tree, ht_manager);
 
         Self {
+            id: popup_id,
             mask,
             frame,
             ct_message,
@@ -1965,9 +2104,12 @@ impl AlertDialogPresenter {
         ht_parent: HitTestTreeRef,
         composite_tree: &mut CompositeTree<Event>,
         ht_manager: &mut HitTestTreeManager,
+        current_sec: f32,
     ) {
         self.mask
             .mount(ct_parent, ht_parent, composite_tree, ht_manager);
+        self.mask.play_open_animation(composite_tree, current_sec);
+        self.frame.play_open_animation(composite_tree, current_sec);
     }
 }
 impl Popup for AlertDialogPresenter {
@@ -1984,6 +2126,23 @@ impl Popup for AlertDialogPresenter {
         ht_manager: &mut HitTestTreeManager,
     ) {
         self.mask.unmount(composite_tree, ht_manager);
+    }
+
+    fn close(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        current_sec: f32,
+    ) {
+        // disable button interaction while animating
+        self.confirm_button.set_interactive(false, ht_manager);
+
+        self.mask.play_close_animation(composite_tree, current_sec);
+        self.frame.play_close_animation(
+            composite_tree,
+            current_sec,
+            Event::PopupUnmount { id: self.id },
+        );
     }
 }
 
@@ -2181,101 +2340,31 @@ async fn run<'sys>(
     let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
     ht_manager.set_action_handler(ht_tab_main, &ht_action_handler);
 
-    let ct_alert_btn = composite_tree.create(CompositeRect {
-        base_scale_factor: init_scale,
-        size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(24.0)],
-        offset: [AnimatableFloat::Value(200.0), AnimatableFloat::Value(64.0)],
-        text: Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                font_id: FontID::UIDefault,
-                content: "Test Alert".into(),
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            ..Default::default()
+    let test_alert_btn = SimpleButtonView::new(
+        init_scale,
+        &mut composite_tree,
+        &mut ht_manager,
+        "Test Alert".into(),
+        Size::new_logical(64.0, 24.0),
+        Some(Event::OpenAlertDialog {
+            message: "てすとめっせーじ from button".into(),
         }),
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-        corner_radius: CornerRadius::all(8.0),
-        border: Some(Border {
-            thickness: 1.0,
-            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-        }),
-        ..Default::default()
-    });
-    let ht_alert_btn = ht_manager.create(HitTestTreeData {
-        left: 200.0,
-        top: 64.0,
-        width: 64.0,
-        height: 24.0,
-        cursor_shape: CursorShape::Pointer,
-        ..Default::default()
-    });
-    composite_tree.add_child(main_window.composite_root(), ct_alert_btn);
-    ht_manager.add_child(main_window.ht_root(), ht_alert_btn);
-
-    struct AlertButtonActionHandler {
-        ct: CompositeTreeRef,
-    }
-    impl HitTestTreeActionHandler for AlertButtonActionHandler {
-        fn on_pointer_enter(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
-            args: &PointerActionArgs,
-        ) -> input::EventContinueControl {
-            context.composite_tree.get_mut(self.ct).composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Animated {
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
-                    from_value: [1.0, 1.0, 1.0, 0.0],
-                    to_value: [1.0, 1.0, 1.0, 0.25],
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                });
-            context.composite_tree.mark_dirty(self.ct);
-
-            input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_pointer_leave(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
-            args: &PointerActionArgs,
-        ) -> input::EventContinueControl {
-            context.composite_tree.get_mut(self.ct).composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Animated {
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
-                    from_value: [1.0, 1.0, 1.0, 0.25],
-                    to_value: [1.0, 1.0, 1.0, 0.0],
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                });
-            context.composite_tree.mark_dirty(self.ct);
-
-            input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_click(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
-            args: &PointerActionArgs,
-        ) -> input::EventContinueControl {
-            unsafe { &*context.system_link.event_dispatcher }.dispatch(Event::OpenAlertDialog {
-                message: "てすとめっせーじ from button".into(),
-            });
-
-            input::EventContinueControl::STOP_PROPAGATION
-        }
-    }
-    let ht_alert_btn_action_handler =
-        std::rc::Rc::new(AlertButtonActionHandler { ct: ct_alert_btn });
-    ht_manager.set_action_handler(ht_alert_btn, &ht_alert_btn_action_handler);
+    );
+    test_alert_btn.locate(
+        &Positioning {
+            parent_anchor: [0.0, 0.0],
+            anchor: [0.0, 0.0],
+            offset: [200.0, 64.0],
+        },
+        &mut composite_tree,
+        &mut ht_manager,
+    );
+    test_alert_btn.mount(
+        main_window.composite_root(),
+        main_window.ht_root(),
+        &mut composite_tree,
+        &mut ht_manager,
+    );
 
     let alert_dialog_id = PopupID(uuid::Uuid::new_v4());
     let alert_dialog = AlertDialogPresenter::new(
@@ -2290,6 +2379,7 @@ async fn run<'sys>(
         main_window.ht_root(),
         &mut composite_tree,
         &mut ht_manager,
+        global_time_base.elapsed().as_secs_f32(),
     );
     popup_by_id.insert(alert_dialog_id, Box::new(alert_dialog));
 
@@ -2350,8 +2440,7 @@ async fn run<'sys>(
                 if window == main_window {
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
-                    composite_tree.get_mut(ct_alert_btn).base_scale_factor = new_scale;
-                    composite_tree.mark_dirty_all(ct_alert_btn);
+                    test_alert_btn.rescale(new_scale, &mut composite_tree);
                     for x in popup_by_id.values() {
                         x.rescale(new_scale, &mut composite_tree);
                     }
@@ -2450,6 +2539,7 @@ async fn run<'sys>(
                     main_window.ht_root(),
                     &mut composite_tree,
                     &mut ht_manager,
+                    global_time_base.elapsed().as_secs_f32(),
                 );
 
                 composite_tree
@@ -2457,6 +2547,17 @@ async fn run<'sys>(
                 popup_by_id.insert(alert_dialog_id, Box::new(alert_dialog));
             }
             Event::PopupClose { id } => {
+                if let Some(p) = popup_by_id.get(&id) {
+                    p.close(
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        global_time_base.elapsed().as_secs_f32(),
+                    );
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
+            }
+            Event::PopupUnmount { id } => {
                 if let Some(p) = popup_by_id.remove(&id) {
                     p.unmount(&mut composite_tree, &mut ht_manager);
                     composite_tree
@@ -2687,8 +2788,7 @@ impl ShellPointerActions for WindowHandle {
     fn release_pointer(&self) {}
 }
 
-// async logicむけにあとで作りなおすかも いったんsprite-atlas-visualizerから雑にコピー
-pub struct AppEventBus {
+pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<Event>>,
     #[cfg(target_os = "linux")]
     efd: linux_eventfd::EventFD,
@@ -2696,10 +2796,10 @@ pub struct AppEventBus {
     event_notify: windows::Win32::Foundation::HANDLE,
 }
 #[cfg(windows)]
-unsafe impl Sync for AppEventBus {}
+unsafe impl Sync for SyncEventBus {}
 #[cfg(windows)]
-unsafe impl Send for AppEventBus {}
-impl Drop for AppEventBus {
+unsafe impl Send for SyncEventBus {}
+impl Drop for SyncEventBus {
     fn drop(&mut self) {
         #[cfg(windows)]
         unsafe {
@@ -2709,7 +2809,7 @@ impl Drop for AppEventBus {
         }
     }
 }
-impl AppEventBus {
+impl SyncEventBus {
     pub fn push(&self, e: Event) {
         self.queue.lock().expect("poisoned").push_back(e);
         #[cfg(target_os = "linux")]
@@ -2721,8 +2821,14 @@ impl AppEventBus {
         }
     }
 
-    fn pop(&self) -> Option<Event> {
-        self.queue.lock().expect("poisoned").pop_front()
+    fn redispatch(&self, dispatcher: &LogicFiberEventDispatcher) {
+        let mut queue = self.queue.lock().expect("poisoned");
+        while let Some(event) = queue.pop_front() {
+            dispatcher.dispatch(event);
+        }
+        if let Err(e) = self.notify_clear() {
+            tracing::error!(reason = ?e, "notify_clear");
+        };
     }
 
     fn notify_clear(&self) -> std::io::Result<()> {
