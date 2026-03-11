@@ -91,6 +91,14 @@ impl WindowHandle {
     pub fn ht_root(&self) -> HitTestTreeRef {
         self.state().ht_root
     }
+
+    pub fn begin_drag(&self, event_id: PointerEventID) {
+        unsafe {
+            (*self.state().xdg_toplevel_ptr)
+                .r#move(&*event_id.seat_ptr, event_id.serial)
+                .expect("xdg_toplevel.move");
+        }
+    }
 }
 impl crate::ShellPointerActions for WindowHandle {
     #[inline(always)]
@@ -426,6 +434,7 @@ pub struct WindowCommittedState {
 pub struct WindowState {
     surface_ptr: *mut wl::Surface,
     xdg_surface_ptr: *mut wl::XdgSurface,
+    xdg_toplevel_ptr: *mut wl::XdgToplevel,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     extra_data: *mut core::ffi::c_void,
@@ -526,6 +535,7 @@ impl Window {
             state: WindowState {
                 surface_ptr: surface.as_ptr(),
                 xdg_surface_ptr: xdg_surface.as_ptr(),
+                xdg_toplevel_ptr: xdg_toplevel.as_ptr(),
                 composite_root,
                 ht_root,
                 extra_data: core::ptr::null_mut(),
@@ -856,7 +866,7 @@ pub struct PopupState {
 }
 impl wl::XdgSurfaceEventListener for PopupState {
     #[tracing::instrument(skip(self, sender))]
-    fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
+    fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
         tracing::trace!("popup.surface.configure");
         sender.ack_configure(serial).expect("popup.ack_configure");
 
@@ -867,24 +877,17 @@ impl wl::XdgSurfaceEventListener for PopupState {
 }
 impl wl::XdgPopupEventListener for PopupState {
     #[tracing::instrument(skip(self, sender))]
-    fn configure(
-        &mut self,
-        sender: &mut peridot_tp_wayland::XdgPopup,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-    ) {
+    fn configure(&mut self, sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
         tracing::trace!("popup.configure");
     }
 
     #[tracing::instrument(skip(self, sender))]
-    fn popup_done(&mut self, sender: &mut peridot_tp_wayland::XdgPopup) {
+    fn popup_done(&mut self, sender: &mut wl::XdgPopup) {
         tracing::trace!("popup.popup_done");
     }
 
     #[tracing::instrument(skip(self, sender))]
-    fn repositioned(&mut self, sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
+    fn repositioned(&mut self, sender: &mut wl::XdgPopup, token: u32) {
         tracing::trace!("popup.repositioned");
     }
 }
@@ -912,6 +915,14 @@ impl DragPreviewPopoverBuffer {
 #[derive(Clone, Copy)]
 pub struct PointerID();
 
+#[derive(Clone)]
+pub struct PointerEventID {
+    serial: u32,
+    seat_ptr: *mut wl::Seat,
+}
+unsafe impl Sync for PointerEventID {}
+unsafe impl Send for PointerEventID {}
+
 struct PointerEnterState {
     pub surface: *mut wl::Surface,
     pub serial: u32,
@@ -919,6 +930,7 @@ struct PointerEnterState {
 
 pub struct PointerState {
     _wl_object: wl::Owned<wl::Pointer>,
+    seat_ptr: *mut wl::Seat,
     cursor: Option<wl::Owned<wl::WpCursorShapeDeviceV1>>,
     pos: Point<LogicalUnit>,
     enter_state: Option<PointerEnterState>,
@@ -947,11 +959,7 @@ impl wl::XdgWmBaseEventListener for GlobalMessaging {
     }
 }
 impl wl::SeatEventListener for GlobalMessaging {
-    fn capabilities(
-        &mut self,
-        seat: &mut peridot_tp_wayland::Seat,
-        capabilities: wl::SeatCapability,
-    ) {
+    fn capabilities(&mut self, seat: &mut wl::Seat, capabilities: wl::SeatCapability) {
         tracing::trace!(?capabilities, "seat::capabilities");
 
         if capabilities.contains(wl::SeatCapability::POINTER) {
@@ -972,6 +980,7 @@ impl wl::SeatEventListener for GlobalMessaging {
 
             self.pointer = Some(PointerState {
                 _wl_object: p,
+                seat_ptr: seat as *mut _,
                 cursor: c,
                 pos: Point::new_logical(0.0, 0.0),
                 enter_state: None,
@@ -1007,7 +1016,7 @@ impl wl::SeatEventListener for GlobalMessaging {
         }
     }
 
-    fn name(&mut self, _seat: &mut peridot_tp_wayland::Seat, name: &core::ffi::CStr) {
+    fn name(&mut self, _seat: &mut wl::Seat, name: &core::ffi::CStr) {
         tracing::trace!(?name, "seat::name");
     }
 }
@@ -1086,6 +1095,10 @@ impl wl::PointerEventListener for GlobalMessaging {
         if state == wl::PointerButtonState::Pressed {
             self.event_dispatcher.dispatch(Event::PointerDown {
                 window: WindowHandle(enter_state.surface),
+                event_id: PointerEventID {
+                    serial,
+                    seat_ptr: pointer_state.seat_ptr,
+                },
             });
         } else if state == wl::PointerButtonState::Released {
             self.event_dispatcher.dispatch(Event::PointerUp {

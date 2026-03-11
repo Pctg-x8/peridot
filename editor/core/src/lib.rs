@@ -756,6 +756,8 @@ pub enum Event {
     Quit,
     PointerDown {
         window: WindowHandle,
+        #[cfg(feature = "wayland")]
+        event_id: platform::unix::wayland::PointerEventID,
     },
     PointerMove {
         pointer_id: PointerID,
@@ -2572,7 +2574,11 @@ async fn run<'sys>(
                 composite_tree.commit(&mut renderer_sync.composite_buffer);
                 system_link.notify_ui_scale_changes_to_render(window, new_scale);
             }
-            Event::PointerDown { window } => {
+            Event::PointerDown {
+                window,
+                #[cfg(feature = "wayland")]
+                event_id,
+            } => {
                 #[cfg(feature = "wayland")]
                 system_link
                     .drag_preview_popover()
@@ -2585,6 +2591,17 @@ async fn run<'sys>(
                 system_link
                     .drag_preview_popover()
                     .bind_position_base_window_link(window);
+
+                #[cfg(feature = "wayland")]
+                {
+                    // waylandの場合はここでTitleBarロールの判定をする
+                    // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
+                    if pointer_input_manager.role_focus(&ht_manager)
+                        == Some(input::hittest::Role::TitleBar)
+                    {
+                        window.begin_drag(event_id);
+                    }
+                }
 
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_left_down(
