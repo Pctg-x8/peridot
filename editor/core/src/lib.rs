@@ -769,6 +769,9 @@ pub enum Event {
     SubWindowClose {
         window: WindowHandle,
     },
+    PopupClose {
+        id: PopupID,
+    },
 }
 
 struct EventQueue {
@@ -1507,6 +1510,7 @@ enum SimpleButtonState {
 
 struct SimpleButtonActionHandler {
     ct_root: CompositeTreeRef,
+    click_event: Option<Event>,
     state: core::cell::Cell<SimpleButtonState>,
 }
 impl HitTestTreeActionHandler for SimpleButtonActionHandler {
@@ -1569,6 +1573,19 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
 
         input::EventContinueControl::empty()
     }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut HitTestEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        if let Some(ref c) = self.click_event {
+            context.system_link.dispatch_event(c.clone());
+        }
+
+        input::EventContinueControl::empty()
+    }
 }
 impl SimpleButtonActionHandler {
     const fn alpha(state: SimpleButtonState) -> f32 {
@@ -1618,6 +1635,7 @@ impl SimpleButtonView {
         ht_manager: &mut HitTestTreeManager,
         init_label: String,
         size: Size<LogicalUnit>,
+        click_event: Option<Event>,
     ) -> Self {
         let ct_root = composite_tree.create(CompositeRect {
             base_scale_factor: init_scale,
@@ -1654,6 +1672,7 @@ impl SimpleButtonView {
 
         let action_handler = Rc::new(SimpleButtonActionHandler {
             ct_root,
+            click_event,
             state: core::cell::Cell::new(SimpleButtonState::None),
         });
         ht_manager.set_action_handler(ht_root, &action_handler);
@@ -1745,6 +1764,15 @@ impl OverlayPopupBasicMaskView {
     ) {
         composite_tree.add_child(ct_parent, self.ct_root);
         ht_manager.add_child(ht_parent, self.ht_root);
+    }
+
+    pub fn unmount(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.remove_child(self.ct_root);
+        ht_manager.remove_child(self.ht_root);
     }
 }
 
@@ -1840,6 +1868,116 @@ impl OverlayPopupBasicFrameView {
     }
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PopupID(uuid::Uuid);
+
+pub trait Popup {
+    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>);
+    fn unmount(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    );
+}
+
+pub struct AlertDialogPresenter {
+    mask: OverlayPopupBasicMaskView,
+    frame: OverlayPopupBasicFrameView,
+    ct_message: CompositeTreeRef,
+    confirm_button: SimpleButtonView,
+}
+impl AlertDialogPresenter {
+    pub fn new(
+        init_scale: f32,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+        popup_id: PopupID,
+        message: String,
+    ) -> Self {
+        let mask = OverlayPopupBasicMaskView::new(composite_tree, ht_manager);
+        let frame = OverlayPopupBasicFrameView::new(
+            init_scale,
+            composite_tree,
+            ht_manager,
+            Size::new_logical(160.0, 88.0),
+        );
+        let confirm_button = SimpleButtonView::new(
+            init_scale,
+            composite_tree,
+            ht_manager,
+            "OK".into(),
+            Size::new_logical(64.0, 24.0),
+            Some(Event::PopupClose { id: popup_id }),
+        );
+        let ct_message = composite_tree.create(CompositeRect {
+            base_scale_factor: init_scale,
+            size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(16.0)],
+            relative_offset_adjustment: [0.5, 0.0],
+            offset: [AnimatableFloat::Value(-32.0), AnimatableFloat::Value(16.0)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    font_id: FontID::UIDefault,
+                    content: message,
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    spacing_inline_start: 0.0,
+                }],
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        confirm_button.locate(
+            &Positioning {
+                parent_anchor: [0.5, 1.0],
+                anchor: [0.5, 1.0],
+                offset: [0.0, -16.0],
+            },
+            composite_tree,
+            ht_manager,
+        );
+        composite_tree.add_child(frame.ct_root, ct_message);
+        confirm_button.mount(frame.ct_root, frame.ht_root, composite_tree, ht_manager);
+        frame.mount(mask.ct_root, mask.ht_root, composite_tree, ht_manager);
+
+        Self {
+            mask,
+            frame,
+            ct_message,
+            confirm_button,
+        }
+    }
+
+    pub fn mount(
+        &self,
+        ct_parent: CompositeTreeRef,
+        ht_parent: HitTestTreeRef,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        self.mask
+            .mount(ct_parent, ht_parent, composite_tree, ht_manager);
+    }
+}
+impl Popup for AlertDialogPresenter {
+    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
+        self.frame.rescale(scale, composite_tree);
+        self.confirm_button.rescale(scale, composite_tree);
+        composite_tree.get_mut(self.ct_message).base_scale_factor = scale;
+        composite_tree.mark_dirty_all(self.ct_message);
+    }
+
+    fn unmount(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        self.mask.unmount(composite_tree, ht_manager);
+    }
+}
+
 pub struct Positioning {
     pub parent_anchor: [f32; 2],
     pub anchor: [f32; 2],
@@ -1876,6 +2014,7 @@ async fn run<'sys>(
     let init_scale = main_window.ui_scale_factor();
     let texture_id_set =
         SystemCommandTextureIDSet::new(&mut texture_id_issuer, system_link.rt_sender());
+    let mut popup_by_id: HashMap<PopupID, Box<dyn Popup>> = HashMap::new();
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -2127,66 +2266,21 @@ async fn run<'sys>(
         std::rc::Rc::new(AlertButtonActionHandler { ct: ct_alert_btn });
     ht_manager.set_action_handler(ht_alert_btn, &ht_alert_btn_action_handler);
 
-    let popup_mask = OverlayPopupBasicMaskView::new(&mut composite_tree, &mut ht_manager);
-    let popup_frame = OverlayPopupBasicFrameView::new(
+    let alert_dialog_id = PopupID(uuid::Uuid::new_v4());
+    let alert_dialog = AlertDialogPresenter::new(
         init_scale,
         &mut composite_tree,
         &mut ht_manager,
-        Size::new_logical(160.0, 88.0),
+        alert_dialog_id,
+        "てすとめっせーじ".into(),
     );
-    let popup_confirm_button = SimpleButtonView::new(
-        init_scale,
-        &mut composite_tree,
-        &mut ht_manager,
-        "OK".into(),
-        Size::new_logical(64.0, 24.0),
-    );
-    popup_confirm_button.locate(
-        &Positioning {
-            parent_anchor: [0.5, 1.0],
-            anchor: [0.5, 1.0],
-            offset: [0.0, -16.0],
-        },
-        &mut composite_tree,
-        &mut ht_manager,
-    );
-    let ct_alert_dialog_message = composite_tree.create(CompositeRect {
-        base_scale_factor: init_scale,
-        size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(16.0)],
-        relative_offset_adjustment: [0.5, 0.0],
-        offset: [AnimatableFloat::Value(-32.0), AnimatableFloat::Value(16.0)],
-        text: Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                font_id: FontID::UIDefault,
-                content: "てすとめっせーじ".into(),
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                spacing_inline_start: 0.0,
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-    composite_tree.add_child(popup_frame.ct_root, ct_alert_dialog_message);
-    popup_confirm_button.mount(
-        popup_frame.ct_root,
-        popup_frame.ht_root,
-        &mut composite_tree,
-        &mut ht_manager,
-    );
-    popup_frame.mount(
-        popup_mask.ct_root,
-        popup_mask.ht_root,
-        &mut composite_tree,
-        &mut ht_manager,
-    );
-    popup_mask.mount(
+    alert_dialog.mount(
         main_window.composite_root(),
         main_window.ht_root(),
         &mut composite_tree,
         &mut ht_manager,
     );
+    popup_by_id.insert(alert_dialog_id, Box::new(alert_dialog));
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -2247,12 +2341,9 @@ async fn run<'sys>(
                     composite_tree.mark_dirty_all(tab_main);
                     composite_tree.get_mut(ct_alert_btn).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(ct_alert_btn);
-                    popup_frame.rescale(new_scale, &mut composite_tree);
-                    composite_tree
-                        .get_mut(ct_alert_dialog_message)
-                        .base_scale_factor = new_scale;
-                    composite_tree.mark_dirty_all(ct_alert_dialog_message);
-                    popup_confirm_button.rescale(new_scale, &mut composite_tree);
+                    for x in popup_by_id.values() {
+                        x.rescale(new_scale, &mut composite_tree);
+                    }
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
@@ -2333,6 +2424,13 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
+            Event::PopupClose { id } => {
+                if let Some(p) = popup_by_id.remove(&id) {
+                    p.unmount(&mut composite_tree, &mut ht_manager);
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
+            }
         }
     }
 
@@ -2367,6 +2465,11 @@ impl SystemLink<'_> {
     #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
         &self.drag_preview_popover
+    }
+
+    #[inline(always)]
+    pub fn dispatch_event(&self, event: Event) {
+        unsafe { &*self.event_dispatcher }.dispatch(event);
     }
 
     #[cfg(target_os = "macos")]

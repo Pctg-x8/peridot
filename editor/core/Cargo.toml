@@ -30,6 +30,7 @@ peridot-tp-freetype = { path = "../../thirdparty/freetype", optional = true }
 peridot-tp-fontconfig = { path = "../../thirdparty/fontconfig", optional = true }
 peridot-tp-harfbuzz = { path = "../../thirdparty/harfbuzz", optional = true }
 bitflags = "2.10.0"
+uuid = { version = "1.22.0", features = ["v4"] }
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
