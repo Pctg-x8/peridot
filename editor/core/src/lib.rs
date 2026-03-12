@@ -901,7 +901,7 @@ enum WindowCaption {
 struct WindowHeaderView {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    command_buttons: [SystemCommandButtonView; 3],
+    command_buttons: Option<[SystemCommandButtonView; 3]>,
 }
 impl WindowHeaderView {
     #[cfg(target_os = "macos")]
@@ -915,6 +915,7 @@ impl WindowHeaderView {
         ht_manager: &mut HitTestTreeManager,
         texture_id_set: &SystemCommandTextureIDSet,
         init_scale: f32,
+        needs_system_command_buttons: bool,
     ) -> Self {
         let ct_root = composite_tree.create(CompositeRect {
             has_bitmap: true,
@@ -968,36 +969,42 @@ impl WindowHeaderView {
             role: Some(crate::input::hittest::Role::TitleBar),
             ..Default::default()
         });
-        let command_buttons = [
-            SystemCommandButtonView::new(
-                init_scale,
-                composite_tree,
-                ht_manager,
-                texture_id_set,
-                0.0,
-                SystemCommand::Close,
-            ),
-            SystemCommandButtonView::new(
-                init_scale,
-                composite_tree,
-                ht_manager,
-                texture_id_set,
-                SystemCommandButtonView::WIDTH,
-                SystemCommand::Maximize,
-            ),
-            SystemCommandButtonView::new(
-                init_scale,
-                composite_tree,
-                ht_manager,
-                texture_id_set,
-                SystemCommandButtonView::WIDTH * 2.0,
-                SystemCommand::Minimize,
-            ),
-        ];
+        let command_buttons = if needs_system_command_buttons {
+            let views = [
+                SystemCommandButtonView::new(
+                    init_scale,
+                    composite_tree,
+                    ht_manager,
+                    texture_id_set,
+                    0.0,
+                    SystemCommand::Close,
+                ),
+                SystemCommandButtonView::new(
+                    init_scale,
+                    composite_tree,
+                    ht_manager,
+                    texture_id_set,
+                    SystemCommandButtonView::WIDTH,
+                    SystemCommand::Maximize,
+                ),
+                SystemCommandButtonView::new(
+                    init_scale,
+                    composite_tree,
+                    ht_manager,
+                    texture_id_set,
+                    SystemCommandButtonView::WIDTH * 2.0,
+                    SystemCommand::Minimize,
+                ),
+            ];
 
-        command_buttons[0].mount(composite_tree, ht_manager, ct_root, ht_root);
-        command_buttons[1].mount(composite_tree, ht_manager, ct_root, ht_root);
-        command_buttons[2].mount(composite_tree, ht_manager, ct_root, ht_root);
+            views[0].mount(composite_tree, ht_manager, ct_root, ht_root);
+            views[1].mount(composite_tree, ht_manager, ct_root, ht_root);
+            views[2].mount(composite_tree, ht_manager, ct_root, ht_root);
+
+            Some(views)
+        } else {
+            None
+        };
 
         Self {
             ct_root,
@@ -1025,8 +1032,10 @@ impl WindowHeaderView {
     ) {
         composite_tree.get_mut(self.ct_root).base_scale_factor = scale_factor;
         composite_tree.mark_dirty_all(self.ct_root);
-        for c in &self.command_buttons {
-            c.rescale(composite_tree, texture_id_set, scale_factor);
+        if let Some(ref xs) = self.command_buttons {
+            for c in xs {
+                c.rescale(composite_tree, texture_id_set, scale_factor);
+            }
         }
     }
 }
@@ -2388,6 +2397,7 @@ async fn run<'sys>(
         &mut ht_manager,
         &texture_id_set,
         init_scale,
+        main_window.needs_system_command_buttons(),
     );
     window_header_view.mount(
         main_window.composite_root(),
@@ -2591,6 +2601,7 @@ async fn run<'sys>(
                     &mut ht_manager,
                     &texture_id_set,
                     init_scale,
+                    main_window.needs_system_command_buttons(),
                 );
                 window_header_view.mount(
                     window.composite_root(),

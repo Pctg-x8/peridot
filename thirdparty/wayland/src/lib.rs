@@ -984,7 +984,7 @@ impl Pointer {
                 EventFnTable!(for L: PointerEventListener {
                     enter(
                         serial: u32 => serial,
-                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) },
+                        surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() },
                         surface_x: Fixed => surface_x,
                         surface_y: Fixed => surface_y
                     ),
@@ -1030,7 +1030,7 @@ pub trait PointerEventListener {
         &mut self,
         pointer: &mut Pointer,
         serial: u32,
-        surface: &mut Surface,
+        surface: Option<&mut Surface>,
         surface_x: Fixed,
         surface_y: Fixed,
     );

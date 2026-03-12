@@ -71,12 +71,13 @@ impl WindowHandle {
     }
 
     #[inline(always)]
+    pub fn needs_system_command_buttons(&self) -> bool {
+        self.event_listener().needs_system_command_buttons
+    }
+
+    #[inline(always)]
     pub fn needs_corner_cutout_rendering(&self) -> bool {
-        unsafe {
-            (*(*self.0).user_data().cast::<WindowEventListener>())
-                .decoration
-                .is_some()
-        }
+        self.event_listener().decoration.is_some()
     }
 
     #[inline(always)]
@@ -567,7 +568,10 @@ impl Window {
             None
         };
 
-        let (mut deco, decoration) = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager {
+        // memo: HyprlandのViewporterはsrcの座標範囲の判定が間違っているので特殊判定して影を出さないようにする
+        let (mut deco, decoration) = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager
+            && !wl_interfaces.is_hyprland
+        {
             let d = dm
                 .get_toplevel_decoration(&xdg_toplevel)
                 .expect("decoration.get_toplevel");
@@ -638,6 +642,7 @@ impl Window {
             },
             window_type: r#type,
             scaling: window_scaling,
+            needs_system_command_buttons: decoration.is_some(),
             decoration,
             pending_configure_size: (None, None),
             pending_configure_buffer_scale: None,
@@ -740,6 +745,7 @@ pub struct WindowEventListener {
     window_type: WindowType,
     scaling: WindowScaling,
     decoration: Option<Pin<Box<WindowDecoration>>>,
+    needs_system_command_buttons: bool,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
     event_dispatcher: LogicFiberEventDispatcher,
@@ -1338,31 +1344,12 @@ impl WindowDecoration {
                 wl::Fixed::from_f32_lossy(1.0),
             )
             .expect("viewport.set_source");
-        // TODO: Hyprlandの検証ロジックとひっかかる箇所(Hyprland側がちがう 本来はtransform後の座標系を指定するはずなので)
-        // ただHyprlandでは不要なやつなのでコンポジタを判定して無効化する必要がある
-        // top.viewport
-        //     .set_source(
-        //         wl::Fixed::from_f32_lossy(0.0),
-        //         wl::Fixed::from_f32_lossy(0.0),
-        //         wl::Fixed::from_f32_lossy(1.0),
-        //         wl::Fixed::from_f32_lossy(Self::SIZE as _),
-        //     )
-        //     .expect("viewport.set_source");
-        // bottom
-        //     .viewport
-        //     .set_source(
-        //         wl::Fixed::from_f32_lossy(0.0),
-        //         wl::Fixed::from_f32_lossy(0.0),
-        //         wl::Fixed::from_f32_lossy(1.0),
-        //         wl::Fixed::from_f32_lossy(Self::SIZE as _),
-        //     )
-        //     .expect("viewport.set_source");
         top.viewport
             .set_source(
                 wl::Fixed::from_f32_lossy(0.0),
                 wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(Self::SIZE as _),
                 wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::from_f32_lossy(Self::SIZE as _),
             )
             .expect("viewport.set_source");
         bottom
@@ -1370,8 +1357,8 @@ impl WindowDecoration {
             .set_source(
                 wl::Fixed::from_f32_lossy(0.0),
                 wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(Self::SIZE as _),
                 wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::from_f32_lossy(Self::SIZE as _),
             )
             .expect("viewport.set_source");
 
@@ -1847,10 +1834,14 @@ impl wl::PointerEventListener for GlobalMessaging {
         &mut self,
         _pointer: &mut wl::Pointer,
         serial: u32,
-        surface: &mut wl::Surface,
+        surface: Option<&mut wl::Surface>,
         surface_x: wl::Fixed,
         surface_y: wl::Fixed,
     ) {
+        let Some(surface) = surface else {
+            return;
+        };
+
         let state = self.pointer.as_mut().expect("no pointer state initialized");
         state.enter_state = Some(PointerEnterState {
             surface: surface as *mut _,
@@ -2239,6 +2230,8 @@ pub struct GlobalInterfaces {
     pub cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     pub fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
     pub alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
+    // flags
+    pub is_hyprland: bool,
 }
 impl GlobalInterfaces {
     pub fn collect_sync(display: &wl::Display) -> std::io::Result<Self> {
@@ -2267,6 +2260,7 @@ impl GlobalInterfaces {
             cursor_shape_manager: rl.cursor_shape_manager,
             fractional_scale_manager: rl.fractional_scale_manager,
             alpha_modifier: rl.alpha_modifier,
+            is_hyprland: rl.is_hyprland,
         })
     }
 }
@@ -2289,6 +2283,7 @@ struct RegistryListener {
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
     alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
+    is_hyprland: bool,
 }
 impl wl::RegistryListener for RegistryListener {
     fn global(
@@ -2393,6 +2388,11 @@ impl wl::RegistryListener for RegistryListener {
         }
         if interface == c"wp_alpha_modifier_v1" {
             self.alpha_modifier = Some(registry.bind(name, version).expect("bind alpha_modifier"));
+        }
+
+        if interface == c"hyprland_surface_manager_v1" {
+            // 暫定的にこのインターフェイスがあった場合はHyprland扱いする
+            self.is_hyprland = true;
         }
     }
 
