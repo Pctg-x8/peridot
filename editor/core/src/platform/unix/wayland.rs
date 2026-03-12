@@ -84,6 +84,15 @@ impl WindowHandle {
     }
 
     #[inline(always)]
+    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
+        self.state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .active_size
+    }
+
+    #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
         self.state()
             .committed_state

@@ -463,13 +463,6 @@ impl<'main> RenderThread<'main> {
 }
 
 struct WindowRenderer<'d> {
-    #[cfg(feature = "wayland")]
-    committed_state: *const Mutex<crate::platform::unix::wayland::WindowCommittedState>,
-    #[cfg(feature = "wayland")]
-    swapchain_externally_invalidation_signal: *const AtomicBool,
-    #[cfg(windows)]
-    w: crate::WindowHandle,
-    #[cfg(target_os = "macos")]
     w: crate::WindowHandle,
     active_scale: SafeF32,
     latest_ui_scale_changes: *const Mutex<Option<f32>>,
@@ -511,18 +504,8 @@ impl<'d> WindowRenderer<'d> {
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
-            #[cfg(windows)]
+            #[cfg(any(windows, feature = "wayland"))]
             || create_data.key.pixels_client_size(),
-            #[cfg(feature = "wayland")]
-            || {
-                create_data
-                    .key
-                    .state()
-                    .committed_state
-                    .lock()
-                    .expect("poisoned")
-                    .active_size
-            },
             #[cfg(target_os = "macos")]
             || {
                 *create_data
@@ -636,16 +619,6 @@ impl<'d> WindowRenderer<'d> {
         };
 
         Self {
-            #[cfg(windows)]
-            w: create_data.key,
-            #[cfg(feature = "wayland")]
-            committed_state: &create_data.key.state().committed_state,
-            #[cfg(feature = "wayland")]
-            swapchain_externally_invalidation_signal: &create_data
-                .key
-                .state()
-                .swapchain_externally_invalidation_signal,
-            #[cfg(target_os = "macos")]
             w: create_data.key,
             #[cfg(any(feature = "wayland", windows))]
             active_scale: init_scale,
@@ -765,12 +738,16 @@ impl<'d> WindowRenderer<'d> {
 
     #[cfg(feature = "wayland")]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
-        unsafe { &(*self.swapchain_externally_invalidation_signal) }.compare_exchange_weak(
-            true,
-            false,
-            std::sync::atomic::Ordering::Relaxed,
-            std::sync::atomic::Ordering::Relaxed,
-        ) == Ok(true)
+        self.w
+            .state()
+            .swapchain_externally_invalidation_signal
+            .compare_exchange_weak(
+                true,
+                false,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            == Ok(true)
     }
     #[cfg(not(feature = "wayland"))]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
@@ -796,15 +773,8 @@ impl<'d> WindowRenderer<'d> {
         self.surface.refresh_caps();
         self.swapchain.recreate(
             &self.surface,
-            #[cfg(windows)]
+            #[cfg(any(windows, feature = "wayland"))]
             || self.w.pixels_client_size(),
-            #[cfg(feature = "wayland")]
-            || {
-                unsafe { &(*self.committed_state) }
-                    .lock()
-                    .expect("poisoned")
-                    .active_size
-            },
             #[cfg(target_os = "macos")]
             || *self.w.state().active_rt_size.lock().expect("poisoned"),
         );
@@ -893,26 +863,12 @@ impl<'d> WindowRenderer<'d> {
                     return r;
                 };
 
-                #[cfg(windows)]
+                #[cfg(any(windows, feature = "wayland"))]
                 let rt_pixel_size = self.w.pixels_client_size();
-                #[cfg(feature = "wayland")]
-                let rt_pixel_size = {
-                    unsafe { &(*self.committed_state) }
-                        .lock()
-                        .expect("poisoned")
-                        .active_size
-                };
                 #[cfg(target_os = "macos")]
                 let rt_pixel_size = *self.w.state().active_rt_size.lock().expect("poisoned");
-                #[cfg(windows)]
+                #[cfg(any(windows, feature = "wayland"))]
                 let rt_logical_size = self.w.client_size();
-                #[cfg(feature = "wayland")]
-                let rt_logical_size = {
-                    unsafe { &(*self.committed_state) }
-                        .lock()
-                        .expect("poisoned")
-                        .active_size_logical
-                };
                 #[cfg(target_os = "macos")]
                 let rt_logical_size = *self.w.state().active_rt_size.lock().expect("poisoned");
 
@@ -1162,7 +1118,7 @@ struct CornerCutoutPushConstants {
 }
 
 struct CornerCutoutRenderer<'d, 'fs> {
-    shader: br::ShaderModuleObject<&'d VulkanDevice<'fs>>,
+    _shader: br::ShaderModuleObject<&'d VulkanDevice<'fs>>,
     pipeline_layout: br::PipelineLayoutObject<&'d VulkanDevice<'fs>>,
     pipeline: br::PipelineObject<&'d VulkanDevice<'fs>>,
     pipeline_cont: br::PipelineObject<&'d VulkanDevice<'fs>>,
@@ -1247,7 +1203,7 @@ impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
             .expect("pipeline.create");
 
         Self {
-            shader,
+            _shader: shader,
             pipeline_layout,
             pipeline,
             pipeline_cont,
