@@ -73,10 +73,12 @@ features = [
     "viewporter",
     "kde-blur",
     "kde-appmenu",
+    "kde-shadow",
     "xdg-decoration-unstable-v1",
     "text-input-unstable-v3",
     "cursor-shape-v1",
     "fractional-scale-v1",
+    "alpha-modifier-v1"
 ]
 
 [target.'cfg(unix)'.dependencies]

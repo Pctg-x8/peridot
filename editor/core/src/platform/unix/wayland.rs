@@ -1,3 +1,4 @@
+use core::pin::Pin;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, atomic::AtomicBool},
@@ -33,12 +34,12 @@ unsafe impl Sync for WindowHandle {}
 impl WindowHandle {
     #[inline(always)]
     pub fn state(&self) -> &WindowState {
-        unsafe { &*(*self.0).user_data().cast() }
+        unsafe { &(*(*self.0).user_data().cast::<SurfaceState<WindowState>>()).data }
     }
 
     #[inline(always)]
     fn state_mut(&mut self) -> &mut WindowState {
-        unsafe { &mut *(*self.0).user_data().cast() }
+        unsafe { &mut (*(*self.0).user_data().cast::<SurfaceState<WindowState>>()).data }
     }
 
     #[inline(always)]
@@ -266,6 +267,7 @@ pub struct DisplayServerLink {
     pub wl_global_interfaces: *const GlobalInterfaces,
     pub pointer_state_ref: *const Option<PointerState>,
     pub window_registry: *mut WindowRegistry,
+    pub decoration_pixbuf: *const WindowDecorationPixbuf,
 }
 
 impl crate::SystemLink<'_> {
@@ -273,6 +275,7 @@ impl crate::SystemLink<'_> {
         dp: &wl::Display,
         wl_interfaces: &GlobalInterfaces,
         window_registry: &mut WindowRegistry,
+        decoration_pixbuf: Option<&WindowDecorationPixbuf>,
         dbus: &dbus::Connection,
         composite_tree: &mut CompositeTree<Event>,
         ht_manager: &mut HitTestTreeManager,
@@ -298,6 +301,7 @@ impl crate::SystemLink<'_> {
                 height_adjustment_factor: 1.0,
                 ..Default::default()
             }),
+            decoration_pixbuf,
         );
         let main_window_handle = w.make_handle();
 
@@ -333,6 +337,7 @@ impl crate::SystemLink<'_> {
                 height_adjustment_factor: 1.0,
                 ..Default::default()
             }),
+            unsafe { self.display_server.decoration_pixbuf.as_ref() },
         );
         let window_handle = w.make_handle();
 
@@ -431,6 +436,12 @@ pub struct WindowCommittedState {
     pub active_size_logical: Size<LogicalUnit>,
 }
 
+#[derive(Clone, Copy)]
+enum SurfaceStateTag {
+    ToplevelWindow,
+    ResizeEdge,
+}
+
 pub struct WindowState {
     surface_ptr: *mut wl::Surface,
     xdg_surface_ptr: *mut wl::XdgSurface,
@@ -444,6 +455,22 @@ pub struct WindowState {
 }
 unsafe impl Sync for WindowState {}
 unsafe impl Send for WindowState {}
+
+struct ResizeEdgeSurfaceData {
+    edge: wl::XdgToplevelResizeEdge,
+    target_toplevel: *const wl::XdgToplevel,
+}
+
+#[repr(C)]
+struct SurfaceState<T> {
+    tag: SurfaceStateTag,
+    data: T,
+}
+
+#[repr(C)]
+struct SurfaceStateUntyped {
+    tag: SurfaceStateTag,
+}
 
 pub struct Window {
     surface: wl::Owned<wl::Surface>,
@@ -459,6 +486,11 @@ impl Drop for Window {
     }
 }
 impl Window {
+    #[inline(always)]
+    pub const fn should_client_decoration(wl_interfaces: &GlobalInterfaces) -> bool {
+        wl_interfaces.zxdg_decoration_manager.is_some()
+    }
+
     fn new(
         r#type: WindowType,
         wl_interfaces: &GlobalInterfaces,
@@ -466,6 +498,7 @@ impl Window {
         event_dispatcher: LogicFiberEventDispatcher,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
+        deco_pixbuf: Option<&WindowDecorationPixbuf>,
     ) -> Self {
         let mut surface = wl_interfaces
             .compositor
@@ -493,16 +526,24 @@ impl Window {
             None
         };
 
-        let mut deco = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager {
+        let (mut deco, decoration) = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager {
             let d = dm
                 .get_toplevel_decoration(&xdg_toplevel)
                 .expect("decoration.get_toplevel");
             d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
                 .expect("decoration.set_mode");
 
-            Some(d)
+            (
+                Some(d),
+                Some(WindowDecoration::new(
+                    wl_interfaces,
+                    deco_pixbuf.expect("pixbuf required"),
+                    &surface,
+                    &xdg_toplevel,
+                )),
+            )
         } else {
-            None
+            (None, None)
         };
 
         let mut window_scaling = if let Some(ref fs) = wl_interfaces.fractional_scale_manager {
@@ -532,23 +573,29 @@ impl Window {
         };
 
         let mut event_listener = Box::new(WindowEventListener {
-            state: WindowState {
-                surface_ptr: surface.as_ptr(),
-                xdg_surface_ptr: xdg_surface.as_ptr(),
-                xdg_toplevel_ptr: xdg_toplevel.as_ptr(),
-                composite_root,
-                ht_root,
-                extra_data: core::ptr::null_mut(),
-                committed_state: Mutex::new(WindowCommittedState {
-                    active_buffer_scale: 1.0,
-                    active_size: Size::new_pixels(640, 480),
-                    active_size_logical: Size::new_logical(640.0, 480.0),
-                }),
-                swapchain_externally_invalidation_signal: std::sync::atomic::AtomicBool::new(false),
-                latest_ui_scale_changes: Mutex::new(None),
+            state: SurfaceState {
+                tag: SurfaceStateTag::ToplevelWindow,
+                data: WindowState {
+                    surface_ptr: surface.as_ptr(),
+                    xdg_surface_ptr: xdg_surface.as_ptr(),
+                    xdg_toplevel_ptr: xdg_toplevel.as_ptr(),
+                    composite_root,
+                    ht_root,
+                    extra_data: core::ptr::null_mut(),
+                    committed_state: Mutex::new(WindowCommittedState {
+                        active_buffer_scale: 1.0,
+                        active_size: Size::new_pixels(640, 480),
+                        active_size_logical: Size::new_logical(640.0, 480.0),
+                    }),
+                    swapchain_externally_invalidation_signal: std::sync::atomic::AtomicBool::new(
+                        false,
+                    ),
+                    latest_ui_scale_changes: Mutex::new(None),
+                },
             },
             window_type: r#type,
             scaling: window_scaling,
+            decoration,
             pending_configure_size: (None, None),
             pending_configure_buffer_scale: None,
             event_dispatcher,
@@ -624,6 +671,11 @@ impl Window {
     }
 
     fn commit(&self) {
+        if let &Some(ref d) =
+            unsafe { &(*self.surface.user_data().cast::<WindowEventListener>()).decoration }
+        {
+            d.commit_all();
+        }
         self.surface.commit().expect("wl_surface.commit");
     }
 }
@@ -641,11 +693,12 @@ impl WindowScaling {
         matches!(self, Self::Manual { .. })
     }
 }
-#[repr(C)] // place state at 0 always: WaylandWindowEventListener can be reinterpreted as WaylandWindowState
+#[repr(C)] // place state at 0 always: WindowEventListener can be reinterpreted as SurfaceState
 pub struct WindowEventListener {
-    state: WindowState,
+    state: SurfaceState<WindowState>,
     window_type: WindowType,
     scaling: WindowScaling,
+    decoration: Option<Pin<Box<WindowDecoration>>>,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
     event_dispatcher: LogicFiberEventDispatcher,
@@ -700,7 +753,7 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
             }
             WindowType::Sub => {
                 self.event_dispatcher.dispatch(Event::SubWindowClose {
-                    window: WindowHandle(self.state.surface_ptr),
+                    window: WindowHandle(self.state.data.surface_ptr),
                 });
             }
         }
@@ -715,6 +768,7 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
         states: &mut wl::ffi::Array,
     ) {
         tracing::trace!("xdg toplevel configure");
+        let states = unsafe { states.as_slice::<wl::XdgToplevelState>() };
 
         self.pending_configure_size = (
             if width == 0 {
@@ -728,6 +782,19 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
                 Some(height)
             },
         );
+        if let Some(ref d) = self.decoration {
+            if states.contains(&wl::XdgToplevelState::Maximized) {
+                d.hide();
+            } else {
+                d.show();
+
+                if states.contains(&wl::XdgToplevelState::Activated) {
+                    d.active();
+                } else {
+                    d.inactive();
+                }
+            }
+        }
     }
 
     fn configure_bounds(&mut self, _sender: &mut wl::XdgToplevel, _width: i32, _height: i32) {}
@@ -767,18 +834,18 @@ impl WindowEventListener {
         let mut delayed_event_queue = Vec::with_capacity(2);
 
         {
-            let mut committed_state_ref = self.state.committed_state.lock().expect("poisoned");
+            let mut committed_state_ref = self.state.data.committed_state.lock().expect("poisoned");
             let mut rescaled = false;
             if let Some(s) = self.pending_configure_buffer_scale.take() {
                 match self.scaling {
                     WindowScaling::Automatic => {
-                        unsafe { &*self.state.surface_ptr }
+                        unsafe { &*self.state.data.surface_ptr }
                             .set_buffer_scale(s as _)
                             .expect("wl_surface.set_buffer_scale");
                     }
                     WindowScaling::Manual { .. } => {
                         // fractional scaleでは1固定にして、viewporterでスケールを適用する必要がある
-                        unsafe { &*self.state.surface_ptr }
+                        unsafe { &*self.state.data.surface_ptr }
                             .set_buffer_scale(1)
                             .expect("wl_surface.set_buffer_scale");
                     }
@@ -786,7 +853,7 @@ impl WindowEventListener {
 
                 committed_state_ref.active_buffer_scale = s;
                 delayed_event_queue.push(Event::WindowRescaleUI {
-                    window: WindowHandle(self.state.surface_ptr),
+                    window: WindowHandle(self.state.data.surface_ptr),
                     new_scale: s,
                 });
                 rescaled = true;
@@ -805,6 +872,17 @@ impl WindowEventListener {
                 let pixels_size =
                     logical_size.to_pixels_ceil(committed_state_ref.active_buffer_scale);
                 if pixels_size != committed_state_ref.active_size {
+                    unsafe {
+                        (*self.state.data.xdg_surface_ptr)
+                            .set_window_geometry(
+                                0,
+                                0,
+                                logical_size.width as _,
+                                logical_size.height as _,
+                            )
+                            .expect("xdg_surface.set_window_geometry");
+                    }
+
                     if let WindowScaling::Manual { ref viewport, .. } = self.scaling {
                         viewport
                             .set_source(
@@ -819,18 +897,28 @@ impl WindowEventListener {
                             .expect("viewport.set_destination");
                     }
 
+                    if let Some(ref d) = self.decoration {
+                        d.adjust_for_frame(logical_size.width as _, logical_size.height as _);
+                        d.commit_all();
+                    }
+
                     committed_state_ref.active_size = pixels_size;
                     committed_state_ref.active_size_logical = logical_size;
                     self.state
+                        .data
                         .swapchain_externally_invalidation_signal
                         .store(true, std::sync::atomic::Ordering::Relaxed);
 
                     delayed_event_queue.push(Event::WindowResize {
-                        window: WindowHandle(self.state.surface_ptr),
+                        window: WindowHandle(self.state.data.surface_ptr),
                         size: logical_size,
                     });
                 }
             }
+        }
+
+        if let Some(ref d) = self.decoration {
+            d.commit_all();
         }
 
         for x in delayed_event_queue {
@@ -895,12 +983,7 @@ impl wl::XdgPopupEventListener for PopupState {
 #[allow(dead_code)]
 pub enum DragPreviewPopoverBuffer {
     SinglePixel(wl::Owned<wl::Buffer>),
-    Shm {
-        shm_region: crate::utils::platform::unix::TemporalSharedMemory,
-        mapped: crate::utils::platform::unix::MappedMemory,
-        shm_pool: wl::Owned<wl::ShmPool>,
-        buf: wl::Owned<wl::Buffer>,
-    },
+    Shm { buf: wl::Owned<wl::Buffer> },
 }
 impl DragPreviewPopoverBuffer {
     #[inline(always)]
@@ -909,6 +992,688 @@ impl DragPreviewPopoverBuffer {
             Self::SinglePixel(x) => x,
             Self::Shm { buf, .. } => buf,
         }
+    }
+}
+
+pub struct WindowDecorationPixbuf {
+    buffer_corner: wl::Owned<wl::Buffer>,
+    buffer_edge: wl::Owned<wl::Buffer>,
+}
+impl WindowDecorationPixbuf {
+    // (corner(size * size) + edge(size * 1)) * 4(bytes per pixel)
+    pub const REQUIRED_BYTE_LENGTH: usize =
+        WindowDecoration::SIZE as usize * (WindowDecoration::SIZE as usize + 1) * 4;
+    pub const REQUIRED_BYTE_ALIGNMENT: usize = 4;
+
+    pub fn generate_content(head_ptr: *mut core::ffi::c_void) {
+        for x in 0..WindowDecoration::SIZE {
+            let a = (1.0 - x as f32 / WindowDecoration::SIZE as f32).powi(2);
+            let v = (a * 255.0) as u32;
+
+            unsafe {
+                core::ptr::write(head_ptr.byte_add(x as usize * 4).cast::<u32>(), v << 24);
+            }
+        }
+        for x in 0..WindowDecoration::SIZE {
+            for y in 0..WindowDecoration::SIZE {
+                let d = ((x as f32 / WindowDecoration::SIZE as f32).powi(2)
+                    + (y as f32 / WindowDecoration::SIZE as f32).powi(2))
+                .sqrt();
+                let a = (1.0 - d).clamp(0.0, 1.0).powi(2);
+                let v = (a * 255.0) as u32;
+
+                unsafe {
+                    core::ptr::write(
+                        head_ptr
+                            .byte_add((x * WindowDecoration::SIZE + y) as usize * 4)
+                            .cast::<u32>(),
+                        v << 24,
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn new(shm_pool: &wl::ShmPool, offset: usize) -> Self {
+        let buffer_edge = shm_pool
+            .create_buffer(
+                offset as _,
+                WindowDecoration::SIZE as _,
+                1,
+                WindowDecoration::SIZE as i32 * 4,
+                wl::ShmFormat::ARGB8888,
+            )
+            .expect("shm_pool.create_buffer");
+        let buffer_corner = shm_pool
+            .create_buffer(
+                (offset + WindowDecoration::SIZE as usize * 4) as _,
+                WindowDecoration::SIZE as _,
+                WindowDecoration::SIZE as _,
+                WindowDecoration::SIZE as i32 * 4,
+                wl::ShmFormat::ARGB8888,
+            )
+            .expect("shm_pool.create_buffer");
+
+        Self {
+            buffer_corner,
+            buffer_edge,
+        }
+    }
+}
+
+struct WindowDecorationCornerSurface {
+    surface: wl::Owned<wl::Surface>,
+    subsurface: wl::Owned<wl::Subsurface>,
+    alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierSurfaceV1>>,
+}
+impl WindowDecorationCornerSurface {
+    fn new(wl_interfaces: &GlobalInterfaces, parent_surface: &wl::Surface) -> Self {
+        let surface = wl_interfaces
+            .compositor
+            .create_surface()
+            .expect("compositor.create_surface");
+        let subsurface = wl_interfaces
+            .subcompositor
+            .get_subsurface(&surface, parent_surface)
+            .expect("compositor.get_surface");
+        let alpha_modifier = wl_interfaces.alpha_modifier.as_ref().map(|alpha_modifier| {
+            alpha_modifier
+                .get_surface(&surface)
+                .expect("alpha_modifier.get_surface")
+        });
+
+        Self {
+            surface,
+            subsurface,
+            alpha_modifier,
+        }
+    }
+
+    fn set_input_rect(
+        &self,
+        compositor: &wl::Compositor,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> wl::Result<()> {
+        let r = compositor.create_region()?;
+        r.add(x, y, width, height)?;
+        self.surface.set_input_region(Some(&r))?;
+
+        Ok(())
+    }
+
+    fn active(&self, buffer: &wl::Buffer) {
+        if let Some(ref a) = self.alpha_modifier {
+            a.set_multiplier(u32::MAX)
+                .expect("alpha_modifier.set_multiplier");
+        } else {
+            self.surface
+                .attach(Some(buffer), 0, 0)
+                .expect("surface.attach");
+        }
+    }
+
+    fn inactive(&self) {
+        if let Some(ref a) = self.alpha_modifier {
+            a.set_multiplier(u32::MAX >> 1)
+                .expect("alpha_modifier.set_multiplier");
+        } else {
+            self.surface.attach(None, 0, 0).expect("surface.attach");
+        }
+    }
+
+    fn show(&self, buffer: &wl::Buffer) {
+        self.surface
+            .attach(Some(buffer), 0, 0)
+            .expect("surface.attach");
+    }
+
+    fn hide(&self) {
+        self.surface.attach(None, 0, 0).expect("surface.attach");
+    }
+}
+
+struct WindowDecorationEdgeSurface {
+    surface: wl::Owned<wl::Surface>,
+    subsurface: wl::Owned<wl::Subsurface>,
+    viewport: wl::Owned<wl::WpViewport>,
+    alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierSurfaceV1>>,
+}
+impl WindowDecorationEdgeSurface {
+    fn new(wl_interfaces: &GlobalInterfaces, parent_surface: &wl::Surface) -> Self {
+        let surface = wl_interfaces
+            .compositor
+            .create_surface()
+            .expect("compositor.create_surface");
+        let subsurface = wl_interfaces
+            .subcompositor
+            .get_subsurface(&surface, parent_surface)
+            .expect("compositor.get_surface");
+        let viewport = wl_interfaces
+            .viewporter
+            .get_viewport(&surface)
+            .expect("viewporter.get_viewport");
+        let alpha_modifier = wl_interfaces.alpha_modifier.as_ref().map(|alpha_modifier| {
+            alpha_modifier
+                .get_surface(&surface)
+                .expect("alpha_modifier.get_surface")
+        });
+
+        Self {
+            surface,
+            subsurface,
+            viewport,
+            alpha_modifier,
+        }
+    }
+
+    fn set_input_rect(
+        &self,
+        compositor: &wl::Compositor,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    ) -> wl::Result<()> {
+        let r = compositor.create_region()?;
+        r.add(x, y, width, height)?;
+        self.surface.set_input_region(Some(&r))?;
+
+        Ok(())
+    }
+
+    fn active(&self, buffer: &wl::Buffer) {
+        if let Some(ref a) = self.alpha_modifier {
+            a.set_multiplier(u32::MAX)
+                .expect("alpha_modifier.set_multiplier");
+        } else {
+            self.surface
+                .attach(Some(buffer), 0, 0)
+                .expect("surface.attach");
+        }
+    }
+
+    fn inactive(&self) {
+        if let Some(ref a) = self.alpha_modifier {
+            a.set_multiplier(u32::MAX >> 1)
+                .expect("alpha_modifier.set_multiplier");
+        } else {
+            self.surface.attach(None, 0, 0).expect("surface.attach");
+        }
+    }
+
+    fn show(&self, buffer: &wl::Buffer) {
+        self.surface
+            .attach(Some(buffer), 0, 0)
+            .expect("surface.attach");
+    }
+
+    fn hide(&self) {
+        self.surface.attach(None, 0, 0).expect("surface.attach");
+    }
+}
+
+struct WindowDecoration {
+    compositor_ptr: *const wl::Compositor,
+    pixbuf_ptr: *const WindowDecorationPixbuf,
+    left: WindowDecorationEdgeSurface,
+    right: WindowDecorationEdgeSurface,
+    top: WindowDecorationEdgeSurface,
+    bottom: WindowDecorationEdgeSurface,
+    lt: WindowDecorationCornerSurface,
+    rt: WindowDecorationCornerSurface,
+    lb: WindowDecorationCornerSurface,
+    rb: WindowDecorationCornerSurface,
+    _left_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _right_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _top_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _bottom_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _lt_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _rt_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _lb_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _rb_data: SurfaceState<ResizeEdgeSurfaceData>,
+    _pinned: core::marker::PhantomPinned,
+}
+impl WindowDecoration {
+    const SIZE: u32 = 64;
+    const INTERACT_SIZE: u32 = 8;
+    const INSET: u32 = 32;
+    const SHIFT_DOWN_AMOUNT: u32 = 4;
+
+    fn new(
+        wl_interfaces: &GlobalInterfaces,
+        pixbuf: &WindowDecorationPixbuf,
+        parent_surface: &wl::Surface,
+        target_toplevel: &wl::XdgToplevel,
+    ) -> Pin<Box<Self>> {
+        // construct
+        let left = WindowDecorationEdgeSurface::new(wl_interfaces, parent_surface);
+        let right = WindowDecorationEdgeSurface::new(wl_interfaces, parent_surface);
+        let top = WindowDecorationEdgeSurface::new(wl_interfaces, parent_surface);
+        let bottom = WindowDecorationEdgeSurface::new(wl_interfaces, parent_surface);
+        let lt = WindowDecorationCornerSurface::new(wl_interfaces, parent_surface);
+        let rt = WindowDecorationCornerSurface::new(wl_interfaces, parent_surface);
+        let lb = WindowDecorationCornerSurface::new(wl_interfaces, parent_surface);
+        let rb = WindowDecorationCornerSurface::new(wl_interfaces, parent_surface);
+
+        // attach appropriate buffer
+        left.surface
+            .attach(Some(&pixbuf.buffer_edge), 0, 0)
+            .expect("surface.attach");
+        right
+            .surface
+            .attach(Some(&pixbuf.buffer_edge), 0, 0)
+            .expect("surface.attach");
+        top.surface
+            .attach(Some(&pixbuf.buffer_edge), 0, 0)
+            .expect("surface.attach");
+        bottom
+            .surface
+            .attach(Some(&pixbuf.buffer_edge), 0, 0)
+            .expect("surface.attach");
+        lt.surface
+            .attach(Some(&pixbuf.buffer_corner), 0, 0)
+            .expect("surface.attach");
+        rt.surface
+            .attach(Some(&pixbuf.buffer_corner), 0, 0)
+            .expect("surface.attach");
+        lb.surface
+            .attach(Some(&pixbuf.buffer_corner), 0, 0)
+            .expect("surface.attach");
+        rb.surface
+            .attach(Some(&pixbuf.buffer_corner), 0, 0)
+            .expect("surface.attach");
+
+        // viewport fixed setup
+        left.viewport
+            .set_source(
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(Self::SIZE as _),
+                wl::Fixed::from_f32_lossy(1.0),
+            )
+            .expect("viewport.set_source");
+        right
+            .viewport
+            .set_source(
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(Self::SIZE as _),
+                wl::Fixed::from_f32_lossy(1.0),
+            )
+            .expect("viewport.set_source");
+        top.viewport
+            .set_source(
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::from_f32_lossy(Self::SIZE as _),
+            )
+            .expect("viewport.set_source");
+        bottom
+            .viewport
+            .set_source(
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::from_f32_lossy(Self::SIZE as _),
+            )
+            .expect("viewport.set_source");
+
+        // apply rotation
+        top.surface
+            .set_buffer_transform(wl::OutputTransform::Rot270)
+            .expect("surface.set_buffer_transform");
+        left.surface
+            .set_buffer_transform(wl::OutputTransform::Flipped)
+            .expect("surface.set_buffer_transform");
+        bottom
+            .surface
+            .set_buffer_transform(wl::OutputTransform::Rot90)
+            .expect("surface.set_buffer_transform");
+        rt.surface
+            .set_buffer_transform(wl::OutputTransform::Rot270)
+            .expect("surface.set_buffer_transform");
+        lt.surface
+            .set_buffer_transform(wl::OutputTransform::Rot180)
+            .expect("surface.set_buffer_transform");
+        lb.surface
+            .set_buffer_transform(wl::OutputTransform::Rot90)
+            .expect("surface.set_buffer_transform");
+
+        // placing
+        left.subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+        right
+            .subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+        top.subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+        bottom
+            .subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+        lt.subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+        rt.subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+        lb.subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+        rb.subsurface
+            .place_below(parent_surface)
+            .expect("subsurface.place_below");
+
+        // positioning(fixed)
+        left.subsurface
+            .set_position(
+                -(Self::SIZE as i32) + Self::INSET as i32,
+                Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+            )
+            .expect("subsurface.set_position");
+        top.subsurface
+            .set_position(
+                Self::INSET as i32,
+                -(Self::SIZE as i32) + Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+            )
+            .expect("subsurface.set_position");
+        lt.subsurface
+            .set_position(
+                -(Self::SIZE as i32) + Self::INSET as i32,
+                -(Self::SIZE as i32) + Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+            )
+            .expect("subsurface.set_position");
+
+        // input region(fixed)
+        lt.set_input_rect(
+            &wl_interfaces.compositor,
+            Self::SIZE as i32 - Self::INSET as i32 - Self::INTERACT_SIZE as i32,
+            Self::SIZE as i32
+                - Self::INSET as i32
+                - Self::INTERACT_SIZE as i32
+                - Self::SHIFT_DOWN_AMOUNT as i32,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+        )
+        .expect("corner_surface.set_input_rect");
+        lb.set_input_rect(
+            &wl_interfaces.compositor,
+            Self::SIZE as i32 - Self::INSET as i32 - Self::INTERACT_SIZE as i32,
+            0,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+        )
+        .expect("corner_surface.set_input_rect");
+        rt.set_input_rect(
+            &wl_interfaces.compositor,
+            0,
+            Self::SIZE as i32
+                - Self::INSET as i32
+                - Self::INTERACT_SIZE as i32
+                - Self::SHIFT_DOWN_AMOUNT as i32,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+        )
+        .expect("corner_surface.set_input_rect");
+        rb.set_input_rect(
+            &wl_interfaces.compositor,
+            0,
+            0,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32,
+            Self::INSET as i32 + Self::INTERACT_SIZE as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+        )
+        .expect("corner_surface.set_input_rect");
+
+        let mut this = Box::new(Self {
+            compositor_ptr: wl_interfaces.compositor.as_ptr(),
+            pixbuf_ptr: pixbuf,
+            left,
+            right,
+            top,
+            bottom,
+            lt,
+            rt,
+            lb,
+            rb,
+            _left_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::Left,
+                    target_toplevel,
+                },
+            },
+            _right_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::Right,
+                    target_toplevel,
+                },
+            },
+            _top_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::Top,
+                    target_toplevel,
+                },
+            },
+            _bottom_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::Bottom,
+                    target_toplevel,
+                },
+            },
+            _lt_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::TopLeft,
+                    target_toplevel,
+                },
+            },
+            _rt_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::TopRight,
+                    target_toplevel,
+                },
+            },
+            _lb_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::BottomLeft,
+                    target_toplevel,
+                },
+            },
+            _rb_data: SurfaceState {
+                tag: SurfaceStateTag::ResizeEdge,
+                data: ResizeEdgeSurfaceData {
+                    edge: wl::XdgToplevelResizeEdge::BottomRight,
+                    target_toplevel,
+                },
+            },
+            _pinned: core::marker::PhantomPinned,
+        });
+        this.left
+            .surface
+            .set_user_data(&mut this._left_data as *mut _ as _);
+        this.right
+            .surface
+            .set_user_data(&mut this._right_data as *mut _ as _);
+        this.top
+            .surface
+            .set_user_data(&mut this._top_data as *mut _ as _);
+        this.bottom
+            .surface
+            .set_user_data(&mut this._bottom_data as *mut _ as _);
+        this.lt
+            .surface
+            .set_user_data(&mut this._lt_data as *mut _ as _);
+        this.rt
+            .surface
+            .set_user_data(&mut this._rt_data as *mut _ as _);
+        this.lb
+            .surface
+            .set_user_data(&mut this._lb_data as *mut _ as _);
+        this.rb
+            .surface
+            .set_user_data(&mut this._rb_data as *mut _ as _);
+
+        Box::into_pin(this)
+    }
+
+    fn adjust_for_frame(&self, parent_width: i32, parent_height: i32) {
+        // positioning
+        let rp = parent_width - Self::INSET as i32;
+        let bp = parent_height - Self::INSET as i32;
+        self.right
+            .subsurface
+            .set_position(rp, Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32)
+            .expect("subsurface.set_position");
+        self.bottom
+            .subsurface
+            .set_position(Self::INSET as i32, bp + Self::SHIFT_DOWN_AMOUNT as i32)
+            .expect("subsurface.set_position");
+        self.rt
+            .subsurface
+            .set_position(
+                rp,
+                -(Self::SIZE as i32) + Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+            )
+            .expect("subsurface.set_position");
+        self.lb
+            .subsurface
+            .set_position(
+                -(Self::SIZE as i32) + Self::INSET as i32,
+                bp + Self::SHIFT_DOWN_AMOUNT as i32,
+            )
+            .expect("subsurface.set_position");
+        self.rb
+            .subsurface
+            .set_position(rp, bp + Self::SHIFT_DOWN_AMOUNT as i32)
+            .expect("subsurface.set_position");
+
+        // sizing
+        self.left
+            .viewport
+            .set_destination(Self::SIZE as _, parent_height - Self::INSET as i32 * 2)
+            .expect("viewport.set_destination");
+        self.right
+            .viewport
+            .set_destination(Self::SIZE as _, parent_height - Self::INSET as i32 * 2)
+            .expect("viewport.set_destination");
+        self.top
+            .viewport
+            .set_destination(parent_width - Self::INSET as i32 * 2, Self::SIZE as _)
+            .expect("viewport.set_destination");
+        self.bottom
+            .viewport
+            .set_destination(parent_width - Self::INSET as i32 * 2, Self::SIZE as _)
+            .expect("viewport.set_destination");
+
+        // adjsut input region
+        self.left
+            .set_input_rect(
+                unsafe { &*self.compositor_ptr },
+                Self::SIZE as i32 - Self::INSET as i32 - Self::INTERACT_SIZE as i32,
+                0,
+                Self::INTERACT_SIZE as i32,
+                parent_height - Self::INSET as i32 * 2,
+            )
+            .expect("edge_surface.set_input_rect");
+        self.right
+            .set_input_rect(
+                unsafe { &*self.compositor_ptr },
+                Self::INSET as i32,
+                0,
+                Self::INTERACT_SIZE as i32,
+                parent_height - Self::INSET as i32 * 2,
+            )
+            .expect("edge_surface.set_input_rect");
+        self.top
+            .set_input_rect(
+                unsafe { &*self.compositor_ptr },
+                0,
+                Self::SIZE as i32
+                    - Self::INSET as i32
+                    - Self::INTERACT_SIZE as i32
+                    - Self::SHIFT_DOWN_AMOUNT as i32,
+                parent_width - Self::INSET as i32 * 2,
+                Self::INTERACT_SIZE as i32,
+            )
+            .expect("edge_surface.set_input_rect");
+        self.bottom
+            .set_input_rect(
+                unsafe { &*self.compositor_ptr },
+                0,
+                Self::INSET as i32 - Self::SHIFT_DOWN_AMOUNT as i32,
+                parent_width - Self::INSET as i32 * 2,
+                Self::INTERACT_SIZE as i32,
+            )
+            .expect("edge_surface.set_input_rect");
+    }
+
+    fn active(&self) {
+        self.left.active(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.right
+            .active(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.top.active(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.bottom
+            .active(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.lt.active(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+        self.rt.active(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+        self.lb.active(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+        self.rb.active(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+    }
+
+    fn inactive(&self) {
+        self.left.inactive();
+        self.right.inactive();
+        self.top.inactive();
+        self.bottom.inactive();
+        self.lt.inactive();
+        self.rt.inactive();
+        self.lb.inactive();
+        self.rb.inactive();
+    }
+
+    fn show(&self) {
+        self.left.show(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.right.show(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.top.show(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.bottom.show(unsafe { &(*self.pixbuf_ptr).buffer_edge });
+        self.lt.show(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+        self.rt.show(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+        self.lb.show(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+        self.rb.show(unsafe { &(*self.pixbuf_ptr).buffer_corner });
+    }
+
+    fn hide(&self) {
+        self.left.hide();
+        self.right.hide();
+        self.top.hide();
+        self.bottom.hide();
+        self.lt.hide();
+        self.rt.hide();
+        self.lb.hide();
+        self.rb.hide();
+    }
+
+    fn commit_all(&self) {
+        self.left.surface.commit().expect("surface.commit");
+        self.right.surface.commit().expect("surface.commit");
+        self.top.surface.commit().expect("surface.commit");
+        self.bottom.surface.commit().expect("surface.commit");
+        self.lt.surface.commit().expect("surface.commit");
+        self.rt.surface.commit().expect("surface.commit");
+        self.lb.surface.commit().expect("surface.commit");
+        self.rb.surface.commit().expect("surface.commit");
     }
 }
 
@@ -1031,18 +1796,52 @@ impl wl::PointerEventListener for GlobalMessaging {
         surface_y: wl::Fixed,
     ) {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
-
         state.enter_state = Some(PointerEnterState {
             surface: surface as *mut _,
             serial,
         });
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
 
-        self.event_dispatcher.dispatch(Event::PointerMove {
-            pointer_id: PointerID(),
-            window: WindowHandle(surface as *mut _),
-            client_pos: state.pos,
-        });
+        let surface_state = unsafe { &*surface.user_data().cast::<SurfaceStateUntyped>() };
+        match surface_state.tag {
+            SurfaceStateTag::ResizeEdge => {
+                let surface_state = unsafe {
+                    core::mem::transmute::<&_, &SurfaceState<ResizeEdgeSurfaceData>>(surface_state)
+                };
+                if let Some(ref c) = state.cursor {
+                    c.set_shape(
+                        serial,
+                        match surface_state.data.edge {
+                            wl::XdgToplevelResizeEdge::Top | wl::XdgToplevelResizeEdge::Bottom => {
+                                wl::WpCursorShapeDeviceV1Shape::NsResize
+                            }
+                            wl::XdgToplevelResizeEdge::Left | wl::XdgToplevelResizeEdge::Right => {
+                                wl::WpCursorShapeDeviceV1Shape::EwResize
+                            }
+                            wl::XdgToplevelResizeEdge::TopLeft
+                            | wl::XdgToplevelResizeEdge::BottomRight => {
+                                wl::WpCursorShapeDeviceV1Shape::NwseResize
+                            }
+                            wl::XdgToplevelResizeEdge::TopRight
+                            | wl::XdgToplevelResizeEdge::BottomLeft => {
+                                wl::WpCursorShapeDeviceV1Shape::NeswResize
+                            }
+                            wl::XdgToplevelResizeEdge::None => {
+                                wl::WpCursorShapeDeviceV1Shape::Default
+                            }
+                        },
+                    )
+                    .expect("cursor.set_shape")
+                }
+            }
+            SurfaceStateTag::ToplevelWindow => {
+                self.event_dispatcher.dispatch(Event::PointerMove {
+                    pointer_id: PointerID(),
+                    window: WindowHandle(surface as *mut _),
+                    client_pos: state.pos,
+                });
+            }
+        }
     }
 
     #[tracing::instrument(skip(self, _pointer, _surface))]
@@ -1053,7 +1852,6 @@ impl wl::PointerEventListener for GlobalMessaging {
         _surface: Option<&mut wl::Surface>,
     ) {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
-
         state.enter_state = None;
     }
 
@@ -1071,11 +1869,21 @@ impl wl::PointerEventListener for GlobalMessaging {
         };
 
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
-        self.event_dispatcher.dispatch(Event::PointerMove {
-            pointer_id: PointerID(),
-            window: WindowHandle(enter_state.surface),
-            client_pos: state.pos,
-        });
+        let surface_state = unsafe {
+            &*(*enter_state.surface)
+                .user_data()
+                .cast::<SurfaceStateUntyped>()
+        };
+        match surface_state.tag {
+            SurfaceStateTag::ResizeEdge => {}
+            SurfaceStateTag::ToplevelWindow => {
+                self.event_dispatcher.dispatch(Event::PointerMove {
+                    pointer_id: PointerID(),
+                    window: WindowHandle(enter_state.surface),
+                    client_pos: state.pos,
+                });
+            }
+        }
     }
 
     #[tracing::instrument(skip(self, _pointer), fields(state = state as u32))]
@@ -1093,13 +1901,34 @@ impl wl::PointerEventListener for GlobalMessaging {
         };
 
         if state == wl::PointerButtonState::Pressed {
-            self.event_dispatcher.dispatch(Event::PointerDown {
-                window: WindowHandle(enter_state.surface),
-                event_id: PointerEventID {
-                    serial,
-                    seat_ptr: pointer_state.seat_ptr,
-                },
-            });
+            let surface_state = unsafe {
+                &*(*enter_state.surface)
+                    .user_data()
+                    .cast::<SurfaceStateUntyped>()
+            };
+            match surface_state.tag {
+                SurfaceStateTag::ResizeEdge => {
+                    let surface_state = unsafe {
+                        core::mem::transmute::<&_, &SurfaceState<ResizeEdgeSurfaceData>>(
+                            surface_state,
+                        )
+                    };
+                    unsafe {
+                        (*surface_state.data.target_toplevel)
+                            .resize(&*pointer_state.seat_ptr, serial, surface_state.data.edge)
+                            .expect("toplevel.resize");
+                    }
+                }
+                SurfaceStateTag::ToplevelWindow => {
+                    self.event_dispatcher.dispatch(Event::PointerDown {
+                        window: WindowHandle(enter_state.surface),
+                        event_id: PointerEventID {
+                            serial,
+                            seat_ptr: pointer_state.seat_ptr,
+                        },
+                    });
+                }
+            }
         } else if state == wl::PointerButtonState::Released {
             self.event_dispatcher.dispatch(Event::PointerUp {
                 window: WindowHandle(enter_state.surface),
@@ -1339,6 +2168,7 @@ impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
 pub struct GlobalInterfaces {
     pub outputs: Vec<wl::Owned<wl::Output>>,
     pub compositor: wl::Owned<wl::Compositor>,
+    pub subcompositor: wl::Owned<wl::Subcompositor>,
     pub xdg_wm_base: wl::Owned<wl::XdgWmBase>,
     pub seat: wl::Owned<wl::Seat>,
     pub shm: wl::Owned<wl::Shm>,
@@ -1348,9 +2178,11 @@ pub struct GlobalInterfaces {
     pub single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
     pub kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     pub kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
+    pub kde_shadow_manager: Option<wl::Owned<wl::OrgKdeKwinShadowManager>>,
     pub zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
     pub cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     pub fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
+    pub alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
 }
 impl GlobalInterfaces {
     pub fn collect_sync(display: &wl::Display) -> std::io::Result<Self> {
@@ -1365,6 +2197,7 @@ impl GlobalInterfaces {
         Ok(Self {
             outputs: rl.outputs,
             compositor: rl.compositor.expect("no compositor"),
+            subcompositor: rl.subcompositor.expect("no subcompositor"),
             xdg_wm_base: rl.xdg_wm_base.expect("no xdg-shell"),
             seat: rl.seat.expect("no seat"),
             shm: rl.shm.expect("no shm"),
@@ -1373,9 +2206,11 @@ impl GlobalInterfaces {
             single_pixel_buffer_manager: rl.single_pixel_buffer_manager,
             kde_blur_manager: rl.kde_blur_manager,
             kde_appmenu_manager: rl.kde_appmenu_manager,
+            kde_shadow_manager: rl.kde_shadow_manager,
             zxdg_decoration_manager: rl.zxdg_decoration_manager,
             cursor_shape_manager: rl.cursor_shape_manager,
             fractional_scale_manager: rl.fractional_scale_manager,
+            alpha_modifier: rl.alpha_modifier,
         })
     }
 }
@@ -1383,6 +2218,7 @@ impl GlobalInterfaces {
 #[derive(Default)]
 struct RegistryListener {
     compositor: Option<wl::Owned<wl::Compositor>>,
+    subcompositor: Option<wl::Owned<wl::Subcompositor>>,
     outputs: Vec<wl::Owned<wl::Output>>,
     xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
     seat: Option<wl::Owned<wl::Seat>>,
@@ -1392,9 +2228,11 @@ struct RegistryListener {
     single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
     kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
+    kde_shadow_manager: Option<wl::Owned<wl::OrgKdeKwinShadowManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
+    alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
 }
 impl wl::RegistryListener for RegistryListener {
     fn global(
@@ -1408,57 +2246,97 @@ impl wl::RegistryListener for RegistryListener {
 
         if interface == c"wl_compositor" {
             self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
-        } else if interface == c"wl_output" {
+            return;
+        }
+        if interface == c"wl_subcompositor" {
+            self.subcompositor = Some(registry.bind(name, version).expect("bind subcompositor"));
+            return;
+        }
+        if interface == c"wl_output" {
             self.outputs
                 .push(registry.bind(name, version).expect("bind output"));
-        } else if interface == c"xdg_wm_base" {
+            return;
+        }
+        if interface == c"xdg_wm_base" {
             self.xdg_wm_base = Some(registry.bind(name, version).expect("bind xdg_wm_base"));
-        } else if interface == c"wl_seat" {
+            return;
+        }
+        if interface == c"wl_seat" {
             assert!(self.seat.is_none(), "multiple seat?");
             self.seat = Some(registry.bind(name, version).expect("bind seat"));
-        } else if interface == c"wl_shm" {
+            return;
+        }
+        if interface == c"wl_shm" {
             self.shm = Some(registry.bind(name, version).expect("bind shm"));
-        } else if interface == c"wp_viewporter" {
+            return;
+        }
+        if interface == c"wp_viewporter" {
             self.viewporter = Some(registry.bind(name, version).expect("bind viewporter"));
-        } else if interface == c"wp_single_pixel_buffer_manager_v1" {
+            return;
+        }
+        if interface == c"wp_single_pixel_buffer_manager_v1" {
             self.single_pixel_buffer_manager = Some(
                 registry
                     .bind(name, version)
                     .expect("bind single_pixel_buffer_manager"),
             );
-        } else if interface == c"org_kde_kwin_blur_manager" {
+            return;
+        }
+        if interface == c"org_kde_kwin_blur_manager" {
             self.kde_blur_manager =
                 Some(registry.bind(name, version).expect("bind kde_blur_manager"));
-        } else if interface == c"org_kde_kwin_appmenu_manager" {
+            return;
+        }
+        if interface == c"org_kde_kwin_appmenu_manager" {
             self.kde_appmenu_manager = Some(
                 registry
                     .bind(name, version)
                     .expect("bind kde_appmenu_manager"),
             );
-        } else if interface == c"zxdg_decoration_manager_v1" {
+            return;
+        }
+        if interface == c"org_kde_kwin_shadow_manager" {
+            self.kde_shadow_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind kde_shadow_manager"),
+            );
+            return;
+        }
+        if interface == c"zxdg_decoration_manager_v1" {
             self.zxdg_decoration_manager = Some(
                 registry
                     .bind(name, version)
                     .expect("bind zxdg_decoration_manager"),
             );
-        } else if interface == c"zwp_text_input_manager_v3" {
+            return;
+        }
+        if interface == c"zwp_text_input_manager_v3" {
             self.text_input_manager = Some(
                 registry
                     .bind(name, version)
                     .expect("bind text_input_manager"),
             );
-        } else if interface == c"wp_cursor_shape_manager_v1" {
+            return;
+        }
+        if interface == c"wp_cursor_shape_manager_v1" {
             self.cursor_shape_manager = Some(
                 registry
                     .bind(name, version)
                     .expect("bind cursor_shape_manager"),
             );
-        } else if interface == c"wp_fractional_scale_manager_v1" {
+            return;
+        }
+        if interface == c"wp_fractional_scale_manager_v1" {
             self.fractional_scale_manager = Some(
                 registry
                     .bind(name, version)
                     .expect("bind fractional_scale_manager"),
             );
+            return;
+        }
+        if interface == c"wp_alpha_modifier_v1" {
+            self.alpha_modifier = Some(registry.bind(name, version).expect("bind alpha_modifier"));
         }
     }
 

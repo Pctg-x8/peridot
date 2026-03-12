@@ -1630,6 +1630,7 @@ Ext!("fractional-scale-v1", fractional_scale);
 Ext!("cursor-shape-v1", cursor_shape);
 Ext!("content-type-v1", content_type);
 Ext!("single-pixel-buffer-v1", single_pixel_buffer);
+Ext!("alpha-modifier-v1", alpha_modifier);
 
 // unstable
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
@@ -1638,6 +1639,7 @@ Ext!("text-input-unstable-v3", text_input);
 Ext!("wlr-layer-shell-unstable-v1", layer_shell);
 Ext!("kde-blur", kde_blur);
 Ext!("kde-appmenu", kde_appmenu);
+Ext!("kde-shadow", kde_shadow);
 
 // external
 Ext!("gtk-shell", gtk_shell);

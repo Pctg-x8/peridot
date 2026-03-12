@@ -201,6 +201,57 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
 
     #[cfg(feature = "wayland")]
+    let popover_buf_shm_bytes = if wl_interfaces.single_pixel_buffer_manager.is_some() {
+        0
+    } else {
+        4
+    };
+    #[cfg(feature = "wayland")]
+    let window_decoration_pixbuf_offset = utils::rup2(
+        popover_buf_shm_bytes,
+        platform::unix::wayland::WindowDecorationPixbuf::REQUIRED_BYTE_ALIGNMENT,
+    );
+    #[cfg(feature = "wayland")]
+    let shm_total_byte_length = window_decoration_pixbuf_offset
+        + if platform::unix::wayland::Window::should_client_decoration(&wl_interfaces) {
+            platform::unix::wayland::WindowDecorationPixbuf::REQUIRED_BYTE_LENGTH
+        } else {
+            0
+        };
+    #[cfg(feature = "wayland")]
+    let shm_pair = if shm_total_byte_length > 0 {
+        let shm_region = utils::platform::unix::TemporalSharedMemory::new_unique(
+            c"/pme_shm",
+            libc::O_RDWR,
+            0o0600,
+        )
+        .expect("buf.shm.create")
+        .expect("buf.shm.create.non_unique");
+        unsafe {
+            utils::platform::unix::ftruncate(&shm_region, shm_total_byte_length as _)
+                .expect("buf.shm.resize");
+        }
+
+        let mapped = utils::platform::unix::MappedMemory::new(
+            None,
+            shm_total_byte_length,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            &shm_region,
+            0,
+        )
+        .expect("buf.mmap");
+
+        let shmp = wl_interfaces
+            .shm
+            .create_pool(&shm_region, shm_total_byte_length as _)
+            .expect("shmp.create.popup");
+
+        Some((shmp, shm_region, mapped))
+    } else {
+        None
+    };
+    #[cfg(feature = "wayland")]
     let popover_buf = if let Some(ref spb) = wl_interfaces.single_pixel_buffer_manager {
         let c = DragPreviewPopoverHandle::BG_COLOR.premultiplied();
         let b = spb
@@ -210,26 +261,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         platform::unix::wayland::DragPreviewPopoverBuffer::SinglePixel(b)
     } else {
         // traditional shm-based single pixel buffer
-        let shm_region = utils::platform::unix::TemporalSharedMemory::new_unique(
-            c"/pme_shm",
-            libc::O_RDWR,
-            0o0600,
-        )
-        .expect("buf.shm.create")
-        .expect("buf.shm.create.non_unique");
-        unsafe {
-            utils::platform::unix::ftruncate(&shm_region, 4).expect("buf.shm.resize");
-        }
+        let (shm, _, mapped) = shm_pair.as_ref().expect("no shm");
 
-        let mapped = utils::platform::unix::MappedMemory::new(
-            None,
-            4,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            &shm_region,
-            0,
-        )
-        .expect("buf.mmap");
+        let buf = shm
+            .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
+            .expect("buf.create.popup");
         unsafe {
             core::ptr::write(
                 mapped.as_ptr().cast::<u32>(),
@@ -239,21 +275,24 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             );
         }
 
-        let shmp = wl_interfaces
-            .shm
-            .create_pool(&shm_region, 4)
-            .expect("shmp.create.popup");
-        let buf = shmp
-            .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
-            .expect("buf.create.popup");
-
-        platform::unix::wayland::DragPreviewPopoverBuffer::Shm {
-            shm_region,
-            mapped,
-            shm_pool: shmp,
-            buf,
-        }
+        platform::unix::wayland::DragPreviewPopoverBuffer::Shm { buf }
     };
+    #[cfg(feature = "wayland")]
+    let window_decoration_pixbuf = core::pin::pin!(
+        if platform::unix::wayland::Window::should_client_decoration(&wl_interfaces) {
+            let (shm, _, mapped) = shm_pair.as_ref().expect("no shm");
+
+            platform::unix::wayland::WindowDecorationPixbuf::generate_content(unsafe {
+                mapped.as_ptr().byte_add(window_decoration_pixbuf_offset)
+            });
+            Some(platform::unix::wayland::WindowDecorationPixbuf::new(
+                shm,
+                window_decoration_pixbuf_offset,
+            ))
+        } else {
+            None
+        }
+    );
 
     #[cfg(feature = "wayland")]
     let drag_preview_popover = DragPreviewPopoverHandle {
@@ -294,6 +333,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         &wl_display,
         &wl_interfaces,
         &mut window_registry,
+        window_decoration_pixbuf.as_ref().get_ref().as_ref(),
         &dbus,
         &mut composite_tree,
         &mut ht_manager,
@@ -397,6 +437,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
                 },
                 window_registry: &mut window_registry,
+                decoration_pixbuf: window_decoration_pixbuf
+                    .as_ref()
+                    .get_ref()
+                    .as_ref()
+                    .map_or_else(core::ptr::null, |x| x as *const _)
             }
         }
     ));
