@@ -15,6 +15,8 @@ pub const VI_STATE_EMPTY: &br::PipelineVertexInputStateCreateInfo =
 
 pub const IA_STATE_TRILIST: &br::PipelineInputAssemblyStateCreateInfo =
     &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleList);
+pub const IA_STATE_TRISTRIP: &br::PipelineInputAssemblyStateCreateInfo =
+    &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleStrip);
 
 pub const RASTER_STATE_DEFAULT_FILL_NOCULL: &br::PipelineRasterizationStateCreateInfo =
     &br::PipelineRasterizationStateCreateInfo::new(
@@ -686,7 +688,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         )
         .present_mode(surface.unbound.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)
-        .composite_alpha(br::CompositeAlphaFlags::OPAQUE)
+        .composite_alpha(surface.unbound.selected_composite_alpha)
         .create(surface.device)
         .expect("swapchain create");
         let image_count = o.image_count().expect("swapchain.get_image_count");
@@ -767,7 +769,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         )
         .present_mode(surface.unbound.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)
-        .composite_alpha(br::CompositeAlphaFlags::OPAQUE)
+        .composite_alpha(surface.unbound.selected_composite_alpha)
         .enable_clip()
         .old_swapchain(br::VkHandleRef::from_raw_ref(&self.handle))
         .create(self.device)
@@ -824,6 +826,7 @@ pub struct UnboundVulkanSurface {
     pub handle: br::vk::VkSurfaceKHR,
     pub selected_format: br::SurfaceFormat,
     pub selected_present_mode: br::PresentMode,
+    pub selected_composite_alpha: br::CompositeAlphaFlags,
     pub caps: br::SurfaceCapabilities,
 }
 impl UnboundVulkanSurface {
@@ -860,6 +863,15 @@ impl UnboundVulkanSurface {
             .expect("vk.surface.refresh_caps");
         }
         self.caps = unsafe { sink.assume_init() };
+        self.selected_composite_alpha = if self
+            .caps
+            .supported_composite_alpha()
+            .has_all(br::CompositeAlphaFlags::PRE_MULTIPLIED)
+        {
+            br::CompositeAlphaFlags::PRE_MULTIPLIED
+        } else {
+            br::CompositeAlphaFlags::INHERIT
+        };
     }
 
     #[inline(always)]
@@ -984,6 +996,14 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
                     .find(|&&x| x == br::PresentMode::FIFO)
                     .copied()
                     .expect("no suitable present mode"),
+                selected_composite_alpha: if caps
+                    .supported_composite_alpha()
+                    .has_all(br::CompositeAlphaFlags::PRE_MULTIPLIED)
+                {
+                    br::CompositeAlphaFlags::PRE_MULTIPLIED
+                } else {
+                    br::CompositeAlphaFlags::INHERIT
+                },
                 caps,
             },
         }

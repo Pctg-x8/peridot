@@ -11,8 +11,9 @@ use bedrock::{
 use crate::{
     Event, RendererSync, SyncEventBus, WindowHandle,
     graphics::{
-        BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, RASTER_STATE_DEFAULT_FILL_NOCULL,
-        UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
+        BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP,
+        RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
+        VulkanSurface, VulkanSwapchain,
     },
     rendering::{
         atlas::{AtlasRect, TextureAtlas},
@@ -476,6 +477,7 @@ struct WindowRenderer<'d> {
     swapchain_invalidated: bool,
     composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
+    corner_cutout_renderer: Option<CornerCutoutRenderer<'d, 'd>>,
     last_composite_render_data: CompositeRenderingData,
     update_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
     update_cb: br::CommandBufferObject<&'d VulkanDevice<'d>>,
@@ -616,6 +618,23 @@ impl<'d> WindowRenderer<'d> {
             });
         }
 
+        let composite_renderer = BoundCompositeRenderer::new(
+            device,
+            glyph_atlas.view(),
+            surface.format(),
+            vk_swapchain.size(),
+            vk_swapchain.image_view_refs(),
+        );
+        let corner_cutout_renderer = if create_data.key.needs_corner_cutout_rendering() {
+            Some(CornerCutoutRenderer::new(
+                device,
+                composite_renderer.subpass_final(),
+                composite_renderer.subpass_continue_final(),
+            ))
+        } else {
+            None
+        };
+
         Self {
             #[cfg(windows)]
             w: create_data.key,
@@ -636,13 +655,8 @@ impl<'d> WindowRenderer<'d> {
             font_set,
             vk_device: device,
             composite_root: create_data.key.composite_root(),
-            composite_renderer: BoundCompositeRenderer::new(
-                device,
-                glyph_atlas.view(),
-                surface.format(),
-                vk_swapchain.size(),
-                vk_swapchain.image_view_refs(),
-            ),
+            composite_renderer,
+            corner_cutout_renderer,
             last_composite_render_data: CompositeRenderingData {
                 instructions: Vec::new(),
                 render_passes: Vec::new(),
@@ -873,6 +887,78 @@ impl<'d> WindowRenderer<'d> {
                     |_, r| r,
                 )
             })
+            .inject(|r| {
+                let Some(ref renderer) = self.corner_cutout_renderer else {
+                    // no corner cutout rendering required
+                    return r;
+                };
+
+                #[cfg(windows)]
+                let rt_pixel_size = self.w.pixels_client_size();
+                #[cfg(feature = "wayland")]
+                let rt_pixel_size = {
+                    unsafe { &(*self.committed_state) }
+                        .lock()
+                        .expect("poisoned")
+                        .active_size
+                };
+                #[cfg(target_os = "macos")]
+                let rt_pixel_size = *self.w.state().active_rt_size.lock().expect("poisoned");
+                #[cfg(windows)]
+                let rt_logical_size = self.w.client_size();
+                #[cfg(feature = "wayland")]
+                let rt_logical_size = {
+                    unsafe { &(*self.committed_state) }
+                        .lock()
+                        .expect("poisoned")
+                        .active_size_logical
+                };
+                #[cfg(target_os = "macos")]
+                let rt_logical_size = *self.w.state().active_rt_size.lock().expect("poisoned");
+
+                let r = if self
+                    .last_composite_render_data
+                    .render_passes
+                    .last()
+                    .is_some_and(|x| x.continued)
+                {
+                    // use continued pass
+                    r.bind_pipeline(br::PipelineBindPoint::Graphics, &renderer.pipeline_cont)
+                } else {
+                    r.bind_pipeline(br::PipelineBindPoint::Graphics, &renderer.pipeline)
+                };
+
+                r.set_viewport(
+                    0,
+                    &[br::Viewport {
+                        x: 0.0,
+                        y: 0.0,
+                        width: rt_pixel_size.width as _,
+                        height: rt_pixel_size.height as _,
+                        minDepth: 0.0,
+                        maxDepth: 1.0,
+                    }],
+                )
+                .set_scissor(
+                    0,
+                    &[br::Rect2D {
+                        offset: br::Offset2D::ZERO,
+                        extent: br::Extent2D {
+                            width: rt_pixel_size.width,
+                            height: rt_pixel_size.height,
+                        },
+                    }],
+                )
+                .push_constant(
+                    &renderer.pipeline_layout,
+                    br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                    0,
+                    &CornerCutoutPushConstants {
+                        screen_size: [rt_logical_size.width as _, rt_logical_size.height as _],
+                    },
+                )
+                .draw(4, 4, 0, 0)
+            })
             .inject(|r| self.vk_device.cmd_end_render_pass(r))
             .end()
             .expect("command buffer end");
@@ -1066,6 +1152,105 @@ impl<'d> GlyphAtlasManagerCommonResources<'d> {
             vec_tri_fill_shader_module,
             render_pass,
             pipeline_layout,
+        }
+    }
+}
+
+#[repr(C)]
+struct CornerCutoutPushConstants {
+    pub screen_size: [f32; 2],
+}
+
+struct CornerCutoutRenderer<'d, 'fs> {
+    shader: br::ShaderModuleObject<&'d VulkanDevice<'fs>>,
+    pipeline_layout: br::PipelineLayoutObject<&'d VulkanDevice<'fs>>,
+    pipeline: br::PipelineObject<&'d VulkanDevice<'fs>>,
+    pipeline_cont: br::PipelineObject<&'d VulkanDevice<'fs>>,
+}
+impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
+    fn new(
+        device: &'d VulkanDevice<'fs>,
+        rendered_pass: br::SubpassRef<impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized>,
+        rendered_pass_cont: br::SubpassRef<
+            impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized,
+        >,
+    ) -> Self {
+        let shader = device.require_shader("corner-cutout.spv");
+        let pipeline_layout = br::PipelineLayoutObject::new(
+            device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[],
+                &[
+                    br::PushConstantRange::for_type::<CornerCutoutPushConstants>(
+                        br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                        0,
+                    ),
+                ],
+            ),
+        )
+        .expect("pipeline_layout.create");
+        let blending = br::PipelineColorBlendStateCreateInfo::new(&[
+            br::vk::VkPipelineColorBlendAttachmentState {
+                blendEnable: true as _,
+                srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
+                dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
+                colorBlendOp: br::vk::VK_BLEND_OP_ADD,
+                srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE,
+                dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
+                alphaBlendOp: br::vk::VK_BLEND_OP_ADD,
+                colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                    | br::vk::VK_COLOR_COMPONENT_G_BIT
+                    | br::vk::VK_COLOR_COMPONENT_B_BIT
+                    | br::vk::VK_COLOR_COMPONENT_A_BIT,
+            },
+            // br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+        ]);
+        let [pipeline, pipeline_cont] = device
+            .create_graphics_pipelines_array(&[
+                br::GraphicsPipelineCreateInfo::new(
+                    &pipeline_layout,
+                    rendered_pass,
+                    &[
+                        shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRISTRIP,
+                    &br::PipelineViewportStateCreateInfo::new_dynamic(1),
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    &blending,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                .set_dynamic_state(&br::PipelineDynamicStateCreateInfo::new(&[
+                    br::vk::VK_DYNAMIC_STATE_VIEWPORT,
+                    br::vk::VK_DYNAMIC_STATE_SCISSOR,
+                ])),
+                br::GraphicsPipelineCreateInfo::new(
+                    &pipeline_layout,
+                    rendered_pass_cont,
+                    &[
+                        shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRISTRIP,
+                    &br::PipelineViewportStateCreateInfo::new_dynamic(1),
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    &blending,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                .set_dynamic_state(&br::PipelineDynamicStateCreateInfo::new(&[
+                    br::vk::VK_DYNAMIC_STATE_VIEWPORT,
+                    br::vk::VK_DYNAMIC_STATE_SCISSOR,
+                ])),
+            ])
+            .expect("pipeline.create");
+
+        Self {
+            shader,
+            pipeline_layout,
+            pipeline,
+            pipeline_cont,
         }
     }
 }

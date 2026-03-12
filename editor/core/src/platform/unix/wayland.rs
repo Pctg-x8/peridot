@@ -66,6 +66,15 @@ impl WindowHandle {
     }
 
     #[inline(always)]
+    pub fn needs_corner_cutout_rendering(&self) -> bool {
+        unsafe {
+            (*(*self.0).user_data().cast::<WindowEventListener>())
+                .decoration
+                .is_some()
+        }
+    }
+
+    #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
         self.state()
             .committed_state
