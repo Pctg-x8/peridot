@@ -94,11 +94,10 @@ impl WindowHandle {
     }
 
     pub fn begin_drag(&self, event_id: PointerEventID) {
-        unsafe {
-            (*self.state().xdg_toplevel_ptr)
-                .r#move(&*event_id.seat_ptr, event_id.serial)
-                .expect("xdg_toplevel.move");
-        }
+        self.state()
+            .xdg_toplevel
+            .r#move(unsafe { &*event_id.seat_ptr }, event_id.serial)
+            .expect("xdg_toplevel.move");
     }
 }
 impl crate::ShellPointerActions for WindowHandle {
@@ -131,7 +130,7 @@ pub struct DragPreviewPopoverHandle {
 }
 impl DragPreviewPopoverHandle {
     pub fn bind_parent_window(&self, window: WindowHandle) {
-        self.root_window.set(window.state().xdg_surface_ptr);
+        self.root_window.set(window.state().xdg_surface.as_ptr());
     }
 
     pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
@@ -444,8 +443,8 @@ enum SurfaceStateTag {
 
 pub struct WindowState {
     surface_ptr: *mut wl::Surface,
-    xdg_surface_ptr: *mut wl::XdgSurface,
-    xdg_toplevel_ptr: *mut wl::XdgToplevel,
+    xdg_surface: wl::Owned<wl::XdgSurface>,
+    xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     extra_data: *mut core::ffi::c_void,
@@ -474,9 +473,7 @@ struct SurfaceStateUntyped {
 
 pub struct Window {
     surface: wl::Owned<wl::Surface>,
-    xdg_surface: wl::Owned<wl::XdgSurface>,
-    xdg_toplevel: wl::Owned<wl::XdgToplevel>,
-    deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
+    _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
 }
 impl Drop for Window {
@@ -504,11 +501,11 @@ impl Window {
             .compositor
             .create_surface()
             .expect("wl_surface create");
-        let mut xdg_surface = wl_interfaces
+        let xdg_surface = wl_interfaces
             .xdg_wm_base
             .get_xdg_surface(&surface)
             .expect("xdg_surface create");
-        let mut xdg_toplevel = xdg_surface.get_toplevel().expect("xdg_toplevel create");
+        let xdg_toplevel = xdg_surface.get_toplevel().expect("xdg_toplevel create");
         xdg_toplevel
             .set_title(c"Peridot Marble Editor")
             .expect("xdg_toplevel.set_title");
@@ -572,13 +569,15 @@ impl Window {
             core::ptr::null_mut()
         };
 
+        let xdg_surface_ptr = xdg_surface.as_ptr();
+        let xdg_toplevel_ptr = xdg_toplevel.as_ptr();
         let mut event_listener = Box::new(WindowEventListener {
             state: SurfaceState {
                 tag: SurfaceStateTag::ToplevelWindow,
                 data: WindowState {
                     surface_ptr: surface.as_ptr(),
-                    xdg_surface_ptr: xdg_surface.as_ptr(),
-                    xdg_toplevel_ptr: xdg_toplevel.as_ptr(),
+                    xdg_surface,
+                    xdg_toplevel,
                     composite_root,
                     ht_root,
                     extra_data: core::ptr::null_mut(),
@@ -604,11 +603,11 @@ impl Window {
             .set_listener(event_listener.as_mut())
             .into_result()
             .expect("wl_surface set listener");
-        xdg_surface
+        unsafe { &mut *xdg_surface_ptr }
             .set_listener(event_listener.as_mut())
             .into_result()
             .expect("xdg_surface set listener");
-        xdg_toplevel
+        unsafe { &mut *xdg_toplevel_ptr }
             .set_listener(event_listener.as_mut())
             .into_result()
             .expect("xdg_toplevel set listener");
@@ -633,10 +632,8 @@ impl Window {
 
         Self {
             surface,
-            xdg_surface,
-            xdg_toplevel,
             _appmenu: appmenu,
-            deco,
+            _deco: deco,
         }
     }
 
@@ -872,16 +869,16 @@ impl WindowEventListener {
                 let pixels_size =
                     logical_size.to_pixels_ceil(committed_state_ref.active_buffer_scale);
                 if pixels_size != committed_state_ref.active_size {
-                    unsafe {
-                        (*self.state.data.xdg_surface_ptr)
-                            .set_window_geometry(
-                                0,
-                                0,
-                                logical_size.width as _,
-                                logical_size.height as _,
-                            )
-                            .expect("xdg_surface.set_window_geometry");
-                    }
+                    self.state
+                        .data
+                        .xdg_surface
+                        .set_window_geometry(
+                            0,
+                            0,
+                            logical_size.width as _,
+                            logical_size.height as _,
+                        )
+                        .expect("xdg_surface.set_window_geometry");
 
                     if let WindowScaling::Manual { ref viewport, .. } = self.scaling {
                         viewport
