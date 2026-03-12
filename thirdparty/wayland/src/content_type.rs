@@ -1,4 +1,4 @@
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static WP_CONTENT_TYPE_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface { name: c"wp_content_type_manager_v1".as_ptr(), version: 1, method_count: 2, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"get_surface_content_type".as_ptr(), signature: c"no".as_ptr(), types: const { [crate::WpContentTypeV1::DEF,crate::Surface::DEF,] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
@@ -11,7 +11,7 @@ unsafe impl Interface for WpContentTypeManagerV1 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for WpContentTypeManagerV1 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl WpContentTypeManagerV1 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -38,7 +38,7 @@ unsafe impl Interface for WpContentTypeV1 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for WpContentTypeV1 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl WpContentTypeV1 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }

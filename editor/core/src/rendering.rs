@@ -221,7 +221,7 @@ impl<'main> RenderThread<'main> {
 
                 let mut descriptor_writes = Vec::new();
                 for x in windows.values_mut() {
-                    x.validate_swapchain(&mut descriptor_writes);
+                    x.validate_swapchain(&mut descriptor_writes, self.event_bus);
                 }
                 self.vk_device
                     .update_descriptor_sets(&descriptor_writes, &[]);
@@ -761,6 +761,7 @@ impl<'d> WindowRenderer<'d> {
     pub fn validate_swapchain<'s>(
         &'s mut self,
         descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+        event_bus: &SyncEventBus,
     ) {
         if !self.swapchain_invalidated {
             // already valid
@@ -801,6 +802,7 @@ impl<'d> WindowRenderer<'d> {
             descriptor_writes,
         );
 
+        event_bus.push(Event::WindowPostResizeRenderBuffer { window: self.w });
         self.swapchain_invalidated = false;
     }
 

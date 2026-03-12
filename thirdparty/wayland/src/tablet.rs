@@ -78,7 +78,7 @@
 //! tool was used on are removed.
 //!   
 
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static ZWP_TABLET_MANAGER_V2_INTERFACE: ffi::Interface = ffi::Interface { name: c"zwp_tablet_manager_v2".as_ptr(), version: 2, method_count: 2, methods: const { [ffi::Message { name: c"get_tablet_seat".as_ptr(), signature: c"no".as_ptr(), types: const { [crate::ZwpTabletSeatV2::DEF,crate::Seat::DEF,] }.as_ptr() },ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
@@ -91,7 +91,7 @@ unsafe impl Interface for ZwpTabletManagerV2 {
         self.0.call_simple_dtor(1);
     }
 }
-
+impl ProxyObject for ZwpTabletManagerV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletManagerV2 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -113,7 +113,7 @@ unsafe impl Interface for ZwpTabletSeatV2 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZwpTabletSeatV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletSeatV2 {
     pub fn set_listener<'l, L: ZwpTabletSeatV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn tablet_added<L: ZwpTabletSeatV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,id: *mut ffi::Proxy,) { L::tablet_added(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { crate::Owned::from_untyped_unchecked(core::ptr::NonNull::new_unchecked(crate::Proxy::cast_ffi_ptr(id))) },) }
@@ -151,7 +151,7 @@ unsafe impl Interface for ZwpTabletToolV2 {
         self.0.call_simple_dtor(1);
     }
 }
-
+impl ProxyObject for ZwpTabletToolV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletToolV2 {
     pub fn set_listener<'l, L: ZwpTabletToolV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn r#type<L: ZwpTabletToolV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,tool_type: u32,) { L::r#type(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { core::mem::transmute(tool_type) },) }
@@ -290,7 +290,7 @@ unsafe impl Interface for ZwpTabletV2 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZwpTabletV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletV2 {
     pub fn set_listener<'l, L: ZwpTabletV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn name<L: ZwpTabletV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,name: *const core::ffi::c_char,) { L::name(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { core::ffi::CStr::from_ptr(name) },) }
@@ -349,7 +349,7 @@ unsafe impl Interface for ZwpTabletPadRingV2 {
         self.0.call_simple_dtor(1);
     }
 }
-
+impl ProxyObject for ZwpTabletPadRingV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletPadRingV2 {
     pub fn set_listener<'l, L: ZwpTabletPadRingV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn source<L: ZwpTabletPadRingV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,source: u32,) { L::source(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { core::mem::transmute(source) },) }
@@ -400,7 +400,7 @@ unsafe impl Interface for ZwpTabletPadStripV2 {
         self.0.call_simple_dtor(1);
     }
 }
-
+impl ProxyObject for ZwpTabletPadStripV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletPadStripV2 {
     pub fn set_listener<'l, L: ZwpTabletPadStripV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn source<L: ZwpTabletPadStripV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,source: u32,) { L::source(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { core::mem::transmute(source) },) }
@@ -451,7 +451,7 @@ unsafe impl Interface for ZwpTabletPadGroupV2 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZwpTabletPadGroupV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletPadGroupV2 {
     pub fn set_listener<'l, L: ZwpTabletPadGroupV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn buttons<L: ZwpTabletPadGroupV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,buttons: *mut ffi::Array,) { L::buttons(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { &mut *buttons },) }
@@ -505,7 +505,7 @@ unsafe impl Interface for ZwpTabletPadV2 {
         self.0.call_simple_dtor(1);
     }
 }
-
+impl ProxyObject for ZwpTabletPadV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletPadV2 {
     pub fn set_listener<'l, L: ZwpTabletPadV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn group<L: ZwpTabletPadV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,pad_group: *mut ffi::Proxy,) { L::group(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { crate::Owned::from_untyped_unchecked(core::ptr::NonNull::new_unchecked(crate::Proxy::cast_ffi_ptr(pad_group))) },) }
@@ -573,7 +573,7 @@ unsafe impl Interface for ZwpTabletPadDialV2 {
         self.0.call_simple_dtor(1);
     }
 }
-
+impl ProxyObject for ZwpTabletPadDialV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTabletPadDialV2 {
     pub fn set_listener<'l, L: ZwpTabletPadDialV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn delta<L: ZwpTabletPadDialV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,value120: i32,) { L::delta(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },value120,) }

@@ -1,4 +1,4 @@
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static ORG_KDE_KWIN_BLUR_MANAGER_INTERFACE: ffi::Interface = ffi::Interface { name: c"org_kde_kwin_blur_manager".as_ptr(), version: 1, method_count: 2, methods: const { [ffi::Message { name: c"create".as_ptr(), signature: c"no".as_ptr(), types: const { [crate::OrgKdeKwinBlur::DEF,crate::Surface::DEF,] }.as_ptr() },ffi::Message { name: c"unset".as_ptr(), signature: c"o".as_ptr(), types: const { [crate::Surface::DEF,] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
@@ -6,7 +6,7 @@ static ORG_KDE_KWIN_BLUR_MANAGER_INTERFACE: ffi::Interface = ffi::Interface { na
 unsafe impl Interface for OrgKdeKwinBlurManager {
     const DEF: *const ffi::Interface = &ORG_KDE_KWIN_BLUR_MANAGER_INTERFACE;
 }
-
+impl ProxyObject for OrgKdeKwinBlurManager { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl OrgKdeKwinBlurManager {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -32,7 +32,7 @@ unsafe impl Interface for OrgKdeKwinBlur {
         self.0.call_simple_dtor(2);
     }
 }
-
+impl ProxyObject for OrgKdeKwinBlur { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl OrgKdeKwinBlur {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }

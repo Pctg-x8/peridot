@@ -1,4 +1,4 @@
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static XDG_WM_BASE_INTERFACE: ffi::Interface = ffi::Interface { name: c"xdg_wm_base".as_ptr(), version: 7, method_count: 4, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"create_positioner".as_ptr(), signature: c"n".as_ptr(), types: const { [crate::XdgPositioner::DEF,] }.as_ptr() },ffi::Message { name: c"get_xdg_surface".as_ptr(), signature: c"no".as_ptr(), types: const { [crate::XdgSurface::DEF,crate::Surface::DEF,] }.as_ptr() },ffi::Message { name: c"pong".as_ptr(), signature: c"u".as_ptr(), types: const { [core::ptr::null(),] }.as_ptr() },] }.as_ptr(), event_count: 1, events: const { [ffi::Message { name: c"ping".as_ptr(), signature: c"u".as_ptr(), types: const { [core::ptr::null(),] }.as_ptr() },] }.as_ptr() };
 
@@ -11,7 +11,7 @@ unsafe impl Interface for XdgWmBase {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for XdgWmBase { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl XdgWmBase {
     pub fn set_listener<'l, L: XdgWmBaseEventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn ping<L: XdgWmBaseEventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,serial: u32,) { L::ping(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },serial,) }
@@ -64,7 +64,7 @@ unsafe impl Interface for XdgPositioner {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for XdgPositioner { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl XdgPositioner {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -160,7 +160,7 @@ unsafe impl Interface for XdgSurface {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for XdgSurface { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl XdgSurface {
     pub fn set_listener<'l, L: XdgSurfaceEventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn configure<L: XdgSurfaceEventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,serial: u32,) { L::configure(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },serial,) }
@@ -216,7 +216,7 @@ unsafe impl Interface for XdgToplevel {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for XdgToplevel { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl XdgToplevel {
     pub fn set_listener<'l, L: XdgToplevelEventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn configure<L: XdgToplevelEventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,width: i32,height: i32,states: *mut ffi::Array,) { L::configure(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },width,height,unsafe { &mut *states },) }
@@ -355,7 +355,7 @@ unsafe impl Interface for XdgPopup {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for XdgPopup { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl XdgPopup {
     pub fn set_listener<'l, L: XdgPopupEventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn configure<L: XdgPopupEventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,x: i32,y: i32,width: i32,height: i32,) { L::configure(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },x,y,width,height,) }

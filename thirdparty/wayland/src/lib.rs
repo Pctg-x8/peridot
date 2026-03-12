@@ -64,6 +64,11 @@ impl Proxy {
     }
 
     #[inline(always)]
+    pub fn id(&self) -> u32 {
+        unsafe { ffi::wl_proxy_get_id(self.0.get()) }
+    }
+
+    #[inline(always)]
     pub fn version(&self) -> u32 {
         unsafe { ffi::wl_proxy_get_version(self.0.get()) }
     }
@@ -184,6 +189,15 @@ impl Proxy {
         }
         #[cfg(not(feature = "tracing"))]
         let _ = self.marshal_array_flags_void(opcode, ffi::MARSHAL_FLAG_DESTROY, &mut []);
+    }
+}
+
+pub trait ProxyObject {
+    fn as_proxy(&self) -> &Proxy;
+
+    #[inline(always)]
+    fn id(&self) -> u32 {
+        self.as_proxy().id()
     }
 }
 

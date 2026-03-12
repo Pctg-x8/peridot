@@ -17,7 +17,7 @@
 //! interface version number is reset.
 //!   
 
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static ZWP_TEXT_INPUT_V3_INTERFACE: ffi::Interface = ffi::Interface { name: c"zwp_text_input_v3".as_ptr(), version: 1, method_count: 8, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"enable".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"disable".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"set_surrounding_text".as_ptr(), signature: c"sii".as_ptr(), types: const { [core::ptr::null(),core::ptr::null(),core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"set_text_change_cause".as_ptr(), signature: c"u".as_ptr(), types: const { [core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"set_content_type".as_ptr(), signature: c"uu".as_ptr(), types: const { [core::ptr::null(),core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"set_cursor_rectangle".as_ptr(), signature: c"iiii".as_ptr(), types: const { [core::ptr::null(),core::ptr::null(),core::ptr::null(),core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"commit".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },] }.as_ptr(), event_count: 6, events: const { [ffi::Message { name: c"enter".as_ptr(), signature: c"o".as_ptr(), types: const { [crate::Surface::DEF,] }.as_ptr() },ffi::Message { name: c"leave".as_ptr(), signature: c"o".as_ptr(), types: const { [crate::Surface::DEF,] }.as_ptr() },ffi::Message { name: c"preedit_string".as_ptr(), signature: c"?sii".as_ptr(), types: const { [core::ptr::null(),core::ptr::null(),core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"commit_string".as_ptr(), signature: c"?s".as_ptr(), types: const { [core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"delete_surrounding_text".as_ptr(), signature: c"uu".as_ptr(), types: const { [core::ptr::null(),core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"done".as_ptr(), signature: c"u".as_ptr(), types: const { [core::ptr::null(),] }.as_ptr() },] }.as_ptr() };
 
@@ -30,7 +30,7 @@ unsafe impl Interface for ZwpTextInputV3 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZwpTextInputV3 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTextInputV3 {
     pub fn set_listener<'l, L: ZwpTextInputV3EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn enter<L: ZwpTextInputV3EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,surface: *mut ffi::Proxy,) { L::enter(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { surface.cast::<crate::Surface>().as_mut() },) }
@@ -147,7 +147,7 @@ unsafe impl Interface for ZwpTextInputManagerV3 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZwpTextInputManagerV3 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwpTextInputManagerV3 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }

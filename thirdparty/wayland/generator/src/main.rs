@@ -251,7 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("");
     }
 
-    println!("use crate::{{ffi, Proxy, Interface}};");
+    println!("use crate::{{ffi, Proxy, ProxyObject, Interface}};");
     println!("");
 
     for x in proto.interfaces.iter() {
@@ -672,7 +672,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    }}");
         }
         println!("}}");
-        println!("");
+        println!(
+            "impl ProxyObject for {type_name} {{ #[inline(always)] fn as_proxy(&self) -> &Proxy {{ &self.0 }} }}"
+        );
         println!("impl {type_name} {{");
         if !listener_fn_table_member_defs.is_empty() {
             println!(

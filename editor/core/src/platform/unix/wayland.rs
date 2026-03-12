@@ -6,7 +6,7 @@ use std::{
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use peridot_tp_dbus as dbus;
-use peridot_tp_wayland as wl;
+use peridot_tp_wayland::{self as wl, ProxyObject};
 use peridot_tp_xkbcommon as xkbcommon;
 
 use crate::{
@@ -32,6 +32,11 @@ pub struct WindowHandle(*mut wl::Surface);
 unsafe impl Send for WindowHandle {}
 unsafe impl Sync for WindowHandle {}
 impl WindowHandle {
+    #[inline(always)]
+    fn event_listener(&self) -> &WindowEventListener {
+        unsafe { &*(*self.0).user_data().cast::<WindowEventListener>() }
+    }
+
     #[inline(always)]
     pub fn state(&self) -> &WindowState {
         unsafe { &(*(*self.0).user_data().cast::<SurfaceState<WindowState>>()).data }
@@ -116,6 +121,27 @@ impl WindowHandle {
             .xdg_toplevel
             .r#move(unsafe { &*event_id.seat_ptr }, event_id.serial)
             .expect("xdg_toplevel.move");
+    }
+
+    pub fn update_manual_scaling(&self) {
+        let el = self.event_listener();
+        if let WindowScaling::Manual { ref viewport, .. } = el.scaling {
+            let committed_state = el.state.data.committed_state.lock().expect("poisoned");
+            viewport
+                .set_source(
+                    wl::Fixed::from_f32_lossy(0.0),
+                    wl::Fixed::from_f32_lossy(0.0),
+                    wl::Fixed::from_f32_lossy(committed_state.active_size.width as _),
+                    wl::Fixed::from_f32_lossy(committed_state.active_size.height as _),
+                )
+                .expect("viewport.set_source");
+            viewport
+                .set_destination(
+                    committed_state.active_size_logical.width as _,
+                    committed_state.active_size_logical.height as _,
+                )
+                .expect("viewport.set_destination");
+        }
     }
 }
 impl crate::ShellPointerActions for WindowHandle {
@@ -898,20 +924,6 @@ impl WindowEventListener {
                         )
                         .expect("xdg_surface.set_window_geometry");
 
-                    if let WindowScaling::Manual { ref viewport, .. } = self.scaling {
-                        viewport
-                            .set_source(
-                                wl::Fixed::from_f32_lossy(0.0),
-                                wl::Fixed::from_f32_lossy(0.0),
-                                wl::Fixed::from_f32_lossy(pixels_size.width as _),
-                                wl::Fixed::from_f32_lossy(pixels_size.height as _),
-                            )
-                            .expect("viewport.set_source");
-                        viewport
-                            .set_destination(logical_size.width as _, logical_size.height as _)
-                            .expect("viewport.set_destination");
-                    }
-
                     if let Some(ref d) = self.decoration {
                         d.adjust_for_frame(logical_size.width as _, logical_size.height as _);
                         d.commit_all();
@@ -1273,6 +1285,13 @@ impl WindowDecoration {
         let lb = WindowDecorationCornerSurface::new(wl_interfaces, parent_surface);
         let rb = WindowDecorationCornerSurface::new(wl_interfaces, parent_surface);
 
+        tracing::debug!(
+            left = left.viewport.id(),
+            right = right.viewport.id(),
+            top = top.viewport.id(),
+            bottom = bottom.viewport.id()
+        );
+
         // attach appropriate buffer
         left.surface
             .attach(Some(&pixbuf.buffer_edge), 0, 0)
@@ -1319,12 +1338,31 @@ impl WindowDecoration {
                 wl::Fixed::from_f32_lossy(1.0),
             )
             .expect("viewport.set_source");
+        // TODO: Hyprlandの検証ロジックとひっかかる箇所(Hyprland側がちがう 本来はtransform後の座標系を指定するはずなので)
+        // ただHyprlandでは不要なやつなのでコンポジタを判定して無効化する必要がある
+        // top.viewport
+        //     .set_source(
+        //         wl::Fixed::from_f32_lossy(0.0),
+        //         wl::Fixed::from_f32_lossy(0.0),
+        //         wl::Fixed::from_f32_lossy(1.0),
+        //         wl::Fixed::from_f32_lossy(Self::SIZE as _),
+        //     )
+        //     .expect("viewport.set_source");
+        // bottom
+        //     .viewport
+        //     .set_source(
+        //         wl::Fixed::from_f32_lossy(0.0),
+        //         wl::Fixed::from_f32_lossy(0.0),
+        //         wl::Fixed::from_f32_lossy(1.0),
+        //         wl::Fixed::from_f32_lossy(Self::SIZE as _),
+        //     )
+        //     .expect("viewport.set_source");
         top.viewport
             .set_source(
                 wl::Fixed::from_f32_lossy(0.0),
                 wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(1.0),
                 wl::Fixed::from_f32_lossy(Self::SIZE as _),
+                wl::Fixed::from_f32_lossy(1.0),
             )
             .expect("viewport.set_source");
         bottom
@@ -1332,8 +1370,8 @@ impl WindowDecoration {
             .set_source(
                 wl::Fixed::from_f32_lossy(0.0),
                 wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(1.0),
                 wl::Fixed::from_f32_lossy(Self::SIZE as _),
+                wl::Fixed::from_f32_lossy(1.0),
             )
             .expect("viewport.set_source");
 
@@ -1543,7 +1581,10 @@ impl WindowDecoration {
         Box::into_pin(this)
     }
 
+    #[tracing::instrument(skip(self))]
     fn adjust_for_frame(&self, parent_width: i32, parent_height: i32) {
+        tracing::debug!("adjust_for_frame");
+
         // positioning
         let rp = parent_width - Self::INSET as i32;
         let bp = parent_height - Self::INSET as i32;

@@ -12,7 +12,7 @@
 //! only be done by creating a new major version of the extension.
 //!   
 
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static WP_SINGLE_PIXEL_BUFFER_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface { name: c"wp_single_pixel_buffer_manager_v1".as_ptr(), version: 1, method_count: 2, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"create_u32_rgba_buffer".as_ptr(), signature: c"nuuuu".as_ptr(), types: const { [crate::Buffer::DEF,core::ptr::null(),core::ptr::null(),core::ptr::null(),core::ptr::null(),] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
@@ -25,7 +25,7 @@ unsafe impl Interface for WpSinglePixelBufferManagerV1 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for WpSinglePixelBufferManagerV1 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl WpSinglePixelBufferManagerV1 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }

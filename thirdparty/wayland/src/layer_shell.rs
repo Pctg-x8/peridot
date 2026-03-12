@@ -1,4 +1,4 @@
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static ZWLR_LAYER_SHELL_V1_INTERFACE: ffi::Interface = ffi::Interface { name: c"zwlr_layer_shell_v1".as_ptr(), version: 4, method_count: 2, methods: const { [ffi::Message { name: c"get_layer_surface".as_ptr(), signature: c"no?ous".as_ptr(), types: const { [crate::ZwlrLayerSurfaceV1::DEF,crate::Surface::DEF,crate::Output::DEF,core::ptr::null(),core::ptr::null(),] }.as_ptr() },ffi::Message { name: c"destroy".as_ptr(), signature: c"3".as_ptr(), types: const { [] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
@@ -13,7 +13,7 @@ unsafe impl Interface for ZwlrLayerShellV1 {
         self.0.call_simple_dtor(1);
     }
 }
-
+impl ProxyObject for ZwlrLayerShellV1 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwlrLayerShellV1 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -50,7 +50,7 @@ unsafe impl Interface for ZwlrLayerSurfaceV1 {
         self.0.call_simple_dtor(7);
     }
 }
-
+impl ProxyObject for ZwlrLayerSurfaceV1 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZwlrLayerSurfaceV1 {
     pub fn set_listener<'l, L: ZwlrLayerSurfaceV1EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn configure<L: ZwlrLayerSurfaceV1EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,serial: u32,width: u32,height: u32,) { L::configure(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },serial,width,height,) }

@@ -128,6 +128,7 @@ unsafe extern "C" {
     pub fn wl_proxy_get_display(proxy: *mut Proxy) -> *mut Display;
     pub fn wl_proxy_set_user_data(proxy: *mut Proxy, user_data: *mut core::ffi::c_void);
     pub fn wl_proxy_get_user_data(proxy: *mut Proxy) -> *mut core::ffi::c_void;
+    pub fn wl_proxy_get_id(proxy: *mut Proxy) -> u32;
 
     pub fn wl_display_connect(name: *const core::ffi::c_char) -> *mut Display;
     pub fn wl_display_disconnect(name: *mut Display);

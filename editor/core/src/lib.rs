@@ -816,6 +816,9 @@ pub enum Event {
         window: WindowHandle,
         size: Size<PointerInputUnit>,
     },
+    WindowPostResizeRenderBuffer {
+        window: WindowHandle,
+    },
     WindowRescaleUI {
         window: WindowHandle,
         new_scale: f32,
@@ -2612,6 +2615,10 @@ async fn run<'sys>(
             }
             Event::WindowResize { window, size } => {
                 pointer_input_manager.set_client_size(window, size);
+            }
+            Event::WindowPostResizeRenderBuffer { window } => {
+                #[cfg(feature = "wayland")]
+                window.update_manual_scaling();
             }
             Event::WindowRescaleUI { window, new_scale } => {
                 unsafe {

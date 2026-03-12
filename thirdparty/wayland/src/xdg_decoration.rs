@@ -1,4 +1,4 @@
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static ZXDG_DECORATION_MANAGER_V1_INTERFACE: ffi::Interface = ffi::Interface { name: c"zxdg_decoration_manager_v1".as_ptr(), version: 1, method_count: 2, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"get_toplevel_decoration".as_ptr(), signature: c"no".as_ptr(), types: const { [crate::ZxdgToplevelDecorationV1::DEF,crate::XdgToplevel::DEF,] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
@@ -11,7 +11,7 @@ unsafe impl Interface for ZxdgDecorationManagerV1 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZxdgDecorationManagerV1 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZxdgDecorationManagerV1 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -33,7 +33,7 @@ unsafe impl Interface for ZxdgToplevelDecorationV1 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZxdgToplevelDecorationV1 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZxdgToplevelDecorationV1 {
     pub fn set_listener<'l, L: ZxdgToplevelDecorationV1EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn configure<L: ZxdgToplevelDecorationV1EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,mode: u32,) { L::configure(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { core::mem::transmute(mode) },) }

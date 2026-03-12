@@ -31,7 +31,7 @@
 //! reset.
 //!   
 
-use crate::{ffi, Proxy, Interface};
+use crate::{ffi, Proxy, ProxyObject, Interface};
 
 static ZXDG_EXPORTER_V2_INTERFACE: ffi::Interface = ffi::Interface { name: c"zxdg_exporter_v2".as_ptr(), version: 1, method_count: 2, methods: const { [ffi::Message { name: c"destroy".as_ptr(), signature: c"".as_ptr(), types: const { [] }.as_ptr() },ffi::Message { name: c"export_toplevel".as_ptr(), signature: c"no".as_ptr(), types: const { [crate::ZxdgExportedV2::DEF,crate::Surface::DEF,] }.as_ptr() },] }.as_ptr(), event_count: 0, events: const { [] }.as_ptr() };
 
@@ -44,7 +44,7 @@ unsafe impl Interface for ZxdgExporterV2 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZxdgExporterV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZxdgExporterV2 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -71,7 +71,7 @@ unsafe impl Interface for ZxdgImporterV2 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZxdgImporterV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZxdgImporterV2 {
     #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) { unsafe { self.0.set_user_data(user_data); } }
     #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void { unsafe { self.0.user_data() } }
@@ -93,7 +93,7 @@ unsafe impl Interface for ZxdgExportedV2 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZxdgExportedV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZxdgExportedV2 {
     pub fn set_listener<'l, L: ZxdgExportedV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn handle<L: ZxdgExportedV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,handle: *const core::ffi::c_char,) { L::handle(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },unsafe { core::ffi::CStr::from_ptr(handle) },) }
@@ -123,7 +123,7 @@ unsafe impl Interface for ZxdgImportedV2 {
         self.0.call_simple_dtor(0);
     }
 }
-
+impl ProxyObject for ZxdgImportedV2 { #[inline(always)] fn as_proxy(&self) -> &Proxy { &self.0 } }
 impl ZxdgImportedV2 {
     pub fn set_listener<'l, L: ZxdgImportedV2EventListener + 'l>(&'l mut self, listener: &'l mut L) -> crate::SetListenerResult {
         extern "C" fn destroyed<L: ZxdgImportedV2EventListener>(data0: *mut core::ffi::c_void, sender0: *mut ffi::Proxy,) { L::destroyed(unsafe { &mut *(data0 as *mut _) }, unsafe { &mut *(sender0 as *mut _) },) }
