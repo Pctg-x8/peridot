@@ -13,9 +13,9 @@ use peridot_tp_xkbcommon as xkbcommon;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(feature = "wayland")]
-use std::{collections::HashMap, sync::RwLock};
+use std::sync::RwLock;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
@@ -736,22 +736,50 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }
 
         #[cfg(windows)]
+        let handles = [events.event_notify];
+        #[cfg(windows)]
         let mut msg = core::mem::MaybeUninit::uninit();
         #[cfg(windows)]
         'app: loop {
-            match unsafe { GetMessageW(msg.as_mut_ptr(), None, 0, 0) } {
-                windows_core::BOOL(0) => break 'app,
-                windows_core::BOOL(-1) => {
-                    panic!(
-                        "unrecoverable GetMessageW error: {}",
-                        std::io::Error::last_os_error()
-                    );
+            let r = unsafe {
+                windows::Win32::UI::WindowsAndMessaging::MsgWaitForMultipleObjectsEx(
+                    Some(&handles),
+                    windows::Win32::System::Threading::INFINITE,
+                    windows::Win32::UI::WindowsAndMessaging::QS_ALLEVENTS,
+                    windows::Win32::UI::WindowsAndMessaging::MWMO_INPUTAVAILABLE,
+                )
+            };
+
+            if r == windows::Win32::Foundation::WAIT_OBJECT_0 {
+                events.redispatch(&app_event_dispatcher);
+            } else if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
+                while unsafe {
+                    windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
+                        msg.as_mut_ptr(),
+                        None,
+                        0,
+                        0,
+                        windows::Win32::UI::WindowsAndMessaging::PM_REMOVE,
+                    )
+                    .as_bool()
+                } {
+                    let msg = unsafe { msg.assume_init_ref() };
+                    if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
+                        break 'app;
+                    }
+
+                    unsafe {
+                        let _ = TranslateMessage(msg);
+                        DispatchMessageW(msg);
+                    }
                 }
-                _ => unsafe {
-                    let msg = msg.assume_init_ref();
-                    let _ = TranslateMessage(msg);
-                    DispatchMessageW(msg);
-                },
+            } else if r == windows::Win32::Foundation::WAIT_FAILED {
+                panic!(
+                    "unrecoverable MsgWaitForMultipleObjectsEx error: {}",
+                    std::io::Error::last_os_error()
+                );
+            } else {
+                tracing::warn!(?r, "unhandled mwmo result");
             }
         }
 
@@ -2118,7 +2146,7 @@ impl OverlayPopupBasicFrameView {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PopupID(uuid::Uuid);
 
 pub trait Popup {

@@ -171,6 +171,18 @@ impl WindowHandle {
     pub fn ht_root(&self) -> HitTestTreeRef {
         self.state().ht_root
     }
+
+    #[inline(always)]
+    pub const fn needs_system_command_buttons(&self) -> bool {
+        // Windowsは常にtrue
+        true
+    }
+
+    #[inline(always)]
+    pub const fn needs_corner_cutout_rendering(&self) -> bool {
+        // Windowsは常に不要
+        false
+    }
 }
 impl ShellPointerActions for WindowHandle {
     #[inline(always)]
@@ -1156,6 +1168,11 @@ impl SystemLink<'_> {
         unsafe {
             let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
         }
+    }
+
+    #[inline(always)]
+    pub fn dispatch_event(&self, event: Event) {
+        unsafe { &*self.event_dispatcher }.dispatch(event);
     }
 
     #[inline(always)]
