@@ -1,7 +1,7 @@
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use windows::{
     Foundation::TypedEventHandler,
-    System::{DispatcherQueue, DispatcherQueueController},
+    System::DispatcherQueueController,
     UI::{
         Composition::{
             CompositionEffectSourceParameter, Compositor, Desktop::DesktopWindowTarget,

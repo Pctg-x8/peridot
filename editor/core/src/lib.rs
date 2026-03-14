@@ -55,6 +55,7 @@ mod input;
 mod platform;
 mod proto;
 mod rendering;
+mod ui;
 mod utils;
 
 static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
@@ -878,746 +879,6 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
-enum WindowCaption {
-    Main { project_name: String },
-    Sub,
-}
-
-struct WindowHeaderView {
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    command_buttons: Option<[SystemCommandButtonView; 3]>,
-}
-impl WindowHeaderView {
-    #[cfg(target_os = "macos")]
-    const THICKNESS: f32 = 32.0;
-    #[cfg(not(target_os = "macos"))]
-    const THICKNESS: f32 = 24.0;
-
-    pub fn new(
-        init_caption: WindowCaption,
-        composite_tree: &mut CompositeTree<Event>,
-        ht_manager: &mut HitTestTreeManager,
-        texture_id_set: &SystemCommandTextureIDSet,
-        init_scale: f32,
-        needs_system_command_buttons: bool,
-    ) -> Self {
-        let ct_root = composite_tree.create(CompositeRect {
-            has_bitmap: true,
-            base_scale_factor: init_scale,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                1.0, 1.0, 1.0, 0.125,
-            ])),
-            relative_size_adjustment: [1.0, 0.0],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(Self::THICKNESS),
-            ],
-            text: match init_caption {
-                WindowCaption::Main { project_name } => Some(CompositeRectText {
-                    runs: vec![
-                        CompositeRectTextRun {
-                            font_id: FontID::UIDefault,
-                            content: "Peridot Marble Editor".into(),
-                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                            ..Default::default()
-                        },
-                        CompositeRectTextRun {
-                            font_id: FontID::UITitleProjectName,
-                            content: project_name,
-                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                            spacing_inline_start: 4.0,
-                            ..Default::default()
-                        },
-                    ],
-                    horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                    vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                    ..Default::default()
-                }),
-                WindowCaption::Sub => Some(CompositeRectText {
-                    runs: vec![CompositeRectTextRun {
-                        font_id: FontID::UIDefault,
-                        content: "EditorWindow".into(),
-                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                        ..Default::default()
-                    }],
-                    horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                    vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                    ..Default::default()
-                }),
-            },
-            ..Default::default()
-        });
-        let ht_root = ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height: Self::THICKNESS,
-            role: Some(crate::input::hittest::Role::TitleBar),
-            ..Default::default()
-        });
-        let command_buttons = if needs_system_command_buttons {
-            let views = [
-                SystemCommandButtonView::new(
-                    init_scale,
-                    composite_tree,
-                    ht_manager,
-                    texture_id_set,
-                    0.0,
-                    SystemCommand::Close,
-                ),
-                SystemCommandButtonView::new(
-                    init_scale,
-                    composite_tree,
-                    ht_manager,
-                    texture_id_set,
-                    SystemCommandButtonView::WIDTH,
-                    SystemCommand::Maximize,
-                ),
-                SystemCommandButtonView::new(
-                    init_scale,
-                    composite_tree,
-                    ht_manager,
-                    texture_id_set,
-                    SystemCommandButtonView::WIDTH * 2.0,
-                    SystemCommand::Minimize,
-                ),
-            ];
-
-            views[0].mount(composite_tree, ht_manager, ct_root, ht_root);
-            views[1].mount(composite_tree, ht_manager, ct_root, ht_root);
-            views[2].mount(composite_tree, ht_manager, ct_root, ht_root);
-
-            Some(views)
-        } else {
-            None
-        };
-
-        Self {
-            ct_root,
-            ht_root,
-            command_buttons,
-        }
-    }
-
-    pub fn mount(
-        &self,
-        ct_parent: CompositeTreeRef,
-        ht_parent: HitTestTreeRef,
-        composite_tree: &mut CompositeTree<Event>,
-        ht_manager: &mut HitTestTreeManager<'_>,
-    ) {
-        composite_tree.add_child(ct_parent, self.ct_root);
-        ht_manager.add_child(ht_parent, self.ht_root);
-    }
-
-    pub fn rescale(
-        &self,
-        scale_factor: f32,
-        composite_tree: &mut CompositeTree<Event>,
-        texture_id_set: &SystemCommandTextureIDSet,
-    ) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = scale_factor;
-        composite_tree.mark_dirty_all(self.ct_root);
-        if let Some(ref xs) = self.command_buttons {
-            for c in xs {
-                c.rescale(composite_tree, texture_id_set, scale_factor);
-            }
-        }
-    }
-
-    pub fn set_maximize_state(
-        &self,
-        is_maximized: bool,
-        composite_tree: &mut CompositeTree<Event>,
-        ht_manager: &mut HitTestTreeManager<'_>,
-        texture_id_set: &SystemCommandTextureIDSet,
-    ) {
-        if let Some(ref xs) = self.command_buttons {
-            xs[1].replace_cmd(
-                composite_tree,
-                ht_manager,
-                texture_id_set,
-                if is_maximized {
-                    SystemCommand::Restore
-                } else {
-                    SystemCommand::Maximize
-                },
-            );
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SystemCommand {
-    Close,
-    Minimize,
-    Maximize,
-    Restore,
-}
-impl SystemCommand {
-    #[inline(always)]
-    const fn role(&self) -> Option<input::hittest::Role> {
-        match self {
-            Self::Close => Some(input::hittest::Role::CloseButton),
-            Self::Maximize => Some(input::hittest::Role::MaximizeButton),
-            Self::Minimize => Some(input::hittest::Role::MinimizeButton),
-            Self::Restore => Some(input::hittest::Role::RestoreButton),
-        }
-    }
-}
-
-struct SystemCommandTextureIDSet {
-    pub close: usize,
-    pub minimize: usize,
-    pub maximize: usize,
-    pub restore: usize,
-}
-impl SystemCommandTextureIDSet {
-    pub fn new(
-        tid_issuer: &mut MainThreadTextureIDIssuer,
-        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
-    ) -> Self {
-        let close = tid_issuer.issue();
-        rt_sender
-            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: close,
-                vertices: SystemCommandButtonView::CLOSE_ICON_VERTICES,
-                indices: SystemCommandButtonView::CLOSE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
-            })
-            .expect("rt_sender.send");
-        let minimize = tid_issuer.issue();
-        rt_sender
-            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: minimize,
-                vertices: SystemCommandButtonView::MINIMIZE_ICON_VERTICES,
-                indices: SystemCommandButtonView::MINIMIZE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
-            })
-            .expect("rt_sender.send");
-        let maximize = tid_issuer.issue();
-        rt_sender
-            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: maximize,
-                vertices: SystemCommandButtonView::MAXIMIZE_ICON_VERTICES,
-                indices: SystemCommandButtonView::MAXIMIZE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
-            })
-            .expect("rt_sender.send");
-        let restore = tid_issuer.issue();
-        rt_sender
-            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: restore,
-                vertices: SystemCommandButtonView::RESTORE_ICON_VERTICES,
-                indices: SystemCommandButtonView::RESTORE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
-            })
-            .expect("rt_sender.send");
-
-        Self {
-            close,
-            minimize,
-            maximize,
-            restore,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn select(&self, cmd: SystemCommand) -> usize {
-        match cmd {
-            SystemCommand::Close => self.close,
-            SystemCommand::Minimize => self.minimize,
-            SystemCommand::Maximize => self.maximize,
-            SystemCommand::Restore => self.restore,
-        }
-    }
-}
-
-struct SystemCommandButtonActionHandler {
-    ct_hover: CompositeTreeRef,
-    cmd: core::cell::Cell<SystemCommand>,
-    hovering: core::cell::Cell<bool>,
-    pressing: core::cell::Cell<bool>,
-    is_dirty: core::cell::Cell<bool>,
-}
-impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
-    fn on_pointer_enter(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
-        _args: &PointerActionArgs,
-    ) -> input::EventContinueControl {
-        self.hovering.set(true);
-        self.is_dirty.set(true);
-        self.update(context.composite_tree, context.current_sec);
-
-        input::EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_leave(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
-        _args: &PointerActionArgs,
-    ) -> input::EventContinueControl {
-        self.hovering.set(false);
-        self.pressing.set(false);
-        self.is_dirty.set(true);
-        self.update(context.composite_tree, context.current_sec);
-
-        input::EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_down(
-        &self,
-        _sender: HitTestTreeRef,
-        _context: &mut HitTestEventContext,
-        _args: &PointerActionArgs,
-    ) -> input::EventContinueControl {
-        input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
-    }
-
-    fn on_pointer_up(
-        &self,
-        _sender: HitTestTreeRef,
-        _context: &mut HitTestEventContext,
-        _args: &PointerActionArgs,
-    ) -> input::EventContinueControl {
-        input::EventContinueControl::STOP_PROPAGATION
-            | input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
-    }
-
-    fn on_click(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
-        _args: &PointerActionArgs,
-    ) -> input::EventContinueControl {
-        tracing::debug!(cmd = ?self.cmd.get(), "syscmd click");
-
-        // TODO: perform works
-        match self.cmd.get() {
-            SystemCommand::Close => context.sender_window.on_click_sys_close_button(),
-            SystemCommand::Minimize => context.sender_window.on_click_sys_minimize_button(),
-            SystemCommand::Maximize => context.sender_window.on_click_sys_maximize_button(),
-            SystemCommand::Restore => context.sender_window.on_click_sys_restore_button(),
-        }
-
-        input::EventContinueControl::STOP_PROPAGATION
-    }
-}
-impl SystemCommandButtonActionHandler {
-    fn update(&self, ct: &mut CompositeTree<Event>, current_sec: f32) {
-        if self.is_dirty.replace(false) {
-            ct.get_mut(self.ct_hover).opacity = if self.hovering.get() {
-                AnimatableFloat::Animated {
-                    from_value: 0.0,
-                    to_value: 1.0,
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                }
-            } else {
-                AnimatableFloat::Animated {
-                    from_value: 1.0,
-                    to_value: 0.0,
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                }
-            };
-
-            ct.mark_dirty(self.ct_hover);
-        }
-    }
-}
-
-struct SystemCommandButtonView {
-    ct_root: CompositeTreeRef,
-    ct_icon: CompositeTreeRef,
-    ct_hover: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    action_handler: Rc<SystemCommandButtonActionHandler>,
-}
-impl SystemCommandButtonView {
-    const ICON_SIZE: f32 = 10.0;
-    const WIDTH: f32 = 48.0;
-
-    const CLOSE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0 + 0.5 / Self::ICON_SIZE, 0.0 - 0.5 / Self::ICON_SIZE],
-        [0.0 - 0.5 / Self::ICON_SIZE, 0.0 + 0.5 / Self::ICON_SIZE],
-        [1.0 - 0.5 / Self::ICON_SIZE, 1.0 + 0.5 / Self::ICON_SIZE],
-        [1.0 + 0.5 / Self::ICON_SIZE, 1.0 - 0.5 / Self::ICON_SIZE],
-        [1.0 + 0.5 / Self::ICON_SIZE, 0.0 + 0.5 / Self::ICON_SIZE],
-        [1.0 - 0.5 / Self::ICON_SIZE, 0.0 - 0.5 / Self::ICON_SIZE],
-        [0.0 - 0.5 / Self::ICON_SIZE, 1.0 - 0.5 / Self::ICON_SIZE],
-        [0.0 + 0.5 / Self::ICON_SIZE, 1.0 + 0.5 / Self::ICON_SIZE],
-    ];
-    const CLOSE_ICON_INDICES: &'static [u16] = &[0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4];
-
-    const MINIMIZE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0, 1.0 - 1.5 / Self::ICON_SIZE],
-        [0.0, 1.0],
-        [1.0, 1.0],
-        [1.0, 1.0 - 1.5 / Self::ICON_SIZE],
-    ];
-    const MINIMIZE_ICON_INDICES: &'static [u16] = &[0, 1, 2, 2, 3, 0];
-
-    const MAXIMIZE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0, 0.0],
-        [0.0 + 1.5 / Self::ICON_SIZE, 0.0 + 1.5 / Self::ICON_SIZE],
-        [1.0, 0.0],
-        [1.0 - 1.5 / Self::ICON_SIZE, 0.0 + 1.5 / Self::ICON_SIZE],
-        [1.0, 1.0],
-        [1.0 - 1.5 / Self::ICON_SIZE, 1.0 - 1.5 / Self::ICON_SIZE],
-        [0.0, 1.0],
-        [0.0 + 1.5 / Self::ICON_SIZE, 1.0 - 1.5 / Self::ICON_SIZE],
-    ];
-    const MAXIMIZE_ICON_INDICES: &'static [u16] = &[
-        0, 2, 3, 3, 1, 0, 2, 4, 5, 5, 3, 2, 4, 6, 7, 7, 5, 4, 6, 0, 1, 1, 7, 6,
-    ];
-
-    const RESTORE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0, 2.0 / Self::ICON_SIZE],
-        [1.0 - 2.0 / Self::ICON_SIZE, 2.0 / Self::ICON_SIZE],
-        [1.0 - 2.0 / Self::ICON_SIZE, 1.0],
-        [0.0, 1.0],
-        [1.0 / Self::ICON_SIZE, 3.0 / Self::ICON_SIZE],
-        [1.0 - 3.0 / Self::ICON_SIZE, 3.0 / Self::ICON_SIZE],
-        [1.0 - 3.0 / Self::ICON_SIZE, 1.0 - 1.0 / Self::ICON_SIZE],
-        [1.0 / Self::ICON_SIZE, 1.0 - 1.0 / Self::ICON_SIZE],
-        [3.0 / Self::ICON_SIZE, 0.0],
-        [1.0, 0.0],
-        [1.0, 1.0 - 3.0 / Self::ICON_SIZE],
-        [3.0 / Self::ICON_SIZE, 1.0 / Self::ICON_SIZE],
-        [1.0 - 1.0 / Self::ICON_SIZE, 1.0 / Self::ICON_SIZE],
-        [1.0 - 1.0 / Self::ICON_SIZE, 1.0 - 3.0 / Self::ICON_SIZE],
-    ];
-    const RESTORE_ICON_INDICES: &'static [u16] = &[
-        0, 1, 4, 4, 1, 5, 1, 2, 5, 5, 2, 6, 2, 3, 6, 6, 3, 7, 3, 0, 7, 7, 0, 4, 8, 9, 11, 11, 9,
-        12, 9, 10, 12, 12, 10, 13,
-    ];
-
-    /*const fn select_vertices_indices(cmd: SystemCommand) -> (&'static [[f32; 2]], &'static [u16]) {
-        match cmd {
-            SystemCommand::Close => (Self::CLOSE_ICON_VERTICES, Self::CLOSE_ICON_INDICES),
-            SystemCommand::Minimize => (Self::MINIMIZE_ICON_VERTICES, Self::MINIMIZE_ICON_INDICES),
-            SystemCommand::Maximize => (Self::MAXIMIZE_ICON_VERTICES, Self::MAXIMIZE_ICON_INDICES),
-            SystemCommand::Restore => (Self::RESTORE_ICON_VERTICES, Self::RESTORE_ICON_INDICES),
-        }
-    }
-
-    fn render_icon(gfx: &VulkanDevice, cmd: SystemCommand, atlas_rect: &AtlasRect) {
-        let (vertices, indices) = Self::select_vertices_indices(cmd);
-        let indices_offset = core::mem::size_of::<[f32; 2]>() * vertices.len();
-        let bufsize = indices_offset + core::mem::size_of::<u16>() * indices.len();
-        let mut buf = MemoryBoundBuffer::new_writable(
-            base_system,
-            bufsize,
-            br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::INDEX_BUFFER,
-        )
-        .unwrap();
-        let p = buf.map(0..bufsize, BufferMapMode::Write).unwrap();
-        unsafe {
-            p.addr_of_mut::<[f32; 2]>(0)
-                .copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
-            p.addr_of_mut::<u16>(indices_offset)
-                .copy_from_nonoverlapping(indices.as_ptr(), indices.len());
-        }
-        p.unmap().unwrap();
-
-        let icon_msaa_buf = RenderTexture::new(
-            base_system,
-            atlas_rect.extent(),
-            PixelFormat::R8,
-            &RenderTextureOptions {
-                msaa_count: Some(4),
-                flags: RenderTextureFlags::ALLOW_TRANSFER_SRC | RenderTextureFlags::NON_SAMPLED,
-            },
-        )
-        .unwrap();
-
-        let rp = gfx
-            .create_render_pass(&br::RenderPassCreateInfo2::new(
-                &[icon_msaa_buf
-                    .make_attachment_description()
-                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
-                    .layout_transition(
-                        br::ImageLayout::Undefined,
-                        br::ImageLayout::TransferSrcOpt,
-                    )],
-                &[br::SubpassDescription2::new()
-                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
-                &[br::SubpassDependency2::new(
-                    br::SubpassIndex::Internal(0),
-                    br::SubpassIndex::External,
-                )
-                .of_memory(
-                    br::AccessFlags::COLOR_ATTACHMENT.write,
-                    br::AccessFlags::TRANSFER.read,
-                )
-                .of_execution(
-                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                    br::PipelineStageFlags::TRANSFER,
-                )],
-            ))
-            .unwrap();
-        let fb = br::FramebufferObject::new(
-            base_system.subsystem,
-            &br::FramebufferCreateInfo::new(
-                &rp,
-                &[icon_msaa_buf.as_transparent_ref()],
-                atlas_rect.width(),
-                atlas_rect.height(),
-            ),
-        )
-        .unwrap();
-
-        let vsh = gfx.require_shader("resources/normalized_01_2d.vert");
-        let fsh = gfx.require_shader("resources/fillcolor_r.frag");
-        let [pipeline] = gfx
-            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
-                gfx.require_empty_pipeline_layout(),
-                rp.subpass(0),
-                &[
-                    vsh.on_stage(br::ShaderStage::Vertex, c"main"),
-                    fsh.on_stage(br::ShaderStage::Fragment, c"main")
-                        .with_specialization_info(&br::SpecializationInfo::new(
-                            &FillcolorRConstants { r: 1.0 },
-                        )),
-                ],
-                VI_STATE_FLOAT2_ONLY,
-                IA_STATE_TRILIST,
-                &br::PipelineViewportStateCreateInfo::new_array(
-                    &[atlas_rect
-                        .extent()
-                        .into_rect(br::Offset2D::ZERO)
-                        .make_viewport(0.0..1.0)],
-                    &[atlas_rect.extent().into_rect(br::Offset2D::ZERO)],
-                ),
-                RASTER_STATE_DEFAULT_FILL_NOCULL,
-                BLEND_STATE_SINGLE_NONE,
-            )
-            .set_multisample_state(
-                &br::PipelineMultisampleStateCreateInfo::new().rasterization_samples(4),
-            )])
-            .unwrap();
-
-        base_system
-            .sync_execute_graphics_commands(|rec| {
-                rec.inject(|r| {
-                    gfx.cmd_begin_render_pass(
-                        r,
-                        &br::RenderPassBeginInfo::new(
-                            &rp,
-                            &fb,
-                            icon_msaa_buf.render_region(),
-                            &[br::ClearValue::color_f32([0.0; 4])],
-                        ),
-                        &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
-                    )
-                })
-                .bind_pipeline(br::PipelineBindPoint::Graphics, &pipeline)
-                .bind_vertex_buffer_array(0, &[buf.as_transparent_ref()], &[0])
-                .bind_index_buffer(&buf, indices_offset, br::IndexType::U16)
-                .draw_indexed(indices.len() as _, 1, 0, 0, 0)
-                .inject(|r| {
-                    inject_cmd_end_render_pass2(
-                        r,
-                        base_system.subsystem,
-                        &br::SubpassEndInfo::new(),
-                    )
-                })
-                .inject(|r| {
-                    inject_cmd_pipeline_barrier_2(
-                        r,
-                        base_system.subsystem,
-                        &br::DependencyInfo::new(
-                            &[],
-                            &[],
-                            &[base_system
-                                .barrier_for_mask_atlas_resource()
-                                .transit_to(br::ImageLayout::TransferDestOpt.from_undefined())],
-                        ),
-                    )
-                })
-                .resolve_image(
-                    icon_msaa_buf.as_image(),
-                    br::ImageLayout::TransferSrcOpt,
-                    base_system.mask_atlas_image_transparent_ref(),
-                    br::ImageLayout::TransferDestOpt,
-                    &[br::vk::VkImageResolve {
-                        srcSubresource: br::ImageSubresourceLayers::new(
-                            br::AspectMask::COLOR,
-                            0,
-                            0..1,
-                        ),
-                        srcOffset: br::Offset3D::ZERO,
-                        dstSubresource: br::ImageSubresourceLayers::new(
-                            br::AspectMask::COLOR,
-                            0,
-                            0..1,
-                        ),
-                        dstOffset: atlas_rect.lt_offset().with_z(0),
-                        extent: atlas_rect.extent().with_depth(1),
-                    }],
-                )
-                .inject(|r| {
-                    inject_cmd_pipeline_barrier_2(
-                        r,
-                        base_system.subsystem,
-                        &br::DependencyInfo::new(
-                            &[],
-                            &[],
-                            &[base_system
-                                .barrier_for_mask_atlas_resource()
-                                .transferring_layout(
-                                    br::ImageLayout::TransferDestOpt,
-                                    br::ImageLayout::ShaderReadOnlyOpt,
-                                )
-                                .from(
-                                    br::PipelineStageFlags2::RESOLVE,
-                                    br::AccessFlags2::TRANSFER.write,
-                                )
-                                .to(
-                                    br::PipelineStageFlags2::FRAGMENT_SHADER,
-                                    br::AccessFlags2::SHADER_SAMPLED_READ,
-                                )],
-                        ),
-                    )
-                })
-            })
-            .unwrap();
-    }*/
-
-    fn new(
-        init_scale_factor: f32,
-        composite_tree: &mut CompositeTree<Event>,
-        ht_manager: &mut HitTestTreeManager,
-        texture_id_set: &SystemCommandTextureIDSet,
-        right_offset: f32,
-        init_cmd: SystemCommand,
-    ) -> Self {
-        let ct_root = composite_tree.create(CompositeRect {
-            base_scale_factor: init_scale_factor,
-            relative_offset_adjustment: [1.0, 0.0],
-            offset: [
-                AnimatableFloat::Value(-right_offset - Self::WIDTH),
-                AnimatableFloat::Value(0.0),
-            ],
-            relative_size_adjustment: [0.0, 1.0],
-            size: [
-                AnimatableFloat::Value(Self::WIDTH),
-                AnimatableFloat::Value(0.0),
-            ],
-            ..Default::default()
-        });
-        let ct_hover = composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value(match init_cmd {
-                SystemCommand::Close => [1.0, 0.0, 0.0, 1.0],
-                _ => [1.0, 1.0, 1.0, 0.5],
-            })),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ct_icon = composite_tree.create(CompositeRect {
-            base_scale_factor: init_scale_factor,
-            offset: [
-                AnimatableFloat::Value(-Self::ICON_SIZE * 0.5),
-                AnimatableFloat::Value(-Self::ICON_SIZE * 0.5),
-            ],
-            relative_offset_adjustment: [0.5, 0.5],
-            size: [
-                AnimatableFloat::Value(Self::ICON_SIZE),
-                AnimatableFloat::Value(Self::ICON_SIZE),
-            ],
-            has_bitmap: true,
-            texatlas_rect_id: Some(texture_id_set.select(init_cmd)),
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([0.9, 0.9, 0.9, 1.0])),
-            ..Default::default()
-        });
-
-        composite_tree.add_child(ct_root, ct_hover);
-        composite_tree.add_child(ct_root, ct_icon);
-
-        let ht_root = ht_manager.create(HitTestTreeData {
-            left: -right_offset - Self::WIDTH,
-            left_adjustment_factor: 1.0,
-            width: Self::WIDTH,
-            height_adjustment_factor: 1.0,
-            role: init_cmd.role(),
-            ..Default::default()
-        });
-
-        let action_handler = Rc::new(SystemCommandButtonActionHandler {
-            cmd: core::cell::Cell::new(init_cmd),
-            ct_hover,
-            hovering: core::cell::Cell::new(false),
-            pressing: core::cell::Cell::new(false),
-            is_dirty: core::cell::Cell::new(false),
-        });
-        ht_manager.set_action_handler(ht_root, &action_handler);
-
-        Self {
-            ct_root,
-            ct_icon,
-            ct_hover,
-            ht_root,
-            action_handler,
-        }
-    }
-
-    fn mount(
-        &self,
-        composite_tree: &mut CompositeTree<Event>,
-        ht_manager: &mut HitTestTreeManager,
-        ct_parent: CompositeTreeRef,
-        ht_parent: HitTestTreeRef,
-    ) {
-        composite_tree.add_child(ct_parent, self.ct_root);
-        ht_manager.add_child(ht_parent, self.ht_root);
-    }
-
-    fn rescale(
-        &self,
-        composite_tree: &mut CompositeTree<Event>,
-        texture_id_set: &SystemCommandTextureIDSet,
-        ui_scale_factor: f32,
-    ) {
-        composite_tree.get_mut(self.ct_icon).texatlas_rect_id =
-            Some(texture_id_set.select(self.action_handler.cmd.get()));
-        composite_tree.get_mut(self.ct_icon).base_scale_factor = ui_scale_factor;
-        composite_tree.get_mut(self.ct_root).base_scale_factor = ui_scale_factor;
-        composite_tree.mark_dirty(self.ct_icon);
-        composite_tree.mark_dirty(self.ct_root);
-    }
-
-    fn replace_cmd(
-        &self,
-        composite_tree: &mut CompositeTree<Event>,
-        ht_manager: &mut HitTestTreeManager,
-        texture_id_set: &SystemCommandTextureIDSet,
-        cmd: SystemCommand,
-    ) {
-        if self.action_handler.cmd.replace(cmd) == cmd {
-            // no changes
-            return;
-        }
-
-        composite_tree.get_mut(self.ct_icon).texatlas_rect_id = Some(texture_id_set.select(cmd));
-        composite_tree.mark_dirty(self.ct_icon);
-        composite_tree.mark_dirty(self.ct_hover);
-        ht_manager.get_data_mut(self.ht_root).role = cmd.role();
-    }
-}
-
 #[derive(Clone, Copy)]
 enum SimpleButtonState {
     None,
@@ -1870,8 +1131,8 @@ impl OverlayPopupBasicMaskView {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
             // WindowHeaderのぶん開ける(ドラッグ判定がこない)
-            height: -WindowHeaderView::THICKNESS,
-            top: WindowHeaderView::THICKNESS,
+            height: -ui::window_header::View::THICKNESS,
+            top: ui::window_header::View::THICKNESS,
             ..Default::default()
         });
 
@@ -2011,7 +1272,7 @@ impl OverlayPopupBasicFrameView {
             top_adjustment_factor: 0.5,
             left: -size.width * 0.5,
             // maskでヘッダ分開けてるのをここで補正
-            top: -size.height * 0.5 - WindowHeaderView::THICKNESS * 0.5,
+            top: -size.height * 0.5 - ui::window_header::View::THICKNESS * 0.5,
             ..Default::default()
         });
 
@@ -2377,7 +1638,7 @@ pub struct Positioning {
 }
 
 struct PerWindowView {
-    header: WindowHeaderView,
+    header: ui::window_header::View,
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
@@ -2404,8 +1665,10 @@ async fn run<'sys>(
 
     let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
     let init_scale = main_window.ui_scale_factor();
-    let texture_id_set =
-        SystemCommandTextureIDSet::new(&mut texture_id_issuer, system_link.rt_sender());
+    let texture_id_set = ui::window_header::SystemCommandTextureIDSet::new(
+        &mut texture_id_issuer,
+        system_link.rt_sender(),
+    );
     let mut popup_manager = PopupManager::new();
 
     composite_tree
@@ -2416,21 +1679,25 @@ async fn run<'sys>(
         .has_bitmap = true;
     composite_tree.mark_dirty(main_window.composite_root());
 
-    let window_header_view = WindowHeaderView::new(
-        WindowCaption::Main {
+    let mut view_init_ctx = ui::ViewInitContext {
+        mount_context: ui::MountContext {
+            composite_tree: &mut composite_tree,
+            ht_manager: &mut ht_manager,
+        },
+        ui_scale_factor: init_scale,
+    };
+    let window_header_view = ui::window_header::View::new(
+        &mut view_init_ctx,
+        ui::window_header::Caption::Main {
             project_name: "New Project".into(),
         },
-        &mut composite_tree,
-        &mut ht_manager,
         &texture_id_set,
-        init_scale,
         main_window.needs_system_command_buttons(),
     );
     window_header_view.mount(
+        view_init_ctx.as_mount(),
         main_window.composite_root(),
         main_window.ht_root(),
-        &mut composite_tree,
-        &mut ht_manager,
     );
 
     main_window.associate_extra_data(Box::new(PerWindowView {
@@ -2590,22 +1857,6 @@ async fn run<'sys>(
         &mut ht_manager,
     );
 
-    popup_manager.open(
-        |id, composite_tree, ht_manager| {
-            AlertDialogPresenter::new(
-                init_scale,
-                composite_tree,
-                ht_manager,
-                id,
-                "てすとめっせーじ".into(),
-            )
-        },
-        main_window,
-        &mut composite_tree,
-        &mut ht_manager,
-        global_time_base.elapsed().as_secs_f32(),
-    );
-
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
@@ -2622,19 +1873,23 @@ async fn run<'sys>(
                             CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
                         composite_tree.mark_dirty(w.composite_root());
 
-                        let window_header_view = WindowHeaderView::new(
-                            WindowCaption::Sub,
-                            composite_tree,
-                            ht_manager,
+                        let mut view_init_ctx = ui::ViewInitContext {
+                            mount_context: ui::MountContext {
+                                composite_tree,
+                                ht_manager,
+                            },
+                            ui_scale_factor: init_scale,
+                        };
+                        let window_header_view = ui::window_header::View::new(
+                            &mut view_init_ctx,
+                            ui::window_header::Caption::Sub,
                             &texture_id_set,
-                            init_scale,
                             w.needs_system_command_buttons(),
                         );
                         window_header_view.mount(
+                            view_init_ctx.as_mount(),
                             w.composite_root(),
                             w.ht_root(),
-                            composite_tree,
-                            ht_manager,
                         );
 
                         w.associate_extra_data(Box::new(PerWindowView {
