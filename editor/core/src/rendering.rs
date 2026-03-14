@@ -9,7 +9,7 @@ use bedrock::{
 };
 
 use crate::{
-    Event, RendererSync, SyncEventBus, WindowHandle,
+    Event, SyncEventBus, WindowHandle,
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP,
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
@@ -19,7 +19,8 @@ use crate::{
         atlas::{AtlasRect, TextureAtlas},
         composite::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData,
-            CompositeTreeRef, CompositeTreeRender, VectorRasterizationState,
+            CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
+            VectorRasterizationState,
         },
         text::{PerWindowFontSet, RootFontSet},
     },
@@ -54,6 +55,25 @@ pub enum RenderMessage {
         width: f32,
         height: f32,
     },
+}
+
+pub struct RendererSync {
+    pub composite_buffer: CompositeTreeSyncBuffer<Event>,
+}
+
+pub struct MainThreadTextureIDIssuer {
+    next_id: usize,
+}
+impl MainThreadTextureIDIssuer {
+    pub fn new() -> Self {
+        Self { next_id: 0 }
+    }
+
+    pub fn issue(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
 }
 
 struct Normalized2DStaticMeshTextureEntry {

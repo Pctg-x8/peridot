@@ -1,6 +1,7 @@
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use windows::{
     Foundation::TypedEventHandler,
+    System::{DispatcherQueue, DispatcherQueueController},
     UI::{
         Composition::{
             CompositionEffectSourceParameter, Compositor, Desktop::DesktopWindowTarget,
@@ -19,7 +20,10 @@ use windows::{
             Dwm::DwmExtendFrameIntoClientArea,
             Gdi::{HBRUSH, MapWindowPoints},
         },
-        System::WinRT::Composition::ICompositorDesktopInterop,
+        System::WinRT::{
+            Composition::ICompositorDesktopInterop, CreateDispatcherQueueController,
+            DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
+        },
         UI::{
             Controls::MARGINS,
             HiDpi::GetDpiForWindow,
@@ -33,9 +37,9 @@ use windows::{
                 PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
                 SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
                 SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-                WA_ACTIVE, WA_CLICKACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
-                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE,
+                WA_CLICKACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
                 WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
                 WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
                 WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
@@ -63,7 +67,10 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::register_class},
+    utils::{
+        LogicalUnit, PixelsUnit, Point, Size,
+        platform::windows::{current_instance_handle, register_class},
+    },
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -269,7 +276,7 @@ pub struct WindowClassSet {
     main: u16,
 }
 impl WindowClassSet {
-    pub fn register(hinstance: HINSTANCE) -> Self {
+    fn register(hinstance: HINSTANCE) -> Self {
         let main = NativeWindow::register_class(hinstance);
 
         Self { hinstance, main }
@@ -1052,7 +1059,7 @@ impl DragPreviewPopoverHandle {
         self.base_window_handle.set(window.0);
     }
 
-    pub fn new(hinstance: HINSTANCE, native_compositor: &Compositor) -> Self {
+    pub fn new(app: &ApplicationContext) -> Self {
         let atom_drag_floating = unsafe {
             register_class(&WNDCLASSEXW {
                 cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
@@ -1060,7 +1067,7 @@ impl DragPreviewPopoverHandle {
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 lpfnWndProc: Some(Self::wndproc),
-                hInstance: hinstance,
+                hInstance: app.hinstance,
                 hIcon: HICON(core::ptr::null_mut()),
                 hCursor: HCURSOR(core::ptr::null_mut()),
                 hbrBackground: HBRUSH(core::ptr::null_mut()),
@@ -1086,7 +1093,7 @@ impl DragPreviewPopoverHandle {
                 128,
                 None,
                 None,
-                Some(hinstance),
+                Some(app.hinstance),
                 None,
             )
             .expect("CreateWindowExW")
@@ -1101,17 +1108,20 @@ impl DragPreviewPopoverHandle {
         fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
         fx.SetOptimization(EffectOptimization::Speed)
             .expect("drag.fx.set_optimization");
-        let effect_factory = native_compositor
+        let effect_factory = app
+            .native_compositor
             .CreateEffectFactory(&fx)
             .expect("drag.fx.create_factory");
-        let backdrop_brush = native_compositor
+        let backdrop_brush = app
+            .native_compositor
             .CreateBackdropBrush()
             .expect("drag.backdrop_brush.create");
         let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
         blur_brush
             .SetSourceParameter(h!("Source"), &backdrop_brush)
             .expect("drag.fx.set_blur_source");
-        let blur_visual = native_compositor
+        let blur_visual = app
+            .native_compositor
             .CreateSpriteVisual()
             .expect("drag.visual.blur.create");
         blur_visual
@@ -1128,7 +1138,8 @@ impl DragPreviewPopoverHandle {
             .expect("drag.visual.blur.set_brush");
         blur_visual
             .SetShadow(&{
-                let x = native_compositor
+                let x = app
+                    .native_compositor
                     .CreateDropShadow()
                     .expect("drag.visual.shadow.create");
                 x.SetBlurRadius(32.0)
@@ -1139,12 +1150,13 @@ impl DragPreviewPopoverHandle {
                 x
             })
             .expect("drag.visual.set_shadow");
-        let color_tint_visual = native_compositor
+        let color_tint_visual = app
+            .native_compositor
             .CreateSpriteVisual()
             .expect("drag.visual.color_tint.create");
         color_tint_visual
             .SetBrush(
-                &native_compositor
+                &app.native_compositor
                     .CreateColorBrushWithColor(
                         DragPreviewPopoverHandle::BG_COLOR.windows_native_color(),
                     )
@@ -1164,7 +1176,7 @@ impl DragPreviewPopoverHandle {
             .expect("drag.visual.add_child");
 
         let composition_target = unsafe {
-            native_compositor
+            app.native_compositor
                 .cast::<ICompositorDesktopInterop>()
                 .expect("native_compositor.cast.desktop_interop")
                 .CreateDesktopWindowTarget(w, true)
@@ -1247,12 +1259,43 @@ impl DragPreviewPopoverHandle {
     }
 }
 
+pub struct ApplicationContext {
+    hinstance: HINSTANCE,
+    wc_set: WindowClassSet,
+    _dispatcher_queue: DispatcherQueueController,
+    native_compositor: Compositor,
+}
+impl ApplicationContext {
+    pub fn new() -> Self {
+        // required for winrt functionalities
+        let dispatcher_queue = unsafe {
+            CreateDispatcherQueueController(DispatcherQueueOptions {
+                dwSize: core::mem::size_of::<DispatcherQueueOptions>() as _,
+                threadType: DQTYPE_THREAD_CURRENT,
+                apartmentType: DQTAT_COM_ASTA,
+            })
+            .expect("dispatchqueuecontroller.create")
+        };
+
+        let hinstance = current_instance_handle();
+        let wc_set = WindowClassSet::register(hinstance);
+        let native_compositor = Compositor::new().expect("win.compositor.create");
+
+        Self {
+            hinstance,
+            wc_set,
+            _dispatcher_queue: dispatcher_queue,
+            native_compositor,
+        }
+    }
+}
+
 pub struct SystemLink<'sys> {
     pub drag_preview_popover: DragPreviewPopoverHandle,
     pub vk_device: *const VulkanDevice<'sys>,
     pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
-    pub window_class_set: *const WindowClassSet,
+    pub app_context_ptr: *const ApplicationContext,
 }
 impl SystemLink<'_> {
     pub fn init_main_window(
@@ -1261,10 +1304,10 @@ impl SystemLink<'_> {
         composite_tree: &mut CompositeTree<Event>,
         ht_manager: &mut HitTestTreeManager,
         rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
-        wc_set: &WindowClassSet,
+        app: &ApplicationContext,
     ) -> WindowHandle {
         let w = NativeWindow::new(
-            &wc_set,
+            &app.wc_set,
             WindowType::Main {},
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
@@ -1322,7 +1365,7 @@ impl SystemLink<'_> {
         setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<Event>, &mut HT),
     ) -> WindowHandle {
         let w = NativeWindow::new(
-            unsafe { &*self.window_class_set },
+            unsafe { &(*self.app_context_ptr).wc_set },
             WindowType::Sub,
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],

@@ -20,14 +20,6 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex},
 };
-#[cfg(windows)]
-use windows::Win32::{
-    System::WinRT::{
-        CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
-        DispatcherQueueOptions,
-    },
-    UI::WindowsAndMessaging::{DispatchMessageW, GetMessageW, TranslateMessage},
-};
 
 use crate::{
     graphics::{
@@ -42,7 +34,8 @@ use crate::{
         },
     },
     rendering::{
-        NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderThread,
+        MainThreadTextureIDIssuer, NewWindowData, NewWindowVulkanSurface, RenderMessage,
+        RenderThread, RendererSync,
         atlas::AtlasRect,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
@@ -92,9 +85,9 @@ pub fn launch() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let mut event_store = core::pin::pin!(VecDeque::new());
+    let mut event_store = VecDeque::new();
     let event_queue = EventQueue {
-        event_store: event_store.as_mut().get_mut(),
+        event_store: &mut event_store,
     };
     let global_time_base = std::time::Instant::now();
     let fs = FileSystem::new();
@@ -115,7 +108,7 @@ pub fn launch() {
                 system_link,
             )
         },
-        event_store,
+        &mut event_store,
         &global_time_base,
         &Mutex::new(RendererSync {
             composite_buffer: CompositeTreeSyncBuffer::new(),
@@ -133,7 +126,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         WindowHandle,
         SystemLink<'sys>,
     ) -> AppFuture,
-    mut event_store: Pin<&mut VecDeque<Event>>,
+    event_store: &mut VecDeque<Event>,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
     fs: &'sys FileSystem,
@@ -158,21 +151,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     );
 
     #[cfg(windows)]
-    let hinstance = utils::platform::windows::current_instance_handle();
-    #[cfg(windows)]
-    let wc_set = platform::windows::WindowClassSet::register(hinstance);
-    #[cfg(windows)]
-    let _dispatcher_queue = unsafe {
-        CreateDispatcherQueueController(DispatcherQueueOptions {
-            dwSize: core::mem::size_of::<DispatcherQueueOptions>() as _,
-            threadType: DQTYPE_THREAD_CURRENT,
-            apartmentType: DQTAT_COM_ASTA,
-        })
-        .expect("dispatchqueuecontroller.create")
-    };
-    #[cfg(windows)]
-    let native_compositor =
-        windows::UI::Composition::Compositor::new().expect("win.compositor.create");
+    let app_context = platform::windows::ApplicationContext::new();
 
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
@@ -196,7 +175,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let mut window_registry = platform::unix::wayland::WindowRegistry::new();
 
     #[cfg(windows)]
-    let drag_preview_popover = DragPreviewPopoverHandle::new(hinstance, &native_compositor);
+    let drag_preview_popover = DragPreviewPopoverHandle::new(&app_context);
 
     #[cfg(feature = "wayland")]
     let popover_buf_shm_bytes = if wl_interfaces.single_pixel_buffer_manager.is_some() {
@@ -308,10 +287,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
-    let mut polling = core::pin::pin!(false);
+    let mut polling = false;
     let empty_dispatcher = LogicFiberEventDispatcher {
-        event_store: event_store.as_mut().get_mut() as *mut _ as _,
-        polling: polling.as_mut().get_mut(),
+        event_store,
+        polling: &mut polling,
         poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
         future_ptr: core::ptr::null_mut(),
     };
@@ -323,7 +302,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         &mut composite_tree,
         &mut ht_manager,
         &rt_sender,
-        &wc_set,
+        &app_context,
     );
 
     #[cfg(feature = "wayland")]
@@ -417,7 +396,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             rt_sender: rt_sender.clone(),
             vk_device: &vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
-            window_class_set: &wc_set,
+            app_context_ptr: &app_context,
         },
         #[cfg(not(windows))]
         SystemLink {
@@ -458,8 +437,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .get_mut(main_window_handle)
         .expect("no window")
         .rebind_event_dispatcher(LogicFiberEventDispatcher {
-            event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            polling: polling.as_mut().get_mut(),
+            event_store,
+            polling: &mut polling,
             poll_fn_ptr: unsafe {
                 core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
             },
@@ -469,8 +448,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     SystemLink::postinit_main_window(
         main_window_handle,
         LogicFiberEventDispatcher {
-            event_store: event_store.as_mut().get_mut() as *mut _ as _,
-            polling: polling.as_mut().get_mut(),
+            event_store,
+            polling: &mut polling,
             poll_fn_ptr: unsafe {
                 core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
             },
@@ -479,8 +458,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     );
     #[cfg(target_os = "macos")]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
-        event_store: event_store.as_mut().get_mut() as *mut _ as _,
-        polling: polling.as_mut().get_mut(),
+        event_store,
+        polling: &mut polling,
         poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
         future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
     });
@@ -767,8 +746,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     }
 
                     unsafe {
-                        let _ = TranslateMessage(msg);
-                        DispatchMessageW(msg);
+                        let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(msg);
+                        windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(msg);
                     }
                 }
             } else if r == windows::Win32::Foundation::WAIT_FAILED {
@@ -798,25 +777,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
     });
-}
-
-struct RendererSync {
-    pub composite_buffer: CompositeTreeSyncBuffer<Event>,
-}
-
-struct MainThreadTextureIDIssuer {
-    pub next_id: usize,
-}
-impl MainThreadTextureIDIssuer {
-    pub fn new() -> Self {
-        Self { next_id: 0 }
-    }
-
-    pub fn issue(&mut self) -> usize {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
 }
 
 #[derive(Clone)]
@@ -1186,9 +1146,9 @@ struct SystemCommandButtonActionHandler {
 impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
         self.hovering.set(true);
         self.is_dirty.set(true);
@@ -1199,9 +1159,9 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
 
     fn on_pointer_leave(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
         self.hovering.set(false);
         self.pressing.set(false);
@@ -1673,9 +1633,9 @@ struct SimpleButtonActionHandler {
 impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
         self.transit(
             SimpleButtonState::Hovering,
@@ -1688,9 +1648,9 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
 
     fn on_pointer_leave(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
         self.transit(
             SimpleButtonState::None,
@@ -1703,9 +1663,9 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
 
     fn on_pointer_down(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
         self.transit(
             SimpleButtonState::Pressing,
@@ -1718,9 +1678,9 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
 
     fn on_pointer_up(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
         self.transit(
             SimpleButtonState::Hovering,
@@ -1733,9 +1693,9 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
 
     fn on_click(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
         if let Some(ref c) = self.click_event {
             context.system_link.dispatch_event(c.clone());
