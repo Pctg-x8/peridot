@@ -24,7 +24,7 @@ use crate::{
         },
         text::{PerWindowFontSet, RootFontSet},
     },
-    utils::{SafeF32, UnboundedRef},
+    utils::SafeF32,
 };
 
 pub mod atlas;

@@ -18,7 +18,7 @@ use crate::{
         },
         text::FontID,
     },
-    ui::{MountContext, ViewInitContext},
+    uikit::{MountContext, MountTarget, ViewInitContext},
 };
 
 pub enum Caption {
@@ -89,7 +89,7 @@ impl View {
             },
             ..Default::default()
         });
-        let ht_root = init_ctx.mount_context.ht_manager.create(HitTestTreeData {
+        let ht_root = init_ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height: Self::THICKNESS,
             role: Some(crate::input::hittest::Role::TitleBar),
@@ -112,9 +112,9 @@ impl View {
                 ),
             ];
 
-            views[0].mount(init_ctx.as_mount(), ct_root, ht_root);
-            views[1].mount(init_ctx.as_mount(), ct_root, ht_root);
-            views[2].mount(init_ctx.as_mount(), ct_root, ht_root);
+            views[0].mount(init_ctx, ct_root, ht_root);
+            views[1].mount(init_ctx, ct_root, ht_root);
+            views[2].mount(init_ctx, ct_root, ht_root);
 
             Some(views)
         } else {
@@ -128,14 +128,9 @@ impl View {
         }
     }
 
-    pub fn mount(
-        &self,
-        ctx: &mut MountContext,
-        ct_parent: CompositeTreeRef,
-        ht_parent: HitTestTreeRef,
-    ) {
-        ctx.composite_tree.add_child(ct_parent, self.ct_root);
-        ctx.ht_manager.add_child(ht_parent, self.ht_root);
+    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
+        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
 
     pub fn rescale(
@@ -358,7 +353,7 @@ impl SystemCommandButtonView {
             ],
             ..Default::default()
         });
-        let ct_hover = init_ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_hover = init_ctx.composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value(match init_cmd {
@@ -385,16 +380,10 @@ impl SystemCommandButtonView {
             ..Default::default()
         });
 
-        init_ctx
-            .mount_context
-            .composite_tree
-            .add_child(ct_root, ct_hover);
-        init_ctx
-            .mount_context
-            .composite_tree
-            .add_child(ct_root, ct_icon);
+        init_ctx.composite_tree.add_child(ct_root, ct_hover);
+        init_ctx.composite_tree.add_child(ct_root, ct_icon);
 
-        let ht_root = init_ctx.mount_context.ht_manager.create(HitTestTreeData {
+        let ht_root = init_ctx.ht_manager.create(HitTestTreeData {
             left: -right_offset - Self::WIDTH,
             left_adjustment_factor: 1.0,
             width: Self::WIDTH,
@@ -411,7 +400,6 @@ impl SystemCommandButtonView {
             is_dirty: core::cell::Cell::new(false),
         });
         init_ctx
-            .mount_context
             .ht_manager
             .set_action_handler(ht_root, &action_handler);
 
