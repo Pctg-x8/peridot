@@ -18,7 +18,10 @@ use windows::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
             Dwm::DwmExtendFrameIntoClientArea,
-            Gdi::{HBRUSH, MapWindowPoints},
+            Gdi::{
+                GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
+                MonitorFromWindow,
+            },
         },
         System::WinRT::{
             Composition::ICompositorDesktopInterop, CreateDispatcherQueueController,
@@ -441,13 +444,21 @@ impl WindowEventHandler {
     fn compute_client_rect(w: HWND, params: &mut NCCALCSIZE_PARAMS) {
         if unsafe { IsZoomed(w).as_bool() } {
             // 最大化状態
-            let sink_x = params.rgrc[0].left;
-            let sink_y = params.rgrc[0].top;
-            params.rgrc[0].left -= sink_x;
-            params.rgrc[0].top -= sink_y;
-            params.rgrc[0].right += sink_x;
-            params.rgrc[0].bottom += sink_y;
+            let mon = unsafe { MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST) };
+            let mut minfo = core::mem::MaybeUninit::<MONITORINFO>::uninit();
+            unsafe {
+                core::ptr::write(
+                    &mut (*minfo.as_mut_ptr()).cbSize,
+                    core::mem::size_of::<MONITORINFO>() as _,
+                );
+            }
+            unsafe {
+                GetMonitorInfoW(mon, minfo.as_mut_ptr()).expect("GetMonitorInfo");
+            }
+            let minfo = unsafe { minfo.assume_init() };
 
+            // 現在のモニタサイズに合わせる（これで合ってるのか不明だけど大体の場合で正しく動くはず）
+            params.rgrc[0] = minfo.rcWork;
             return;
         }
 
@@ -642,10 +653,10 @@ impl WindowEventHandler {
                 DwmExtendFrameIntoClientArea(
                     hwnd,
                     &MARGINS {
-                        cxLeftWidth: -1,
-                        cxRightWidth: -1,
-                        cyTopHeight: -1,
-                        cyBottomHeight: -1,
+                        cxLeftWidth: 1,
+                        cxRightWidth: 1,
+                        cyTopHeight: 1,
+                        cyBottomHeight: 1,
                     },
                 )
             } {
