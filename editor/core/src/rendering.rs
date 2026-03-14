@@ -366,8 +366,18 @@ impl<'main> RenderThread<'main> {
                                 });
                         }
                         glyph_atlas_mgr.atlas_rects[id] = rect;
-
-                        // TODO: rasterize mesh
+                        if glyph_atlas_mgr
+                            .vector_raster_state
+                            .normalized_2d_mesh_requests
+                            .insert(id, (rect.left, rect.top))
+                            .is_none()
+                        {
+                            // new entry
+                            glyph_atlas_mgr
+                                .vector_raster_state
+                                .updated_rects
+                                .push(rect.vk_rect());
+                        }
                     }
                 }
                 let needs_update_command = x.update(
@@ -403,7 +413,7 @@ impl<'main> RenderThread<'main> {
                 });
             }
 
-            for x in glyph_atlas_per_scale.values() {
+            for (s, x) in glyph_atlas_per_scale.iter() {
                 if x.vector_raster_state.is_empty() {
                     // no vector rasterization required
                     continue;
@@ -414,6 +424,8 @@ impl<'main> RenderThread<'main> {
                     &vg_render_formats,
                     &glyph_atlas_manager_common_resources,
                     &mut render_queue,
+                    &normalized_2d_static_mesh_textures,
+                    s.value(),
                 );
             }
 
@@ -984,6 +996,7 @@ pub struct GlyphAtlasManagerCommonResources<'d> {
     fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
     curve_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
     vec_tri_fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
+    fill_tri_white_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
     render_pass: br::RenderPassObject<&'d VulkanDevice<'d>>,
     pipeline_layout: br::PipelineLayoutObject<&'d VulkanDevice<'d>>,
 }
@@ -992,6 +1005,7 @@ impl<'d> GlyphAtlasManagerCommonResources<'d> {
         let fill_shader_module = vk_device.require_shader("vg-fill.spv");
         let curve_shader_module = vk_device.require_shader("vg-curve.spv");
         let vec_tri_fill_shader_module = vk_device.require_shader("vec-tri-fill.spv");
+        let fill_tri_white_shader_module = vk_device.require_shader("tri-fill-white.spv");
 
         let render_pass = br::RenderPassObject::new(
             vk_device,
@@ -1065,6 +1079,7 @@ impl<'d> GlyphAtlasManagerCommonResources<'d> {
             fill_shader_module,
             curve_shader_module,
             vec_tri_fill_shader_module,
+            fill_tri_white_shader_module,
             render_pass,
             pipeline_layout,
         }
@@ -1178,6 +1193,7 @@ pub struct MaskTextureAtlasManager<'d> {
     triangle_fans_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
     curve_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
     colorize_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
+    fill_tri_white_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
 }
 impl Drop for MaskTextureAtlasManager<'_> {
     fn drop(&mut self) {
@@ -1187,7 +1203,7 @@ impl Drop for MaskTextureAtlasManager<'_> {
     }
 }
 impl<'d> MaskTextureAtlasManager<'d> {
-    const VI_STATE_FOR_TRI_FANS: &'static br::PipelineVertexInputStateCreateInfo<'static> =
+    const VI_STATE_FOR_TRIS: &'static br::PipelineVertexInputStateCreateInfo<'static> =
         &br::PipelineVertexInputStateCreateInfo::new(
             &[br::VertexInputBindingDescription::per_vertex_typed::<
                 [f32; 2],
@@ -1260,7 +1276,12 @@ impl<'d> MaskTextureAtlasManager<'d> {
         let vp_state = br::PipelineViewportStateCreateInfo::new(&viewports, &scissors);
         let ms_state = br::PipelineMultisampleStateCreateInfo::new()
             .rasterization_samples(TextureAtlas::MULTISAMPLE_LEVEL as _);
-        let [triangle_fans_pipeline, curve_pipeline, colorize_pipeline] = common_res
+        let [
+            triangle_fans_pipeline,
+            curve_pipeline,
+            colorize_pipeline,
+            fill_tri_white_pipeline,
+        ] = common_res
             .device
             .create_graphics_pipelines_array(&[
                 br::GraphicsPipelineCreateInfo::new(
@@ -1280,7 +1301,7 @@ impl<'d> MaskTextureAtlasManager<'d> {
                             .fill_shader_module
                             .on_stage(br::ShaderStage::Fragment, c"fragMain"),
                     ],
-                    Self::VI_STATE_FOR_TRI_FANS,
+                    Self::VI_STATE_FOR_TRIS,
                     IA_STATE_TRILIST,
                     &vp_state,
                     RASTER_STATE_DEFAULT_FILL_NOCULL,
@@ -1332,6 +1353,24 @@ impl<'d> MaskTextureAtlasManager<'d> {
                 )
                 .set_multisample_state(&ms_state)
                 .set_depth_stencil_state(Self::STENCIL_STATE_FILTER_EQ_ONLY),
+                br::GraphicsPipelineCreateInfo::new(
+                    &common_res.pipeline_layout,
+                    common_res.render_pass.subpass(1),
+                    &[
+                        common_res
+                            .fill_tri_white_shader_module
+                            .on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        common_res
+                            .fill_tri_white_shader_module
+                            .on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    Self::VI_STATE_FOR_TRIS,
+                    IA_STATE_TRILIST,
+                    &vp_state,
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&ms_state),
             ])
             .expect("create vector rasterize pipelines");
 
@@ -1425,6 +1464,7 @@ impl<'d> MaskTextureAtlasManager<'d> {
             triangle_fans_pipeline,
             curve_pipeline,
             colorize_pipeline,
+            fill_tri_white_pipeline,
         }
     }
 
@@ -1461,14 +1501,34 @@ impl<'d> MaskTextureAtlasManager<'d> {
         }
     }
 
-    pub fn perform_render(
+    fn perform_render(
         &self,
         state: &VectorRasterizationState,
         formats: &GlyphAtlasRenderingFormats,
         common_res: &GlyphAtlasManagerCommonResources,
         render_worker_queue: &mut (impl br::QueueMut + ?Sized),
+        normalized_2d_static_mesh_textures: &HashMap<usize, Normalized2DStaticMeshTextureEntry>,
+        scale: f32,
     ) {
         // TODO: 最適化はあとで
+        let mut normalized_2d_static_mesh_vertices_fused = Vec::new();
+        let mut normalized_2d_static_mesh_indices_fused = Vec::new();
+        for (x, &(ox, oy)) in state.normalized_2d_mesh_requests.iter() {
+            let e = &normalized_2d_static_mesh_textures[x];
+            let v_offset = normalized_2d_static_mesh_vertices_fused.len();
+
+            tracing::debug!(x, ox, oy, w = e.width, h = e.height, "n2");
+            normalized_2d_static_mesh_vertices_fused.extend(e.vertices.iter().map(|&[x, y]| {
+                [
+                    2.0 * (x * e.width * scale + ox as f32) / self.atlas.size().width as f32 - 1.0,
+                    2.0 * (y * e.height * scale + oy as f32) / self.atlas.size().height as f32
+                        - 1.0,
+                ]
+            }));
+            normalized_2d_static_mesh_indices_fused
+                .extend(e.indices.iter().map(|i| *i + v_offset as u16));
+        }
+
         let filltri_points_offset = 0;
         let filltri_indices_offset =
             filltri_points_offset + core::mem::size_of_val(&state.fill_tri_points[..]);
@@ -1476,8 +1536,13 @@ impl<'d> MaskTextureAtlasManager<'d> {
             + core::mem::size_of_val(&state.fill_tri_indices[..])
             + (core::mem::size_of::<[f32; 4]>() - 1))
             & !(core::mem::size_of::<[f32; 4]>() - 1);
-        let vector_draw_buffer_total_size =
+        let normalized_2d_static_mesh_vertices_offset =
             curve_triangles_offset + core::mem::size_of_val(&state.curve_tris[..]);
+        let normalized_2d_static_mesh_indices_offset = normalized_2d_static_mesh_vertices_offset
+            + core::mem::size_of_val(&normalized_2d_static_mesh_vertices_fused[..]);
+
+        let vector_draw_buffer_total_size = normalized_2d_static_mesh_indices_offset
+            + core::mem::size_of_val(&normalized_2d_static_mesh_indices_fused[..]);
         let mut vector_draw_buffer = br::BufferObject::new(
             self.device,
             &br::BufferCreateInfo::new(
@@ -1545,6 +1610,20 @@ impl<'d> MaskTextureAtlasManager<'d> {
                 state.curve_tris.as_ptr(),
                 p.ptr().byte_add(curve_triangles_offset).cast(),
                 state.curve_tris.len(),
+            );
+            core::ptr::copy_nonoverlapping(
+                normalized_2d_static_mesh_vertices_fused.as_ptr(),
+                p.ptr()
+                    .byte_add(normalized_2d_static_mesh_vertices_offset)
+                    .cast(),
+                normalized_2d_static_mesh_vertices_fused.len(),
+            );
+            core::ptr::copy_nonoverlapping(
+                normalized_2d_static_mesh_indices_fused.as_ptr(),
+                p.ptr()
+                    .byte_add(normalized_2d_static_mesh_indices_offset)
+                    .cast(),
+                normalized_2d_static_mesh_indices_fused.len(),
             );
         }
         if !self
@@ -1724,6 +1803,27 @@ impl<'d> MaskTextureAtlasManager<'d> {
         .next_subpass(br::SubpassContents::Inline)
         .bind_pipeline(br::PipelineBindPoint::Graphics, &self.colorize_pipeline)
         .draw(3, 1, 0, 0)
+        .bind_pipeline(
+            br::PipelineBindPoint::Graphics,
+            &self.fill_tri_white_pipeline,
+        )
+        .bind_vertex_buffer_array(
+            0,
+            &[vector_draw_buffer.as_transparent_ref()],
+            &[normalized_2d_static_mesh_vertices_offset as _],
+        )
+        .bind_index_buffer(
+            &vector_draw_buffer,
+            normalized_2d_static_mesh_indices_offset as _,
+            br::IndexType::U16,
+        )
+        .draw_indexed(
+            normalized_2d_static_mesh_indices_fused.len() as _,
+            1,
+            0,
+            0,
+            0,
+        )
         .end_render_pass()
         .inject(|r| {
             self.device.cmd_pipeline_barrier(

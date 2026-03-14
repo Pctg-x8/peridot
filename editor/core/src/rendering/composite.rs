@@ -1,7 +1,7 @@
 //! UI Rect Compositioning
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -1370,6 +1370,7 @@ pub struct VectorRasterizationState {
     pub curve_tris: Vec<[f32; 4]>,
     pub updated_rects: Vec<br::Rect2D>,
     pub rounded_fill_rect_radius_requests: HashMap<SafeF32, AtlasRect>,
+    pub normalized_2d_mesh_requests: HashMap<usize, (u32, u32)>,
 }
 impl VectorRasterizationState {
     pub fn new() -> Self {
@@ -1379,6 +1380,7 @@ impl VectorRasterizationState {
             curve_tris: Vec::new(),
             updated_rects: Vec::new(),
             rounded_fill_rect_radius_requests: HashMap::new(),
+            normalized_2d_mesh_requests: HashMap::new(),
         }
     }
 
@@ -1388,6 +1390,7 @@ impl VectorRasterizationState {
         self.curve_tris.clear();
         self.updated_rects.clear();
         self.rounded_fill_rect_radius_requests.clear();
+        self.normalized_2d_mesh_requests.clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1395,6 +1398,7 @@ impl VectorRasterizationState {
         self.fill_tri_points.is_empty()
             && self.curve_tris.is_empty()
             && self.rounded_fill_rect_radius_requests.is_empty()
+            && self.normalized_2d_mesh_requests.is_empty()
     }
 }
 

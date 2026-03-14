@@ -1099,7 +1099,7 @@ impl SystemCommandTextureIDSet {
         let maximize = tid_issuer.issue();
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: close,
+                id: maximize,
                 vertices: SystemCommandButtonView::MAXIMIZE_ICON_VERTICES,
                 indices: SystemCommandButtonView::MAXIMIZE_ICON_INDICES,
                 width: SystemCommandButtonView::ICON_SIZE as _,
