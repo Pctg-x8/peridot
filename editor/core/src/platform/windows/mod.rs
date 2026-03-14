@@ -464,7 +464,14 @@ impl WindowEventHandler {
     fn dpi_changed(&mut self, hwnd: HWND, new_scale: f32, new_rect: &RECT) {
         tracing::trace!("dpi changed");
 
+        self.state.content_scale = new_scale;
+        self.event_dispatcher.dispatch(Event::WindowRescaleUI {
+            window: WindowHandle(hwnd),
+            new_scale,
+        });
+
         unsafe {
+            // move to suggested rect
             if let Err(e) = SetWindowPos(
                 hwnd,
                 None,
@@ -477,12 +484,6 @@ impl WindowEventHandler {
                 tracing::error!(reason = %e, "dpi_changed.set_window_pos");
             }
         }
-
-        self.state.content_scale = new_scale;
-        self.event_dispatcher.dispatch(Event::WindowRescaleUI {
-            window: WindowHandle(hwnd),
-            new_scale,
-        });
     }
 
     #[tracing::instrument(skip(self))]

@@ -1517,7 +1517,6 @@ impl<'d> MaskTextureAtlasManager<'d> {
             let e = &normalized_2d_static_mesh_textures[x];
             let v_offset = normalized_2d_static_mesh_vertices_fused.len();
 
-            tracing::debug!(x, ox, oy, w = e.width, h = e.height, "n2");
             normalized_2d_static_mesh_vertices_fused.extend(e.vertices.iter().map(|&[x, y]| {
                 [
                     2.0 * (x * e.width * scale + ox as f32) / self.atlas.size().width as f32 - 1.0,
