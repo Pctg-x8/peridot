@@ -15,9 +15,13 @@ use windows::{
     },
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::{HBRUSH, MapWindowPoints},
+        Graphics::{
+            Dwm::DwmExtendFrameIntoClientArea,
+            Gdi::{HBRUSH, MapWindowPoints},
+        },
         System::WinRT::Composition::ICompositorDesktopInterop,
         UI::{
+            Controls::MARGINS,
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
@@ -25,7 +29,7 @@ use windows::{
                 GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
                 HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
                 HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
-                IDI_APPLICATION, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
+                IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
                 PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
                 SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
                 SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
@@ -427,7 +431,19 @@ impl WindowEventHandler {
         }
     }
 
-    fn compute_client_rect(params: &mut NCCALCSIZE_PARAMS) {
+    fn compute_client_rect(w: HWND, params: &mut NCCALCSIZE_PARAMS) {
+        if unsafe { IsZoomed(w).as_bool() } {
+            // 最大化状態
+            let sink_x = params.rgrc[0].left;
+            let sink_y = params.rgrc[0].top;
+            params.rgrc[0].left -= sink_x;
+            params.rgrc[0].top -= sink_y;
+            params.rgrc[0].right += sink_x;
+            params.rgrc[0].bottom += sink_y;
+
+            return;
+        }
+
         // remove non-client area
         let w = unsafe { GetSystemMetrics(SM_CXSIZEFRAME) };
         let h = unsafe { GetSystemMetrics(SM_CYSIZEFRAME) };
@@ -613,30 +629,46 @@ impl WindowEventHandler {
             return LRESULT(0);
         }
 
-        if msg == WM_ACTIVATE && (wparam.0 == WA_ACTIVE as _ || wparam.0 == WA_CLICKACTIVE as _) {
-            let state = Self::get_for_window(hwnd);
+        if msg == WM_ACTIVATE {
+            if let Err(e) = unsafe {
+                DwmExtendFrameIntoClientArea(
+                    hwnd,
+                    &MARGINS {
+                        cxLeftWidth: -1,
+                        cxRightWidth: -1,
+                        cyTopHeight: -1,
+                        cyBottomHeight: -1,
+                    },
+                )
+            } {
+                tracing::error!(reason = %e, "DwmExtendFrameIntoClientArea");
+            }
 
-            if state.text_services_mgr.is_none() {
-                // first time activation
-                let text_services_mgr = CoreTextServicesManager::GetForCurrentView()
-                    .expect("coretextservicesmanager.get");
-                let edit_context = text_services_mgr
-                    .CreateEditContext()
-                    .expect("edit_context.create");
-                edit_context
-                    .LayoutRequested(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        CoreTextLayoutRequestedEventArgs,
-                    >::new(|sender, e| {
-                        let e = e.ok().expect("event_args.null");
-                        let req = e.Request().expect("layout_requested.event_args.request");
-                        tracing::trace!(
-                            req.is_canceled = ?req.IsCanceled(),
-                            req.range = ?req.Range(),
-                            "edit_context.layout_requested"
-                        );
+            if wparam.0 == WA_ACTIVE as _ || wparam.0 == WA_CLICKACTIVE as _ {
+                let state = Self::get_for_window(hwnd);
 
-                        req.LayoutBounds()
+                // test for text services
+                if state.text_services_mgr.is_none() {
+                    // first time activation
+                    let text_services_mgr = CoreTextServicesManager::GetForCurrentView()
+                        .expect("coretextservicesmanager.get");
+                    let edit_context = text_services_mgr
+                        .CreateEditContext()
+                        .expect("edit_context.create");
+                    edit_context
+                        .LayoutRequested(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            CoreTextLayoutRequestedEventArgs,
+                        >::new(|sender, e| {
+                            let e = e.ok().expect("event_args.null");
+                            let req = e.Request().expect("layout_requested.event_args.request");
+                            tracing::trace!(
+                                req.is_canceled = ?req.IsCanceled(),
+                                req.range = ?req.Range(),
+                                "edit_context.layout_requested"
+                            );
+
+                            req.LayoutBounds()
                         .expect("layout_requested.event_args.request.layout_bounds")
                         .SetControlBounds(windows::Foundation::Rect {
                             X: 0.0,
@@ -647,7 +679,7 @@ impl WindowEventHandler {
                         .expect(
                             "layout_requested.event_args.request.layout_bounds.set_control_bounds",
                         );
-                        req.LayoutBounds()
+                            req.LayoutBounds()
                             .expect("layout_requested.event_args.request.layout_bounds")
                             .SetTextBounds(windows::Foundation::Rect {
                                 X: 0.0,
@@ -659,59 +691,59 @@ impl WindowEventHandler {
                                 "layout_requested.event_args.request.layout_bounds.set_text_bounds",
                             );
 
-                        Ok(())
-                    }))
-                    .expect("edit_context.layout_requested");
-                edit_context
-                    .TextRequested(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        CoreTextTextRequestedEventArgs,
-                    >::new(|sender, e| {
-                        let e = e.ok().expect("event_args.null");
-                        let req = e.Request().expect("text_requested.event_args.request");
-                        tracing::trace!(
-                            req.is_canceled = ?req.IsCanceled(),
-                            req.range = ?req.Range(),
-                            req.text = ?req.Text(),
-                            "edit_context.text_requested"
-                        );
+                            Ok(())
+                        }))
+                        .expect("edit_context.layout_requested");
+                    edit_context
+                        .TextRequested(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            CoreTextTextRequestedEventArgs,
+                        >::new(|sender, e| {
+                            let e = e.ok().expect("event_args.null");
+                            let req = e.Request().expect("text_requested.event_args.request");
+                            tracing::trace!(
+                                req.is_canceled = ?req.IsCanceled(),
+                                req.range = ?req.Range(),
+                                req.text = ?req.Text(),
+                                "edit_context.text_requested"
+                            );
 
-                        Ok(())
-                    }))
-                    .expect("edit_context.text_requested");
-                edit_context
-                    .TextUpdating(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        CoreTextTextUpdatingEventArgs,
-                    >::new(|sender, e| {
-                        let e = e.ok().expect("event_args.null");
-                        tracing::trace!(
-                            input_language = ?e.InputLanguage(),
-                            is_canceled = ?e.IsCanceled(),
-                            new_selection = ?e.NewSelection(),
-                            range = ?e.Range(),
-                            text = ?e.Text().map(|x| x.to_string_lossy()),
-                            "edit_context.text_updating"
-                        );
+                            Ok(())
+                        }))
+                        .expect("edit_context.text_requested");
+                    edit_context
+                        .TextUpdating(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            CoreTextTextUpdatingEventArgs,
+                        >::new(|sender, e| {
+                            let e = e.ok().expect("event_args.null");
+                            tracing::trace!(
+                                input_language = ?e.InputLanguage(),
+                                is_canceled = ?e.IsCanceled(),
+                                new_selection = ?e.NewSelection(),
+                                range = ?e.Range(),
+                                text = ?e.Text().map(|x| x.to_string_lossy()),
+                                "edit_context.text_updating"
+                            );
 
-                        Ok(())
-                    }))
-                    .expect("edit_context.text_updating");
-                edit_context
-                    .CompositionStarted(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        CoreTextCompositionStartedEventArgs,
-                    >::new(|sender, e| {
-                        tracing::trace!("composition_started");
-                        let e = e.ok().expect("event_args.null");
-                        tracing::trace!(
-                            is_canceled = ?e.IsCanceled(),
-                            "edit_context.composition_started"
-                        );
-                        Ok(())
-                    }))
-                    .expect("edit_context.composition_started");
-                edit_context.CompositionCompleted(&TypedEventHandler::<
+                            Ok(())
+                        }))
+                        .expect("edit_context.text_updating");
+                    edit_context
+                        .CompositionStarted(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            CoreTextCompositionStartedEventArgs,
+                        >::new(|sender, e| {
+                            tracing::trace!("composition_started");
+                            let e = e.ok().expect("event_args.null");
+                            tracing::trace!(
+                                is_canceled = ?e.IsCanceled(),
+                                "edit_context.composition_started"
+                            );
+                            Ok(())
+                        }))
+                        .expect("edit_context.composition_started");
+                    edit_context.CompositionCompleted(&TypedEventHandler::<
                     CoreTextEditContext,
                     CoreTextCompositionCompletedEventArgs,
                 >::new(move |sender, e| {
@@ -734,37 +766,37 @@ impl WindowEventHandler {
                     Ok(())
                 }))
                 .expect("edit_context.composition_completed");
-                edit_context
-                    .FormatUpdating(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        CoreTextFormatUpdatingEventArgs,
-                    >::new(|sender, e| {
-                        let e = e.ok().expect("event_args.null");
-                        tracing::trace!(
-                            background_color = ?e.BackgroundColor(),
-                            is_canceled = ?e.IsCanceled(),
-                            range = ?e.Range(),
-                            reason = ?e.Reason(),
-                            text_color = ?e.TextColor(),
-                            underline_color = ?e.UnderlineColor(),
-                            underline_type = ?e.UnderlineType(),
-                            "edit_context.format_updating"
-                        );
+                    edit_context
+                        .FormatUpdating(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            CoreTextFormatUpdatingEventArgs,
+                        >::new(|sender, e| {
+                            let e = e.ok().expect("event_args.null");
+                            tracing::trace!(
+                                background_color = ?e.BackgroundColor(),
+                                is_canceled = ?e.IsCanceled(),
+                                range = ?e.Range(),
+                                reason = ?e.Reason(),
+                                text_color = ?e.TextColor(),
+                                underline_color = ?e.UnderlineColor(),
+                                underline_type = ?e.UnderlineType(),
+                                "edit_context.format_updating"
+                            );
 
-                        Ok(())
-                    }))
-                    .expect("edit_context.format_updating");
-                edit_context
-                    .FocusRemoved(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        windows_core::IInspectable,
-                    >::new(|sender, e| {
-                        tracing::trace!(e = ?e.ok(), "edit_context.focus_removed");
+                            Ok(())
+                        }))
+                        .expect("edit_context.format_updating");
+                    edit_context
+                        .FocusRemoved(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            windows_core::IInspectable,
+                        >::new(|sender, e| {
+                            tracing::trace!(e = ?e.ok(), "edit_context.focus_removed");
 
-                        Ok(())
-                    }))
-                    .expect("edit_context.focus_removed");
-                edit_context
+                            Ok(())
+                        }))
+                        .expect("edit_context.focus_removed");
+                    edit_context
                     .NotifyFocusLeaveCompleted(&TypedEventHandler::<
                         CoreTextEditContext,
                         IInspectable,
@@ -774,43 +806,46 @@ impl WindowEventHandler {
                         Ok(())
                     }))
                     .expect("edit_context.notify_focus_leave_completed");
-                edit_context
-                    .SelectionRequested(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        CoreTextSelectionRequestedEventArgs,
-                    >::new(|sender, e| {
-                        let e = e.ok().expect("event_args.null");
-                        let req = e
-                            .Request()
-                            .expect("edit_context.selection_requested.event_args.request");
-                        tracing::trace!(
-                            req.is_canceled = ?req.IsCanceled(),
-                            req.selection = ?req.Selection(),
-                            "edit_context.selection_requested"
-                        );
+                    edit_context
+                        .SelectionRequested(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            CoreTextSelectionRequestedEventArgs,
+                        >::new(|sender, e| {
+                            let e = e.ok().expect("event_args.null");
+                            let req = e
+                                .Request()
+                                .expect("edit_context.selection_requested.event_args.request");
+                            tracing::trace!(
+                                req.is_canceled = ?req.IsCanceled(),
+                                req.selection = ?req.Selection(),
+                                "edit_context.selection_requested"
+                            );
 
-                        Ok(())
-                    }))
-                    .expect("edit_context.selection_requested");
-                edit_context
-                    .SelectionUpdating(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        CoreTextSelectionUpdatingEventArgs,
-                    >::new(|sender, e| {
-                        let e = e.ok().expect("event_args.null");
-                        tracing::trace!(
-                            is_canceled = ?e.IsCanceled(),
-                            selection = ?e.Selection(),
-                            "edit_context.selection_updating"
-                        );
+                            Ok(())
+                        }))
+                        .expect("edit_context.selection_requested");
+                    edit_context
+                        .SelectionUpdating(&TypedEventHandler::<
+                            CoreTextEditContext,
+                            CoreTextSelectionUpdatingEventArgs,
+                        >::new(|sender, e| {
+                            let e = e.ok().expect("event_args.null");
+                            tracing::trace!(
+                                is_canceled = ?e.IsCanceled(),
+                                selection = ?e.Selection(),
+                                "edit_context.selection_updating"
+                            );
 
-                        Ok(())
-                    }))
-                    .expect("edit_context.selection_updating");
+                            Ok(())
+                        }))
+                        .expect("edit_context.selection_updating");
 
-                state.text_services_mgr = Some(text_services_mgr);
-                state.edit_context = Some(edit_context);
+                    state.text_services_mgr = Some(text_services_mgr);
+                    state.edit_context = Some(edit_context);
+                }
             }
+
+            return LRESULT(0);
         }
 
         if msg == WM_DPICHANGED {
@@ -888,7 +923,7 @@ impl WindowEventHandler {
 
         if msg == WM_NCCALCSIZE {
             if wparam.0 == 1 {
-                Self::compute_client_rect(unsafe {
+                Self::compute_client_rect(hwnd, unsafe {
                     &mut *core::ptr::without_provenance_mut(lparam.0.cast_unsigned())
                 });
 
