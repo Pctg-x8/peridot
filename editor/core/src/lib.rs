@@ -850,9 +850,7 @@ pub enum Event {
         window: WindowHandle,
         is_maximized: bool,
     },
-    SubWindowOpen {
-        window: WindowHandle,
-    },
+    SubWindowOpen,
     SubWindowClose {
         window: WindowHandle,
     },
@@ -2597,9 +2595,7 @@ async fn run<'sys>(
             context: &mut HitTestEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
-            context
-                .system_link
-                .open_window(context.composite_tree, context.ht_create_only_access);
+            context.system_link.dispatch_event(Event::SubWindowOpen);
 
             input::EventContinueControl::STOP_PROPAGATION
         }
@@ -2656,32 +2652,36 @@ async fn run<'sys>(
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
-            Event::SubWindowOpen { mut window } => {
-                composite_tree.get_mut(window.composite_root()).has_bitmap = true;
-                composite_tree
-                    .get_mut(window.composite_root())
-                    .composite_mode =
-                    CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
-                composite_tree.mark_dirty(window.composite_root());
-
-                let window_header_view = WindowHeaderView::new(
-                    WindowCaption::Sub,
+            Event::SubWindowOpen => {
+                system_link.open_window(
                     &mut composite_tree,
                     &mut ht_manager,
-                    &texture_id_set,
-                    init_scale,
-                    main_window.needs_system_command_buttons(),
-                );
-                window_header_view.mount(
-                    window.composite_root(),
-                    window.ht_root(),
-                    &mut composite_tree,
-                    &mut ht_manager,
-                );
+                    |mut w, composite_tree, ht_manager| {
+                        composite_tree.get_mut(w.composite_root()).has_bitmap = true;
+                        composite_tree.get_mut(w.composite_root()).composite_mode =
+                            CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
+                        composite_tree.mark_dirty(w.composite_root());
 
-                window.associate_extra_data(Box::new(PerWindowView {
-                    header: window_header_view,
-                }));
+                        let window_header_view = WindowHeaderView::new(
+                            WindowCaption::Sub,
+                            composite_tree,
+                            ht_manager,
+                            &texture_id_set,
+                            init_scale,
+                            w.needs_system_command_buttons(),
+                        );
+                        window_header_view.mount(
+                            w.composite_root(),
+                            w.ht_root(),
+                            composite_tree,
+                            ht_manager,
+                        );
+
+                        w.associate_extra_data(Box::new(PerWindowView {
+                            header: window_header_view,
+                        }));
+                    },
+                );
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                 composite_tree.commit(&mut renderer_sync.composite_buffer);

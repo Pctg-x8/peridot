@@ -1315,10 +1315,11 @@ impl SystemLink<'_> {
         &self.drag_preview_popover
     }
 
-    pub fn open_window<'h>(
+    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
         &self,
         composite_tree: &mut CompositeTree<Event>,
-        hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
+        hit_tree: &mut HT,
+        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<Event>, &mut HT),
     ) -> WindowHandle {
         let w = NativeWindow::new(
             unsafe { &*self.window_class_set },
@@ -1344,9 +1345,9 @@ impl SystemLink<'_> {
             }))
             .expect("rt_sender.send");
 
+        setup_contents(h, composite_tree, hit_tree);
         unsafe {
             let _ = ShowWindow(w.hwnd, SW_SHOW);
-            (*self.event_dispatcher).dispatch(Event::SubWindowOpen { window: h });
         }
         h
     }
