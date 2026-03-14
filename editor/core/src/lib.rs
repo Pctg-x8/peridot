@@ -1296,15 +1296,13 @@ async fn run<'sys>(
                     .drag_preview_popover()
                     .bind_position_base_window_link(window);
 
+                // waylandの場合はここでTitleBarロールの判定をする
+                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
                 #[cfg(feature = "wayland")]
+                if pointer_input_manager.role_focus(&ht_manager)
+                    == Some(input::hittest::Role::TitleBar)
                 {
-                    // waylandの場合はここでTitleBarロールの判定をする
-                    // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
-                    if pointer_input_manager.role_focus(&ht_manager)
-                        == Some(input::hittest::Role::TitleBar)
-                    {
-                        window.begin_drag(event_id);
-                    }
+                    window.begin_drag(event_id);
                 }
 
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
