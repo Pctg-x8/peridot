@@ -1059,6 +1059,13 @@ pub struct CompositeRenderingData {
     pub render_passes: Vec<RenderPassRequirements>,
     pub required_backdrop_buffer_count: usize,
 }
+impl CompositeRenderingData {
+    pub const EMPTY: Self = Self {
+        instructions: Vec::new(),
+        render_passes: Vec::new(),
+        required_backdrop_buffer_count: 0,
+    };
+}
 
 const fn rect_overlaps(a: &br::Rect2D, b: &br::Rect2D) -> bool {
     b.offset.x - (a.extent.width as i32) < a.offset.x

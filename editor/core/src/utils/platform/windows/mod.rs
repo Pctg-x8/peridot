@@ -1,5 +1,4 @@
 mod log_writer;
-pub mod winrt_bootstrap;
 
 use windows::{
     Win32::{
@@ -12,7 +11,7 @@ use windows::{
     core::PCSTR,
 };
 
-pub use self::{log_writer::DebugOutputWriter, winrt_bootstrap::WindowsAppRuntimeBootstrap};
+pub use self::log_writer::DebugOutputWriter;
 
 pub fn set_panic_hook() {
     std::panic::set_hook(Box::new(|panic| unsafe {

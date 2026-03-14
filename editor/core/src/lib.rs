@@ -162,8 +162,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(windows)]
     let wc_set = platform::windows::WindowClassSet::register(hinstance);
     #[cfg(windows)]
-    let app_runtime = utils::platform::windows::WindowsAppRuntimeBootstrap::init();
-    #[cfg(windows)]
     let _dispatcher_queue = unsafe {
         CreateDispatcherQueueController(DispatcherQueueOptions {
             dwSize: core::mem::size_of::<DispatcherQueueOptions>() as _,
@@ -800,9 +798,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
     });
-
-    #[cfg(windows)]
-    app_runtime.shutdown();
 }
 
 struct RendererSync {

@@ -808,6 +808,11 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
     }
 
     #[inline(always)]
+    pub fn image_count(&self) -> usize {
+        self.images.len()
+    }
+
+    #[inline(always)]
     pub fn image_ref<'a>(&'a self, index: usize) -> br::VkHandleRef<'a, br::vk::VkImage> {
         unsafe { br::VkHandleRef::dangling(self.images[index]) }
     }

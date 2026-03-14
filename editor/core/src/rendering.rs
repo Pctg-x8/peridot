@@ -482,8 +482,6 @@ struct WindowRenderer<'d> {
     render_cb_invalid: bool,
     present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
     backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
-    primary_framebuffers: Vec<br::FramebufferObject<'d, &'d VulkanDevice<'d>>>,
-    primary_render_pass: br::RenderPassObject<&'d VulkanDevice<'d>>,
     swapchain: VulkanSwapchain<'d, 'd>,
     surface: VulkanSurface<'d, 'd>,
     font_set: PerWindowFontSet<'d>,
@@ -517,47 +515,6 @@ impl<'d> WindowRenderer<'d> {
             },
         );
 
-        // TODO: 同じ構造のものがあれば使い回したい
-        let vk_render_pass = br::RenderPassObject::new(
-            device,
-            &br::RenderPassCreateInfo2::new(
-                &[br::AttachmentDescription2::new(surface.format())
-                    .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)
-                    .layout_transition(br::ImageLayout::PresentSrc, br::ImageLayout::PresentSrc)],
-                &[br::SubpassDescription2::new()
-                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
-                &[br::SubpassDependency2::new(
-                    br::SubpassIndex::Internal(0),
-                    br::SubpassIndex::External,
-                )
-                .by_region()
-                .of_memory(
-                    br::AccessFlags::COLOR_ATTACHMENT.write,
-                    br::AccessFlags::MEMORY.read,
-                )
-                .of_execution(
-                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                    br::PipelineStageFlags(0),
-                )],
-            ),
-        )
-        .expect("render pass create");
-        let vk_framebuffers = vk_swapchain
-            .image_view_refs()
-            .map(|bb| {
-                br::FramebufferObject::new(
-                    device,
-                    &br::FramebufferCreateInfo::new(
-                        &vk_render_pass,
-                        &[bb],
-                        vk_swapchain.size().width,
-                        vk_swapchain.size().height,
-                    ),
-                )
-                .expect("framebuffer create")
-            })
-            .collect::<Vec<_>>();
-
         let mut update_cp = br::CommandPoolObject::new(
             device,
             &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
@@ -588,7 +545,7 @@ impl<'d> WindowRenderer<'d> {
             device,
             &br::CommandBufferAllocateInfo::new(
                 &mut render_cp,
-                vk_framebuffers.len() as _,
+                vk_swapchain.image_count() as _,
                 br::CommandBufferLevel::Primary,
             ),
         )
@@ -630,11 +587,7 @@ impl<'d> WindowRenderer<'d> {
             composite_root: create_data.key.composite_root(),
             composite_renderer,
             corner_cutout_renderer,
-            last_composite_render_data: CompositeRenderingData {
-                instructions: Vec::new(),
-                render_passes: Vec::new(),
-                required_backdrop_buffer_count: 0,
-            },
+            last_composite_render_data: CompositeRenderingData::EMPTY,
             update_cp,
             update_cb,
             update_completion_fence: br::FenceObject::new(device, &br::FenceCreateInfo::new(0))
@@ -648,7 +601,7 @@ impl<'d> WindowRenderer<'d> {
             render_cp,
             render_cb,
             render_cb_invalid: true,
-            present_ready_semaphores: (0..vk_framebuffers.len())
+            present_ready_semaphores: (0..vk_swapchain.image_count())
                 .map(|_| {
                     br::SemaphoreObject::new(device, &br::SemaphoreCreateInfo::new())
                         .expect("rendering_timeline_semaphore create")
@@ -662,8 +615,6 @@ impl<'d> WindowRenderer<'d> {
             surface,
             swapchain: vk_swapchain,
             swapchain_invalidated: false,
-            primary_render_pass: vk_render_pass,
-            primary_framebuffers: vk_framebuffers,
         }
     }
 
@@ -769,7 +720,6 @@ impl<'d> WindowRenderer<'d> {
         }
 
         self.invalidate_render_commands();
-        self.primary_framebuffers.clear();
 
         self.surface.refresh_caps();
         self.swapchain.recreate(
@@ -781,19 +731,6 @@ impl<'d> WindowRenderer<'d> {
         );
 
         // recrease rt resources
-        self.primary_framebuffers
-            .extend(self.swapchain.image_view_refs().map(|bb| {
-                br::FramebufferObject::new(
-                    self.vk_device,
-                    &br::FramebufferCreateInfo::new(
-                        &self.primary_render_pass,
-                        &[bb],
-                        self.swapchain.size().width,
-                        self.swapchain.size().height,
-                    ),
-                )
-                .expect("framebuffer create")
-            }));
         self.composite_renderer.recreate_rt_resources(
             self.vk_device,
             self.surface.format(),
