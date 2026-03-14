@@ -25,16 +25,17 @@ use windows::{
                 GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
                 HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
                 HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
-                IDI_APPLICATION, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostQuitMessage,
-                SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
-                SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE, WA_CLICKACTIVE,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
-                WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE,
-                WM_SETFOCUS, WM_SIZE, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
-                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-                WS_OVERLAPPEDWINDOW, WS_POPUP,
+                IDI_APPLICATION, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
+                PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
+                SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+                SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_NOZORDER, SendMessageW, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+                WA_ACTIVE, WA_CLICKACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
+                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+                WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
+                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -182,6 +183,62 @@ impl WindowHandle {
     pub const fn needs_corner_cutout_rendering(&self) -> bool {
         // Windowsは常に不要
         false
+    }
+
+    #[inline(always)]
+    pub fn on_click_sys_close_button(&self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_CLOSE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
+    }
+
+    #[inline(always)]
+    pub fn on_click_sys_minimize_button(&self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_MINIMIZE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
+    }
+
+    #[inline(always)]
+    pub fn on_click_sys_maximize_button(&self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_MAXIMIZE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
+    }
+
+    #[inline(always)]
+    pub fn on_click_sys_restore_button(&self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_RESTORE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
     }
 }
 impl ShellPointerActions for WindowHandle {
@@ -498,6 +555,11 @@ impl WindowEventHandler {
         }
     }
 
+    #[inline(always)]
+    const fn is_application_handled_hittest(ht: u32) -> bool {
+        ht == HTCLOSE || ht == HTMAXBUTTON || ht == HTMINBUTTON
+    }
+
     extern "system" fn handle_messages(
         hwnd: HWND,
         msg: u32,
@@ -802,6 +864,23 @@ impl WindowEventHandler {
                         ((lparam.0 >> 16) & 0xffff) as u16 as _,
                     ),
                 );
+
+                if wparam.0 == SIZE_MAXIMIZED as _ {
+                    state
+                        .event_dispatcher
+                        .dispatch(Event::WindowMaximizeStateChanged {
+                            window: WindowHandle(hwnd),
+                            is_maximized: true,
+                        });
+                }
+                if wparam.0 == SIZE_RESTORED as _ {
+                    state
+                        .event_dispatcher
+                        .dispatch(Event::WindowMaximizeStateChanged {
+                            window: WindowHandle(hwnd),
+                            is_maximized: false,
+                        });
+                }
             }
 
             return LRESULT(0);
@@ -855,7 +934,7 @@ impl WindowEventHandler {
             return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
         }
 
-        if msg == WM_LBUTTONDOWN || msg == WM_NCLBUTTONDOWN {
+        if msg == WM_LBUTTONDOWN {
             Self::get_for_window(hwnd).left_button_down(
                 hwnd,
                 Point::new_pixels(
@@ -867,9 +946,25 @@ impl WindowEventHandler {
             return LRESULT(0);
         }
 
-        if msg == WM_LBUTTONUP || msg == WM_NCLBUTTONUP {
-            Self::get_for_window(hwnd).left_button_up(hwnd);
+        if msg == WM_NCLBUTTONDOWN && Self::is_application_handled_hittest(wparam.0 as _) {
+            // アプリケーションでハンドリングするNonClientエリア
+            // NonClientイベントはスクリーン座標で来る
+            let mut p = [POINT {
+                x: (lparam.0 & 0xffff) as i16 as _,
+                y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            }];
+            unsafe {
+                MapWindowPoints(None, Some(hwnd), &mut p);
+            }
 
+            Self::get_for_window(hwnd).left_button_down(hwnd, Point::new_pixels(p[0].x, p[0].y));
+            return LRESULT(0);
+        }
+
+        if msg == WM_LBUTTONUP
+            || (msg == WM_NCLBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
+        {
+            Self::get_for_window(hwnd).left_button_up(hwnd);
             return LRESULT(0);
         }
 
@@ -886,7 +981,7 @@ impl WindowEventHandler {
         }
 
         if msg == WM_NCMOUSEMOVE {
-            // NCMOUSEMOVEはスクリーン座標で来る(TODO: 他のNCマウスイベントもかも？)
+            // NonClientイベントはスクリーン座標で来る
             let mut p = [POINT {
                 x: (lparam.0 & 0xffff) as i16 as _,
                 y: ((lparam.0 >> 16) & 0xffff) as i16 as _,

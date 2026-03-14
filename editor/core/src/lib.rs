@@ -846,6 +846,10 @@ pub enum Event {
         window: WindowHandle,
         new_scale: f32,
     },
+    WindowMaximizeStateChanged {
+        window: WindowHandle,
+        is_maximized: bool,
+    },
     SubWindowOpen {
         window: WindowHandle,
     },
@@ -1061,6 +1065,27 @@ impl WindowHeaderView {
             }
         }
     }
+
+    pub fn set_maximize_state(
+        &self,
+        is_maximized: bool,
+        composite_tree: &mut CompositeTree<Event>,
+        ht_manager: &mut HitTestTreeManager<'_>,
+        texture_id_set: &SystemCommandTextureIDSet,
+    ) {
+        if let Some(ref xs) = self.command_buttons {
+            xs[1].replace_cmd(
+                composite_tree,
+                ht_manager,
+                texture_id_set,
+                if is_maximized {
+                    SystemCommand::Restore
+                } else {
+                    SystemCommand::Maximize
+                },
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1188,18 +1213,39 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
         input::EventContinueControl::STOP_PROPAGATION
     }
 
+    fn on_pointer_down(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut HitTestEventContext,
+        _args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
+    }
+
+    fn on_pointer_up(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut HitTestEventContext,
+        _args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        input::EventContinueControl::STOP_PROPAGATION
+            | input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
+    }
+
     fn on_click(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut HitTestEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> input::EventContinueControl {
+        tracing::debug!(cmd = ?self.cmd.get(), "syscmd click");
+
         // TODO: perform works
         match self.cmd.get() {
-            SystemCommand::Close => {}
-            SystemCommand::Minimize => {}
-            SystemCommand::Maximize => {}
-            SystemCommand::Restore => {}
+            SystemCommand::Close => context.sender_window.on_click_sys_close_button(),
+            SystemCommand::Minimize => context.sender_window.on_click_sys_minimize_button(),
+            SystemCommand::Maximize => context.sender_window.on_click_sys_maximize_button(),
+            SystemCommand::Restore => context.sender_window.on_click_sys_restore_button(),
         }
 
         input::EventContinueControl::STOP_PROPAGATION
@@ -2674,6 +2720,20 @@ async fn run<'sys>(
                 composite_tree.commit(&mut renderer_sync.composite_buffer);
                 system_link.notify_ui_scale_changes_to_render(window, new_scale);
             }
+            Event::WindowMaximizeStateChanged {
+                window,
+                is_maximized,
+            } => unsafe {
+                window
+                    .extra_data_ref::<PerWindowView>()
+                    .header
+                    .set_maximize_state(
+                        is_maximized,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &texture_id_set,
+                    );
+            },
             Event::PointerDown {
                 window,
                 #[cfg(feature = "wayland")]
@@ -2708,6 +2768,7 @@ async fn run<'sys>(
                     &window,
                     &ht_manager,
                     &mut HitTestEventContext {
+                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2732,6 +2793,7 @@ async fn run<'sys>(
                     &window,
                     &ht_manager,
                     &mut HitTestEventContext {
+                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2752,6 +2814,7 @@ async fn run<'sys>(
                     &window,
                     &ht_manager,
                     &mut HitTestEventContext {
+                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),

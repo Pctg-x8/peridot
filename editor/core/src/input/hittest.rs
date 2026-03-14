@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    DragPreviewPopoverHandle, Event,
+    DragPreviewPopoverHandle, Event, WindowHandle,
     input::{EventContinueControl, FocusTargetToken},
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -377,6 +377,7 @@ pub struct PointerActionArgs {
 }
 
 pub struct HitTestEventContext<'env, 'h> {
+    pub sender_window: WindowHandle,
     pub current_sec: f32,
     pub composite_tree: &'env mut crate::rendering::composite::CompositeTree<Event>,
     pub drag_preview: &'env DragPreviewPopoverHandle,
