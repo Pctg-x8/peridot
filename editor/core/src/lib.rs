@@ -515,12 +515,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .add(&events.efd, EpollEventBits::IN, 2)
             .expect("epoll.add.events_efd");
         #[cfg(target_os = "linux")]
-        let poll_id_to_watch_ref = core::cell::UnsafeCell::new(HashMap::new());
+        let poll_id_to_watch_ref = core::cell::UnsafeCell::new(std::collections::HashMap::new());
         #[cfg(target_os = "linux")]
         dbus.set_watch_functions(Box::new(DBusWatcher {
             epoll: &epoll,
             last_poll_id: 100,
-            fd_to_poll_id: HashMap::new(),
+            fd_to_poll_id: std::collections::HashMap::new(),
             poll_id_to_watch_ref: &poll_id_to_watch_ref,
         }));
         #[cfg(target_os = "linux")]
@@ -1563,7 +1563,7 @@ impl SystemLink<'_> {
 pub enum WindowType {
     Main {
         #[cfg(target_os = "linux")]
-        termination_event: Arc<linux_eventfd::EventFD>,
+        termination_event: std::sync::Arc<linux_eventfd::EventFD>,
     },
     Sub,
 }
@@ -1836,8 +1836,9 @@ impl FileSystem {
 struct DBusWatcher<'e> {
     epoll: &'e Epoll,
     last_poll_id: u64,
-    fd_to_poll_id: HashMap<core::ffi::c_int, u64>,
-    poll_id_to_watch_ref: &'e core::cell::UnsafeCell<HashMap<u64, *mut dbus::WatchRef>>,
+    fd_to_poll_id: std::collections::HashMap<core::ffi::c_int, u64>,
+    poll_id_to_watch_ref:
+        &'e core::cell::UnsafeCell<std::collections::HashMap<u64, *mut dbus::WatchRef>>,
 }
 #[cfg(target_os = "linux")]
 impl dbus::WatchFunction for DBusWatcher<'_> {

@@ -117,6 +117,15 @@ impl WindowHandle {
         self.state().ht_root
     }
 
+    // TODO: impl them
+    pub fn on_click_sys_close_button(&self) {}
+
+    pub fn on_click_sys_maximize_button(&self) {}
+
+    pub fn on_click_sys_minimize_button(&self) {}
+
+    pub fn on_click_sys_restore_button(&self) {}
+
     pub fn begin_drag(&self, event_id: PointerEventID) {
         self.state()
             .xdg_toplevel
@@ -145,7 +154,7 @@ impl WindowHandle {
         }
     }
 }
-impl crate::ShellPointerActions for WindowHandle {
+impl crate::input::ShellPointerActions for WindowHandle {
     #[inline(always)]
     fn capture_pointer(&self) {
         // Waylandはなし(勝手にキャプチャ状態になってるらしい)
@@ -362,10 +371,11 @@ impl crate::SystemLink<'_> {
         main_window_handle
     }
 
-    pub fn open_window<'h>(
+    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
         &self,
         composite_tree: &mut CompositeTree<Event>,
-        hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
+        hit_tree: &mut HT,
+        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<Event>, &mut HT),
     ) -> WindowHandle {
         let w = Window::new(
             WindowType::Sub,
@@ -394,15 +404,13 @@ impl crate::SystemLink<'_> {
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
             }))
             .expect("rt_sender.send");
+        setup_contents(window_handle, composite_tree, hit_tree);
         w.commit();
 
         unsafe {
             (*self.display_server.window_registry)
                 .objects
                 .insert(window_handle, w);
-            (*self.event_dispatcher).dispatch(Event::SubWindowOpen {
-                window: window_handle,
-            });
         }
         window_handle
     }
