@@ -94,39 +94,55 @@ impl<'d> PerWindowFontSet<'d> {
         let ui_default = root_set
             .ui_common_font_data
             .iter()
-            .map(|&(f, ix)| unsafe {
+            .map(|&(f, ix, _)| unsafe {
                 ft::new_memory_face(root_set.ft_lib.0, &root_set.font_binaries[f], ix as _)
-                    .expect("FreeType.new_face.ui_default")
+                    .expect("FreeType.new_face")
             })
             .collect::<Vec<_>>();
         #[cfg(feature = "freetype")]
         let ui_title_project_name = root_set
             .ui_common_font_data
             .iter()
-            .map(|&(f, ix)| unsafe {
+            .map(|&(f, ix, _)| unsafe {
                 ft::new_memory_face(root_set.ft_lib.0, &root_set.font_binaries[f], ix as _)
-                    .expect("FreeType.new_face.ui_title_project_name")
+                    .expect("FreeType.new_face")
             })
             .collect::<Vec<_>>();
 
         #[cfg(feature = "harfbuzz")]
-        let ui_default_shaping = ui_default
+        let ui_default_shaping = root_set
+            .ui_common_font_data
             .iter()
-            .map(|&f| {
-                core::ptr::NonNull::new(unsafe {
-                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
-                })
-                .expect("hb_ft_font_create_referenced.ui_default")
+            .map(|&(_, _, f)| {
+                let font = core::ptr::NonNull::new(unsafe { hb::ffi::hb_font_create(f) })
+                    .expect("hb_font_create");
+                unsafe {
+                    hb::ffi::hb_font_set_variation(
+                        font.as_ptr(),
+                        hb::ffi::HB_OT_TAG_VAR_AXIS_WEIGHT,
+                        400.0,
+                    );
+                }
+
+                font
             })
             .collect::<Vec<_>>();
         #[cfg(feature = "harfbuzz")]
-        let ui_title_project_name_shaping = ui_title_project_name
+        let ui_title_project_name_shaping = root_set
+            .ui_common_font_data
             .iter()
-            .map(|&f| {
-                core::ptr::NonNull::new(unsafe {
-                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
-                })
-                .expect("hb_ft_font_create_referenced.ui_title_project_name")
+            .map(|&(_, _, f)| {
+                let font = core::ptr::NonNull::new(unsafe { hb::ffi::hb_font_create(f) })
+                    .expect("hb_font_create");
+                unsafe {
+                    hb::ffi::hb_font_set_variation(
+                        font.as_ptr(),
+                        hb::ffi::HB_OT_TAG_VAR_AXIS_WEIGHT,
+                        400.0,
+                    );
+                }
+
+                font
             })
             .collect::<Vec<_>>();
 
@@ -179,10 +195,12 @@ impl<'d> PerWindowFontSet<'d> {
         #[cfg(feature = "harfbuzz")]
         unsafe {
             for &x in &self.ui_default_shaping.faces {
-                hb::ffi::hb_ft_font_changed(x.as_ptr());
+                let scale = (12.0 * dpi as f32 / 72.0 * 64.0).ceil() as _;
+                hb::ffi::hb_font_set_scale(x.as_ptr(), scale, scale);
             }
             for &x in &self.ui_title_project_name_shaping.faces {
-                hb::ffi::hb_ft_font_changed(x.as_ptr());
+                let scale = (10.0 * dpi as f32 / 72.0 * 64.0).ceil() as _;
+                hb::ffi::hb_font_set_scale(x.as_ptr(), scale, scale);
             }
         }
     }
@@ -245,7 +263,7 @@ pub struct RootFontSet {
     #[cfg(feature = "freetype")]
     font_binaries: Vec<Vec<ft::raw::FT_Byte>>,
     #[cfg(feature = "freetype")]
-    ui_common_font_data: Vec<(usize, core::ffi::c_int)>,
+    ui_common_font_data: Vec<(usize, core::ffi::c_int, *mut hb::ffi::hb_face_t)>,
     #[cfg(windows)]
     dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     #[cfg(windows)]
@@ -368,7 +386,7 @@ impl RootFontSet {
                     .expect("FcPattern.get.index")
                     .expect("FcPattern.get.not_exist.index");
 
-                let font_binary_index = match loaded_fonts.entry(file) {
+                let font_binary_index = match loaded_fonts.entry(file.clone()) {
                     std::collections::hash_map::Entry::Occupied(x) => *x.get(),
                     std::collections::hash_map::Entry::Vacant(x) => {
                         font_binaries.push(
@@ -381,7 +399,26 @@ impl RootFontSet {
 
                 if selected_fonts.insert((font_binary_index, index)) {
                     // 未知のフォント
-                    fonts_ordered.push((font_binary_index, index));
+                    let hb_face = hb::ffi::hb_face_create_from_file_or_fail(
+                        file.as_ptr(),
+                        font_binary_index as _,
+                    );
+
+                    // if hb::ffi::hb_ot_var_has_data(hb_face) != 0 {
+                    //     let mut count = hb::ffi::hb_ot_var_get_axis_count(hb_face);
+                    //     let mut infos =
+                    //         Vec::<hb::ffi::hb_ot_var_axis_info_t>::with_capacity(count as _);
+                    //     hb::ffi::hb_ot_var_get_axis_infos(
+                    //         hb_face,
+                    //         0,
+                    //         &mut count,
+                    //         infos.spare_capacity_mut().as_mut_ptr() as _,
+                    //     );
+                    //     infos.set_len(count as _);
+                    //     tracing::debug!(?infos, "variable face");
+                    // }
+
+                    fonts_ordered.push((font_binary_index, index, hb_face));
                 }
             }
 
