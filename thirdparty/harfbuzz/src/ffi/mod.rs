@@ -200,9 +200,6 @@ pub use self::blob::*;
 mod buffer;
 pub use self::buffer::*;
 
-mod draw;
-pub use self::draw::*;
-
 mod face;
 pub use self::face::*;
 
@@ -214,15 +211,6 @@ pub use self::ft::*;
 
 mod map;
 pub use self::map::*;
-
-mod ot_name;
-pub use self::ot_name::*;
-
-mod ot_var;
-pub use self::ot_var::*;
-
-mod paint;
-pub use self::paint::*;
 
 mod script_list;
 pub use self::script_list::*;

@@ -1821,6 +1821,8 @@ impl<Event> CompositeTreeRender<Event> {
         let mut baseline_y_offset = 0.0f32;
         #[cfg(feature = "freetype")]
         for x in text_layout.runs.iter() {
+            #[cfg(feature = "freetype")]
+            let font = font_set.select(x.font_id);
             #[cfg(feature = "harfbuzz")]
             let shaping_set = font_set.select_shaping(x.font_id);
 
@@ -1828,16 +1830,9 @@ impl<Event> CompositeTreeRender<Event> {
             let mut shaped_bytes = 0usize;
             while shaped_bytes < x.content.len() {
                 let starting_bytes = shaped_bytes;
-                #[cfg(feature = "harfbuzz")]
                 for c in x.content[starting_bytes..].chars() {
-                    let mut gid = core::mem::MaybeUninit::uninit();
                     if unsafe {
-                        peridot_tp_harfbuzz::ffi::hb_font_get_glyph(
-                            shaping_set.faces[font_index].as_ptr(),
-                            c as _,
-                            0,
-                            gid.as_mut_ptr(),
-                        )
+                        peridot_tp_freetype::get_char_index(font.faces[font_index], c as _)
                     } == 0
                     {
                         // no char in font, needs fallback
@@ -1875,24 +1870,20 @@ impl<Event> CompositeTreeRender<Event> {
 
                 #[cfg(feature = "harfbuzz")]
                 buffers.push((buf, font_index));
-                #[cfg(feature = "harfbuzz")]
+                #[cfg(feature = "freetype")]
                 {
-                    let mut extents = core::mem::MaybeUninit::uninit();
-                    unsafe {
-                        peridot_tp_harfbuzz::ffi::hb_font_get_h_extents(
-                            shaping_set.faces[font_index].as_ptr(),
-                            extents.as_mut_ptr(),
-                        );
-                    }
-                    let extents = unsafe { extents.assume_init() };
-
-                    baseline_y_offset = baseline_y_offset.max(extents.ascender as f32 / 64.0);
+                    baseline_y_offset = baseline_y_offset.max(unsafe {
+                        (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
+                    });
 
                     // freetype2のdescenderは符号が逆になってるのでこれで正解
                     // TODO: 複数行になる場合はleadingを行間に足す
-                    cache.text_height = cache
-                        .text_height
-                        .max((extents.ascender - extents.descender) as f32 / 64.0);
+                    cache.text_height = cache.text_height.max(unsafe {
+                        ((*(*font.faces[font_index]).size).metrics.ascender
+                            - (*(*font.faces[font_index]).size).metrics.descender)
+                            as f32
+                            / 64.0
+                    });
                 }
 
                 // reset for next chunk
@@ -1904,7 +1895,8 @@ impl<Event> CompositeTreeRender<Event> {
         let mut x_shift = 0.0;
         #[cfg(feature = "harfbuzz")]
         for (r, &(b, font_index)) in text_layout.runs.iter().zip(buffers.iter()) {
-            let shaping_set = font_set.select_shaping(r.font_id);
+            #[cfg(feature = "freetype")]
+            let font = font_set.select(r.font_id);
 
             x_shift += r.spacing_inline_start * scale_factor;
 
@@ -1928,17 +1920,17 @@ impl<Event> CompositeTreeRender<Event> {
                 let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
 
-                let mut extents = core::mem::MaybeUninit::uninit();
                 unsafe {
-                    peridot_tp_harfbuzz::ffi::hb_font_get_glyph_extents(
-                        shaping_set.faces[font_index].as_ptr(),
+                    peridot_tp_freetype::load_glyph(
+                        font.faces[font_index],
                         glyph_info.codepoint,
-                        extents.as_mut_ptr(),
-                    );
-                }
-                let extents = unsafe { extents.assume_init() };
-                let glyph_width = extents.width as f32 / 64.0;
-                let glyph_height = -extents.height as f32 / 64.0;
+                        peridot_tp_freetype::LoadFlags::DEFAULT,
+                    )
+                    .expect("face.load_glyph")
+                };
+                let metrics = unsafe { &(*(*font.faces[font_index]).glyph).metrics };
+                let glyph_width = metrics.width as f32 / 64.0;
+                let glyph_height = metrics.height as f32 / 64.0;
 
                 let (r, is_new) = glyph_atlas.acquire_for_glyph(
                     (r.font_id as _, glyph_info.codepoint as _),
@@ -1947,8 +1939,8 @@ impl<Event> CompositeTreeRender<Event> {
                 );
                 let placement_box = GlyphPlacementBox {
                     left: left_cursor
-                        + (glyph_position.x_offset as f32 + extents.x_bearing as f32) / 64.0,
-                    top: baseline_y - extents.y_bearing as f32 / 64.0,
+                        + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32) / 64.0,
+                    top: baseline_y - metrics.horiBearingY as f32 / 64.0,
                     tex_left: r.left,
                     tex_top: r.top,
                     width: r.width(),
@@ -1961,229 +1953,147 @@ impl<Event> CompositeTreeRender<Event> {
                     vector_raster_state.updated_rects.push(r.vk_rect());
 
                     struct OutlineReceiver<'r> {
-                        current_figure: Option<(f32, f32, usize)>,
-                        pen_pos: (f32, f32),
+                        current_figure: Option<(peridot_tp_freetype::Vector, usize)>,
+                        pen_pos: peridot_tp_freetype::Vector,
                         sink: &'r mut VectorRasterizationState,
                         offset_x: f32,
                         offset_y: f32,
                     }
-                    impl OutlineReceiver<'_> {
-                        pub extern "C" fn move_to(
-                            _dfuncs: *mut peridot_tp_harfbuzz::ffi::hb_draw_funcs_t,
-                            draw_data: *mut core::ffi::c_void,
-                            _st: *mut peridot_tp_harfbuzz::ffi::hb_draw_state_t,
-                            to_x: core::ffi::c_float,
-                            to_y: core::ffi::c_float,
-                            _user_data: *mut core::ffi::c_void,
-                        ) {
-                            let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
-
-                            this.current_figure =
-                                Some((to_x, to_y, this.sink.fill_tri_points.len()));
-                            this.pen_pos = (to_x, to_y);
-                            this.sink
-                                .fill_tri_points
-                                .push([to_x + this.offset_x, to_y + this.offset_y]);
+                    impl peridot_tp_freetype::OutlineFuncs for OutlineReceiver<'_> {
+                        fn move_to(&mut self, to: &peridot_tp_freetype::Vector) {
+                            self.current_figure =
+                                Some((to.clone(), self.sink.fill_tri_points.len()));
+                            self.pen_pos = to.clone();
+                            self.sink.fill_tri_points.push([
+                                to.x as f32 / 64.0 + self.offset_x,
+                                to.y as f32 / 64.0 + self.offset_y,
+                            ]);
                         }
 
-                        pub extern "C" fn line_to(
-                            _dfuncs: *mut peridot_tp_harfbuzz::ffi::hb_draw_funcs_t,
-                            draw_data: *mut core::ffi::c_void,
-                            _st: *mut peridot_tp_harfbuzz::ffi::hb_draw_state_t,
-                            to_x: core::ffi::c_float,
-                            to_y: core::ffi::c_float,
-                            _user_data: *mut core::ffi::c_void,
-                        ) {
-                            let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
-
-                            let Some((_, _, filltri_index0)) = this.current_figure else {
+                        fn line_to(&mut self, to: &peridot_tp_freetype::Vector) {
+                            let Some((_, filltri_index0)) = self.current_figure else {
                                 panic!("no figure started?");
                             };
 
-                            let filltri_index1 = this.sink.fill_tri_points.len() - 1;
-                            let filltri_index2 = this.sink.fill_tri_points.len();
-                            this.sink
-                                .fill_tri_points
-                                .push([to_x + this.offset_x, to_y + this.offset_y]);
-                            this.sink.fill_tri_indices.extend([
+                            let filltri_index1 = self.sink.fill_tri_points.len() - 1;
+                            let filltri_index2 = self.sink.fill_tri_points.len();
+                            self.sink.fill_tri_points.push([
+                                to.x as f32 / 64.0 + self.offset_x,
+                                to.y as f32 / 64.0 + self.offset_y,
+                            ]);
+                            self.sink.fill_tri_indices.extend([
                                 filltri_index0 as u16,
                                 filltri_index1 as u16,
                                 filltri_index2 as u16,
                             ]);
-                            this.pen_pos = (to_x, to_y);
+                            self.pen_pos = to.clone();
                         }
 
-                        pub extern "C" fn quadratic_to(
-                            _dfuncs: *mut peridot_tp_harfbuzz::ffi::hb_draw_funcs_t,
-                            draw_data: *mut core::ffi::c_void,
-                            _st: *mut peridot_tp_harfbuzz::ffi::hb_draw_state_t,
-                            control_x: core::ffi::c_float,
-                            control_y: core::ffi::c_float,
-                            to_x: core::ffi::c_float,
-                            to_y: core::ffi::c_float,
-                            _user_data: *mut core::ffi::c_void,
+                        fn conic_to(
+                            &mut self,
+                            control: &peridot_tp_freetype::Vector,
+                            to: &peridot_tp_freetype::Vector,
                         ) {
-                            let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let control_x = control_x / 64.0;
-                            let control_y = control_y / 64.0;
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
-
-                            let Some((_, _, filltri_index0)) = this.current_figure else {
+                            let Some((_, filltri_index0)) = self.current_figure else {
                                 panic!("no figure started?");
                             };
 
-                            let filltri_index1 = this.sink.fill_tri_points.len() - 1;
-                            let filltri_index2 = this.sink.fill_tri_points.len();
-                            this.sink
-                                .fill_tri_points
-                                .push([to_x + this.offset_x, to_y + this.offset_y]);
-                            this.sink.fill_tri_indices.extend([
+                            let filltri_index1 = self.sink.fill_tri_points.len() - 1;
+                            let filltri_index2 = self.sink.fill_tri_points.len();
+                            self.sink.fill_tri_points.push([
+                                to.x as f32 / 64.0 + self.offset_x,
+                                to.y as f32 / 64.0 + self.offset_y,
+                            ]);
+                            self.sink.fill_tri_indices.extend([
                                 filltri_index0 as u16,
                                 filltri_index1 as u16,
                                 filltri_index2 as u16,
                             ]);
-                            this.sink.curve_tris.extend([
+                            self.sink.curve_tris.extend([
                                 [
-                                    this.pen_pos.0 + this.offset_x,
-                                    this.pen_pos.1 + this.offset_y,
+                                    self.pen_pos.x as f32 / 64.0 + self.offset_x,
+                                    self.pen_pos.y as f32 / 64.0 + self.offset_y,
                                     0.0,
                                     0.0,
                                 ],
                                 [
-                                    control_x + this.offset_x,
-                                    control_y + this.offset_y,
+                                    control.x as f32 / 64.0 + self.offset_x,
+                                    control.y as f32 / 64.0 + self.offset_y,
                                     0.5,
                                     0.0,
                                 ],
-                                [to_x + this.offset_x, to_y + this.offset_y, 1.0, 1.0],
+                                [
+                                    to.x as f32 / 64.0 + self.offset_x,
+                                    to.y as f32 / 64.0 + self.offset_y,
+                                    1.0,
+                                    1.0,
+                                ],
                             ]);
-                            this.pen_pos = (to_x, to_y);
+                            self.pen_pos = to.clone();
                         }
 
-                        pub extern "C" fn cubic_to(
-                            _dfuncs: *mut peridot_tp_harfbuzz::ffi::hb_draw_funcs_t,
-                            draw_data: *mut core::ffi::c_void,
-                            _st: *mut peridot_tp_harfbuzz::ffi::hb_draw_state_t,
-                            control1_x: core::ffi::c_float,
-                            control1_y: core::ffi::c_float,
-                            control2_x: core::ffi::c_float,
-                            control2_y: core::ffi::c_float,
-                            to_x: core::ffi::c_float,
-                            to_y: core::ffi::c_float,
-                            _user_data: *mut core::ffi::c_void,
+                        fn cubic_to(
+                            &mut self,
+                            control1: &peridot_tp_freetype::Vector,
+                            control2: &peridot_tp_freetype::Vector,
+                            to: &peridot_tp_freetype::Vector,
                         ) {
-                            let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let control1_x = control1_x / 64.0;
-                            let control1_y = control1_y / 64.0;
-                            let control2_x = control2_x / 64.0;
-                            let control2_y = control2_y / 64.0;
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
-
                             lyon_geom::CubicBezierSegment {
                                 from: lyon_geom::point(
-                                    this.pen_pos.0 + this.offset_x,
-                                    this.pen_pos.1 + this.offset_y,
+                                    self.pen_pos.x as f32 / 64.0 + self.offset_x,
+                                    self.pen_pos.y as f32 / 64.0 + self.offset_y,
                                 ),
                                 ctrl1: lyon_geom::point(
-                                    control1_x + this.offset_x,
-                                    control1_y + this.offset_y,
+                                    control1.x as f32 / 64.0 + self.offset_x,
+                                    control1.y as f32 / 64.0 + self.offset_y,
                                 ),
                                 ctrl2: lyon_geom::point(
-                                    control2_x + this.offset_x,
-                                    control2_y + this.offset_y,
+                                    control2.x as f32 / 64.0 + self.offset_x,
+                                    control2.y as f32 / 64.0 + self.offset_y,
                                 ),
-                                to: lyon_geom::point(to_x + this.offset_x, to_y + this.offset_y),
+                                to: lyon_geom::point(
+                                    to.x as f32 / 64.0 + self.offset_x,
+                                    to.y as f32 / 64.0 + self.offset_y,
+                                ),
                             }
                             .for_each_quadratic_bezier(0.1, &mut |q| {
-                                let Some((_, _, filltri_index0)) = this.current_figure else {
+                                let Some((_, filltri_index0)) = self.current_figure else {
                                     panic!("no figure started?");
                                 };
 
-                                let filltri_index1 = this.sink.fill_tri_points.len() - 1;
-                                let filltri_index2 = this.sink.fill_tri_points.len();
-                                this.sink.fill_tri_points.push([q.to.x, q.to.y]);
-                                this.sink.fill_tri_indices.extend([
+                                let filltri_index1 = self.sink.fill_tri_points.len() - 1;
+                                let filltri_index2 = self.sink.fill_tri_points.len();
+                                self.sink.fill_tri_points.push([q.to.x, q.to.y]);
+                                self.sink.fill_tri_indices.extend([
                                     filltri_index0 as u16,
                                     filltri_index1 as u16,
                                     filltri_index2 as u16,
                                 ]);
-                                this.sink.curve_tris.extend([
+                                self.sink.curve_tris.extend([
                                     [q.from.x, q.from.y, 0.0, 0.0],
                                     [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
                                     [q.to.x, q.to.y, 1.0, 1.0],
                                 ]);
                             });
-                            this.pen_pos = (to_x, to_y);
-                        }
-
-                        pub extern "C" fn close(
-                            dfuncs: *mut peridot_tp_harfbuzz::ffi::hb_draw_funcs_t,
-                            draw_data: *mut core::ffi::c_void,
-                            st: *mut peridot_tp_harfbuzz::ffi::hb_draw_state_t,
-                            user_data: *mut core::ffi::c_void,
-                        ) {
-                            let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let Some((start_x, start_y, _)) = this.current_figure else {
-                                panic!("no figure started?");
-                            };
-
-                            Self::line_to(dfuncs, draw_data, st, start_x, start_y, user_data);
-                            this.current_figure = None;
+                            self.pen_pos = to.clone();
                         }
                     }
 
-                    let draw_funcs = unsafe { peridot_tp_harfbuzz::ffi::hb_draw_funcs_create() };
                     unsafe {
-                        peridot_tp_harfbuzz::ffi::hb_draw_funcs_set_move_to_func(
-                            draw_funcs,
-                            OutlineReceiver::move_to,
-                            core::ptr::null_mut(),
-                            None,
-                        );
-                        peridot_tp_harfbuzz::ffi::hb_draw_funcs_set_line_to_func(
-                            draw_funcs,
-                            OutlineReceiver::line_to,
-                            core::ptr::null_mut(),
-                            None,
-                        );
-                        peridot_tp_harfbuzz::ffi::hb_draw_funcs_set_quadratic_to_func(
-                            draw_funcs,
-                            OutlineReceiver::quadratic_to,
-                            core::ptr::null_mut(),
-                            None,
-                        );
-                        peridot_tp_harfbuzz::ffi::hb_draw_funcs_set_cubic_to_func(
-                            draw_funcs,
-                            OutlineReceiver::cubic_to,
-                            core::ptr::null_mut(),
-                            None,
-                        );
-                        peridot_tp_harfbuzz::ffi::hb_draw_funcs_set_close_path_func(
-                            draw_funcs,
-                            OutlineReceiver::close,
-                            core::ptr::null_mut(),
-                            None,
-                        );
-
-                        peridot_tp_harfbuzz::ffi::hb_font_draw_glyph_or_fail(
-                            shaping_set.faces[font_index].as_ptr(),
-                            glyph_info.codepoint,
-                            draw_funcs,
+                        let face_ptr = font.faces[font_index];
+                        peridot_tp_freetype::outline_decompose(
+                            &mut (*(*face_ptr).glyph).outline,
                             &mut OutlineReceiver {
                                 current_figure: None,
-                                pen_pos: (0.0, 0.0),
+                                pen_pos: peridot_tp_freetype::Vector { x: 0, y: 0 },
                                 sink: vector_raster_state,
-                                offset_x: r.left as f32 - extents.x_bearing as f32 / 64.0,
-                                offset_y: -(r.top as f32) - extents.y_bearing as f32 / 64.0,
-                            } as *mut _ as _,
-                        );
-                        peridot_tp_harfbuzz::ffi::hb_draw_funcs_destroy(draw_funcs);
+                                offset_x: r.left as f32 - metrics.horiBearingX as f32 / 64.0,
+                                offset_y: -(r.top as f32) - metrics.horiBearingY as f32 / 64.0,
+                            },
+                            0,
+                            0,
+                        )
+                        .expect("glyph.outline.decompose");
                     }
                 }
 
