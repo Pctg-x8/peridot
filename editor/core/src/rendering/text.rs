@@ -122,8 +122,6 @@ impl<'d> PerWindowFontSet<'d> {
                         hb::ffi::HB_OT_TAG_VAR_AXIS_WEIGHT,
                         400.0,
                     );
-                    let scale = (12.0f32 * 64.0).ceil() as _;
-                    hb::ffi::hb_font_set_scale(font.as_ptr(), scale, scale);
                 }
 
                 font
@@ -142,8 +140,6 @@ impl<'d> PerWindowFontSet<'d> {
                         hb::ffi::HB_OT_TAG_VAR_AXIS_WEIGHT,
                         400.0,
                     );
-                    let scale = (10.0f32 * 64.0).ceil() as _;
-                    hb::ffi::hb_font_set_scale(font.as_ptr(), scale, scale);
                 }
 
                 font
@@ -193,6 +189,18 @@ impl<'d> PerWindowFontSet<'d> {
         for &x in &self.ui_title_project_name.faces {
             if let Err(e) = unsafe { ft::set_char_size(x, 0, 10.0f32.to_f26dot6_lossy(), 0, dpi) } {
                 tracing::error!(reason = %e, "FreeType.set_char_size.ui_title_project_name");
+            }
+        }
+
+        #[cfg(feature = "harfbuzz")]
+        unsafe {
+            for &x in &self.ui_default_shaping.faces {
+                let scale = (12.0 * dpi as f32 / 72.0 * 64.0).ceil() as _;
+                hb::ffi::hb_font_set_scale(x.as_ptr(), scale, scale);
+            }
+            for &x in &self.ui_title_project_name_shaping.faces {
+                let scale = (10.0 * dpi as f32 / 72.0 * 64.0).ceil() as _;
+                hb::ffi::hb_font_set_scale(x.as_ptr(), scale, scale);
             }
         }
     }
