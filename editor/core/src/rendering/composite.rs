@@ -1937,8 +1937,8 @@ impl<Event> CompositeTreeRender<Event> {
                     );
                 }
                 let extents = unsafe { extents.assume_init() };
-                let glyph_width = extents.width as f32 / 64.0;
-                let glyph_height = -extents.height as f32 / 64.0;
+                let glyph_width = extents.width as f32 * scale_factor / 64.0;
+                let glyph_height = -extents.height as f32 * scale_factor / 64.0;
 
                 let (r, is_new) = glyph_atlas.acquire_for_glyph(
                     (r.font_id as _, glyph_info.codepoint as _),
@@ -1947,8 +1947,10 @@ impl<Event> CompositeTreeRender<Event> {
                 );
                 let placement_box = GlyphPlacementBox {
                     left: left_cursor
-                        + (glyph_position.x_offset as f32 + extents.x_bearing as f32) / 64.0,
-                    top: baseline_y - extents.y_bearing as f32 / 64.0,
+                        + (glyph_position.x_offset as f32 + extents.x_bearing as f32)
+                            * scale_factor
+                            / 64.0,
+                    top: baseline_y - extents.y_bearing as f32 * scale_factor / 64.0,
                     tex_left: r.left,
                     tex_top: r.top,
                     width: r.width(),
@@ -1966,6 +1968,7 @@ impl<Event> CompositeTreeRender<Event> {
                         sink: &'r mut VectorRasterizationState,
                         offset_x: f32,
                         offset_y: f32,
+                        scale_factor: f32,
                     }
                     impl OutlineReceiver<'_> {
                         pub extern "C" fn move_to(
@@ -1977,8 +1980,8 @@ impl<Event> CompositeTreeRender<Event> {
                             _user_data: *mut core::ffi::c_void,
                         ) {
                             let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
+                            let to_x = to_x * this.scale_factor / 64.0;
+                            let to_y = to_y * this.scale_factor / 64.0;
 
                             this.current_figure =
                                 Some((to_x, to_y, this.sink.fill_tri_points.len()));
@@ -1997,8 +2000,8 @@ impl<Event> CompositeTreeRender<Event> {
                             _user_data: *mut core::ffi::c_void,
                         ) {
                             let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
+                            let to_x = to_x * this.scale_factor / 64.0;
+                            let to_y = to_y * this.scale_factor / 64.0;
 
                             let Some((_, _, filltri_index0)) = this.current_figure else {
                                 panic!("no figure started?");
@@ -2028,10 +2031,10 @@ impl<Event> CompositeTreeRender<Event> {
                             _user_data: *mut core::ffi::c_void,
                         ) {
                             let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let control_x = control_x / 64.0;
-                            let control_y = control_y / 64.0;
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
+                            let control_x = control_x * this.scale_factor / 64.0;
+                            let control_y = control_y * this.scale_factor / 64.0;
+                            let to_x = to_x * this.scale_factor / 64.0;
+                            let to_y = to_y * this.scale_factor / 64.0;
 
                             let Some((_, _, filltri_index0)) = this.current_figure else {
                                 panic!("no figure started?");
@@ -2078,12 +2081,12 @@ impl<Event> CompositeTreeRender<Event> {
                             _user_data: *mut core::ffi::c_void,
                         ) {
                             let this = unsafe { &mut *draw_data.cast::<Self>() };
-                            let control1_x = control1_x / 64.0;
-                            let control1_y = control1_y / 64.0;
-                            let control2_x = control2_x / 64.0;
-                            let control2_y = control2_y / 64.0;
-                            let to_x = to_x / 64.0;
-                            let to_y = to_y / 64.0;
+                            let control1_x = control1_x * this.scale_factor / 64.0;
+                            let control1_y = control1_y * this.scale_factor / 64.0;
+                            let control2_x = control2_x * this.scale_factor / 64.0;
+                            let control2_y = control2_y * this.scale_factor / 64.0;
+                            let to_x = to_x * this.scale_factor / 64.0;
+                            let to_y = to_y * this.scale_factor / 64.0;
 
                             lyon_geom::CubicBezierSegment {
                                 from: lyon_geom::point(
@@ -2179,15 +2182,18 @@ impl<Event> CompositeTreeRender<Event> {
                                 current_figure: None,
                                 pen_pos: (0.0, 0.0),
                                 sink: vector_raster_state,
-                                offset_x: r.left as f32 - extents.x_bearing as f32 / 64.0,
-                                offset_y: -(r.top as f32) - extents.y_bearing as f32 / 64.0,
+                                offset_x: r.left as f32
+                                    - extents.x_bearing as f32 * scale_factor / 64.0,
+                                offset_y: -(r.top as f32)
+                                    - extents.y_bearing as f32 * scale_factor / 64.0,
+                                scale_factor,
                             } as *mut _ as _,
                         );
                         peridot_tp_harfbuzz::ffi::hb_draw_funcs_destroy(draw_funcs);
                     }
                 }
 
-                left_cursor += glyph_position.x_advance as f32 / 64.0;
+                left_cursor += glyph_position.x_advance as f32 * scale_factor / 64.0;
             }
 
             x_shift = left_cursor;
