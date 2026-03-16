@@ -22,7 +22,7 @@ use crate::{
             CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
             VectorRasterizationState,
         },
-        text::{PerWindowFontSet, RootFontSet},
+        text::{PerWindowFontSet, RootFontSet, ThreadLocalTypingContext},
     },
     utils::SafeF32,
 };
@@ -90,6 +90,7 @@ pub struct RenderThread<'main> {
     pub global_time_base: &'main std::time::Instant,
     pub event_bus: &'main SyncEventBus,
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
+    pub root_font_set: &'main RootFontSet,
 }
 impl<'main> RenderThread<'main> {
     pub fn run(self) {
@@ -112,7 +113,10 @@ impl<'main> RenderThread<'main> {
             ref_count: u64,
         }
         let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
-        let font_set = RootFontSet::new();
+        let typing_context = ThreadLocalTypingContext {
+            #[cfg(feature = "freetype")]
+            ft_lib: self::text::FreeType::init().expect("freetype.init"),
+        };
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
         let mut normalized_2d_static_mesh_textures: HashMap<
             usize,
@@ -172,7 +176,8 @@ impl<'main> RenderThread<'main> {
                                 wd,
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
-                                &font_set,
+                                self.root_font_set,
+                                &typing_context,
                             ),
                         );
                     }
@@ -525,9 +530,10 @@ impl<'d> WindowRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         root_font_set: &'d RootFontSet,
+        typing_context: &ThreadLocalTypingContext,
     ) -> Self {
         #[allow(unused_mut)]
-        let mut font_set = PerWindowFontSet::new(root_font_set);
+        let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
         #[cfg(feature = "wayland")]
         font_set.rescale((init_scale.value() * 72.0) as _);
 

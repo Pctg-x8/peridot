@@ -18,6 +18,8 @@ use std::{
     sync::Mutex,
 };
 
+#[cfg(not(windows))]
+use crate::rendering::text::ThreadLocalTypingContext;
 use crate::{
     graphics::VulkanDevice,
     input::{
@@ -35,7 +37,7 @@ use crate::{
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
             CompositeTreeSyncBuffer,
         },
-        text::FontID,
+        text::{FontID, PerWindowFontSet, RootFontSet},
     },
     uikit::{
         MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
@@ -366,6 +368,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }))
         .expect("rt_sender.send");
 
+    let root_font_set = RootFontSet::new();
+
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging {
         text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
@@ -401,6 +405,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             drag_preview_popover,
             rt_sender: rt_sender.clone(),
             vk_device: &vk_device,
+            root_font_set: &root_font_set,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
             dbus: &dbus,
@@ -494,6 +499,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             global_time_base: &global_time_base,
             event_bus: &events,
             message_receiver: rt_receiver,
+            root_font_set: &root_font_set,
         };
         let render_thread = std::thread::Builder::new()
             .name("Render".into())
@@ -973,7 +979,8 @@ impl Popup for AlertDialogPresenter {
     }
 }
 
-struct PerWindowView {
+struct PerWindowData {
+    font_set: PerWindowFontSet<'static>,
     header: ui::window_header::View,
 }
 
@@ -989,6 +996,10 @@ async fn run<'sys>(
 ) {
     tracing::info!("app start");
 
+    let typing_context = ThreadLocalTypingContext {
+        #[cfg(feature = "freetype")]
+        ft_lib: rendering::text::FreeType::init().expect("freetype.init"),
+    };
     let mut keyboard_focus_manager = KeyboardFocusManager::new();
     let mut pointer_input_manager = PointerInputManager::new();
     pointer_input_manager.set_client_size(main_window, main_window.client_size());
@@ -1033,7 +1044,10 @@ async fn run<'sys>(
     );
     window_header_view.mount(&mut view_init_ctx, &main_window);
 
-    main_window.associate_extra_data(Box::new(PerWindowView {
+    main_window.associate_extra_data(Box::new(PerWindowData {
+        font_set: unsafe {
+            PerWindowFontSet::new(system_link.root_font_set(), &typing_context).lifetime_unbound()
+        },
         header: window_header_view,
     }));
 
@@ -1221,7 +1235,11 @@ async fn run<'sys>(
                         );
                         window_header_view.mount(&mut view_init_ctx, &w);
 
-                        w.associate_extra_data(Box::new(PerWindowView {
+                        w.associate_extra_data(Box::new(PerWindowData {
+                            font_set: unsafe {
+                                PerWindowFontSet::new(system_link.root_font_set(), &typing_context)
+                                    .lifetime_unbound()
+                            },
                             header: window_header_view,
                         }));
                     },
@@ -1233,7 +1251,7 @@ async fn run<'sys>(
             Event::SubWindowClose { mut window } => {
                 tracing::trace!("subWindowClose");
                 unsafe {
-                    drop(window.take_extra_data::<PerWindowView>());
+                    drop(window.take_extra_data::<PerWindowData>());
                 }
                 system_link.close_window(window, &mut composite_tree, &mut ht_manager);
             }
@@ -1244,14 +1262,15 @@ async fn run<'sys>(
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
             }
-            Event::WindowRescaleUI { window, new_scale } => {
-                unsafe {
-                    window.extra_data_ref::<PerWindowView>().header.rescale(
-                        new_scale,
-                        &mut composite_tree,
-                        &texture_id_set,
-                    );
-                }
+            Event::WindowRescaleUI {
+                mut window,
+                new_scale,
+            } => {
+                let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
+                wd.font_set.rescale((new_scale * 72.0) as _);
+                wd.header
+                    .rescale(new_scale, &mut composite_tree, &texture_id_set);
+
                 popup_manager.rescale(window, new_scale, &mut composite_tree);
 
                 if window == main_window {
@@ -1269,7 +1288,7 @@ async fn run<'sys>(
                 is_maximized,
             } => unsafe {
                 window
-                    .extra_data_ref::<PerWindowView>()
+                    .extra_data_ref::<PerWindowData>()
                     .header
                     .set_maximize_state(
                         is_maximized,
@@ -1430,6 +1449,7 @@ struct SystemLink<'sys> {
     drag_preview_popover: DragPreviewPopoverHandle,
     vk_device: *const VulkanDevice<'sys>,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    root_font_set: *const RootFontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,
     #[cfg(all(unix, not(target_os = "macos")))]
     display_server: platform::unix::DisplayServerLink,
@@ -1446,6 +1466,11 @@ impl SystemLink<'_> {
     #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
         &self.drag_preview_popover
+    }
+
+    #[inline(always)]
+    pub const fn root_font_set(&self) -> &RootFontSet {
+        unsafe { &*self.root_font_set }
     }
 
     #[inline(always)]

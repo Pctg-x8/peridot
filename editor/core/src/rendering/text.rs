@@ -66,6 +66,11 @@ impl Drop for FaceShapingSet {
     }
 }
 
+pub struct ThreadLocalTypingContext {
+    #[cfg(feature = "freetype")]
+    pub ft_lib: FreeType,
+}
+
 pub struct PerWindowFontSet<'d> {
     #[cfg(windows)]
     dw_factory: &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory,
@@ -89,13 +94,13 @@ pub struct PerWindowFontSet<'d> {
     ui_title_project_name: &'d apple_sdk_port::text::Font,
 }
 impl<'d> PerWindowFontSet<'d> {
-    pub fn new(root_set: &'d RootFontSet) -> Self {
+    pub fn new(root_set: &'d RootFontSet, ctx: &ThreadLocalTypingContext) -> Self {
         #[cfg(feature = "freetype")]
         let ui_default = root_set
             .ui_common_font_data
             .iter()
             .map(|&(f, ix)| unsafe {
-                ft::new_memory_face(root_set.ft_lib.0, &root_set.font_binaries[f], ix as _)
+                ft::new_memory_face(ctx.ft_lib.0, &root_set.font_binaries[f], ix as _)
                     .expect("FreeType.new_face.ui_default")
             })
             .collect::<Vec<_>>();
@@ -104,7 +109,7 @@ impl<'d> PerWindowFontSet<'d> {
             .ui_common_font_data
             .iter()
             .map(|&(f, ix)| unsafe {
-                ft::new_memory_face(root_set.ft_lib.0, &root_set.font_binaries[f], ix as _)
+                ft::new_memory_face(ctx.ft_lib.0, &root_set.font_binaries[f], ix as _)
                     .expect("FreeType.new_face.ui_title_project_name")
             })
             .collect::<Vec<_>>();
@@ -158,6 +163,10 @@ impl<'d> PerWindowFontSet<'d> {
             #[cfg(target_os = "macos")]
             ui_title_project_name: &root_set.ui_title_project_name,
         }
+    }
+
+    pub const unsafe fn lifetime_unbound(self) -> PerWindowFontSet<'static> {
+        unsafe { core::mem::transmute(self) }
     }
 
     #[cfg(feature = "freetype")]
@@ -240,8 +249,6 @@ pub struct RootFontSet {
     ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
     #[cfg(target_os = "macos")]
     ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
-    #[cfg(feature = "freetype")]
-    ft_lib: FreeType,
     #[cfg(feature = "freetype")]
     font_binaries: Vec<Vec<ft::raw::FT_Byte>>,
     #[cfg(feature = "freetype")]
@@ -399,7 +406,6 @@ impl RootFontSet {
         );
 
         Self {
-            ft_lib: FreeType::init().expect("freetype.init"),
             font_binaries,
             ui_common_font_data,
         }
