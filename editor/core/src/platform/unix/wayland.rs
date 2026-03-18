@@ -826,10 +826,10 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
         }
     }
 
-    #[tracing::instrument(skip(self, sender), fields(states = ?unsafe { states.as_slice::<u32>() }))]
+    #[tracing::instrument(skip(self, _sender), fields(states = ?unsafe { states.as_slice::<u32>() }))]
     fn configure(
         &mut self,
-        sender: &mut wl::XdgToplevel,
+        _sender: &mut wl::XdgToplevel,
         width: i32,
         height: i32,
         states: &mut wl::ffi::Array,
@@ -1017,18 +1017,18 @@ impl wl::XdgSurfaceEventListener for PopupState {
     }
 }
 impl wl::XdgPopupEventListener for PopupState {
-    #[tracing::instrument(skip(self, sender))]
-    fn configure(&mut self, sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn configure(&mut self, _sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
         tracing::trace!("popup.configure");
     }
 
-    #[tracing::instrument(skip(self, sender))]
-    fn popup_done(&mut self, sender: &mut wl::XdgPopup) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn popup_done(&mut self, _sender: &mut wl::XdgPopup) {
         tracing::trace!("popup.popup_done");
     }
 
-    #[tracing::instrument(skip(self, sender))]
-    fn repositioned(&mut self, sender: &mut wl::XdgPopup, token: u32) {
+    #[tracing::instrument(skip(self, _sender))]
+    fn repositioned(&mut self, _sender: &mut wl::XdgPopup, token: u32) {
         tracing::trace!("popup.repositioned");
     }
 }

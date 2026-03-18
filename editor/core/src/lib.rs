@@ -10,8 +10,6 @@ use peridot_tp_wayland as wl;
 use peridot_tp_xkbcommon as xkbcommon;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
-#[cfg(feature = "wayland")]
-use std::sync::RwLock;
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -39,7 +37,7 @@ use crate::{
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
             CompositeTreeSyncBuffer,
         },
-        text::{FontID, PerWindowFontSet, RootFontSet},
+        text::{FontID, PerWindowFontSet, RootFontSet, TextLayout},
     },
     uikit::{
         MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
@@ -985,6 +983,7 @@ struct TextInputViewEventHandler {
     token: FocusTargetToken,
     ct_root: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
+    content: String,
 }
 impl KeyboardFocusEventHandler for TextInputViewEventHandler {
     fn taken(&self, context: &mut InputEventContext) {
@@ -1002,6 +1001,30 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
+        let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x,
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+
+        let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
+        // TextLayoutはPixels座標系なのでscaleをかけておく
+        let x = TextLayout::find_nearest_position(
+            (local_x - 2.0) * cursor_rect.base_scale_factor,
+            &self.content,
+            FontID::UIDefault,
+            unsafe {
+                &context
+                    .sender_window
+                    .extra_data_ref::<PerWindowData>()
+                    .font_set
+            },
+        );
+        cursor_rect.offset[0] = AnimatableFloat::Value(2.0 + x / cursor_rect.base_scale_factor);
+        context.composite_tree.mark_dirty(self.ct_cursor);
+
         input::EventContinueControl::STOP_PROPAGATION
     }
 }
@@ -1042,6 +1065,21 @@ impl TextInputViewEventHandler {
         context.composite_tree.mark_dirty(self.ct_root);
         context.composite_tree.mark_dirty(self.ct_cursor);
     }
+
+    fn update_cursor_position(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        window: WindowHandle,
+    ) {
+        let tw = TextLayout::measure_width(&self.content, FontID::UIDefault, unsafe {
+            &window.extra_data_ref::<PerWindowData>().font_set
+        });
+
+        let cursor_rect = composite_tree.get_mut(self.ct_cursor);
+        // base_scale_factorがかかるのであらかじめわっておく
+        cursor_rect.offset[0] = AnimatableFloat::Value(2.0 + tw / cursor_rect.base_scale_factor);
+        composite_tree.mark_dirty(self.ct_cursor);
+    }
 }
 
 pub struct TextInputView {
@@ -1049,7 +1087,7 @@ pub struct TextInputView {
     eh: Rc<TextInputViewEventHandler>,
 }
 impl TextInputView {
-    pub fn new(ctx: &mut ViewInitContext) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, window: WindowHandle) -> Self {
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
@@ -1098,9 +1136,12 @@ impl TextInputView {
             token: kf_token,
             ct_root,
             ct_cursor,
+            content: "aaa".into(),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+        eh.update_cursor_position(ctx.composite_tree, window);
 
         Self { ht_root, eh }
     }
@@ -1111,11 +1152,13 @@ impl TextInputView {
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
 
-    pub fn rescale(&self, ct: &mut CompositeTree<Event>, new_scale: f32) {
+    pub fn rescale(&self, ct: &mut CompositeTree<Event>, window: WindowHandle, new_scale: f32) {
         ct.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_root);
         ct.get_mut(self.eh.ct_cursor).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_cursor);
+
+        self.eh.update_cursor_position(ct, window);
     }
 }
 
@@ -1344,7 +1387,7 @@ async fn run<'sys>(
     );
     test_alert_btn.mount(&mut view_init_ctx, &main_window);
 
-    let text_input_view = TextInputView::new(&mut view_init_ctx);
+    let text_input_view = TextInputView::new(&mut view_init_ctx, main_window);
     text_input_view.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -1422,7 +1465,7 @@ async fn run<'sys>(
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
-                    text_input_view.rescale(&mut composite_tree, new_scale);
+                    text_input_view.rescale(&mut composite_tree, window, new_scale);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
@@ -1481,6 +1524,7 @@ async fn run<'sys>(
                         drag_preview: system_link.drag_preview_popover(),
                         system_link: &system_link,
                         ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
                     },
                     window.ht_root(),
                     &mut keyboard_focus_registry,
@@ -1506,6 +1550,7 @@ async fn run<'sys>(
                         drag_preview: system_link.drag_preview_popover(),
                         system_link: &system_link,
                         ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
                     },
                     window.ht_root(),
                 );
@@ -1527,6 +1572,7 @@ async fn run<'sys>(
                         drag_preview: system_link.drag_preview_popover(),
                         system_link: &system_link,
                         ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
                     },
                     window.ht_root(),
                 );
@@ -1592,7 +1638,7 @@ async fn run<'sys>(
 pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
 
 #[cfg(not(windows))]
-struct SystemLink<'sys> {
+pub struct SystemLink<'sys> {
     drag_preview_popover: DragPreviewPopoverHandle,
     vk_device: *const VulkanDevice<'sys>,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,

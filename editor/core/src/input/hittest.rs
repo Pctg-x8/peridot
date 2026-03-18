@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    DragPreviewPopoverHandle, Event, WindowHandle,
     input::{EventContinueControl, FocusTargetToken, InputEventContext},
     utils::{LogicalUnit, Point, Rect, Size},
 };

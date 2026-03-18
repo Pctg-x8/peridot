@@ -25,6 +25,7 @@ pub struct InputEventContext<'env, 'h> {
     pub drag_preview: &'env DragPreviewPopoverHandle,
     pub system_link: &'env SystemLink<'env>,
     pub ht_create_only_access: &'env mut HitTestTreeManagerCreateOnlyAccess<'h>,
+    pub ht_manager: &'env HitTestTreeManager<'h>,
 }
 
 bitflags! {

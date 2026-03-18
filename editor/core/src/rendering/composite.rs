@@ -1,7 +1,7 @@
 //! UI Rect Compositioning
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     sync::Arc,
 };
 
@@ -18,6 +18,8 @@ use windows::Win32::Graphics::{
 #[cfg(windows)]
 use windows_core::*;
 
+#[cfg(feature = "harfbuzz")]
+use crate::rendering::text::{TextLayout, TextRun};
 use crate::{
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
@@ -26,7 +28,7 @@ use crate::{
     rendering::{
         MaskTextureAtlasManager,
         atlas::{AtlasRect, DynamicAtlasManager},
-        text::{FontID, PerWindowFontSet},
+        text::{FontID, GlyphPlacementBox, PerWindowFontSet},
     },
     utils::SafeF32,
 };
@@ -1330,27 +1332,6 @@ impl CompositeRenderingInstructionBuilder {
     }
 }
 
-#[derive(Debug)]
-struct GlyphPlacementBox {
-    pub left: f32,
-    pub top: f32,
-    pub tex_left: u32,
-    pub tex_top: u32,
-    pub width: u32,
-    pub height: u32,
-}
-impl GlyphPlacementBox {
-    #[inline(always)]
-    const fn right(&self) -> f32 {
-        self.left + self.width as f32
-    }
-
-    #[inline(always)]
-    const fn bottom(&self) -> f32 {
-        self.top + self.height as f32
-    }
-}
-
 struct CompositeRectCache {
     text_rects: Vec<GlyphPlacementBox>,
     text_width: f32,
@@ -1813,297 +1794,27 @@ impl<Event> CompositeTreeRender<Event> {
     ) {
         tracing::trace!("relayout text");
 
-        cache.text_width = 0.0;
-        cache.text_height = 0.0;
+        let text_layout = TextLayout::new(
+            text_layout.runs.iter().map(|r| TextRun {
+                content: &r.content,
+                font: r.font_id,
+                spacing_inline_start: r.spacing_inline_start,
+            }),
+            font_set,
+            scale_factor,
+        );
         cache.text_rects.clear();
-
-        #[cfg(feature = "harfbuzz")]
-        let mut buffers = Vec::with_capacity(text_layout.runs.len());
-        #[cfg(feature = "freetype")]
-        let mut baseline_y_offset = 0.0f32;
-        #[cfg(feature = "freetype")]
-        for x in text_layout.runs.iter() {
-            #[cfg(feature = "freetype")]
-            let font = font_set.select(x.font_id);
-            #[cfg(feature = "harfbuzz")]
-            let shaping_set = font_set.select_shaping(x.font_id);
-
-            let mut font_index = 0;
-            let mut shaped_bytes = 0usize;
-            while shaped_bytes < x.content.len() {
-                let starting_bytes = shaped_bytes;
-                for c in x.content[starting_bytes..].chars() {
-                    if unsafe {
-                        peridot_tp_freetype::get_char_index(font.faces[font_index], c as _)
-                    } == 0
-                    {
-                        // no char in font, needs fallback
-                        break;
-                    }
-
-                    shaped_bytes += c.len_utf8();
-                }
-
-                if starting_bytes == shaped_bytes {
-                    // no chars available for this font, fallback
-                    font_index += 1;
-                    continue;
-                }
-
-                #[cfg(feature = "harfbuzz")]
-                let buf = unsafe { peridot_tp_harfbuzz::ffi::hb_buffer_create() };
-                #[cfg(feature = "harfbuzz")]
-                unsafe {
-                    peridot_tp_harfbuzz::ffi::hb_buffer_add_utf8(
-                        buf,
-                        x.content.as_ptr().add(starting_bytes).cast(),
-                        (shaped_bytes - starting_bytes) as _,
-                        0,
-                        -1,
-                    );
-                    peridot_tp_harfbuzz::ffi::hb_buffer_guess_segment_properties(buf);
-                    peridot_tp_harfbuzz::ffi::hb_shape(
-                        shaping_set.faces[font_index].as_ptr(),
-                        buf,
-                        core::ptr::null(),
-                        0,
-                    );
-                }
-
-                #[cfg(feature = "harfbuzz")]
-                buffers.push((buf, font_index));
-                #[cfg(feature = "freetype")]
-                {
-                    baseline_y_offset = baseline_y_offset.max(unsafe {
-                        (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
-                    });
-
-                    // freetype2のdescenderは符号が逆になってるのでこれで正解
-                    // TODO: 複数行になる場合はleadingを行間に足す
-                    cache.text_height = cache.text_height.max(unsafe {
-                        ((*(*font.faces[font_index]).size).metrics.ascender
-                            - (*(*font.faces[font_index]).size).metrics.descender)
-                            as f32
-                            / 64.0
-                    });
-                }
-
-                // reset for next chunk
-                font_index = 0;
-            }
-        }
-
-        #[cfg(feature = "harfbuzz")]
-        let mut x_shift = 0.0;
-        #[cfg(feature = "harfbuzz")]
-        for (r, &(b, font_index)) in text_layout.runs.iter().zip(buffers.iter()) {
-            #[cfg(feature = "freetype")]
-            let font = font_set.select(r.font_id);
-
-            x_shift += r.spacing_inline_start * scale_factor;
-
-            let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-            let glyph_infos = unsafe {
-                peridot_tp_harfbuzz::ffi::hb_buffer_get_glyph_infos(b, glyph_infos_len.as_mut_ptr())
-            };
-            let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-            let glyph_positions = unsafe {
-                peridot_tp_harfbuzz::ffi::hb_buffer_get_glyph_positions(
-                    b,
-                    glyph_positions_len.as_mut_ptr(),
-                )
-            };
-            assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-                glyph_positions_len.assume_init()
-            });
-            let baseline_y = baseline_y_offset;
-            let mut left_cursor = x_shift;
-            for n in 0..unsafe { glyph_positions_len.assume_init() } {
-                let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
-                let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
-
-                unsafe {
-                    peridot_tp_freetype::load_glyph(
-                        font.faces[font_index],
-                        glyph_info.codepoint,
-                        peridot_tp_freetype::LoadFlags::DEFAULT,
-                    )
-                    .expect("face.load_glyph")
-                };
-                let metrics = unsafe { &(*(*font.faces[font_index]).glyph).metrics };
-                let glyph_width = metrics.width as f32 / 64.0;
-                let glyph_height = metrics.height as f32 / 64.0;
-
-                let (r, is_new) = glyph_atlas.acquire_for_glyph(
-                    (r.font_id as _, glyph_info.codepoint as _),
-                    glyph_width.ceil() as _,
-                    glyph_height.ceil() as _,
-                );
-                let placement_box = GlyphPlacementBox {
-                    left: left_cursor
-                        + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32) / 64.0,
-                    top: baseline_y - metrics.horiBearingY as f32 / 64.0,
-                    tex_left: r.left,
-                    tex_top: r.top,
-                    width: r.width(),
-                    height: r.height(),
-                };
-                cache.text_width = cache.text_width.max(placement_box.right());
-                cache.text_rects.push(placement_box);
-
-                if is_new {
-                    vector_raster_state.updated_rects.push(r.vk_rect());
-
-                    struct OutlineReceiver<'r> {
-                        current_figure: Option<(peridot_tp_freetype::Vector, usize)>,
-                        pen_pos: peridot_tp_freetype::Vector,
-                        sink: &'r mut VectorRasterizationState,
-                        offset_x: f32,
-                        offset_y: f32,
-                    }
-                    impl peridot_tp_freetype::OutlineFuncs for OutlineReceiver<'_> {
-                        fn move_to(&mut self, to: &peridot_tp_freetype::Vector) {
-                            self.current_figure =
-                                Some((to.clone(), self.sink.fill_tri_points.len()));
-                            self.pen_pos = to.clone();
-                            self.sink.fill_tri_points.push([
-                                to.x as f32 / 64.0 + self.offset_x,
-                                to.y as f32 / 64.0 + self.offset_y,
-                            ]);
-                        }
-
-                        fn line_to(&mut self, to: &peridot_tp_freetype::Vector) {
-                            let Some((_, filltri_index0)) = self.current_figure else {
-                                panic!("no figure started?");
-                            };
-
-                            let filltri_index1 = self.sink.fill_tri_points.len() - 1;
-                            let filltri_index2 = self.sink.fill_tri_points.len();
-                            self.sink.fill_tri_points.push([
-                                to.x as f32 / 64.0 + self.offset_x,
-                                to.y as f32 / 64.0 + self.offset_y,
-                            ]);
-                            self.sink.fill_tri_indices.extend([
-                                filltri_index0 as u16,
-                                filltri_index1 as u16,
-                                filltri_index2 as u16,
-                            ]);
-                            self.pen_pos = to.clone();
-                        }
-
-                        fn conic_to(
-                            &mut self,
-                            control: &peridot_tp_freetype::Vector,
-                            to: &peridot_tp_freetype::Vector,
-                        ) {
-                            let Some((_, filltri_index0)) = self.current_figure else {
-                                panic!("no figure started?");
-                            };
-
-                            let filltri_index1 = self.sink.fill_tri_points.len() - 1;
-                            let filltri_index2 = self.sink.fill_tri_points.len();
-                            self.sink.fill_tri_points.push([
-                                to.x as f32 / 64.0 + self.offset_x,
-                                to.y as f32 / 64.0 + self.offset_y,
-                            ]);
-                            self.sink.fill_tri_indices.extend([
-                                filltri_index0 as u16,
-                                filltri_index1 as u16,
-                                filltri_index2 as u16,
-                            ]);
-                            self.sink.curve_tris.extend([
-                                [
-                                    self.pen_pos.x as f32 / 64.0 + self.offset_x,
-                                    self.pen_pos.y as f32 / 64.0 + self.offset_y,
-                                    0.0,
-                                    0.0,
-                                ],
-                                [
-                                    control.x as f32 / 64.0 + self.offset_x,
-                                    control.y as f32 / 64.0 + self.offset_y,
-                                    0.5,
-                                    0.0,
-                                ],
-                                [
-                                    to.x as f32 / 64.0 + self.offset_x,
-                                    to.y as f32 / 64.0 + self.offset_y,
-                                    1.0,
-                                    1.0,
-                                ],
-                            ]);
-                            self.pen_pos = to.clone();
-                        }
-
-                        fn cubic_to(
-                            &mut self,
-                            control1: &peridot_tp_freetype::Vector,
-                            control2: &peridot_tp_freetype::Vector,
-                            to: &peridot_tp_freetype::Vector,
-                        ) {
-                            lyon_geom::CubicBezierSegment {
-                                from: lyon_geom::point(
-                                    self.pen_pos.x as f32 / 64.0 + self.offset_x,
-                                    self.pen_pos.y as f32 / 64.0 + self.offset_y,
-                                ),
-                                ctrl1: lyon_geom::point(
-                                    control1.x as f32 / 64.0 + self.offset_x,
-                                    control1.y as f32 / 64.0 + self.offset_y,
-                                ),
-                                ctrl2: lyon_geom::point(
-                                    control2.x as f32 / 64.0 + self.offset_x,
-                                    control2.y as f32 / 64.0 + self.offset_y,
-                                ),
-                                to: lyon_geom::point(
-                                    to.x as f32 / 64.0 + self.offset_x,
-                                    to.y as f32 / 64.0 + self.offset_y,
-                                ),
-                            }
-                            .for_each_quadratic_bezier(0.1, &mut |q| {
-                                let Some((_, filltri_index0)) = self.current_figure else {
-                                    panic!("no figure started?");
-                                };
-
-                                let filltri_index1 = self.sink.fill_tri_points.len() - 1;
-                                let filltri_index2 = self.sink.fill_tri_points.len();
-                                self.sink.fill_tri_points.push([q.to.x, q.to.y]);
-                                self.sink.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    filltri_index2 as u16,
-                                ]);
-                                self.sink.curve_tris.extend([
-                                    [q.from.x, q.from.y, 0.0, 0.0],
-                                    [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
-                                    [q.to.x, q.to.y, 1.0, 1.0],
-                                ]);
-                            });
-                            self.pen_pos = to.clone();
-                        }
-                    }
-
-                    unsafe {
-                        let face_ptr = font.faces[font_index];
-                        peridot_tp_freetype::outline_decompose(
-                            &mut (*(*face_ptr).glyph).outline,
-                            &mut OutlineReceiver {
-                                current_figure: None,
-                                pen_pos: peridot_tp_freetype::Vector { x: 0, y: 0 },
-                                sink: vector_raster_state,
-                                offset_x: r.left as f32 - metrics.horiBearingX as f32 / 64.0,
-                                offset_y: -(r.top as f32) - metrics.horiBearingY as f32 / 64.0,
-                            },
-                            0,
-                            0,
-                        )
-                        .expect("glyph.outline.decompose");
-                    }
-                }
-
-                left_cursor += glyph_position.x_advance as f32 / 64.0;
-            }
-
-            x_shift = left_cursor;
-        }
+        cache
+            .text_rects
+            .extend(text_layout.rasterize_and_place_glyphs(
+                font_set,
+                vector_raster_state,
+                glyph_atlas,
+                scale_factor,
+            ));
+        // TODO: LTR前提 RTLサポートもするなら最大値をとる必要がある
+        cache.text_width = cache.text_rects.last().map_or(0.0, |r| r.right());
+        cache.text_height = text_layout.height();
 
         #[cfg(target_os = "macos")]
         let corresponding_run_index = unsafe {
