@@ -993,7 +993,7 @@ struct TextInputViewEventHandler {
     ct_root: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    content: String,
+    content: core::cell::RefCell<String>,
     cursor_pos_bytes: core::cell::Cell<usize>,
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
@@ -1012,7 +1012,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             KeyInputCode::LeftArrow => {
                 let mut new_cursor_pos = self.cursor_pos_bytes.get().saturating_sub(1);
                 while new_cursor_pos > 0 {
-                    if self.content.is_char_boundary(new_cursor_pos) {
+                    if self.content.borrow().is_char_boundary(new_cursor_pos) {
                         break;
                     }
 
@@ -1032,9 +1032,9 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     .cursor_pos_bytes
                     .get()
                     .saturating_add(1)
-                    .min(self.content.len());
-                while new_cursor_pos < self.content.len() {
-                    if self.content.is_char_boundary(new_cursor_pos) {
+                    .min(self.content.borrow().len());
+                while new_cursor_pos < self.content.borrow().len() {
+                    if self.content.borrow().is_char_boundary(new_cursor_pos) {
                         break;
                     }
 
@@ -1048,6 +1048,69 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.ht_manager,
                     context.sender_window.client_size(),
                 );
+            }
+            KeyInputCode::Character(c) if c == '\n' => (/* ignore enter key */),
+            KeyInputCode::Character(c) if c == '\x08' => {
+                // bksp
+                let mut remove_to = self.cursor_pos_bytes.get().saturating_sub(1);
+                while remove_to > 0 {
+                    if self.content.borrow().is_char_boundary(remove_to) {
+                        break;
+                    }
+
+                    remove_to -= 1;
+                }
+                if remove_to != self.cursor_pos_bytes.get() {
+                    self.content
+                        .borrow_mut()
+                        .replace_range(remove_to..self.cursor_pos_bytes.get(), "");
+                    self.cursor_pos_bytes.set(remove_to);
+                    self.update_cursor_position(
+                        context.composite_tree,
+                        context.sender_window,
+                        context.system_link,
+                        context.ht_manager,
+                        context.sender_window.client_size(),
+                    );
+                    context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            font_id: FontID::UIDefault,
+                            content: self.content.borrow().clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+                        offset: [2.0, 2.0],
+                    });
+                    context.composite_tree.mark_text_layout_dirty(self.ct_root);
+                }
+            }
+            KeyInputCode::Character(c) => {
+                self.content
+                    .borrow_mut()
+                    .insert(self.cursor_pos_bytes.get(), c);
+                self.cursor_pos_bytes
+                    .set(self.cursor_pos_bytes.get() + c.len_utf8());
+                self.update_cursor_position(
+                    context.composite_tree,
+                    context.sender_window,
+                    context.system_link,
+                    context.ht_manager,
+                    context.sender_window.client_size(),
+                );
+                context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
+                    runs: vec![CompositeRectTextRun {
+                        font_id: FontID::UIDefault,
+                        content: self.content.borrow().clone(),
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    }],
+                    horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+                    vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+                    offset: [2.0, 2.0],
+                });
+                context.composite_tree.mark_text_layout_dirty(self.ct_root);
             }
             _ => (),
         }
@@ -1072,7 +1135,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         // TextLayoutはPixels座標系なのでscaleをかけておく
         let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
             (local_x - 2.0) * cursor_rect.base_scale_factor,
-            &self.content,
+            &self.content.borrow(),
             FontID::UIDefault,
             unsafe {
                 &context
@@ -1150,7 +1213,7 @@ impl TextInputViewEventHandler {
         client_size: Size<LogicalUnit>,
     ) {
         let tw = TextLayout::measure_width(
-            &self.content[..self.cursor_pos_bytes.get()],
+            &self.content.borrow()[..self.cursor_pos_bytes.get()],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
         );
@@ -1230,7 +1293,7 @@ impl TextInputView {
             ct_root,
             ct_cursor,
             ht_root,
-            content: "aaa".into(),
+            content: core::cell::RefCell::new("aaa".into()),
             cursor_pos_bytes: core::cell::Cell::new(0),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
