@@ -912,6 +912,11 @@ impl PerWindowKeyboardFocusState {
         &mut self,
         tok: FocusTargetToken,
     ) -> (Option<FocusTargetToken>, Option<FocusTargetToken>) {
+        if self.current_focus == Some(tok.0) {
+            // no changes
+            return (None, None);
+        }
+
         let released_focus = self.current_focus.replace(tok.0);
         (released_focus.map(FocusTargetToken), Some(tok))
     }

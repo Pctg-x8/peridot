@@ -1001,7 +1001,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
-        let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+        let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
             sender,
             args.client_pos.x,
             args.client_pos.y,
@@ -1113,7 +1113,7 @@ impl TextInputView {
         });
         let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
-            size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(16.0)],
+            size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
             offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
