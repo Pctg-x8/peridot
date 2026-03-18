@@ -893,6 +893,11 @@ pub enum KeyInputCode {
     RightArrow,
     UpArrow,
     DownArrow,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
     UnknownNativeCode(u32),
 }
 

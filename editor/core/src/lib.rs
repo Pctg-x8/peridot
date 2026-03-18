@@ -1049,6 +1049,29 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.sender_window.client_size(),
                 );
             }
+            KeyInputCode::Home => {
+                self.cursor_pos_bytes.set(0);
+                self.update_cursor_position(
+                    context.composite_tree,
+                    context.sender_window,
+                    context.system_link,
+                    context.ht_manager,
+                    context.sender_window.client_size(),
+                );
+            }
+            KeyInputCode::End => {
+                self.cursor_pos_bytes.set(self.content.borrow().len());
+                self.update_cursor_position(
+                    context.composite_tree,
+                    context.sender_window,
+                    context.system_link,
+                    context.ht_manager,
+                    context.sender_window.client_size(),
+                );
+            }
+            KeyInputCode::Insert => {
+                // TODO: insert mode
+            }
             KeyInputCode::Character(c) if c == '\n' => (/* ignore enter key */),
             KeyInputCode::Character(c) if c == '\x08' => {
                 // bksp
@@ -1086,7 +1109,42 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.composite_tree.mark_text_layout_dirty(self.ct_root);
                 }
             }
-            KeyInputCode::Character(c) => {
+            KeyInputCode::Character(c) if c == '\x7f' => {
+                // del
+                if self.cursor_pos_bytes.get() < self.content.borrow().len() {
+                    let remove_to = self.cursor_pos_bytes.get();
+                    let remove_to = remove_to
+                        + self.content.borrow()[remove_to..]
+                            .chars()
+                            .next()
+                            .expect("no char")
+                            .len_utf8();
+
+                    self.content
+                        .borrow_mut()
+                        .replace_range(self.cursor_pos_bytes.get()..remove_to, "");
+                    self.update_cursor_position(
+                        context.composite_tree,
+                        context.sender_window,
+                        context.system_link,
+                        context.ht_manager,
+                        context.sender_window.client_size(),
+                    );
+                    context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            font_id: FontID::UIDefault,
+                            content: self.content.borrow().clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+                        offset: [2.0, 2.0],
+                    });
+                    context.composite_tree.mark_text_layout_dirty(self.ct_root);
+                }
+            }
+            KeyInputCode::Character(c) if !c.is_control() => {
                 self.content
                     .borrow_mut()
                     .insert(self.cursor_pos_bytes.get(), c);

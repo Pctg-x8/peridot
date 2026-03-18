@@ -2175,6 +2175,11 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                     k if k == Key::Right as u32 => KeyInputCode::RightArrow,
                     k if k == Key::Up as u32 => KeyInputCode::UpArrow,
                     k if k == Key::Down as u32 => KeyInputCode::DownArrow,
+                    k if k == Key::Home as u32 => KeyInputCode::Home,
+                    k if k == Key::End as u32 => KeyInputCode::End,
+                    k if k == Key::PageUp as u32 => KeyInputCode::PageUp,
+                    k if k == Key::PageDown as u32 => KeyInputCode::PageDown,
+                    k if k == Key::Insert as u32 => KeyInputCode::Insert,
                     _ => KeyInputCode::UnknownNativeCode(key),
                 }
             } else {
