@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     DragPreviewPopoverHandle, Event, WindowHandle,
-    input::{EventContinueControl, FocusTargetToken},
+    input::{EventContinueControl, FocusTargetToken, InputEventContext},
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
@@ -19,6 +19,7 @@ pub struct HitTestTreeData<'h> {
     pub height_adjustment_factor: f32,
     pub role: Option<Role>,
     pub cursor_shape: CursorShape,
+    pub keyboard_focus: Option<FocusTargetToken>,
     pub action_handler: Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>>,
 }
 impl Default for HitTestTreeData<'_> {
@@ -37,6 +38,7 @@ impl Default for HitTestTreeData<'_> {
             height_adjustment_factor: 0.0,
             role: None,
             cursor_shape: CursorShape::Default,
+            keyboard_focus: None,
             action_handler: None,
         }
     }
@@ -376,27 +378,12 @@ pub struct PointerActionArgs {
     pub client_size: Size<LogicalUnit>,
 }
 
-pub struct HitTestEventContext<'env, 'h> {
-    pub sender_window: WindowHandle,
-    pub current_sec: f32,
-    pub composite_tree: &'env mut crate::rendering::composite::CompositeTree<Event>,
-    pub drag_preview: &'env DragPreviewPopoverHandle,
-    pub system_link: &'env crate::SystemLink<'env>,
-    pub ht_create_only_access: &'env mut HitTestTreeManagerCreateOnlyAccess<'h>,
-}
-
 pub trait HitTestTreeActionHandler {
-    #[allow(unused_variables)]
-    #[inline]
-    fn keyboard_focus(&self, sender: HitTestTreeRef) -> Option<FocusTargetToken> {
-        None
-    }
-
     #[allow(unused_variables)]
     fn on_pointer_enter(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -406,7 +393,7 @@ pub trait HitTestTreeActionHandler {
     fn on_pointer_leave(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -416,7 +403,7 @@ pub trait HitTestTreeActionHandler {
     fn on_pointer_move(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -426,7 +413,7 @@ pub trait HitTestTreeActionHandler {
     fn on_pointer_down(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -436,7 +423,7 @@ pub trait HitTestTreeActionHandler {
     fn on_pointer_up(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -446,7 +433,7 @@ pub trait HitTestTreeActionHandler {
     fn on_click(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -456,7 +443,7 @@ pub trait HitTestTreeActionHandler {
     fn on_drag_start(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -466,7 +453,7 @@ pub trait HitTestTreeActionHandler {
     fn on_drag_move(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
@@ -476,7 +463,7 @@ pub trait HitTestTreeActionHandler {
     fn on_drag_end(
         &self,
         sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()

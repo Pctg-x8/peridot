@@ -1,18 +1,31 @@
-use std::collections::{BTreeSet, HashMap};
+use std::{
+    collections::{BTreeSet, HashMap},
+    rc::{Rc, Weak},
+};
 
 use bitflags::bitflags;
 
 use crate::{
-    WindowHandle,
+    DragPreviewPopoverHandle, Event, SystemLink, WindowHandle,
     input::hittest::{
-        CursorShape, HitTestEventContext, HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
-        Role,
+        CursorShape, HitTestTreeManager, HitTestTreeManagerCreateOnlyAccess, HitTestTreeRef,
+        PointerActionArgs, Role,
     },
+    rendering::composite::CompositeTree,
     utils::{LogicalUnit, Point, Size},
 };
 
 pub mod hittest;
 pub type PointerInputUnit = LogicalUnit;
+
+pub struct InputEventContext<'env, 'h> {
+    pub sender_window: WindowHandle,
+    pub current_sec: f32,
+    pub composite_tree: &'env mut CompositeTree<Event>,
+    pub drag_preview: &'env DragPreviewPopoverHandle,
+    pub system_link: &'env SystemLink<'env>,
+    pub ht_create_only_access: &'env mut HitTestTreeManagerCreateOnlyAccess<'h>,
+}
 
 bitflags! {
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -79,7 +92,7 @@ impl PointerInputManager {
         &self,
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) {
         for ht_ref in ht.iter_ascending_from(ht_target) {
@@ -98,7 +111,7 @@ impl PointerInputManager {
         &self,
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) {
         for ht_ref in ht.iter_ascending_from(ht_target) {
@@ -118,9 +131,9 @@ impl PointerInputManager {
         sh: &(impl ShellPointerActions + ?Sized),
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
-        kfm: &mut KeyboardFocusManager,
+        kf_registry: &KeyboardFocusTokenRegistry,
     ) -> (bool, Option<HitTestTreeRef>) {
         let mut needs_recompute_pointer_enter = false;
         let mut new_captured = None;
@@ -133,14 +146,11 @@ impl PointerInputManager {
                     h.on_pointer_down(ht_ref, action_context, action_args)
                 });
 
-            match ht
-                .get_data(ht_ref)
-                .action_handler()
-                .and_then(|x| x.keyboard_focus(ht_ref))
-            {
-                Some(x) => kfm.set_focus(x),
-                None => kfm.clear_focus(),
-            }
+            Self::update_keyboard_focus(
+                ht.get_data(ht_ref).keyboard_focus,
+                action_context,
+                kf_registry,
+            );
 
             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                 needs_recompute_pointer_enter = true;
@@ -161,7 +171,7 @@ impl PointerInputManager {
         &self,
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) -> bool {
         let mut needs_recompute_pointer_enter = false;
@@ -188,7 +198,7 @@ impl PointerInputManager {
         sh: &(impl ShellPointerActions + ?Sized),
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) -> (bool, bool) {
         let mut needs_recompute_pointer_enter = false;
@@ -220,7 +230,7 @@ impl PointerInputManager {
         sh: &(impl ShellPointerActions + ?Sized),
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) -> (bool, Option<HitTestTreeRef>) {
         let mut needs_recompute_pointer_enter = false;
@@ -250,7 +260,7 @@ impl PointerInputManager {
     fn begin_drag(
         &mut self,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         action_args: &PointerActionArgs,
         shell: &(impl ShellPointerActions + ?Sized),
     ) {
@@ -290,7 +300,7 @@ impl PointerInputManager {
         &self,
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) -> bool {
         let mut needs_recompute_pointer_enter = false;
@@ -317,7 +327,7 @@ impl PointerInputManager {
         sh: &(impl ShellPointerActions + ?Sized),
         action_args: &PointerActionArgs,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) -> (bool, bool) {
         let mut needs_recompute_pointer_enter = false;
@@ -349,7 +359,7 @@ impl PointerInputManager {
         window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_root: HitTestTreeRef,
     ) {
         let new_hit = ht.test(
@@ -407,7 +417,7 @@ impl PointerInputManager {
         client_pos: Point<PointerInputUnit>,
         sh: &(impl ShellPointerActions + ?Sized),
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_root: HitTestTreeRef,
     ) {
         self.last_client_pointer_pos = Some((window, client_pos));
@@ -490,9 +500,9 @@ impl PointerInputManager {
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_root: HitTestTreeRef,
-        kfm: &mut KeyboardFocusManager,
+        kf_registry: &KeyboardFocusTokenRegistry,
     ) {
         let Some(client_pos) = self.last_client_pointer_pos else {
             // no pointer on the surface
@@ -518,14 +528,11 @@ impl PointerInputManager {
                         )
                     },
                 );
-                match ht
-                    .get_data(ht_ref)
-                    .action_handler()
-                    .and_then(|x| x.keyboard_focus(ht_ref))
-                {
-                    Some(x) => kfm.set_focus(x),
-                    None => kfm.clear_focus(),
-                }
+                Self::update_keyboard_focus(
+                    ht.get_data(ht_ref).keyboard_focus,
+                    action_context,
+                    kf_registry,
+                );
 
                 if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                     self.handle_mouse_enter_leave(
@@ -558,7 +565,7 @@ impl PointerInputManager {
                     ht,
                     action_context,
                     ht_ref,
-                    kfm,
+                    kf_registry,
                 );
 
                 if let Some(h) = new_captured {
@@ -581,7 +588,7 @@ impl PointerInputManager {
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
         ht: &HitTestTreeManager,
-        action_context: &mut HitTestEventContext,
+        action_context: &mut InputEventContext,
         ht_root: HitTestTreeRef,
     ) {
         let Some(client_pos) = self.last_client_pointer_pos else {
@@ -837,22 +844,93 @@ impl PointerInputManager {
         ht.iter_ascending_from(hit)
             .find_map(|x| ht.get_data(x).role)
     }
+
+    fn update_keyboard_focus(
+        new_focus: Option<FocusTargetToken>,
+        action_context: &mut InputEventContext,
+        kf_registry: &KeyboardFocusTokenRegistry,
+    ) {
+        let (released, taken) = match new_focus {
+            Some(x) => action_context
+                .sender_window
+                .keyboard_focus_state_mut()
+                .set_focus(x),
+            None => (
+                action_context
+                    .sender_window
+                    .keyboard_focus_state_mut()
+                    .clear_focus(),
+                None,
+            ),
+        };
+
+        if let Some(eh) = released.and_then(|x| kf_registry.event_handler(x)) {
+            eh.release(action_context);
+        }
+
+        if let Some(eh) = taken.and_then(|x| kf_registry.event_handler(x)) {
+            eh.taken(action_context);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FocusTargetToken(usize);
 
-pub struct KeyboardFocusManager {
-    last_token: usize,
-    unused_token: BTreeSet<usize>,
+pub trait KeyboardFocusEventHandler {
+    #[allow(unused_variables)]
+    fn taken(&self, context: &mut InputEventContext) {}
+    #[allow(unused_variables)]
+    fn release(&self, context: &mut InputEventContext) {}
+}
+
+struct KeyboardFocusTokenData {
+    event_handler: Option<Weak<dyn KeyboardFocusEventHandler>>,
+}
+impl KeyboardFocusTokenData {
+    fn reset(&mut self) {
+        self.event_handler = None;
+    }
+}
+
+pub struct PerWindowKeyboardFocusState {
     current_focus: Option<usize>,
 }
-impl KeyboardFocusManager {
+impl PerWindowKeyboardFocusState {
+    pub fn new() -> Self {
+        Self {
+            current_focus: None,
+        }
+    }
+
+    pub fn has_focus(&self, tok: &FocusTargetToken) -> bool {
+        self.current_focus.is_some_and(|x| x == tok.0)
+    }
+
+    pub fn set_focus(
+        &mut self,
+        tok: FocusTargetToken,
+    ) -> (Option<FocusTargetToken>, Option<FocusTargetToken>) {
+        let released_focus = self.current_focus.replace(tok.0);
+        (released_focus.map(FocusTargetToken), Some(tok))
+    }
+
+    pub fn clear_focus(&mut self) -> Option<FocusTargetToken> {
+        self.current_focus.take().map(FocusTargetToken)
+    }
+}
+
+pub struct KeyboardFocusTokenRegistry {
+    last_token: usize,
+    unused_token: BTreeSet<usize>,
+    token_data: Vec<KeyboardFocusTokenData>,
+}
+impl KeyboardFocusTokenRegistry {
     pub fn new() -> Self {
         Self {
             last_token: 0,
             unused_token: BTreeSet::new(),
-            current_focus: None,
+            token_data: Vec::new(),
         }
     }
 
@@ -863,6 +941,9 @@ impl KeyboardFocusManager {
 
         let t = FocusTargetToken(self.last_token);
         self.last_token += 1;
+        self.token_data.push(KeyboardFocusTokenData {
+            event_handler: None,
+        });
         t
     }
 
@@ -872,17 +953,24 @@ impl KeyboardFocusManager {
         } else {
             self.unused_token.insert(tok.0);
         }
+
+        self.token_data[tok.0].reset();
     }
 
-    pub fn has_focus(&self, tok: &FocusTargetToken) -> bool {
-        self.current_focus.is_some_and(|x| x == tok.0)
+    #[inline(always)]
+    pub fn set_event_handler(
+        &mut self,
+        tok: FocusTargetToken,
+        handler: &Rc<impl KeyboardFocusEventHandler + 'static>,
+    ) {
+        self.token_data[tok.0].event_handler = Some(Rc::downgrade(handler) as _);
     }
 
-    pub fn set_focus(&mut self, tok: FocusTargetToken) {
-        self.current_focus = Some(tok.0);
-    }
-
-    pub fn clear_focus(&mut self) {
-        self.current_focus = None;
+    #[inline(always)]
+    fn event_handler(&self, tok: FocusTargetToken) -> Option<Rc<dyn KeyboardFocusEventHandler>> {
+        self.token_data[tok.0]
+            .event_handler
+            .as_ref()
+            .and_then(Weak::upgrade)
     }
 }

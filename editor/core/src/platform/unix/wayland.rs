@@ -13,7 +13,7 @@ use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
     input::{
-        PointerInputUnit,
+        PerWindowKeyboardFocusState, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
         },
@@ -115,6 +115,16 @@ impl WindowHandle {
     #[inline(always)]
     pub fn ht_root(&self) -> HitTestTreeRef {
         self.state().ht_root
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &self.state().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
+        &mut self.state_mut().keyboard_focus_state
     }
 
     // TODO: impl them
@@ -504,6 +514,7 @@ pub struct WindowState {
     pub committed_state: Mutex<WindowCommittedState>,
     pub swapchain_externally_invalidation_signal: AtomicBool,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
+    pub keyboard_focus_state: PerWindowKeyboardFocusState,
 }
 unsafe impl Sync for WindowState {}
 unsafe impl Send for WindowState {}
@@ -646,6 +657,7 @@ impl Window {
                         false,
                     ),
                     latest_ui_scale_changes: Mutex::new(None),
+                    keyboard_focus_state: PerWindowKeyboardFocusState::new(),
                 },
             },
             window_type: r#type,

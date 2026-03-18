@@ -3,10 +3,10 @@ use std::rc::Rc;
 use crate::{
     Event,
     input::{
-        EventContinueControl,
+        EventContinueControl, InputEventContext,
         hittest::{
-            CursorShape, HitTestEventContext, HitTestTreeActionHandler, HitTestTreeCreate,
-            HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
+            CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
+            HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
         },
     },
     rendering::{
@@ -129,7 +129,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_pointer_enter(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         self.transit(
@@ -144,7 +144,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_pointer_leave(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         self.transit(
@@ -159,7 +159,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_pointer_down(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         self.transit(
@@ -174,7 +174,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_pointer_up(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         self.transit(
@@ -189,7 +189,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_click(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         if let Some(ref c) = self.click_event {

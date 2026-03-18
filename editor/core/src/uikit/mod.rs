@@ -2,7 +2,10 @@
 
 use crate::{
     Event, WindowHandle,
-    input::hittest::{HitTestTreeManager, HitTestTreeRef},
+    input::{
+        KeyboardFocusTokenRegistry,
+        hittest::{HitTestTreeManager, HitTestTreeRef},
+    },
     rendering::composite::{CompositeTree, CompositeTreeRef},
 };
 
@@ -14,6 +17,7 @@ pub struct MountContext<'a, 'h> {
 
 pub struct ViewInitContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
+    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub ui_scale_factor: f32,
 }
 impl<'a, 'h> core::ops::Deref for ViewInitContext<'a, 'h> {

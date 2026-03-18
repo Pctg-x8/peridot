@@ -3,10 +3,10 @@ use std::rc::Rc;
 use crate::{
     Event,
     input::{
-        EventContinueControl,
+        EventContinueControl, InputEventContext,
         hittest::{
-            HitTestEventContext, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
-            HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
+            HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager,
+            HitTestTreeRef, PointerActionArgs,
         },
     },
     rendering::{
@@ -181,7 +181,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
     fn on_pointer_enter(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         self.hovering.set(true);
@@ -194,7 +194,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
     fn on_pointer_leave(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         self.hovering.set(false);
@@ -208,7 +208,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
     fn on_pointer_down(
         &self,
         _sender: HitTestTreeRef,
-        _context: &mut HitTestEventContext,
+        _context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
@@ -217,7 +217,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
     fn on_pointer_up(
         &self,
         _sender: HitTestTreeRef,
-        _context: &mut HitTestEventContext,
+        _context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
@@ -226,7 +226,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
     fn on_click(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut HitTestEventContext,
+        context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         match self.cmd.get() {

@@ -539,6 +539,7 @@ pub struct CompositeRectText<Event> {
     pub runs: Vec<CompositeRectTextRun<Event>>,
     pub horizontal_alignment: CompositeRectTextHorizontalAlignment,
     pub vertical_alignment: CompositeRectTextVerticalAlignment,
+    pub offset: [f32; 2],
 }
 impl<Event> Default for CompositeRectText<Event> {
     fn default() -> Self {
@@ -546,6 +547,7 @@ impl<Event> Default for CompositeRectText<Event> {
             runs: Vec::new(),
             horizontal_alignment: Default::default(),
             vertical_alignment: Default::default(),
+            offset: [0.0, 0.0],
         }
     }
 }
@@ -1684,12 +1686,12 @@ impl<Event> CompositeTreeRender<Event> {
                     CompositeRectTextHorizontalAlignment::Start => 0.0,
                     CompositeRectTextHorizontalAlignment::End => w - cache.text_width,
                     CompositeRectTextHorizontalAlignment::Middle => (w - cache.text_width) * 0.5,
-                };
+                } + t.offset[0] * r.base_scale_factor;
                 let y_offset = match t.vertical_alignment {
                     CompositeRectTextVerticalAlignment::Start => 0.0,
                     CompositeRectTextVerticalAlignment::End => h - cache.text_height,
                     CompositeRectTextVerticalAlignment::Middle => (h - cache.text_height) * 0.5,
-                };
+                } + t.offset[1] * r.base_scale_factor;
                 for b in cache.text_rects.iter() {
                     unsafe {
                         core::ptr::write(

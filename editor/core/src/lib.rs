@@ -15,6 +15,7 @@ use std::sync::RwLock;
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Mutex,
 };
 
@@ -23,16 +24,17 @@ use crate::rendering::text::ThreadLocalTypingContext;
 use crate::{
     graphics::VulkanDevice,
     input::{
-        KeyboardFocusManager, PointerInputManager, PointerInputUnit,
+        FocusTargetToken, InputEventContext, KeyboardFocusEventHandler, KeyboardFocusTokenRegistry,
+        PointerInputManager, PointerInputUnit,
         hittest::{
-            CursorShape, HitTestEventContext, HitTestTreeActionHandler, HitTestTreeCreate,
-            HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
+            CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
+            HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
         },
     },
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
         composite::{
-            AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
+            AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
             CompositeTreeSyncBuffer,
@@ -979,6 +981,144 @@ impl Popup for AlertDialogPresenter {
     }
 }
 
+struct TextInputViewEventHandler {
+    token: FocusTargetToken,
+    ct_root: CompositeTreeRef,
+    ct_cursor: CompositeTreeRef,
+}
+impl KeyboardFocusEventHandler for TextInputViewEventHandler {
+    fn taken(&self, context: &mut InputEventContext) {
+        self.update(context);
+    }
+
+    fn release(&self, context: &mut InputEventContext) {
+        self.update(context);
+    }
+}
+impl HitTestTreeActionHandler for TextInputViewEventHandler {
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        input::EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl TextInputViewEventHandler {
+    fn update(&self, context: &mut InputEventContext) {
+        if context
+            .sender_window
+            .keyboard_focus_state()
+            .has_focus(&self.token)
+        {
+            context.composite_tree.get_mut(self.ct_root).border = Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Animated {
+                    from_value: [1.0, 1.0, 1.0, 0.5],
+                    to_value: [1.0, 1.0, 1.0, 1.0],
+                    start_sec: context.current_sec,
+                    end_sec: context.current_sec + 0.1,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                },
+            });
+            context.composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(1.0);
+        } else {
+            context.composite_tree.get_mut(self.ct_root).border = Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Animated {
+                    from_value: [1.0, 1.0, 1.0, 1.0],
+                    to_value: [1.0, 1.0, 1.0, 0.5],
+                    start_sec: context.current_sec,
+                    end_sec: context.current_sec + 0.1,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                },
+            });
+            context.composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(0.0);
+        }
+
+        context.composite_tree.mark_dirty(self.ct_root);
+        context.composite_tree.mark_dirty(self.ct_cursor);
+    }
+}
+
+pub struct TextInputView {
+    ht_root: HitTestTreeRef,
+    eh: Rc<TextInputViewEventHandler>,
+}
+impl TextInputView {
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let kf_token = ctx.keyboard_focus_registry.acquire_token();
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(20.0)],
+            offset: [AnimatableFloat::Value(200.0), AnimatableFloat::Value(300.0)],
+            has_bitmap: true,
+            border: Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+            }),
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    font_id: FontID::UIDefault,
+                    content: "aaa".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+                vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+                offset: [2.0, 2.0],
+            }),
+            ..Default::default()
+        });
+        let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(16.0)],
+            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
+            width: 128.0,
+            height: 20.0,
+            left: 200.0,
+            top: 300.0,
+            cursor_shape: CursorShape::IBeam,
+            keyboard_focus: Some(kf_token),
+            ..Default::default()
+        });
+
+        ctx.composite_tree.add_child(ct_root, ct_cursor);
+
+        let eh = Rc::new(TextInputViewEventHandler {
+            token: kf_token,
+            ct_root,
+            ct_cursor,
+        });
+        ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+        Self { ht_root, eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(parent.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
+    }
+
+    pub fn rescale(&self, ct: &mut CompositeTree<Event>, new_scale: f32) {
+        ct.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
+        ct.mark_dirty_all(self.eh.ct_root);
+        ct.get_mut(self.eh.ct_cursor).base_scale_factor = new_scale;
+        ct.mark_dirty_all(self.eh.ct_cursor);
+    }
+}
+
 struct PerWindowData {
     font_set: PerWindowFontSet<'static>,
     header: ui::window_header::View,
@@ -1000,7 +1140,7 @@ async fn run<'sys>(
         #[cfg(feature = "freetype")]
         ft_lib: rendering::text::FreeType::init().expect("freetype.init"),
     };
-    let mut keyboard_focus_manager = KeyboardFocusManager::new();
+    let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
     let mut pointer_input_manager = PointerInputManager::new();
     pointer_input_manager.set_client_size(main_window, main_window.client_size());
 
@@ -1032,6 +1172,7 @@ async fn run<'sys>(
             ht_manager: &mut ht_manager,
             current_sec: global_time_base.elapsed().as_secs_f32(),
         },
+        keyboard_focus_registry: &mut keyboard_focus_registry,
         ui_scale_factor: init_scale,
     };
     let window_header_view = ui::window_header::View::new(
@@ -1093,7 +1234,7 @@ async fn run<'sys>(
         fn on_pointer_enter(
             &self,
             sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
+            context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.composite_tree.get_mut(self.ct).composite_mode =
@@ -1113,7 +1254,7 @@ async fn run<'sys>(
         fn on_pointer_leave(
             &self,
             sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
+            context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.composite_tree.get_mut(self.ct).composite_mode =
@@ -1133,7 +1274,7 @@ async fn run<'sys>(
         fn on_drag_start(
             &self,
             sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
+            context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context
@@ -1147,7 +1288,7 @@ async fn run<'sys>(
         fn on_drag_move(
             &self,
             sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
+            context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.drag_preview.r#move(&args.client_pos);
@@ -1158,7 +1299,7 @@ async fn run<'sys>(
         fn on_drag_end(
             &self,
             sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
+            context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.drag_preview.hide();
@@ -1170,7 +1311,7 @@ async fn run<'sys>(
         fn on_click(
             &self,
             sender: HitTestTreeRef,
-            context: &mut HitTestEventContext,
+            context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
             context.system_link.dispatch_event(Event::SubWindowOpen);
@@ -1203,6 +1344,9 @@ async fn run<'sys>(
     );
     test_alert_btn.mount(&mut view_init_ctx, &main_window);
 
+    let text_input_view = TextInputView::new(&mut view_init_ctx);
+    text_input_view.mount(&mut view_init_ctx, &main_window);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
@@ -1225,6 +1369,7 @@ async fn run<'sys>(
                                 ht_manager,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                             },
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
                             ui_scale_factor: init_scale,
                         };
                         let window_header_view = ui::window_header::View::new(
@@ -1277,6 +1422,7 @@ async fn run<'sys>(
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
+                    text_input_view.rescale(&mut composite_tree, new_scale);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
@@ -1328,7 +1474,7 @@ async fn run<'sys>(
                 pointer_input_manager.handle_mouse_left_down(
                     &window,
                     &ht_manager,
-                    &mut HitTestEventContext {
+                    &mut InputEventContext {
                         sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
@@ -1337,7 +1483,7 @@ async fn run<'sys>(
                         ht_create_only_access: &mut ht_create_only_access,
                     },
                     window.ht_root(),
-                    &mut keyboard_focus_manager,
+                    &mut keyboard_focus_registry,
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -1353,7 +1499,7 @@ async fn run<'sys>(
                     client_pos,
                     &window,
                     &ht_manager,
-                    &mut HitTestEventContext {
+                    &mut InputEventContext {
                         sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
@@ -1374,7 +1520,7 @@ async fn run<'sys>(
                 pointer_input_manager.handle_mouse_left_up(
                     &window,
                     &ht_manager,
-                    &mut HitTestEventContext {
+                    &mut InputEventContext {
                         sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
@@ -1398,6 +1544,7 @@ async fn run<'sys>(
                             ht_manager: &mut ht_manager,
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                         },
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
                         ui_scale_factor: main_window.ui_scale_factor(),
                     },
                     target_window,
