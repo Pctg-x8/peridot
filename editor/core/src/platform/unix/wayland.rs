@@ -23,7 +23,7 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, PixelsUnit, Point, Size},
+    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
 
 pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
@@ -332,6 +332,7 @@ pub struct DisplayServerLink {
     pub pointer_state_ref: *const Option<PointerState>,
     pub window_registry: *mut WindowRegistry,
     pub decoration_pixbuf: *const WindowDecorationPixbuf,
+    pub global_messaging_ptr: *const GlobalMessaging,
 }
 
 impl crate::SystemLink<'_> {
@@ -472,6 +473,20 @@ impl crate::SystemLink<'_> {
             .latest_ui_scale_changes
             .lock()
             .expect("poisoned") = Some(new_scale);
+    }
+
+    pub fn set_ime_cursor_rect(&self, r: Rect<LogicalUnit>) {
+        if let Some(ti) = unsafe { &*self.display_server.global_messaging_ptr }
+            .keyboard
+            .as_ref()
+            .expect("keyboard.uninit")
+            .text_input
+            .as_ref()
+        {
+            ti.set_cursor_rectangle(r.left as _, r.top as _, r.width as _, r.height as _)
+                .expect("text_input.set_cursor_rectangle");
+            ti.commit().expect("text_input.commit");
+        }
     }
 }
 
@@ -1773,7 +1788,7 @@ pub struct KeyboardState {
     _wl_object: wl::Owned<wl::Keyboard>,
     xkb_keymap: Option<xkbcommon::Keymap>,
     xkb_state: Option<xkbcommon::State>,
-    _text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
+    text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
     enter_state: Option<KeyboardEnterState>,
 }
 
@@ -1842,7 +1857,7 @@ impl wl::SeatEventListener for GlobalMessaging {
                 _wl_object: k,
                 xkb_keymap: None,
                 xkb_state: None,
-                _text_input: Some(ti),
+                text_input: Some(ti),
                 enter_state: None,
             });
         } else {

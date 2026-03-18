@@ -276,6 +276,45 @@ impl<'h> HitTestTreeManager<'h> {
         }
     }
 
+    fn compute_global_rect(
+        &self,
+        r: HitTestTreeRef,
+        root_width: f32,
+        root_height: f32,
+    ) -> (f32, f32, f32, f32) {
+        let d = &self.data[r.0];
+        match self.relations[r.0].parent {
+            None => (
+                root_width * d.left_adjustment_factor + d.left,
+                root_height * d.top_adjustment_factor + d.top,
+                root_width * d.width_adjustment_factor + d.width,
+                root_height * d.height_adjustment_factor + d.height,
+            ),
+            Some(parent) => {
+                let (parent_x, parent_y, parent_w, parent_h) =
+                    self.compute_global_rect(HitTestTreeRef(parent), root_width, root_height);
+                (
+                    parent_x + parent_w * d.left_adjustment_factor + d.left,
+                    parent_y + parent_h * d.top_adjustment_factor + d.top,
+                    parent_w * d.width_adjustment_factor + d.width,
+                    parent_h * d.height_adjustment_factor + d.height,
+                )
+            }
+        }
+    }
+
+    pub fn translate_tree_local_to_root(
+        &self,
+        from: HitTestTreeRef,
+        x: f32,
+        y: f32,
+        root_width: f32,
+        root_height: f32,
+    ) -> (f32, f32) {
+        let (gx, gy, _, _) = self.compute_global_rect(from, root_width, root_height);
+        (gx + x, gy + y)
+    }
+
     pub fn test(
         &self,
         root: HitTestTreeRef,

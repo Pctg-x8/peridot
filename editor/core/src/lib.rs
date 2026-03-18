@@ -43,7 +43,7 @@ use crate::{
         MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
         PopupID, PopupManager, Positioning, RawMountTarget, SimpleButtonView, ViewInitContext,
     },
-    utils::{Color32, Point, Size},
+    utils::{Color32, LogicalUnit, Point, Rect, Size},
 };
 
 #[cfg(windows)]
@@ -421,7 +421,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     .as_ref()
                     .get_ref()
                     .as_ref()
-                    .map_or_else(core::ptr::null, |x| x as *const _)
+                    .map_or_else(core::ptr::null, |x| x as *const _),
+                global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
             }
         }
     ));
@@ -991,6 +992,7 @@ struct TextInputViewEventHandler {
     token: FocusTargetToken,
     ct_root: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
     content: String,
     cursor_pos_bytes: core::cell::Cell<usize>,
 }
@@ -1017,7 +1019,13 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     new_cursor_pos -= 1;
                 }
                 self.cursor_pos_bytes.set(new_cursor_pos);
-                self.update_cursor_position(context.composite_tree, context.sender_window);
+                self.update_cursor_position(
+                    context.composite_tree,
+                    context.sender_window,
+                    context.system_link,
+                    context.ht_manager,
+                    context.sender_window.client_size(),
+                );
             }
             KeyInputCode::RightArrow => {
                 let mut new_cursor_pos = self
@@ -1033,7 +1041,13 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     new_cursor_pos += 1;
                 }
                 self.cursor_pos_bytes.set(new_cursor_pos);
-                self.update_cursor_position(context.composite_tree, context.sender_window);
+                self.update_cursor_position(
+                    context.composite_tree,
+                    context.sender_window,
+                    context.system_link,
+                    context.ht_manager,
+                    context.sender_window.client_size(),
+                );
             }
             _ => (),
         }
@@ -1068,9 +1082,25 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             },
         );
         self.cursor_pos_bytes.set(bytes);
-        self.update_cursor_position(context.composite_tree, context.sender_window);
+        self.update_cursor_position(
+            context.composite_tree,
+            context.sender_window,
+            context.system_link,
+            context.ht_manager,
+            args.client_size,
+        );
 
+        input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
         input::EventContinueControl::STOP_PROPAGATION
+            | input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
 }
 impl TextInputViewEventHandler {
@@ -1115,6 +1145,9 @@ impl TextInputViewEventHandler {
         &self,
         composite_tree: &mut CompositeTree<Event>,
         window: WindowHandle,
+        system_link: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        client_size: Size<LogicalUnit>,
     ) {
         let tw = TextLayout::measure_width(
             &self.content[..self.cursor_pos_bytes.get()],
@@ -1125,6 +1158,19 @@ impl TextInputViewEventHandler {
         let cursor_rect = composite_tree.get_mut(self.ct_cursor);
         // base_scale_factorがかかるのであらかじめわっておく
         cursor_rect.offset[0] = AnimatableFloat::Value(2.0 + tw / cursor_rect.base_scale_factor);
+
+        let (sx, sy) = ht_manager.translate_tree_local_to_root(
+            self.ht_root,
+            2.0 + tw / cursor_rect.base_scale_factor,
+            2.0,
+            client_size.width,
+            client_size.height,
+        );
+        system_link.set_ime_cursor_rect(Rect::from_lt_size(
+            Point::new_logical(sx, sy),
+            Size::new_logical(2.0, 16.0),
+        ));
+
         composite_tree.mark_dirty(self.ct_cursor);
     }
 }
@@ -1134,7 +1180,7 @@ pub struct TextInputView {
     eh: Rc<TextInputViewEventHandler>,
 }
 impl TextInputView {
-    pub fn new(ctx: &mut ViewInitContext, window: WindowHandle) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, window: WindowHandle, syslink: &SystemLink) -> Self {
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
@@ -1183,13 +1229,12 @@ impl TextInputView {
             token: kf_token,
             ct_root,
             ct_cursor,
+            ht_root,
             content: "aaa".into(),
             cursor_pos_bytes: core::cell::Cell::new(0),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        eh.update_cursor_position(ctx.composite_tree, window);
 
         Self { ht_root, eh }
     }
@@ -1200,13 +1245,21 @@ impl TextInputView {
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
 
-    pub fn rescale(&self, ct: &mut CompositeTree<Event>, window: WindowHandle, new_scale: f32) {
+    pub fn rescale(
+        &self,
+        ct: &mut CompositeTree<Event>,
+        window: WindowHandle,
+        syslink: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        new_scale: f32,
+    ) {
         ct.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_root);
         ct.get_mut(self.eh.ct_cursor).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_cursor);
 
-        self.eh.update_cursor_position(ct, window);
+        self.eh
+            .update_cursor_position(ct, window, syslink, ht_manager, window.client_size());
     }
 }
 
@@ -1435,7 +1488,7 @@ async fn run<'sys>(
     );
     test_alert_btn.mount(&mut view_init_ctx, &main_window);
 
-    let text_input_view = TextInputView::new(&mut view_init_ctx, main_window);
+    let text_input_view = TextInputView::new(&mut view_init_ctx, main_window, &system_link);
     text_input_view.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -1513,7 +1566,13 @@ async fn run<'sys>(
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
-                    text_input_view.rescale(&mut composite_tree, window, new_scale);
+                    text_input_view.rescale(
+                        &mut composite_tree,
+                        window,
+                        &system_link,
+                        &ht_manager,
+                        new_scale,
+                    );
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
