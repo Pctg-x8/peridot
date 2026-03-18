@@ -22,7 +22,7 @@ use crate::rendering::text::ThreadLocalTypingContext;
 use crate::{
     graphics::VulkanDevice,
     input::{
-        CharacterInputEventHandler, FocusTargetToken, InputEventContext, KeyInputCode,
+        FocusTargetToken, InputEventContext, KeyInputCode, KeyInputEventHandler,
         KeyboardFocusTokenRegistry, PointerInputManager, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
@@ -992,8 +992,9 @@ struct TextInputViewEventHandler {
     ct_root: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
     content: String,
+    cursor_pos_bytes: core::cell::Cell<usize>,
 }
-impl CharacterInputEventHandler for TextInputViewEventHandler {
+impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         self.update(context);
     }
@@ -1004,6 +1005,38 @@ impl CharacterInputEventHandler for TextInputViewEventHandler {
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {
         tracing::debug!(?code, "keydown");
+
+        match code {
+            KeyInputCode::LeftArrow => {
+                let mut new_cursor_pos = self.cursor_pos_bytes.get().saturating_sub(1);
+                while new_cursor_pos > 0 {
+                    if self.content.is_char_boundary(new_cursor_pos) {
+                        break;
+                    }
+
+                    new_cursor_pos -= 1;
+                }
+                self.cursor_pos_bytes.set(new_cursor_pos);
+                self.update_cursor_position(context.composite_tree, context.sender_window);
+            }
+            KeyInputCode::RightArrow => {
+                let mut new_cursor_pos = self
+                    .cursor_pos_bytes
+                    .get()
+                    .saturating_add(1)
+                    .min(self.content.len());
+                while new_cursor_pos < self.content.len() {
+                    if self.content.is_char_boundary(new_cursor_pos) {
+                        break;
+                    }
+
+                    new_cursor_pos += 1;
+                }
+                self.cursor_pos_bytes.set(new_cursor_pos);
+                self.update_cursor_position(context.composite_tree, context.sender_window);
+            }
+            _ => (),
+        }
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
@@ -1023,7 +1056,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
-        let x = TextLayout::find_nearest_position(
+        let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
             (local_x - 2.0) * cursor_rect.base_scale_factor,
             &self.content,
             FontID::UIDefault,
@@ -1034,8 +1067,8 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
                     .font_set
             },
         );
-        cursor_rect.offset[0] = AnimatableFloat::Value(2.0 + x / cursor_rect.base_scale_factor);
-        context.composite_tree.mark_dirty(self.ct_cursor);
+        self.cursor_pos_bytes.set(bytes);
+        self.update_cursor_position(context.composite_tree, context.sender_window);
 
         input::EventContinueControl::STOP_PROPAGATION
     }
@@ -1083,9 +1116,11 @@ impl TextInputViewEventHandler {
         composite_tree: &mut CompositeTree<Event>,
         window: WindowHandle,
     ) {
-        let tw = TextLayout::measure_width(&self.content, FontID::UIDefault, unsafe {
-            &window.extra_data_ref::<PerWindowData>().font_set
-        });
+        let tw = TextLayout::measure_width(
+            &self.content[..self.cursor_pos_bytes.get()],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+        );
 
         let cursor_rect = composite_tree.get_mut(self.ct_cursor);
         // base_scale_factorがかかるのであらかじめわっておく
@@ -1149,6 +1184,7 @@ impl TextInputView {
             ct_root,
             ct_cursor,
             content: "aaa".into(),
+            cursor_pos_bytes: core::cell::Cell::new(0),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);

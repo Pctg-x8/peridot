@@ -833,12 +833,12 @@ impl TextLayout {
         width
     }
 
-    pub fn find_nearest_position(
+    pub fn find_nearest_position_with_bytes(
         x: f32,
         text: &str,
         font: FontID,
         font_set: &PerWindowFontSet,
-    ) -> f32 {
+    ) -> (f32, usize) {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -852,6 +852,7 @@ impl TextLayout {
 
         // TODO: LTR前提
         let mut left_cursor = 0.0;
+        let mut bytes = 0;
         #[cfg(feature = "harfbuzz")]
         for &(buf, left_base, font, fallback_index) in layout.buffers.iter() {
             let font = font_set.select(font).faces[fallback_index];
@@ -885,25 +886,30 @@ impl TextLayout {
 
                 if x < left {
                     // overshoot
-                    return left;
+                    return (left, bytes);
                 }
 
                 if x <= mid {
                     // left
-                    return left;
+                    return (left, bytes);
                 }
 
                 if x <= right {
                     // right
-                    return right;
+                    return (right, bytes);
                 }
 
                 left_cursor += glyph_position.x_advance as f32 / 64.0;
+                bytes += text[bytes..]
+                    .chars()
+                    .next()
+                    .expect("out of range")
+                    .len_utf8();
             }
         }
 
         // beyond
-        left_cursor
+        (left_cursor, bytes)
     }
 }
 

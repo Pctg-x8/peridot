@@ -896,7 +896,7 @@ pub enum KeyInputCode {
     UnknownNativeCode(u32),
 }
 
-pub trait CharacterInputEventHandler {
+pub trait KeyInputEventHandler {
     #[allow(unused_variables)]
     fn focus_taken(&self, context: &mut InputEventContext) {}
     #[allow(unused_variables)]
@@ -909,7 +909,7 @@ pub trait CharacterInputEventHandler {
 }
 
 struct KeyboardFocusTokenData {
-    event_handler: Option<Weak<dyn CharacterInputEventHandler>>,
+    event_handler: Option<Weak<dyn KeyInputEventHandler>>,
 }
 impl KeyboardFocusTokenData {
     fn reset(&mut self) {
@@ -1022,13 +1022,13 @@ impl KeyboardFocusTokenRegistry {
     pub fn set_event_handler(
         &mut self,
         tok: FocusTargetToken,
-        handler: &Rc<impl CharacterInputEventHandler + 'static>,
+        handler: &Rc<impl KeyInputEventHandler + 'static>,
     ) {
         self.token_data[tok.0].event_handler = Some(Rc::downgrade(handler) as _);
     }
 
     #[inline(always)]
-    fn event_handler(&self, tok: FocusTargetToken) -> Option<Rc<dyn CharacterInputEventHandler>> {
+    fn event_handler(&self, tok: FocusTargetToken) -> Option<Rc<dyn KeyInputEventHandler>> {
         self.token_data[tok.0]
             .event_handler
             .as_ref()
