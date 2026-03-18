@@ -866,11 +866,11 @@ impl PointerInputManager {
         };
 
         if let Some(eh) = released.and_then(|x| kf_registry.event_handler(x)) {
-            eh.release(action_context);
+            eh.focus_released(action_context);
         }
 
         if let Some(eh) = taken.and_then(|x| kf_registry.event_handler(x)) {
-            eh.taken(action_context);
+            eh.focus_taken(action_context);
         }
     }
 }
@@ -878,15 +878,38 @@ impl PointerInputManager {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FocusTargetToken(usize);
 
-pub trait KeyboardFocusEventHandler {
+#[derive(Clone, Debug)]
+pub enum KeyInputCode {
+    Character(char),
+    LeftShift,
+    LeftAlt,
+    LeftControl,
+    LeftSuper,
+    RightShift,
+    RightAlt,
+    RightControl,
+    RightSuper,
+    LeftArrow,
+    RightArrow,
+    UpArrow,
+    DownArrow,
+    UnknownNativeCode(u32),
+}
+
+pub trait CharacterInputEventHandler {
     #[allow(unused_variables)]
-    fn taken(&self, context: &mut InputEventContext) {}
+    fn focus_taken(&self, context: &mut InputEventContext) {}
     #[allow(unused_variables)]
-    fn release(&self, context: &mut InputEventContext) {}
+    fn focus_released(&self, context: &mut InputEventContext) {}
+
+    #[allow(unused_variables)]
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {}
+    #[allow(unused_variables)]
+    fn keyup(&self, context: &mut InputEventContext, code: KeyInputCode) {}
 }
 
 struct KeyboardFocusTokenData {
-    event_handler: Option<Weak<dyn KeyboardFocusEventHandler>>,
+    event_handler: Option<Weak<dyn CharacterInputEventHandler>>,
 }
 impl KeyboardFocusTokenData {
     fn reset(&mut self) {
@@ -923,6 +946,38 @@ impl PerWindowKeyboardFocusState {
 
     pub fn clear_focus(&mut self) -> Option<FocusTargetToken> {
         self.current_focus.take().map(FocusTargetToken)
+    }
+
+    pub fn handle_keydown(
+        &self,
+        code: KeyInputCode,
+        context: &mut InputEventContext,
+        registry: &KeyboardFocusTokenRegistry,
+    ) {
+        let Some(eh) = self
+            .current_focus
+            .and_then(|x| registry.event_handler(FocusTargetToken(x)))
+        else {
+            return;
+        };
+
+        eh.keydown(context, code);
+    }
+
+    pub fn handle_keyup(
+        &self,
+        code: KeyInputCode,
+        context: &mut InputEventContext,
+        registry: &KeyboardFocusTokenRegistry,
+    ) {
+        let Some(eh) = self
+            .current_focus
+            .and_then(|x| registry.event_handler(FocusTargetToken(x)))
+        else {
+            return;
+        };
+
+        eh.keyup(context, code);
     }
 }
 
@@ -967,13 +1022,13 @@ impl KeyboardFocusTokenRegistry {
     pub fn set_event_handler(
         &mut self,
         tok: FocusTargetToken,
-        handler: &Rc<impl KeyboardFocusEventHandler + 'static>,
+        handler: &Rc<impl CharacterInputEventHandler + 'static>,
     ) {
         self.token_data[tok.0].event_handler = Some(Rc::downgrade(handler) as _);
     }
 
     #[inline(always)]
-    fn event_handler(&self, tok: FocusTargetToken) -> Option<Rc<dyn KeyboardFocusEventHandler>> {
+    fn event_handler(&self, tok: FocusTargetToken) -> Option<Rc<dyn CharacterInputEventHandler>> {
         self.token_data[tok.0]
             .event_handler
             .as_ref()

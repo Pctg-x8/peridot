@@ -22,8 +22,8 @@ use crate::rendering::text::ThreadLocalTypingContext;
 use crate::{
     graphics::VulkanDevice,
     input::{
-        FocusTargetToken, InputEventContext, KeyboardFocusEventHandler, KeyboardFocusTokenRegistry,
-        PointerInputManager, PointerInputUnit,
+        CharacterInputEventHandler, FocusTargetToken, InputEventContext, KeyInputCode,
+        KeyboardFocusTokenRegistry, PointerInputManager, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
             HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
@@ -799,6 +799,14 @@ pub enum Event {
     PointerUp {
         window: WindowHandle,
     },
+    KeyDown {
+        window: WindowHandle,
+        code: KeyInputCode,
+    },
+    KeyUp {
+        window: WindowHandle,
+        code: KeyInputCode,
+    },
     WindowResize {
         window: WindowHandle,
         size: Size<PointerInputUnit>,
@@ -985,13 +993,17 @@ struct TextInputViewEventHandler {
     ct_cursor: CompositeTreeRef,
     content: String,
 }
-impl KeyboardFocusEventHandler for TextInputViewEventHandler {
-    fn taken(&self, context: &mut InputEventContext) {
+impl CharacterInputEventHandler for TextInputViewEventHandler {
+    fn focus_taken(&self, context: &mut InputEventContext) {
         self.update(context);
     }
 
-    fn release(&self, context: &mut InputEventContext) {
+    fn focus_released(&self, context: &mut InputEventContext) {
         self.update(context);
+    }
+
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {
+        tracing::debug!(?code, "keydown");
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
@@ -1575,6 +1587,42 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                     },
                     window.ht_root(),
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::KeyDown { window, code } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                window.keyboard_focus_state().handle_keydown(
+                    code,
+                    &mut InputEventContext {
+                        sender_window: window,
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                    &keyboard_focus_registry,
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::KeyUp { window, code } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                window.keyboard_focus_state().handle_keyup(
+                    code,
+                    &mut InputEventContext {
+                        sender_window: window,
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                    &keyboard_focus_registry,
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);

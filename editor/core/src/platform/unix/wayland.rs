@@ -5,6 +5,7 @@ use std::{
 };
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
+use linux_input::Key;
 use peridot_tp_dbus as dbus;
 use peridot_tp_wayland::{self as wl, ProxyObject};
 use peridot_tp_xkbcommon as xkbcommon;
@@ -13,7 +14,7 @@ use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
     input::{
-        PerWindowKeyboardFocusState, PointerInputUnit,
+        KeyInputCode, PerWindowKeyboardFocusState, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
         },
@@ -1764,11 +1765,16 @@ pub struct PointerState {
     enter_state: Option<PointerEnterState>,
 }
 
+struct KeyboardEnterState {
+    pub surface: *mut wl::Surface,
+}
+
 pub struct KeyboardState {
     _wl_object: wl::Owned<wl::Keyboard>,
     xkb_keymap: Option<xkbcommon::Keymap>,
     xkb_state: Option<xkbcommon::State>,
     _text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
+    enter_state: Option<KeyboardEnterState>,
 }
 
 pub struct GlobalMessaging {
@@ -1837,6 +1843,7 @@ impl wl::SeatEventListener for GlobalMessaging {
                 xkb_keymap: None,
                 xkb_state: None,
                 _text_input: Some(ti),
+                enter_state: None,
             });
         } else {
             // remove keyboard
@@ -2083,15 +2090,18 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         state.xkb_state = Some(xkb_state);
     }
 
-    #[tracing::instrument(skip(self, _sender, _surface))]
+    #[tracing::instrument(skip(self, _sender, surface))]
     fn enter(
         &mut self,
         _sender: &mut wl::Keyboard,
         serial: u32,
-        _surface: &mut wl::Surface,
+        surface: &mut wl::Surface,
         keys: &[u32],
     ) {
         tracing::trace!("keyboard::enter");
+
+        let state = self.keyboard.as_mut().expect("no keyboard");
+        state.enter_state = Some(KeyboardEnterState { surface });
     }
 
     #[tracing::instrument(skip(self, _sender, _surface))]
@@ -2102,6 +2112,9 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         _surface: Option<&mut wl::Surface>,
     ) {
         tracing::trace!("keyboard::leave");
+
+        let state = self.keyboard.as_mut().expect("no keyboard");
+        state.enter_state = None;
     }
 
     #[tracing::instrument(skip(self, _sender))]
@@ -2113,10 +2126,13 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         key: u32,
         state: wl::KeyboardKeyState,
     ) {
-        let state = self.keyboard.as_mut().expect("keyboard_state.uninit");
+        let k_state = self.keyboard.as_mut().expect("keyboard_state.uninit");
         tracing::trace!("keyboard::key");
+        let Some(ref enter_state) = k_state.enter_state else {
+            return;
+        };
 
-        if let Some(ref mut x) = state.xkb_state {
+        if let Some(ref mut x) = k_state.xkb_state {
             let mut buf = Vec::with_capacity(32);
             // evdevのスキャンコードでくるので、xkbのスキャンコードにする(8を足せばいいらしい: https://wayland-book.com/seat/keyboard.html)
             let mut alen = x.key_get_utf8(key + 8, buf.spare_capacity_mut());
@@ -2127,11 +2143,43 @@ impl wl::KeyboardEventListener for GlobalMessaging {
             unsafe {
                 buf.set_len(alen);
             }
-            tracing::trace!(
-                alen,
-                text = unsafe { core::str::from_utf8_unchecked(&buf) },
-                "keyboard translated"
-            );
+            let text = unsafe { core::str::from_utf8_unchecked(&buf) };
+            tracing::trace!(alen, text, "keyboard translated");
+
+            let code = if text.is_empty() {
+                match key {
+                    k if k == Key::LeftControl as u32 => KeyInputCode::LeftControl,
+                    k if k == Key::RightControl as u32 => KeyInputCode::RightControl,
+                    k if k == Key::LeftShift as u32 => KeyInputCode::LeftShift,
+                    k if k == Key::RightShift as u32 => KeyInputCode::RightShift,
+                    k if k == Key::LeftAlt as u32 => KeyInputCode::LeftAlt,
+                    k if k == Key::RightAlt as u32 => KeyInputCode::RightAlt,
+                    k if k == Key::LeftMeta as u32 => KeyInputCode::LeftSuper,
+                    k if k == Key::RightMeta as u32 => KeyInputCode::RightSuper,
+                    k if k == Key::Left as u32 => KeyInputCode::LeftArrow,
+                    k if k == Key::Right as u32 => KeyInputCode::RightArrow,
+                    k if k == Key::Up as u32 => KeyInputCode::UpArrow,
+                    k if k == Key::Down as u32 => KeyInputCode::DownArrow,
+                    _ => KeyInputCode::UnknownNativeCode(key),
+                }
+            } else {
+                KeyInputCode::Character(text.chars().next().expect("empty"))
+            };
+            match state {
+                wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
+                    self.event_dispatcher.dispatch(Event::KeyDown {
+                        window: WindowHandle(enter_state.surface),
+                        code,
+                    });
+                }
+                wl::KeyboardKeyState::Released => {
+                    self.event_dispatcher.dispatch(Event::KeyUp {
+                        window: WindowHandle(enter_state.surface),
+                        code,
+                    });
+                }
+                _ => unreachable!(),
+            }
         }
     }
 

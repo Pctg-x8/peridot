@@ -89,6 +89,7 @@ libc = "0.2"
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-eventfd = { path = "../../platform/linux/eventfd" }
 linux-epoll = { path = "../../platform/linux/epoll" }
+linux-input = { path = "../../platform/linux/input" }
 peridot-tp-dbus = { path = "../../thirdparty/dbus" }
 peridot-tp-xkbcommon = { path = "../../thirdparty/xkbcommon" }
 
