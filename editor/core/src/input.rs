@@ -912,11 +912,14 @@ pub trait KeyInputEventHandler {
     #[allow(unused_variables)]
     fn keyup(&self, context: &mut InputEventContext, code: KeyInputCode) {}
 
-    // ime related events
     #[allow(unused_variables)]
-    fn ime_commit(&self, context: &mut InputEventContext, text: &str) {}
-    #[allow(unused_variables)]
-    fn ime_preedit(&self, context: &mut InputEventContext, text: &str) {}
+    fn ime_state_changes(
+        &self,
+        context: &mut InputEventContext,
+        new_committed_string: &str,
+        new_preedit_string: &str,
+    ) {
+    }
 }
 
 struct KeyboardFocusTokenData {
@@ -991,9 +994,10 @@ impl PerWindowKeyboardFocusState {
         eh.keyup(context, code);
     }
 
-    pub fn handle_ime_commit(
+    pub fn handle_ime_state_changes(
         &self,
-        text: &str,
+        new_committed_string: &str,
+        new_preedit_string: &str,
         context: &mut InputEventContext,
         registry: &KeyboardFocusTokenRegistry,
     ) {
@@ -1004,23 +1008,7 @@ impl PerWindowKeyboardFocusState {
             return;
         };
 
-        eh.ime_commit(context, text);
-    }
-
-    pub fn handle_ime_preedit(
-        &self,
-        text: &str,
-        context: &mut InputEventContext,
-        registry: &KeyboardFocusTokenRegistry,
-    ) {
-        let Some(eh) = self
-            .current_focus
-            .and_then(|x| registry.event_handler(FocusTargetToken(x)))
-        else {
-            return;
-        };
-
-        eh.ime_preedit(context, text);
+        eh.ime_state_changes(context, new_committed_string, new_preedit_string);
     }
 }
 

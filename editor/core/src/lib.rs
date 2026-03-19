@@ -32,10 +32,10 @@ use crate::{
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
         composite::{
-            AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
-            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
-            CompositeTreeSyncBuffer,
+            AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
+            CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
+            CompositeTreeRef, CompositeTreeSyncBuffer,
         },
         text::{FontID, PerWindowFontSet, RootFontSet, TextLayout},
     },
@@ -43,7 +43,7 @@ use crate::{
         MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
         PopupID, PopupManager, Positioning, RawMountTarget, SimpleButtonView, ViewInitContext,
     },
-    utils::{Color32, LogicalUnit, Point, Rect, Size},
+    utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
 };
 
 #[cfg(windows)]
@@ -812,13 +812,10 @@ pub enum Event {
         window: WindowHandle,
         code: KeyInputCode,
     },
-    IMECommitString {
+    IMEStateChanges {
         window: WindowHandle,
-        content: String,
-    },
-    IMEPreeditString {
-        window: WindowHandle,
-        content: String,
+        committed_string: String,
+        preedit_string: String,
     },
     WindowResize {
         window: WindowHandle,
@@ -1004,9 +1001,12 @@ struct TextInputViewEventHandler {
     token: FocusTargetToken,
     ct_root: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
+    ct_preedit_underline: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     content: core::cell::RefCell<String>,
     cursor_pos_bytes: core::cell::Cell<usize>,
+    preedit_range_start_bytes: core::cell::Cell<usize>,
+    preedit_range_end_bytes: core::cell::Cell<usize>,
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
@@ -1186,12 +1186,68 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         }
     }
 
-    fn ime_commit(&self, context: &mut InputEventContext, text: &str) {
-        self.content
-            .borrow_mut()
-            .insert_str(self.cursor_pos_bytes.get(), text);
-        self.cursor_pos_bytes
-            .set(self.cursor_pos_bytes.get() + text.len());
+    fn ime_state_changes(
+        &self,
+        context: &mut InputEventContext,
+        new_committed_string: &str,
+        new_preedit_string: &str,
+    ) {
+        // TODO: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
+        // 他PFではどうなのかは不明
+        let has_preedit_text =
+            self.preedit_range_start_bytes.get() != self.preedit_range_end_bytes.get();
+
+        if has_preedit_text {
+            if !new_preedit_string.is_empty() {
+                // replace preedit
+                self.content.borrow_mut().replace_range(
+                    self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get(),
+                    new_preedit_string,
+                );
+                self.preedit_range_start_bytes
+                    .set(self.preedit_range_start_bytes.get());
+                self.preedit_range_end_bytes
+                    .set(self.preedit_range_start_bytes.get() + new_preedit_string.len());
+                self.cursor_pos_bytes
+                    .set(self.preedit_range_end_bytes.get());
+            } else {
+                // clear preedit
+                self.content.borrow_mut().replace_range(
+                    self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get(),
+                    "",
+                );
+                self.preedit_range_start_bytes
+                    .set(self.preedit_range_start_bytes.get());
+                self.preedit_range_end_bytes
+                    .set(self.preedit_range_start_bytes.get());
+                self.cursor_pos_bytes
+                    .set(self.preedit_range_start_bytes.get());
+            }
+        }
+
+        if !new_committed_string.is_empty() {
+            // insert committed
+            self.content
+                .borrow_mut()
+                .insert_str(self.cursor_pos_bytes.get(), new_committed_string);
+            self.cursor_pos_bytes
+                .set(self.cursor_pos_bytes.get() + new_committed_string.len());
+        }
+
+        if !has_preedit_text && !new_preedit_string.is_empty() {
+            // insert preedit
+            self.content
+                .borrow_mut()
+                .insert_str(self.cursor_pos_bytes.get(), new_preedit_string);
+            self.preedit_range_start_bytes
+                .set(self.cursor_pos_bytes.get());
+            self.preedit_range_end_bytes
+                .set(self.cursor_pos_bytes.get() + new_preedit_string.len());
+            self.cursor_pos_bytes
+                .set(self.preedit_range_end_bytes.get());
+        }
+
+        self.update_preedit_underline(context.composite_tree, context.sender_window);
         self.update_cursor_position(
             context.composite_tree,
             context.sender_window,
@@ -1211,10 +1267,6 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             offset: [2.0, 2.0],
         });
         context.composite_tree.mark_text_layout_dirty(self.ct_root);
-    }
-
-    fn ime_preedit(&self, context: &mut InputEventContext, text: &str) {
-        tracing::debug!(text, "ime preedit");
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
@@ -1343,6 +1395,40 @@ impl TextInputViewEventHandler {
 
         composite_tree.mark_dirty(self.ct_cursor);
     }
+
+    fn update_preedit_underline(
+        &self,
+        composite_tree: &mut CompositeTree<Event>,
+        window: WindowHandle,
+    ) {
+        let preedit_range =
+            self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
+        if preedit_range.is_empty() {
+            // no preedit
+            composite_tree.get_mut(self.ct_preedit_underline).opacity = AnimatableFloat::Value(0.0);
+            composite_tree.mark_dirty(self.ct_preedit_underline);
+            return;
+        }
+
+        let o = TextLayout::measure_width(
+            &self.content.borrow()[..preedit_range.start],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+        );
+        let tw = TextLayout::measure_width(
+            &self.content.borrow()[preedit_range],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+        );
+
+        let underline_rect = composite_tree.get_mut(self.ct_preedit_underline);
+        underline_rect.offset[0] =
+            AnimatableFloat::Value(2.0 + o / underline_rect.base_scale_factor);
+        underline_rect.size[0] = AnimatableFloat::Value(tw / underline_rect.base_scale_factor);
+        underline_rect.opacity = AnimatableFloat::Value(1.0);
+
+        composite_tree.mark_dirty(self.ct_preedit_underline);
+    }
 }
 
 pub struct TextInputView {
@@ -1372,12 +1458,27 @@ impl TextInputView {
                 vertical_alignment: CompositeRectTextVerticalAlignment::Start,
                 offset: [2.0, 2.0],
             }),
+            clip_child: Some(ClipConfig {
+                left_softness: unsafe { SafeF32::new_unchecked(0.0) },
+                right_softness: unsafe { SafeF32::new_unchecked(0.0) },
+                top_softness: unsafe { SafeF32::new_unchecked(0.0) },
+                bottom_softness: unsafe { SafeF32::new_unchecked(0.0) },
+            }),
             ..Default::default()
         });
         let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
             offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ct_preedit_underline = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(1.0)],
+            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
             opacity: AnimatableFloat::Value(0.0),
@@ -1394,14 +1495,18 @@ impl TextInputView {
         });
 
         ctx.composite_tree.add_child(ct_root, ct_cursor);
+        ctx.composite_tree.add_child(ct_root, ct_preedit_underline);
 
         let eh = Rc::new(TextInputViewEventHandler {
             token: kf_token,
             ct_root,
             ct_cursor,
+            ct_preedit_underline,
             ht_root,
             content: core::cell::RefCell::new("aaa".into()),
             cursor_pos_bytes: core::cell::Cell::new(0),
+            preedit_range_start_bytes: core::cell::Cell::new(0),
+            preedit_range_end_bytes: core::cell::Cell::new(0),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);
@@ -1427,9 +1532,12 @@ impl TextInputView {
         ct.mark_dirty_all(self.eh.ct_root);
         ct.get_mut(self.eh.ct_cursor).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_cursor);
+        ct.get_mut(self.eh.ct_preedit_underline).base_scale_factor = new_scale;
+        ct.mark_dirty_all(self.eh.ct_preedit_underline);
 
         self.eh
             .update_cursor_position(ct, window, syslink, ht_manager, window.client_size());
+        self.eh.update_preedit_underline(ct, window);
     }
 }
 
@@ -1892,28 +2000,15 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::IMECommitString { window, content } => {
+            Event::IMEStateChanges {
+                window,
+                committed_string,
+                preedit_string,
+            } => {
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
-                window.keyboard_focus_state().handle_ime_commit(
-                    &content,
-                    &mut InputEventContext {
-                        sender_window: window,
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
-                        ht_manager: &ht_manager,
-                    },
-                    &keyboard_focus_registry,
-                );
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-            }
-            Event::IMEPreeditString { window, content } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
-                window.keyboard_focus_state().handle_ime_preedit(
-                    &content,
+                window.keyboard_focus_state().handle_ime_state_changes(
+                    &committed_string,
+                    &preedit_string,
                     &mut InputEventContext {
                         sender_window: window,
                         composite_tree: &mut composite_tree,

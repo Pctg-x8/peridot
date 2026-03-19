@@ -2313,25 +2313,17 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
             return;
         };
 
-        if !self.ime_pending_state.committed_text.is_empty() {
-            self.event_dispatcher.dispatch(Event::IMECommitString {
-                window: WindowHandle(k_enter_state.surface),
-                content: core::mem::replace(
-                    &mut self.ime_pending_state.committed_text,
-                    String::new(),
-                ),
-            });
-        }
-
-        if !self.ime_pending_state.preedit_text.is_empty() {
-            self.event_dispatcher.dispatch(Event::IMEPreeditString {
-                window: WindowHandle(k_enter_state.surface),
-                content: core::mem::replace(
-                    &mut self.ime_pending_state.preedit_text,
-                    String::new(),
-                ),
-            });
-        }
+        self.event_dispatcher.dispatch(Event::IMEStateChanges {
+            window: WindowHandle(k_enter_state.surface),
+            committed_string: core::mem::replace(
+                &mut self.ime_pending_state.committed_text,
+                String::new(),
+            ),
+            preedit_string: core::mem::replace(
+                &mut self.ime_pending_state.preedit_text,
+                String::new(),
+            ),
+        });
     }
 }
 impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
