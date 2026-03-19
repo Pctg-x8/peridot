@@ -479,12 +479,34 @@ impl crate::SystemLink<'_> {
         if let Some(ti) = unsafe { &*self.display_server.global_messaging_ptr }
             .keyboard
             .as_ref()
-            .expect("keyboard.uninit")
-            .text_input
-            .as_ref()
+            .and_then(|x| x.text_input.as_ref())
         {
             ti.set_cursor_rectangle(r.left as _, r.top as _, r.width as _, r.height as _)
                 .expect("text_input.set_cursor_rectangle");
+        }
+    }
+
+    pub fn ime_set_surrounding_text(&self, text: &str, cursor: usize, anchor: usize) {
+        if let Some(ti) = unsafe { &*self.display_server.global_messaging_ptr }
+            .keyboard
+            .as_ref()
+            .and_then(|x| x.text_input.as_ref())
+        {
+            ti.set_surrounding_text(
+                &std::ffi::CString::new(text).expect("cstring.new"),
+                cursor as _,
+                anchor as _,
+            )
+            .expect("text_input.set_surrounding_text");
+        }
+    }
+
+    pub fn ime_commit(&self) {
+        if let Some(ti) = unsafe { &*self.display_server.global_messaging_ptr }
+            .keyboard
+            .as_ref()
+            .and_then(|x| x.text_input.as_ref())
+        {
             ti.commit().expect("text_input.commit");
         }
     }
@@ -1792,6 +1814,11 @@ pub struct KeyboardState {
     enter_state: Option<KeyboardEnterState>,
 }
 
+pub struct IMEPendingState {
+    pub committed_text: String,
+    pub preedit_text: String,
+}
+
 pub struct GlobalMessaging {
     pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
     pub xkb_context: xkbcommon::Context,
@@ -1799,6 +1826,7 @@ pub struct GlobalMessaging {
     pub pointer: Option<PointerState>,
     pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
     pub event_dispatcher: LogicFiberEventDispatcher,
+    pub ime_pending_state: IMEPendingState,
     pub _pinned: core::marker::PhantomPinned,
 }
 impl wl::XdgWmBaseEventListener for GlobalMessaging {
@@ -2256,12 +2284,16 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
         cursor_begin: i32,
         cursor_end: i32,
     ) {
-        tracing::trace!("textinputv3::preedit_string");
+        self.ime_pending_state.preedit_text = text
+            .map(|t| t.to_string_lossy().into_owned())
+            .unwrap_or_default();
     }
 
     #[tracing::instrument(skip(self, _sender))]
     fn commit_string(&mut self, _sender: &mut wl::ZwpTextInputV3, text: Option<&core::ffi::CStr>) {
-        tracing::trace!("textinputv3::commit_string");
+        self.ime_pending_state.committed_text = text
+            .map(|t| t.to_string_lossy().into_owned())
+            .unwrap_or_default();
     }
 
     #[tracing::instrument(skip(self, _sender))]
@@ -2276,7 +2308,30 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, _sender))]
     fn done(&mut self, _sender: &mut wl::ZwpTextInputV3, serial: u32) {
-        tracing::trace!("textinputv3::done");
+        let k_state = self.keyboard.as_ref().expect("keyboard.uninit");
+        let Some(ref k_enter_state) = k_state.enter_state else {
+            return;
+        };
+
+        if !self.ime_pending_state.committed_text.is_empty() {
+            self.event_dispatcher.dispatch(Event::IMECommitString {
+                window: WindowHandle(k_enter_state.surface),
+                content: core::mem::replace(
+                    &mut self.ime_pending_state.committed_text,
+                    String::new(),
+                ),
+            });
+        }
+
+        if !self.ime_pending_state.preedit_text.is_empty() {
+            self.event_dispatcher.dispatch(Event::IMEPreeditString {
+                window: WindowHandle(k_enter_state.surface),
+                content: core::mem::replace(
+                    &mut self.ime_pending_state.preedit_text,
+                    String::new(),
+                ),
+            });
+        }
     }
 }
 impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {

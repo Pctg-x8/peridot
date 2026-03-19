@@ -382,6 +382,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .as_ref()
             .map(|x| x.as_ptr()),
         event_dispatcher: empty_dispatcher.clone(),
+        ime_pending_state: platform::unix::wayland::IMEPendingState {
+            committed_text: String::new(),
+            preedit_text: String::new(),
+        },
         _pinned: core::marker::PhantomPinned,
     });
 
@@ -808,6 +812,14 @@ pub enum Event {
         window: WindowHandle,
         code: KeyInputCode,
     },
+    IMECommitString {
+        window: WindowHandle,
+        content: String,
+    },
+    IMEPreeditString {
+        window: WindowHandle,
+        content: String,
+    },
     WindowResize {
         window: WindowHandle,
         size: Size<PointerInputUnit>,
@@ -1173,6 +1185,37 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             _ => (),
         }
     }
+
+    fn ime_commit(&self, context: &mut InputEventContext, text: &str) {
+        self.content
+            .borrow_mut()
+            .insert_str(self.cursor_pos_bytes.get(), text);
+        self.cursor_pos_bytes
+            .set(self.cursor_pos_bytes.get() + text.len());
+        self.update_cursor_position(
+            context.composite_tree,
+            context.sender_window,
+            context.system_link,
+            context.ht_manager,
+            context.sender_window.client_size(),
+        );
+        context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
+            runs: vec![CompositeRectTextRun {
+                font_id: FontID::UIDefault,
+                content: self.content.borrow().clone(),
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+            offset: [2.0, 2.0],
+        });
+        context.composite_tree.mark_text_layout_dirty(self.ct_root);
+    }
+
+    fn ime_preedit(&self, context: &mut InputEventContext, text: &str) {
+        tracing::debug!(text, "ime preedit");
+    }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
     fn on_pointer_down(
@@ -1291,6 +1334,12 @@ impl TextInputViewEventHandler {
             Point::new_logical(sx, sy),
             Size::new_logical(2.0, 16.0),
         ));
+        system_link.ime_set_surrounding_text(
+            &self.content.borrow(),
+            self.cursor_pos_bytes.get(),
+            self.cursor_pos_bytes.get(),
+        );
+        system_link.ime_commit();
 
         composite_tree.mark_dirty(self.ct_cursor);
     }
@@ -1829,6 +1878,42 @@ async fn run<'sys>(
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 window.keyboard_focus_state().handle_keyup(
                     code,
+                    &mut InputEventContext {
+                        sender_window: window,
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                    &keyboard_focus_registry,
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::IMECommitString { window, content } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                window.keyboard_focus_state().handle_ime_commit(
+                    &content,
+                    &mut InputEventContext {
+                        sender_window: window,
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                    &keyboard_focus_registry,
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::IMEPreeditString { window, content } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                window.keyboard_focus_state().handle_ime_preedit(
+                    &content,
                     &mut InputEventContext {
                         sender_window: window,
                         composite_tree: &mut composite_tree,
