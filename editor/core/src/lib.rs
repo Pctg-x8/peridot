@@ -1004,6 +1004,8 @@ struct TextInputViewEventHandler {
     ct_cursor: CompositeTreeRef,
     ct_preedit_underline: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    content_h_offset: core::cell::Cell<f32>,
+    content_visible_width: f32,
     content: core::cell::RefCell<String>,
     cursor_pos_bytes: core::cell::Cell<usize>,
     preedit_range_start_bytes: core::cell::Cell<usize>,
@@ -1247,7 +1249,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
         let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
-            (local_x - 2.0) * cursor_rect.base_scale_factor,
+            (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
             unsafe {
@@ -1346,13 +1348,30 @@ impl TextInputViewEventHandler {
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
         );
 
+        let mut text_scroll_occured = false;
         let cursor_rect = composite_tree.get_mut(self.ct_cursor);
         // base_scale_factorがかかるのであらかじめわっておく
-        cursor_rect.offset[0] = AnimatableFloat::Value(tw / cursor_rect.base_scale_factor);
+        let mut cursor_display_x = tw / cursor_rect.base_scale_factor + self.content_h_offset.get();
+        if cursor_display_x < 0.0 {
+            // 範囲外になる(左すぎ cursor_display_xが0になるようにスクロール量を調整)
+            self.content_h_offset
+                .set(self.content_h_offset.get() - cursor_display_x);
+            text_scroll_occured = true;
+            cursor_display_x = 0.0;
+        } else if self.content_visible_width - 2.0 < cursor_display_x {
+            // 範囲外になる(右すぎ cursor_display_xがcontent_visible_widthになるようにスクロール量を調整)
+            self.content_h_offset.set(
+                self.content_h_offset.get()
+                    - (cursor_display_x - (self.content_visible_width - 2.0)),
+            );
+            text_scroll_occured = true;
+            cursor_display_x = self.content_visible_width - 2.0;
+        }
+        cursor_rect.offset[0] = AnimatableFloat::Value(cursor_display_x);
 
         let (sx, sy) = ht_manager.translate_tree_local_to_root(
             self.ht_root,
-            2.0 + tw / cursor_rect.base_scale_factor,
+            2.0 + cursor_display_x,
             2.0,
             client_size.width,
             client_size.height,
@@ -1369,6 +1388,13 @@ impl TextInputViewEventHandler {
         system_link.ime_commit();
 
         composite_tree.mark_dirty(self.ct_cursor);
+
+        if text_scroll_occured {
+            composite_tree.get_mut(self.ct_text).offset[0] =
+                AnimatableFloat::Value(self.content_h_offset.get());
+            composite_tree.mark_dirty(self.ct_text);
+            self.update_preedit_underline(composite_tree, window);
+        }
     }
 
     fn update_preedit_underline(
@@ -1397,7 +1423,9 @@ impl TextInputViewEventHandler {
         );
 
         let underline_rect = composite_tree.get_mut(self.ct_preedit_underline);
-        underline_rect.offset[0] = AnimatableFloat::Value(o / underline_rect.base_scale_factor);
+        underline_rect.offset[0] = AnimatableFloat::Value(
+            o / underline_rect.base_scale_factor + self.content_h_offset.get(),
+        );
         underline_rect.size[0] = AnimatableFloat::Value(tw / underline_rect.base_scale_factor);
         underline_rect.opacity = AnimatableFloat::Value(1.0);
 
@@ -1484,6 +1512,8 @@ impl TextInputView {
             ct_cursor,
             ct_preedit_underline,
             ht_root,
+            content_h_offset: core::cell::Cell::new(0.0),
+            content_visible_width: 128.0 - 4.0,
             content: core::cell::RefCell::new("aaa".into()),
             cursor_pos_bytes: core::cell::Cell::new(0),
             preedit_range_start_bytes: core::cell::Cell::new(0),
