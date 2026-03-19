@@ -1003,6 +1003,7 @@ struct TextInputViewEventHandler {
     ct_text: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
     ct_preedit_underline: CompositeTreeRef,
+    ct_selection_bg: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     content_h_offset: core::cell::Cell<f32>,
     content_visible_width: f32,
@@ -1010,6 +1011,8 @@ struct TextInputViewEventHandler {
     cursor_pos_bytes: core::cell::Cell<usize>,
     preedit_range_start_bytes: core::cell::Cell<usize>,
     preedit_range_end_bytes: core::cell::Cell<usize>,
+    selection_begin_bytes: core::cell::Cell<usize>,
+    dragging: core::cell::Cell<bool>,
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
@@ -1018,6 +1021,10 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 
     fn focus_released(&self, context: &mut InputEventContext) {
         self.update(context);
+
+        // clear selection
+        self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+        self.update_selection(context.composite_tree, context.sender_window);
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {
@@ -1034,6 +1041,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     new_cursor_pos -= 1;
                 }
                 self.cursor_pos_bytes.set(new_cursor_pos);
+                self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
                     context.sender_window,
@@ -1041,6 +1049,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.ht_manager,
                     context.sender_window.client_size(),
                 );
+                self.update_selection(context.composite_tree, context.sender_window);
             }
             KeyInputCode::RightArrow => {
                 let mut new_cursor_pos = self
@@ -1056,6 +1065,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     new_cursor_pos += 1;
                 }
                 self.cursor_pos_bytes.set(new_cursor_pos);
+                self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
                     context.sender_window,
@@ -1063,9 +1073,11 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.ht_manager,
                     context.sender_window.client_size(),
                 );
+                self.update_selection(context.composite_tree, context.sender_window);
             }
             KeyInputCode::Home => {
                 self.cursor_pos_bytes.set(0);
+                self.selection_begin_bytes.set(0); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
                     context.sender_window,
@@ -1073,9 +1085,11 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.ht_manager,
                     context.sender_window.client_size(),
                 );
+                self.update_selection(context.composite_tree, context.sender_window);
             }
             KeyInputCode::End => {
                 self.cursor_pos_bytes.set(self.content.borrow().len());
+                self.selection_begin_bytes.set(self.content.borrow().len()); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
                     context.sender_window,
@@ -1083,6 +1097,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.ht_manager,
                     context.sender_window.client_size(),
                 );
+                self.update_selection(context.composite_tree, context.sender_window);
             }
             KeyInputCode::Insert => {
                 // TODO: insert mode
@@ -1090,19 +1105,41 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             KeyInputCode::Character(c) if c == '\n' => (/* ignore enter key */),
             KeyInputCode::Character(c) if c == '\x08' => {
                 // bksp
-                let mut remove_to = self.cursor_pos_bytes.get().saturating_sub(1);
-                while remove_to > 0 {
-                    if self.content.borrow().is_char_boundary(remove_to) {
-                        break;
-                    }
+                let selection_range = self.selection_range();
+                if selection_range.is_empty() {
+                    // single character removal
 
-                    remove_to -= 1;
-                }
-                if remove_to != self.cursor_pos_bytes.get() {
+                    let mut remove_to = self.cursor_pos_bytes.get().saturating_sub(1);
+                    while remove_to > 0 {
+                        if self.content.borrow().is_char_boundary(remove_to) {
+                            break;
+                        }
+
+                        remove_to -= 1;
+                    }
+                    if remove_to != self.cursor_pos_bytes.get() {
+                        self.content
+                            .borrow_mut()
+                            .replace_range(remove_to..self.cursor_pos_bytes.get(), "");
+                        self.cursor_pos_bytes.set(remove_to);
+                        self.selection_begin_bytes.set(remove_to);
+
+                        self.update_text(context.composite_tree);
+                        self.update_cursor_position(
+                            context.composite_tree,
+                            context.sender_window,
+                            context.system_link,
+                            context.ht_manager,
+                            context.sender_window.client_size(),
+                        );
+                    }
+                } else {
+                    // remove selection
                     self.content
                         .borrow_mut()
-                        .replace_range(remove_to..self.cursor_pos_bytes.get(), "");
-                    self.cursor_pos_bytes.set(remove_to);
+                        .replace_range(selection_range.clone(), "");
+                    self.cursor_pos_bytes.set(selection_range.start);
+                    self.selection_begin_bytes.set(selection_range.start);
 
                     self.update_text(context.composite_tree);
                     self.update_cursor_position(
@@ -1112,22 +1149,35 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         context.ht_manager,
                         context.sender_window.client_size(),
                     );
+                    self.update_selection(context.composite_tree, context.sender_window);
                 }
             }
             KeyInputCode::Character(c) if c == '\x7f' => {
                 // del
-                if self.cursor_pos_bytes.get() < self.content.borrow().len() {
-                    let remove_to = self.cursor_pos_bytes.get();
-                    let remove_to = remove_to
-                        + self.content.borrow()[remove_to..]
-                            .chars()
-                            .next()
-                            .expect("no char")
-                            .len_utf8();
+                let selection_range = self.selection_range();
+                if selection_range.is_empty() {
+                    // single character removal
+                    if self.cursor_pos_bytes.get() < self.content.borrow().len() {
+                        let remove_to = self.cursor_pos_bytes.get();
+                        let remove_to = remove_to
+                            + self.content.borrow()[remove_to..]
+                                .chars()
+                                .next()
+                                .expect("no char")
+                                .len_utf8();
 
+                        self.content
+                            .borrow_mut()
+                            .replace_range(self.cursor_pos_bytes.get()..remove_to, "");
+                        self.update_text(context.composite_tree);
+                    }
+                } else {
+                    // remove selection
                     self.content
                         .borrow_mut()
-                        .replace_range(self.cursor_pos_bytes.get()..remove_to, "");
+                        .replace_range(selection_range.clone(), "");
+                    self.cursor_pos_bytes.set(selection_range.start);
+                    self.selection_begin_bytes.set(selection_range.start);
 
                     self.update_text(context.composite_tree);
                     self.update_cursor_position(
@@ -1137,15 +1187,28 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         context.ht_manager,
                         context.sender_window.client_size(),
                     );
+                    self.update_selection(context.composite_tree, context.sender_window);
                 }
             }
             KeyInputCode::Character(c) if !c.is_control() => {
-                self.content
-                    .borrow_mut()
-                    .insert(self.cursor_pos_bytes.get(), c);
-                self.cursor_pos_bytes
-                    .set(self.cursor_pos_bytes.get() + c.len_utf8());
+                let selection_range = self.selection_range();
+                if selection_range.is_empty() {
+                    // just insert
+                    self.content
+                        .borrow_mut()
+                        .insert(self.cursor_pos_bytes.get(), c);
+                    self.cursor_pos_bytes
+                        .set(self.cursor_pos_bytes.get() + c.len_utf8());
+                } else {
+                    // replace selection
+                    self.content
+                        .borrow_mut()
+                        .replace_range(selection_range.clone(), &c.to_string());
+                    self.cursor_pos_bytes
+                        .set(selection_range.start + c.len_utf8());
+                }
 
+                self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
                 self.update_text(context.composite_tree);
                 self.update_cursor_position(
                     context.composite_tree,
@@ -1154,6 +1217,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.ht_manager,
                     context.sender_window.client_size(),
                 );
+                self.update_selection(context.composite_tree, context.sender_window);
             }
             _ => (),
         }
@@ -1165,6 +1229,16 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         new_committed_string: &str,
         new_preedit_string: &str,
     ) {
+        let selection_range = self.selection_range();
+        if !selection_range.is_empty() {
+            // remove selection first
+            self.content
+                .borrow_mut()
+                .replace_range(selection_range.clone(), "");
+            self.cursor_pos_bytes.set(selection_range.start);
+            self.selection_begin_bytes.set(selection_range.start);
+        }
+
         // TODO: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
         // 他PFではどうなのかは不明
         let has_preedit_text =
@@ -1220,6 +1294,9 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 .set(self.preedit_range_end_bytes.get());
         }
 
+        // no selection in editing
+        self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+
         self.update_text(context.composite_tree);
         self.update_preedit_underline(context.composite_tree, context.sender_window);
         self.update_cursor_position(
@@ -1229,10 +1306,98 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             context.ht_manager,
             context.sender_window.client_size(),
         );
+        self.update_selection(context.composite_tree, context.sender_window);
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
     fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x,
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+
+        let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
+        // TextLayoutはPixels座標系なのでscaleをかけておく
+        let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
+            (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
+            &self.content.borrow(),
+            FontID::UIDefault,
+            unsafe {
+                &context
+                    .sender_window
+                    .extra_data_ref::<PerWindowData>()
+                    .font_set
+            },
+        );
+        self.cursor_pos_bytes.set(bytes);
+        self.selection_begin_bytes.set(bytes); // 最初は同じところ(=範囲選択なし)
+        self.update_cursor_position(
+            context.composite_tree,
+            context.sender_window,
+            context.system_link,
+            context.ht_manager,
+            args.client_size,
+        );
+        self.update_selection(context.composite_tree, context.sender_window);
+        self.dragging.set(true);
+
+        input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
+    }
+
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        if !self.dragging.get() {
+            // not dragging
+            return input::EventContinueControl::STOP_PROPAGATION;
+        }
+
+        let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x,
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+
+        let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
+        // TextLayoutはPixels座標系なのでscaleをかけておく
+        let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
+            (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
+            &self.content.borrow(),
+            FontID::UIDefault,
+            unsafe {
+                &context
+                    .sender_window
+                    .extra_data_ref::<PerWindowData>()
+                    .font_set
+            },
+        );
+        self.cursor_pos_bytes.set(bytes);
+        self.update_cursor_position(
+            context.composite_tree,
+            context.sender_window,
+            context.system_link,
+            context.ht_manager,
+            args.client_size,
+        );
+        self.update_selection(context.composite_tree, context.sender_window);
+
+        input::EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_up(
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
@@ -1267,16 +1432,9 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             context.ht_manager,
             args.client_size,
         );
+        self.update_selection(context.composite_tree, context.sender_window);
+        self.dragging.set(false);
 
-        input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
-    }
-
-    fn on_pointer_up(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> input::EventContinueControl {
         input::EventContinueControl::STOP_PROPAGATION
             | input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
@@ -1383,7 +1541,7 @@ impl TextInputViewEventHandler {
         system_link.ime_set_surrounding_text(
             &self.content.borrow(),
             self.cursor_pos_bytes.get(),
-            self.cursor_pos_bytes.get(),
+            self.selection_begin_bytes.get(),
         );
         system_link.ime_commit();
 
@@ -1394,6 +1552,7 @@ impl TextInputViewEventHandler {
                 AnimatableFloat::Value(self.content_h_offset.get());
             composite_tree.mark_dirty(self.ct_text);
             self.update_preedit_underline(composite_tree, window);
+            self.update_selection(composite_tree, window);
         }
     }
 
@@ -1431,6 +1590,44 @@ impl TextInputViewEventHandler {
 
         composite_tree.mark_dirty(self.ct_preedit_underline);
     }
+
+    fn update_selection(&self, composite_tree: &mut CompositeTree<Event>, window: WindowHandle) {
+        let selection_range = self.selection_range();
+        if selection_range.is_empty() {
+            // no selection
+            composite_tree.get_mut(self.ct_selection_bg).size[0] = AnimatableFloat::Value(0.0);
+            composite_tree.mark_dirty(self.ct_selection_bg);
+            return;
+        }
+
+        let o = TextLayout::measure_total_advances(
+            &self.content.borrow()[..selection_range.start],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+        );
+        let tw = TextLayout::measure_total_advances(
+            &self.content.borrow()[selection_range],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+        );
+
+        let ct = composite_tree.get_mut(self.ct_selection_bg);
+        ct.offset[0] =
+            AnimatableFloat::Value(o / ct.base_scale_factor + self.content_h_offset.get());
+        ct.size[0] = AnimatableFloat::Value(tw / ct.base_scale_factor);
+
+        composite_tree.mark_dirty(self.ct_selection_bg);
+    }
+
+    fn selection_range(&self) -> core::ops::Range<usize> {
+        match (
+            self.cursor_pos_bytes.get(),
+            self.selection_begin_bytes.get(),
+        ) {
+            (a, b) if a <= b => a..b,
+            (a, b) => b..a,
+        }
+    }
 }
 
 pub struct TextInputView {
@@ -1459,10 +1656,10 @@ impl TextInputView {
             ],
             offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
             clip_child: Some(ClipConfig {
-                left_softness: unsafe { SafeF32::new_unchecked(0.0) },
-                right_softness: unsafe { SafeF32::new_unchecked(0.0) },
-                top_softness: unsafe { SafeF32::new_unchecked(0.0) },
-                bottom_softness: unsafe { SafeF32::new_unchecked(0.0) },
+                left_softness: unsafe { SafeF32::new_unchecked(1.0) },
+                right_softness: unsafe { SafeF32::new_unchecked(1.0) },
+                top_softness: unsafe { SafeF32::new_unchecked(1.0) },
+                bottom_softness: unsafe { SafeF32::new_unchecked(1.0) },
             }),
             ..Default::default()
         });
@@ -1489,6 +1686,13 @@ impl TextInputView {
             opacity: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
+        let ct_selection_bg = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(16.0)],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.2, 0.4, 1.0, 0.25])),
+            ..Default::default()
+        });
         let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
             width: 128.0,
             height: 20.0,
@@ -1499,6 +1703,7 @@ impl TextInputView {
             ..Default::default()
         });
 
+        ctx.composite_tree.add_child(ct_text_clip, ct_selection_bg);
         ctx.composite_tree.add_child(ct_text_clip, ct_text);
         ctx.composite_tree.add_child(ct_text_clip, ct_cursor);
         ctx.composite_tree
@@ -1511,6 +1716,7 @@ impl TextInputView {
             ct_text,
             ct_cursor,
             ct_preedit_underline,
+            ct_selection_bg,
             ht_root,
             content_h_offset: core::cell::Cell::new(0.0),
             content_visible_width: 128.0 - 4.0,
@@ -1518,6 +1724,8 @@ impl TextInputView {
             cursor_pos_bytes: core::cell::Cell::new(0),
             preedit_range_start_bytes: core::cell::Cell::new(0),
             preedit_range_end_bytes: core::cell::Cell::new(0),
+            selection_begin_bytes: core::cell::Cell::new(0),
+            dragging: core::cell::Cell::new(false),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);
@@ -1551,6 +1759,8 @@ impl TextInputView {
         ct.mark_dirty_all(self.eh.ct_preedit_underline);
         ct.get_mut(self.ct_text_clip).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.ct_text_clip);
+        ct.get_mut(self.eh.ct_selection_bg).base_scale_factor = new_scale;
+        ct.mark_dirty_all(self.eh.ct_selection_bg);
 
         self.eh
             .update_cursor_position(ct, window, syslink, ht_manager, window.client_size());
