@@ -1000,6 +1000,7 @@ impl Popup for AlertDialogPresenter {
 struct TextInputViewEventHandler {
     token: FocusTargetToken,
     ct_root: CompositeTreeRef,
+    ct_text: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
     ct_preedit_underline: CompositeTreeRef,
     ht_root: HitTestTreeRef,
@@ -1100,6 +1101,8 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         .borrow_mut()
                         .replace_range(remove_to..self.cursor_pos_bytes.get(), "");
                     self.cursor_pos_bytes.set(remove_to);
+
+                    self.update_text(context.composite_tree);
                     self.update_cursor_position(
                         context.composite_tree,
                         context.sender_window,
@@ -1107,18 +1110,6 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         context.ht_manager,
                         context.sender_window.client_size(),
                     );
-                    context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
-                        runs: vec![CompositeRectTextRun {
-                            font_id: FontID::UIDefault,
-                            content: self.content.borrow().clone(),
-                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                            ..Default::default()
-                        }],
-                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                        vertical_alignment: CompositeRectTextVerticalAlignment::Start,
-                        offset: [2.0, 2.0],
-                    });
-                    context.composite_tree.mark_text_layout_dirty(self.ct_root);
                 }
             }
             KeyInputCode::Character(c) if c == '\x7f' => {
@@ -1135,6 +1126,8 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     self.content
                         .borrow_mut()
                         .replace_range(self.cursor_pos_bytes.get()..remove_to, "");
+
+                    self.update_text(context.composite_tree);
                     self.update_cursor_position(
                         context.composite_tree,
                         context.sender_window,
@@ -1142,18 +1135,6 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         context.ht_manager,
                         context.sender_window.client_size(),
                     );
-                    context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
-                        runs: vec![CompositeRectTextRun {
-                            font_id: FontID::UIDefault,
-                            content: self.content.borrow().clone(),
-                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                            ..Default::default()
-                        }],
-                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                        vertical_alignment: CompositeRectTextVerticalAlignment::Start,
-                        offset: [2.0, 2.0],
-                    });
-                    context.composite_tree.mark_text_layout_dirty(self.ct_root);
                 }
             }
             KeyInputCode::Character(c) if !c.is_control() => {
@@ -1162,6 +1143,8 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     .insert(self.cursor_pos_bytes.get(), c);
                 self.cursor_pos_bytes
                     .set(self.cursor_pos_bytes.get() + c.len_utf8());
+
+                self.update_text(context.composite_tree);
                 self.update_cursor_position(
                     context.composite_tree,
                     context.sender_window,
@@ -1169,18 +1152,6 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.ht_manager,
                     context.sender_window.client_size(),
                 );
-                context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
-                    runs: vec![CompositeRectTextRun {
-                        font_id: FontID::UIDefault,
-                        content: self.content.borrow().clone(),
-                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                        ..Default::default()
-                    }],
-                    horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                    vertical_alignment: CompositeRectTextVerticalAlignment::Start,
-                    offset: [2.0, 2.0],
-                });
-                context.composite_tree.mark_text_layout_dirty(self.ct_root);
             }
             _ => (),
         }
@@ -1247,6 +1218,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 .set(self.preedit_range_end_bytes.get());
         }
 
+        self.update_text(context.composite_tree);
         self.update_preedit_underline(context.composite_tree, context.sender_window);
         self.update_cursor_position(
             context.composite_tree,
@@ -1255,18 +1227,6 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             context.ht_manager,
             context.sender_window.client_size(),
         );
-        context.composite_tree.get_mut(self.ct_root).text = Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                font_id: FontID::UIDefault,
-                content: self.content.borrow().clone(),
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Start,
-            offset: [2.0, 2.0],
-        });
-        context.composite_tree.mark_text_layout_dirty(self.ct_root);
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
@@ -1357,6 +1317,21 @@ impl TextInputViewEventHandler {
         context.composite_tree.mark_dirty(self.ct_cursor);
     }
 
+    fn update_text(&self, composite_tree: &mut CompositeTree<Event>) {
+        composite_tree.get_mut(self.ct_text).text = Some(CompositeRectText {
+            runs: vec![CompositeRectTextRun {
+                font_id: FontID::UIDefault,
+                content: self.content.borrow().clone(),
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+            ..Default::default()
+        });
+        composite_tree.mark_text_layout_dirty(self.ct_text);
+    }
+
     fn update_cursor_position(
         &self,
         composite_tree: &mut CompositeTree<Event>,
@@ -1365,7 +1340,7 @@ impl TextInputViewEventHandler {
         ht_manager: &HitTestTreeManager,
         client_size: Size<LogicalUnit>,
     ) {
-        let tw = TextLayout::measure_width(
+        let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
@@ -1373,7 +1348,7 @@ impl TextInputViewEventHandler {
 
         let cursor_rect = composite_tree.get_mut(self.ct_cursor);
         // base_scale_factorがかかるのであらかじめわっておく
-        cursor_rect.offset[0] = AnimatableFloat::Value(2.0 + tw / cursor_rect.base_scale_factor);
+        cursor_rect.offset[0] = AnimatableFloat::Value(tw / cursor_rect.base_scale_factor);
 
         let (sx, sy) = ht_manager.translate_tree_local_to_root(
             self.ht_root,
@@ -1410,20 +1385,19 @@ impl TextInputViewEventHandler {
             return;
         }
 
-        let o = TextLayout::measure_width(
+        let o = TextLayout::measure_total_advances(
             &self.content.borrow()[..preedit_range.start],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
         );
-        let tw = TextLayout::measure_width(
+        let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[preedit_range],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
         );
 
         let underline_rect = composite_tree.get_mut(self.ct_preedit_underline);
-        underline_rect.offset[0] =
-            AnimatableFloat::Value(2.0 + o / underline_rect.base_scale_factor);
+        underline_rect.offset[0] = AnimatableFloat::Value(o / underline_rect.base_scale_factor);
         underline_rect.size[0] = AnimatableFloat::Value(tw / underline_rect.base_scale_factor);
         underline_rect.opacity = AnimatableFloat::Value(1.0);
 
@@ -1432,7 +1406,7 @@ impl TextInputViewEventHandler {
 }
 
 pub struct TextInputView {
-    ht_root: HitTestTreeRef,
+    ct_text_clip: CompositeTreeRef,
     eh: Rc<TextInputViewEventHandler>,
 }
 impl TextInputView {
@@ -1447,17 +1421,15 @@ impl TextInputView {
                 thickness: 1.0,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
             }),
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: "aaa".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Start,
-                offset: [2.0, 2.0],
-            }),
+            ..Default::default()
+        });
+        let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            size: [
+                AnimatableFloat::Value(128.0 - 4.0),
+                AnimatableFloat::Value(20.0 - 4.0),
+            ],
+            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
             clip_child: Some(ClipConfig {
                 left_softness: unsafe { SafeF32::new_unchecked(0.0) },
                 right_softness: unsafe { SafeF32::new_unchecked(0.0) },
@@ -1466,10 +1438,15 @@ impl TextInputView {
             }),
             ..Default::default()
         });
+        let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            has_bitmap: true,
+            ..Default::default()
+        });
         let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
-            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
+            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
             opacity: AnimatableFloat::Value(0.0),
@@ -1478,7 +1455,7 @@ impl TextInputView {
         let ct_preedit_underline = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(1.0)],
-            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
+            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(14.0)],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
             opacity: AnimatableFloat::Value(0.0),
@@ -1494,12 +1471,16 @@ impl TextInputView {
             ..Default::default()
         });
 
-        ctx.composite_tree.add_child(ct_root, ct_cursor);
-        ctx.composite_tree.add_child(ct_root, ct_preedit_underline);
+        ctx.composite_tree.add_child(ct_text_clip, ct_text);
+        ctx.composite_tree.add_child(ct_text_clip, ct_cursor);
+        ctx.composite_tree
+            .add_child(ct_text_clip, ct_preedit_underline);
+        ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
         let eh = Rc::new(TextInputViewEventHandler {
             token: kf_token,
             ct_root,
+            ct_text,
             ct_cursor,
             ct_preedit_underline,
             ht_root,
@@ -1511,13 +1492,15 @@ impl TextInputView {
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-        Self { ht_root, eh }
+        eh.update_text(ctx.composite_tree);
+
+        Self { ct_text_clip, eh }
     }
 
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree
             .add_child(parent.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
+        ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
     }
 
     pub fn rescale(
@@ -1530,10 +1513,14 @@ impl TextInputView {
     ) {
         ct.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_root);
+        ct.get_mut(self.eh.ct_text).base_scale_factor = new_scale;
+        ct.mark_dirty_all(self.eh.ct_text);
         ct.get_mut(self.eh.ct_cursor).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_cursor);
         ct.get_mut(self.eh.ct_preedit_underline).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_preedit_underline);
+        ct.get_mut(self.ct_text_clip).base_scale_factor = new_scale;
+        ct.mark_dirty_all(self.ct_text_clip);
 
         self.eh
             .update_cursor_position(ct, window, syslink, ht_manager, window.client_size());

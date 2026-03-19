@@ -780,7 +780,7 @@ impl TextLayout {
         self.height
     }
 
-    pub fn measure_width(text: &str, font: FontID, font_set: &PerWindowFontSet) -> f32 {
+    pub fn measure_visual_width(text: &str, font: FontID, font_set: &PerWindowFontSet) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -833,6 +833,37 @@ impl TextLayout {
         width
     }
 
+    pub fn measure_total_advances(text: &str, font: FontID, font_set: &PerWindowFontSet) -> f32 {
+        // TODO: 最適化はあとで
+        let layout = Self::new(
+            core::iter::once(TextRun {
+                content: text,
+                font,
+                spacing_inline_start: 0.0,
+            }),
+            font_set,
+            1.0,
+        );
+
+        let Some(&(last_buf, left_base, _, _)) = layout.buffers.last() else {
+            return 0.0;
+        };
+
+        let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+        let glyph_positions = unsafe {
+            hb::ffi::hb_buffer_get_glyph_positions(last_buf, glyph_positions_len.as_mut_ptr())
+        };
+
+        let mut left_cursor = left_base;
+        for n in 0..unsafe { glyph_positions_len.assume_init() } {
+            let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
+
+            left_cursor += glyph_position.x_advance as f32 / 64.0;
+        }
+
+        left_cursor
+    }
+
     pub fn find_nearest_position_with_bytes(
         x: f32,
         text: &str,
@@ -854,34 +885,17 @@ impl TextLayout {
         let mut left_cursor = 0.0;
         let mut bytes = 0;
         #[cfg(feature = "harfbuzz")]
-        for &(buf, left_base, font, fallback_index) in layout.buffers.iter() {
-            let font = font_set.select(font).faces[fallback_index];
-
-            let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-            let glyph_infos =
-                unsafe { hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr()) };
+        for &(buf, left_base, _, _) in layout.buffers.iter() {
             let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
             let glyph_positions = unsafe {
                 hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
             };
-            assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-                glyph_positions_len.assume_init()
-            });
             left_cursor = left_base;
             for n in 0..unsafe { glyph_positions_len.assume_init() } {
-                let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
 
-                unsafe {
-                    ft::load_glyph(font, glyph_info.codepoint, ft::LoadFlags::DEFAULT)
-                        .expect("face.load_glyph")
-                };
-                let metrics = unsafe { &(*(*font).glyph).metrics };
-                let glyph_width = metrics.width as f32 / 64.0;
-
-                let left = left_cursor
-                    + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32) / 64.0;
-                let right = left + glyph_width.ceil();
+                let left = left_cursor;
+                let right = left + glyph_position.x_advance as f32 / 64.0;
                 let mid = (left + right) / 2.0;
 
                 if x < left {
@@ -896,7 +910,14 @@ impl TextLayout {
 
                 if x <= right {
                     // right
-                    return (right, bytes);
+                    let mut next_boundary_bytes = bytes.saturating_add(1);
+                    while next_boundary_bytes < text.len()
+                        && !text.is_char_boundary(next_boundary_bytes)
+                    {
+                        next_boundary_bytes += 1;
+                    }
+
+                    return (right, next_boundary_bytes);
                 }
 
                 left_cursor += glyph_position.x_advance as f32 / 64.0;
