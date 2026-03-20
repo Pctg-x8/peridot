@@ -1460,7 +1460,6 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
                 // 一部Commonにあるらしいので特別対応
                 || c as u32 == 0x30fc || c as u32 == 0xff70;
             if is_budou_cluster_c != is_budou_cluster {
-                tracing::debug!(?same_cluster_range, is_budou_cluster, "parse");
                 if !same_cluster_range.is_empty() {
                     if !is_budou_cluster {
                         words.extend(
@@ -1488,7 +1487,6 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             cb += c.len_utf8();
         }
         if !same_cluster_range.is_empty() {
-            tracing::debug!(?same_cluster_range, is_budou_cluster, "parse");
             if !is_budou_cluster {
                 words.extend(
                     content[same_cluster_range.clone()]
@@ -1534,7 +1532,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
                 },
             );
 
-            if dbg!(target_x_pixels) <= dbg!(tw) {
+            if target_x_pixels <= tw {
                 select_range = starting_byte..measure_range.end;
                 break;
             }
