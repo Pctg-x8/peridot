@@ -1,0 +1,9 @@
+[workspace]
+members = ["generator"]
+
+[package]
+name = "peridot-tp-unicode-properties"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

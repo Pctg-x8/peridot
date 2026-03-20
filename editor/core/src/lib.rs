@@ -1445,7 +1445,112 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
-        tracing::debug!("double click");
+        use unicode_segmentation::UnicodeSegmentation;
+        let mut words = Vec::new();
+        let content = self.content.borrow();
+        let mut chars = content.chars();
+        let mut is_budou_cluster = false;
+        let mut same_cluster_range = 0..0;
+        let mut cb = 0;
+        while let Some(c) = chars.next() {
+            let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
+                || peridot_tp_unicode_properties::script::is_katakana(c)
+                || peridot_tp_unicode_properties::script::is_han(c)
+                || peridot_tp_unicode_properties::script::is_thai(c)
+                // 一部Commonにあるらしいので特別対応
+                || c as u32 == 0x30fc || c as u32 == 0xff70;
+            if is_budou_cluster_c != is_budou_cluster {
+                tracing::debug!(?same_cluster_range, is_budou_cluster, "parse");
+                if !same_cluster_range.is_empty() {
+                    if !is_budou_cluster {
+                        words.extend(
+                            content[same_cluster_range.clone()]
+                                .split_word_bounds()
+                                .map(|x| x.to_owned()),
+                        )
+                    } else {
+                        words.extend(
+                            peridot_tp_budoux::parse(
+                                &peridot_tp_budoux::embedded::ja_knbc::MODEL,
+                                &content[same_cluster_range.clone()],
+                            )
+                            .into_iter()
+                            .map(|x| x.to_owned()),
+                        )
+                    }
+                }
+
+                is_budou_cluster = is_budou_cluster_c;
+                same_cluster_range = cb..cb;
+            }
+
+            same_cluster_range.end += c.len_utf8();
+            cb += c.len_utf8();
+        }
+        if !same_cluster_range.is_empty() {
+            tracing::debug!(?same_cluster_range, is_budou_cluster, "parse");
+            if !is_budou_cluster {
+                words.extend(
+                    content[same_cluster_range.clone()]
+                        .split_word_bounds()
+                        .map(|x| x.to_owned()),
+                )
+            } else {
+                words.extend(
+                    peridot_tp_budoux::parse(
+                        &peridot_tp_budoux::embedded::ja_knbc::MODEL,
+                        &content[same_cluster_range.clone()],
+                    )
+                    .into_iter()
+                    .map(|x| x.to_owned()),
+                )
+            }
+        }
+
+        tracing::debug!(?words, "double click");
+
+        // TODO: LTR前提 最適化はあとで
+        let (sx, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x - 2.0 - self.content_h_offset.get(),
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+        let target_x_pixels = sx * context.composite_tree.get(self.ct_text).base_scale_factor;
+        let mut measure_range = 0..0;
+        let mut select_range = 0..content.len();
+        for w in words {
+            let starting_byte = measure_range.end;
+            measure_range.end += w.len();
+            let tw = TextLayout::measure_total_advances(
+                &content[measure_range.clone()],
+                FontID::UIDefault,
+                unsafe {
+                    &context
+                        .sender_window
+                        .extra_data_ref::<PerWindowData>()
+                        .font_set
+                },
+            );
+
+            if dbg!(target_x_pixels) <= dbg!(tw) {
+                select_range = starting_byte..measure_range.end;
+                break;
+            }
+        }
+
+        self.cursor_pos_bytes.set(select_range.end);
+        self.selection_begin_bytes.set(select_range.start);
+        self.update_cursor_position(
+            context.composite_tree,
+            context.sender_window,
+            context.system_link,
+            context.ht_manager,
+            args.client_size,
+        );
+        self.update_selection(context.composite_tree, context.sender_window);
+
         input::EventContinueControl::STOP_PROPAGATION
     }
 }
