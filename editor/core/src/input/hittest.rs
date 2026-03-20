@@ -478,6 +478,16 @@ pub trait HitTestTreeActionHandler {
     }
 
     #[allow(unused_variables)]
+    fn on_double_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::empty()
+    }
+
+    #[allow(unused_variables)]
     fn on_drag_start(
         &self,
         sender: HitTestTreeRef,

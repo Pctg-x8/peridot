@@ -1176,10 +1176,10 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     self.content
                         .borrow_mut()
                         .replace_range(selection_range.clone(), "");
+                    self.update_text(context.composite_tree);
+
                     self.cursor_pos_bytes.set(selection_range.start);
                     self.selection_begin_bytes.set(selection_range.start);
-
-                    self.update_text(context.composite_tree);
                     self.update_cursor_position(
                         context.composite_tree,
                         context.sender_window,
@@ -1437,6 +1437,16 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
         input::EventContinueControl::STOP_PROPAGATION
             | input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
+    }
+
+    fn on_double_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        tracing::debug!("double click");
+        input::EventContinueControl::STOP_PROPAGATION
     }
 }
 impl TextInputViewEventHandler {

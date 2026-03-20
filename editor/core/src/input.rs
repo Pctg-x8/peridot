@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeSet, HashMap},
     rc::{Rc, Weak},
+    time::{Duration, Instant},
 };
 
 use bitflags::bitflags;
@@ -67,14 +68,24 @@ pub trait ShellPointerActions {
     fn release_pointer(&self);
 }
 
+struct LastClickState {
+    count: usize,
+    window: WindowHandle,
+    pos: Point<PointerInputUnit>,
+    time: Instant,
+}
+
 pub struct PointerInputManager {
     last_client_pointer_pos: Option<(WindowHandle, Point<PointerInputUnit>)>,
     pointer_focus: PointerFocusState,
     down_gesture: PointerDownGestureState,
     client_size_by_window: HashMap<WindowHandle, Size<PointerInputUnit>>,
+    last_click: Option<LastClickState>,
 }
 impl PointerInputManager {
     const CLICK_DETECTION_MAX_DISTANCE: f32 = 4.0;
+    const DOUBLE_CLICK_DETECTION_MAX_DISTANCE: f32 = 4.0;
+    const DOUBLE_CLICK_DETECTION_MAX_TIME: Duration = Duration::from_millis(500);
 
     pub fn new() -> Self {
         PointerInputManager {
@@ -82,6 +93,7 @@ impl PointerInputManager {
             pointer_focus: PointerFocusState::None,
             down_gesture: PointerDownGestureState::None,
             client_size_by_window: HashMap::new(),
+            last_click: None,
         }
     }
 
@@ -732,67 +744,174 @@ impl PointerInputManager {
 
         if self.down_gesture.is_click() {
             // クリック判定持続してた
-            match self.pointer_focus {
-                PointerFocusState::Capturing(ht_ref) => {
-                    let flags = ht.get_data(ht_ref).action_handler().map_or(
-                        EventContinueControl::empty(),
-                        |h| {
-                            h.on_click(
-                                ht_ref,
-                                action_context,
-                                &PointerActionArgs {
-                                    client_pos: client_pos.1,
-                                    client_size: self.client_size_by_window[&client_pos.0],
-                                },
-                            )
-                        },
-                    );
-                    if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
-                        self.handle_mouse_enter_leave(
-                            client_pos.0,
-                            client_pos.1,
-                            ht,
-                            action_context,
-                            ht_root,
-                        );
-                    }
-                    if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
-                        sh.release_pointer();
-                        self.pointer_focus = PointerFocusState::Entering(ht_ref);
-                        self.handle_mouse_enter_leave(
-                            client_pos.0,
-                            client_pos.1,
-                            ht,
-                            action_context,
-                            ht_root,
-                        );
-                    }
-                }
-                PointerFocusState::Entering(ht_ref) => {
-                    let (needs_recompute_pointer_enter, new_captured) = self.dispatch_click(
-                        sh,
-                        &PointerActionArgs {
-                            client_pos: client_pos.1,
-                            client_size: self.client_size_by_window[&client_pos.0],
-                        },
-                        ht,
-                        action_context,
-                        ht_ref,
-                    );
 
-                    if let Some(h) = new_captured {
-                        self.pointer_focus = PointerFocusState::Capturing(h);
-                    } else if needs_recompute_pointer_enter {
-                        self.handle_mouse_enter_leave(
-                            client_pos.0,
-                            client_pos.1,
-                            ht,
-                            action_context,
-                            ht_root,
-                        );
+            match self.last_click {
+                // double click
+                Some(ref mut last_click)
+                    if last_click.count == 1
+                        && last_click.time.elapsed() <= Self::DOUBLE_CLICK_DETECTION_MAX_TIME
+                        && last_click.window == client_pos.0
+                        && last_click.pos.distance_sq(&client_pos.1)
+                            <= Self::DOUBLE_CLICK_DETECTION_MAX_DISTANCE
+                                * Self::DOUBLE_CLICK_DETECTION_MAX_DISTANCE =>
+                {
+                    last_click.count = 2;
+                    last_click.pos = client_pos.1;
+                    last_click.time = Instant::now();
+
+                    match self.pointer_focus {
+                        PointerFocusState::Capturing(ht_ref) => {
+                            let flags = ht.get_data(ht_ref).action_handler().map_or(
+                                EventContinueControl::empty(),
+                                |h| {
+                                    h.on_double_click(
+                                        ht_ref,
+                                        action_context,
+                                        &PointerActionArgs {
+                                            client_pos: client_pos.1,
+                                            client_size: self.client_size_by_window[&client_pos.0],
+                                        },
+                                    )
+                                },
+                            );
+                            if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
+                                self.handle_mouse_enter_leave(
+                                    client_pos.0,
+                                    client_pos.1,
+                                    ht,
+                                    action_context,
+                                    ht_root,
+                                );
+                            }
+                            if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
+                                sh.release_pointer();
+                                self.pointer_focus = PointerFocusState::Entering(ht_ref);
+                                self.handle_mouse_enter_leave(
+                                    client_pos.0,
+                                    client_pos.1,
+                                    ht,
+                                    action_context,
+                                    ht_root,
+                                );
+                            }
+                        }
+                        PointerFocusState::Entering(ht_ref) => {
+                            let mut needs_recompute_pointer_enter = false;
+                            let mut new_captured = None;
+
+                            for ht_ref in ht.iter_ascending_from(ht_ref) {
+                                let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                                    continue;
+                                };
+
+                                let flags = a.on_double_click(
+                                    ht_ref,
+                                    action_context,
+                                    &PointerActionArgs {
+                                        client_pos: client_pos.1,
+                                        client_size: self.client_size_by_window[&client_pos.0],
+                                    },
+                                );
+                                if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
+                                    needs_recompute_pointer_enter = true;
+                                }
+                                if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
+                                    new_captured = Some(ht_ref);
+                                    sh.capture_pointer();
+                                }
+                                if flags.contains(EventContinueControl::STOP_PROPAGATION) {
+                                    break;
+                                }
+                            }
+
+                            if let Some(h) = new_captured {
+                                self.pointer_focus = PointerFocusState::Capturing(h);
+                            } else if needs_recompute_pointer_enter {
+                                self.handle_mouse_enter_leave(
+                                    client_pos.0,
+                                    client_pos.1,
+                                    ht,
+                                    action_context,
+                                    ht_root,
+                                );
+                            }
+                        }
+                        PointerFocusState::None => (),
                     }
                 }
-                PointerFocusState::None => (),
+                // single click
+                _ => {
+                    self.last_click = Some(LastClickState {
+                        count: 1,
+                        window: client_pos.0,
+                        pos: client_pos.1,
+                        time: Instant::now(),
+                    });
+
+                    match self.pointer_focus {
+                        PointerFocusState::Capturing(ht_ref) => {
+                            let flags = ht.get_data(ht_ref).action_handler().map_or(
+                                EventContinueControl::empty(),
+                                |h| {
+                                    h.on_click(
+                                        ht_ref,
+                                        action_context,
+                                        &PointerActionArgs {
+                                            client_pos: client_pos.1,
+                                            client_size: self.client_size_by_window[&client_pos.0],
+                                        },
+                                    )
+                                },
+                            );
+                            if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
+                                self.handle_mouse_enter_leave(
+                                    client_pos.0,
+                                    client_pos.1,
+                                    ht,
+                                    action_context,
+                                    ht_root,
+                                );
+                            }
+                            if flags.contains(EventContinueControl::RELEASE_CAPTURE_ELEMENT) {
+                                sh.release_pointer();
+                                self.pointer_focus = PointerFocusState::Entering(ht_ref);
+                                self.handle_mouse_enter_leave(
+                                    client_pos.0,
+                                    client_pos.1,
+                                    ht,
+                                    action_context,
+                                    ht_root,
+                                );
+                            }
+                        }
+                        PointerFocusState::Entering(ht_ref) => {
+                            let (needs_recompute_pointer_enter, new_captured) = self
+                                .dispatch_click(
+                                    sh,
+                                    &PointerActionArgs {
+                                        client_pos: client_pos.1,
+                                        client_size: self.client_size_by_window[&client_pos.0],
+                                    },
+                                    ht,
+                                    action_context,
+                                    ht_ref,
+                                );
+
+                            if let Some(h) = new_captured {
+                                self.pointer_focus = PointerFocusState::Capturing(h);
+                            } else if needs_recompute_pointer_enter {
+                                self.handle_mouse_enter_leave(
+                                    client_pos.0,
+                                    client_pos.1,
+                                    ht,
+                                    action_context,
+                                    ht_root,
+                                );
+                            }
+                        }
+                        PointerFocusState::None => (),
+                    }
+                }
             }
         }
 
