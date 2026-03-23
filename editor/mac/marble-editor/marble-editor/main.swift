@@ -336,3 +336,18 @@ func restoreThreadPriority(contextPtr: UnsafeMutableRawPointer) {
     Thread.current.threadPriority = context.threadPriority
     Unmanaged<ThreadPriorityContext>.fromOpaque(contextPtr).release()
 }
+
+enum CustomAttributeKey: NSString {
+    case SpacingInlineStart = "peridot.spacing_inline_start"
+    case FontID = "peridot.font_id"
+}
+
+@_cdecl("ni_ak_spacing_inline_start")
+func akSpacingInlineStart() -> CFString {
+    CustomAttributeKey.SpacingInlineStart.rawValue
+}
+
+@_cdecl("ni_ak_font_id")
+func akFontID() -> CFString {
+    CustomAttributeKey.FontID.rawValue
+}

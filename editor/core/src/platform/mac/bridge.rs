@@ -1,5 +1,6 @@
 use core::ffi::*;
 
+use apple_sdk_port::raw::CFStringRef;
 use bitflags::bitflags;
 
 #[repr(C)]
@@ -78,4 +79,7 @@ unsafe extern "C" {
 
     pub fn manual_capture_begin(window_link: *mut WindowLink);
     pub fn manual_capture_end();
+
+    pub fn ni_ak_spacing_inline_start() -> CFStringRef;
+    pub fn ni_ak_font_id() -> CFStringRef;
 }

@@ -696,6 +696,17 @@ impl Number {
             _ => Some(unsafe { buf.assume_init() }),
         }
     }
+
+    #[inline(always)]
+    pub fn f32_value(&self) -> Option<f32> {
+        let mut buf = core::mem::MaybeUninit::<f32>::uninit();
+        match unsafe {
+            CFNumberGetValue(&self.0, NumberType::Float32 as _, buf.as_mut_ptr().cast())
+        } {
+            v if v == 0 => None,
+            _ => Some(unsafe { buf.assume_init() }),
+        }
+    }
 }
 
 #[repr(u32)]
@@ -761,6 +772,11 @@ impl core::fmt::Display for String {
     }
 }
 impl String {
+    #[inline(always)]
+    pub const unsafe fn from_internal_ref<'a>(r: &'a __CFString) -> &'a Self {
+        unsafe { core::mem::transmute(r) }
+    }
+
     #[inline(always)]
     pub fn from_cstring(
         allocator: Option<&Allocator>,

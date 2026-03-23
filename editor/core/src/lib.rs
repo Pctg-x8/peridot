@@ -45,6 +45,8 @@ use crate::{
     },
     utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
 };
+#[cfg(target_os = "macos")]
+use crate::{input::PerWindowKeyboardFocusState, utils::PixelsUnit};
 
 #[cfg(windows)]
 mod bindgen;
@@ -341,15 +343,18 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     w.make_primary_window();
 
     #[cfg(target_os = "macos")]
-    let vk_surface = VulkanSurface::new(&vk_device, unsafe {
-        br::MetalSurfaceCreateInfo::new(w.metal_layer())
-            .execute(vk_device.instance(), None)
-            .expect("vk_surface.create")
+    let vk_surface = graphics::VulkanSurface::new(&vk_device, unsafe {
+        bedrock::SurfaceCreateInfo::execute(
+            &bedrock::MetalSurfaceCreateInfo::new(w.metal_layer()),
+            bedrock::InstanceChild::instance(&vk_device),
+            None,
+        )
+        .expect("vk_surface.create")
     });
 
     #[cfg(target_os = "macos")]
     rt_sender
-        .send(RenderMessage::NewWindow(NewWindowData {
+        .send(RenderMessage::NewWindow(rendering::NewWindowData {
             #[cfg(target_os = "macos")]
             init_scale: SafeF32::new(
                 *w.dispatcher()
@@ -360,11 +365,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             )
             .expect("invalid scale"),
             #[cfg(target_os = "macos")]
-            latest_ui_scale_changes: UnboundedRef::new(
+            latest_ui_scale_changes: utils::UnboundedRef::new(
                 &w.dispatcher().state.latest_ui_scale_changes,
             ),
             key: main_window_handle,
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            vk_surface: rendering::NewWindowVulkanSurface(vk_surface.unbound().1),
         }))
         .expect("rt_sender.send");
 
@@ -1530,6 +1535,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
                         .extra_data_ref::<PerWindowData>()
                         .font_set
                 },
+                context.sender_window.ui_scale_factor(),
             );
 
             if target_x_pixels <= tw {
@@ -1617,6 +1623,7 @@ impl TextInputViewEventHandler {
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            window.ui_scale_factor(),
         );
 
         let mut text_scroll_occured = false;
@@ -1687,11 +1694,13 @@ impl TextInputViewEventHandler {
             &self.content.borrow()[..preedit_range.start],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[preedit_range],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            window.ui_scale_factor(),
         );
 
         let underline_rect = composite_tree.get_mut(self.ct_preedit_underline);
@@ -1717,11 +1726,13 @@ impl TextInputViewEventHandler {
             &self.content.borrow()[..selection_range.start],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[selection_range],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            window.ui_scale_factor(),
         );
 
         let ct = composite_tree.get_mut(self.ct_selection_bg);
@@ -2456,10 +2467,11 @@ impl SystemLink<'_> {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn open_window<'h>(
+    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
         &self,
         composite_tree: &mut CompositeTree<Event>,
-        hit_tree: &mut (impl HitTestTreeCreate<'h> + ?Sized),
+        hit_tree: &mut HT,
+        setup_content: impl FnOnce(WindowHandle, &mut CompositeTree<Event>, &mut HT),
     ) -> WindowHandle {
         let mut w = MacWindow::new(
             WindowType::Sub,
@@ -2494,13 +2506,16 @@ impl SystemLink<'_> {
             }),
         });
 
-        let vk_surface = VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
-            br::MetalSurfaceCreateInfo::new(w.metal_layer())
-                .execute((*self.vk_device).instance(), None)
-                .expect("vk_surface.create")
+        let vk_surface = graphics::VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
+            bedrock::SurfaceCreateInfo::execute(
+                &bedrock::MetalSurfaceCreateInfo::new(w.metal_layer()),
+                bedrock::InstanceChild::instance(&*self.vk_device),
+                None,
+            )
+            .expect("vk_surface.create")
         });
         self.rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
+            .send(RenderMessage::NewWindow(rendering::NewWindowData {
                 init_scale: SafeF32::new(
                     *w.dispatcher()
                         .state
@@ -2509,14 +2524,15 @@ impl SystemLink<'_> {
                         .expect("poisoned"),
                 )
                 .expect("invalid scale"),
-                latest_ui_scale_changes: UnboundedRef::new(
+                latest_ui_scale_changes: utils::UnboundedRef::new(
                     &w.dispatcher().state.latest_ui_scale_changes,
                 ),
                 key: handle,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+                vk_surface: rendering::NewWindowVulkanSurface(vk_surface.unbound().1),
             }))
             .expect("rt_sender.send");
 
+        setup_content(handle, composite_tree, hit_tree);
         handle
     }
 
@@ -2604,6 +2620,38 @@ impl WindowHandle {
     }
 
     #[inline(always)]
+    fn state_mut(&mut self) -> &mut MacWindowState {
+        unsafe {
+            &mut (*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
+                .cast::<MacWindowDispatcher>())
+            .state
+        }
+    }
+
+    #[inline(always)]
+    pub fn associate_extra_data<T>(&mut self, data: Box<T>) {
+        self.state_mut().extra_data = Box::into_raw(data) as _;
+    }
+
+    #[inline(always)]
+    pub unsafe fn extra_data_ref<T>(&self) -> &T {
+        unsafe { &*self.state().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn extra_data_mut<T>(&mut self) -> &mut T {
+        unsafe { &mut *self.state_mut().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    pub unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
+        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
+        self.state_mut().extra_data = core::ptr::null_mut();
+
+        r
+    }
+
+    #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
         let state = self.state();
 
@@ -2628,9 +2676,19 @@ impl WindowHandle {
     pub fn ht_root(&self) -> HitTestTreeRef {
         self.state().ht_root
     }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &self.state().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
+        &mut self.state_mut().keyboard_focus_state
+    }
 }
 #[cfg(target_os = "macos")]
-impl ShellPointerActions for WindowHandle {
+impl input::ShellPointerActions for WindowHandle {
     #[inline(always)]
     fn capture_pointer(&self) {}
 
@@ -3122,6 +3180,7 @@ impl MacWindowDispatcher {
 #[cfg(target_os = "macos")]
 struct MacWindowState {
     wlink: *mut platform::mac::bridge::WindowLink,
+    extra_data: *mut core::ffi::c_void,
     swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     latest_ui_scale_changes: Mutex<Option<f32>>,
     active_size: std::sync::Mutex<Size<LogicalUnit>>,
@@ -3129,6 +3188,7 @@ struct MacWindowState {
     active_buffer_scale: std::sync::Mutex<f32>,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    keyboard_focus_state: PerWindowKeyboardFocusState,
 }
 #[cfg(target_os = "macos")]
 unsafe impl Sync for MacWindowState {}

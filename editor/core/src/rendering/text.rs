@@ -446,6 +446,8 @@ pub struct TextLayout {
     height: f32,
     #[cfg(feature = "harfbuzz")]
     baseline_y_offset: f32,
+    #[cfg(target_os = "macos")]
+    frame: apple_sdk_port::Owned<apple_sdk_port::text::Frame>,
 }
 impl Drop for TextLayout {
     fn drop(&mut self) {
@@ -565,10 +567,108 @@ impl TextLayout {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        let ak_spacing_inline_start = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_spacing_inline_start(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let ak_font_id = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_font_id(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let mut attributed_string_runs = Vec::with_capacity(ub.unwrap_or(lb));
+        #[cfg(target_os = "macos")]
+        let mut total_bytes = 0;
+        #[cfg(target_os = "macos")]
+        for (n, r) in text_runs.enumerate() {
+            let font = font_set.select(r.font);
+            let range = apple_sdk_port::foundation::Range {
+                location: total_bytes as _,
+                length: r.content.len() as _,
+            };
+
+            let mut str_attr = apple_sdk_port::foundation::MutableDictionary::<
+                apple_sdk_port::foundation::String,
+                dyn apple_sdk_port::Object,
+            >::new_copying_key_generic_value(None, 2)
+            .expect("str_attr.create");
+            str_attr.set(
+                apple_sdk_port::foundation::AttributedStringKey::font(),
+                font,
+            );
+            str_attr.set(
+                &ak_spacing_inline_start,
+                &*apple_sdk_port::foundation::Number::new_f32(None, r.spacing_inline_start)
+                    .expect("Number.create"),
+            );
+            str_attr.set(
+                &ak_font_id,
+                &*apple_sdk_port::foundation::Number::new_i64(None, r.font as usize as _)
+                    .expect("Number.create"),
+            );
+
+            attributed_string_runs.push((
+                apple_sdk_port::foundation::AttributedString::new(
+                    None,
+                    unsafe {
+                        &apple_sdk_port::foundation::String::from_str_no_copy(None, r.content)
+                    },
+                    Some(&str_attr),
+                )
+                .expect("str.crate"),
+                range,
+            ));
+            total_bytes += r.content.len();
+        }
+        #[cfg(target_os = "macos")]
+        let mut str =
+            apple_sdk_port::foundation::MutableAttributedString::new(None, total_bytes as _)
+                .expect("str.create");
+        #[cfg(target_os = "macos")]
+        str.begin_editing();
+        #[cfg(target_os = "macos")]
+        for (s, r) in attributed_string_runs {
+            str.replace_attributed_string(r, &s);
+        }
+        #[cfg(target_os = "macos")]
+        str.end_editing();
+        #[cfg(target_os = "macos")]
+        let framesetter = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
+            .expect("Framesetter.create");
+        #[cfg(target_os = "macos")]
+        let frame = framesetter
+            .create_frame(
+                apple_sdk_port::foundation::Range {
+                    location: 0,
+                    length: 0,
+                },
+                &apple_sdk_port::graphics::Path::new_rect(
+                    apple_sdk_port::raw::CGRect {
+                        origin: apple_sdk_port::raw::CGPoint { x: 0.0, y: 0.0 },
+                        size: apple_sdk_port::raw::CGSize {
+                            width: f64::MAX,
+                            height: f64::MAX,
+                        },
+                    },
+                    None,
+                ),
+                None,
+            )
+            .expect("Frame.create");
+
         Self {
+            #[cfg(feature = "harfbuzz")]
             buffers,
+            #[cfg(feature = "harfbuzz")]
             height,
+            #[cfg(feature = "harfbuzz")]
             baseline_y_offset,
+            #[cfg(target_os = "macos")]
+            frame,
         }
     }
 
@@ -772,6 +872,286 @@ impl TextLayout {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        let ak_spacing_inline_start = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_spacing_inline_start(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let ak_font_id = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_font_id(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let lines = self.frame.lines();
+        #[cfg(target_os = "macos")]
+        tracing::debug!(line_count = lines.len(), "frameset lines");
+        #[cfg(target_os = "macos")]
+        let mut height = 0.0;
+        #[cfg(target_os = "macos")]
+        for n in 0..lines.len() {
+            let runs = lines[n].glyph_runs();
+            tracing::debug!(count = runs.len(), "glyph runs");
+            let mut baseline_pos: apple_sdk_port::raw::CGFloat = 0.0;
+            for m in 0..runs.len() {
+                let font = match runs[m]
+                    .attributes()
+                    .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
+                {
+                    Some(x) => unsafe {
+                        apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                    },
+                    None => font_set.select(Default::default()),
+                };
+
+                baseline_pos = baseline_pos.max(font.ascent());
+                // TODO: 複数行になる場合はleadingを行間に足す
+                height = height.max((font.ascent() + font.descent()) as f32 * 2.0);
+            }
+
+            #[cfg(target_os = "macos")]
+            let mut x_shift = 0.0;
+            #[cfg(target_os = "macos")]
+            for m in 0..runs.len() {
+                let run = &runs[m];
+
+                let attributes = run.attributes();
+                attributes.apply_untyped_value(|key, value| {
+                    tracing::debug!(?key, ?value, "run attribute");
+                });
+                let font = match attributes
+                    .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
+                {
+                    Some(x) => unsafe {
+                        apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                    },
+                    None => font_set.select(Default::default()),
+                };
+                let spacing_inline_start =
+                    match attributes.get_untyped_value(ak_spacing_inline_start) {
+                        Some(x) => unsafe {
+                            apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
+                                .f32_value()
+                                .expect("invalid attr value") as _
+                        },
+                        None => 0,
+                    };
+                let font_id = match attributes.get_untyped_value(ak_font_id) {
+                    Some(x) => unsafe {
+                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
+                            .i64_value()
+                            .expect("invalid attr value") as usize as _
+                    },
+                    None => 0,
+                };
+                x_shift += spacing_inline_start;
+
+                let glyph_count = run.glyph_count();
+                tracing::debug!(count = glyph_count, "run");
+                let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
+                font.bounding_rects_for_glyphs(
+                    apple_sdk_port::text::FontOrientation::Horizontal,
+                    unsafe { core::slice::from_raw_parts(run.glyphs_ptr(), glyph_count as _) },
+                    glyph_bounding_rects.spare_capacity_mut(),
+                );
+                unsafe {
+                    glyph_bounding_rects.set_len(glyph_count as _);
+                }
+
+                for g in 0..glyph_count {
+                    let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
+                    let pos = unsafe { &*run.positions().add(g as usize) };
+                    let bounding_rect = &glyph_bounding_rects[g as usize];
+                    tracing::debug!(glyph, ?font_id, ?pos, ?bounding_rect, "glyph");
+
+                    if bounding_rect.size.width == 0.0 && bounding_rect.size.height == 0.0 {
+                        // empty shape(whitespace)
+                        continue;
+                    }
+
+                    let (r, is_new) = atlas.acquire_for_glyph(
+                        (font_id as usize, glyph),
+                        (bounding_rect.size.width as f32 * render_scale).ceil() as _,
+                        (bounding_rect.size.height as f32 * render_scale).ceil() as _,
+                    );
+                    let placement_box = GlyphPlacementBox {
+                        left: ((pos.x + bounding_rect.origin.x) as f32 + x_shift) * render_scale,
+                        top: (baseline_pos + pos.y
+                            - (bounding_rect.size.height + bounding_rect.origin.y))
+                            as f32
+                            * render_scale,
+                        tex_left: r.left,
+                        tex_top: r.top,
+                        width: r.width(),
+                        height: r.height(),
+                    };
+                    // cache.text_width = cache.text_width.max(placement_box.right());
+                    boxes.push(placement_box);
+
+                    if is_new {
+                        vector_rasterization_state.updated_rects.push(r.vk_rect());
+
+                        let path = font
+                            .create_path_for_glyph(glyph, None)
+                            .expect("font.create_path_for_glyph");
+                        let mut current_figure = None;
+                        let mut pen_pos = (0.0, 0.0);
+                        let offset_x = r.left as f32 - bounding_rect.origin.x as f32 * render_scale;
+                        let offset_y = -(r.top as f32)
+                            - (bounding_rect.size.height + bounding_rect.origin.y) as f32
+                                * render_scale;
+                        path.apply(|e| match e.r#type {
+                            apple_sdk_port::raw::kCGPathElementMoveToPoint => {
+                                let to = unsafe { &*e.points };
+
+                                current_figure = Some((
+                                    to.clone(),
+                                    vector_rasterization_state.fill_tri_points.len(),
+                                ));
+                                pen_pos = (to.x, to.y);
+                                vector_rasterization_state.fill_tri_points.push([
+                                    to.x as f32 * render_scale + offset_x,
+                                    to.y as f32 * render_scale + offset_y,
+                                ]);
+                            }
+                            apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
+                                let to = unsafe { &*e.points };
+                                let Some((_, filltri_index0)) = current_figure else {
+                                    panic!("no figure started?");
+                                };
+
+                                let filltri_index1 =
+                                    vector_rasterization_state.fill_tri_points.len() - 1;
+                                vector_rasterization_state.fill_tri_points.push([
+                                    to.x as f32 * render_scale + offset_x,
+                                    to.y as f32 * render_scale + offset_y,
+                                ]);
+                                vector_rasterization_state.fill_tri_indices.extend([
+                                    filltri_index0 as u16,
+                                    filltri_index1 as u16,
+                                    vector_rasterization_state.fill_tri_points.len() as u16 - 1,
+                                ]);
+                                pen_pos = (to.x, to.y);
+                            }
+                            apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
+                                let points = unsafe { core::slice::from_raw_parts(e.points, 2) };
+                                let Some((_, filltri_index0)) = current_figure else {
+                                    panic!("no figure started?");
+                                };
+
+                                let filltri_index1 =
+                                    vector_rasterization_state.fill_tri_points.len() - 1;
+                                vector_rasterization_state.fill_tri_points.push([
+                                    points[1].x as f32 * render_scale + offset_x,
+                                    points[1].y as f32 * render_scale + offset_y,
+                                ]);
+                                vector_rasterization_state.fill_tri_indices.extend([
+                                    filltri_index0 as u16,
+                                    filltri_index1 as u16,
+                                    vector_rasterization_state.fill_tri_points.len() as u16 - 1,
+                                ]);
+                                vector_rasterization_state.curve_tris.extend([
+                                    [
+                                        pen_pos.0 as f32 * render_scale + offset_x,
+                                        pen_pos.1 as f32 * render_scale + offset_y,
+                                        0.0,
+                                        0.0,
+                                    ],
+                                    [
+                                        points[0].x as f32 * render_scale + offset_x,
+                                        points[0].y as f32 * render_scale + offset_y,
+                                        0.5,
+                                        0.0,
+                                    ],
+                                    [
+                                        points[1].x as f32 * render_scale + offset_x,
+                                        points[1].y as f32 * render_scale + offset_y,
+                                        1.0,
+                                        1.0,
+                                    ],
+                                ]);
+                                pen_pos = (points[1].x, points[1].y);
+                            }
+                            apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
+                                let points = unsafe { core::slice::from_raw_parts(e.points, 3) };
+                                lyon_geom::CubicBezierSegment {
+                                    from: lyon_geom::point(pen_pos.0, pen_pos.1),
+                                    ctrl1: lyon_geom::point(points[0].x, points[0].y),
+                                    ctrl2: lyon_geom::point(points[1].x, points[1].y),
+                                    to: lyon_geom::point(points[2].x, points[2].y),
+                                }
+                                .for_each_quadratic_bezier(
+                                    0.1,
+                                    &mut |q| {
+                                        let Some((_, filltri_index0)) = current_figure else {
+                                            panic!("no figure started?");
+                                        };
+
+                                        let filltri_index1 =
+                                            vector_rasterization_state.fill_tri_points.len() - 1;
+                                        vector_rasterization_state.fill_tri_points.push([
+                                            q.to.x as f32 * render_scale + offset_x,
+                                            q.to.y as f32 * render_scale + offset_y,
+                                        ]);
+                                        vector_rasterization_state.fill_tri_indices.extend([
+                                            filltri_index0 as u16,
+                                            filltri_index1 as u16,
+                                            vector_rasterization_state.fill_tri_points.len() as u16
+                                                - 1,
+                                        ]);
+                                        vector_rasterization_state.curve_tris.extend([
+                                            [
+                                                pen_pos.0 as f32 * render_scale + offset_x,
+                                                pen_pos.1 as f32 * render_scale + offset_y,
+                                                0.0,
+                                                0.0,
+                                            ],
+                                            [
+                                                q.ctrl.x as f32 * render_scale + offset_x,
+                                                q.ctrl.y as f32 * render_scale + offset_y,
+                                                0.5,
+                                                0.0,
+                                            ],
+                                            [
+                                                q.to.x as f32 * render_scale + offset_x,
+                                                q.to.y as f32 * render_scale + offset_y,
+                                                1.0,
+                                                1.0,
+                                            ],
+                                        ]);
+                                        pen_pos = (q.to.x, q.to.y);
+                                    },
+                                )
+                            }
+                            apple_sdk_port::raw::kCGPathElementCloseSubpath => {
+                                // line to start point
+                                let Some((start_point, filltri_index0)) = current_figure.take()
+                                else {
+                                    panic!("no figure started?");
+                                };
+
+                                let filltri_index1 =
+                                    vector_rasterization_state.fill_tri_points.len() - 1;
+                                vector_rasterization_state.fill_tri_points.push([
+                                    start_point.x as f32 * render_scale + offset_x,
+                                    start_point.y as f32 * render_scale + offset_y,
+                                ]);
+                                vector_rasterization_state.fill_tri_indices.extend([
+                                    filltri_index0 as u16,
+                                    filltri_index1 as u16,
+                                    vector_rasterization_state.fill_tri_points.len() as u16 - 1,
+                                ]);
+                                pen_pos = (start_point.x, start_point.y);
+                            }
+                            _ => unreachable!(),
+                        })
+                    }
+                }
+            }
+        }
+
         boxes
     }
 
@@ -780,7 +1160,12 @@ impl TextLayout {
         self.height
     }
 
-    pub fn measure_visual_width(text: &str, font: FontID, font_set: &PerWindowFontSet) -> f32 {
+    pub fn measure_visual_width(
+        text: &str,
+        font: FontID,
+        font_set: &PerWindowFontSet,
+        render_scale: f32,
+    ) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -789,27 +1174,37 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
-            1.0,
+            render_scale,
         );
 
+        #[cfg(feature = "harfbuzz")]
         let Some(&(last_buf, left_base, font, fallback_index)) = layout.buffers.last() else {
             return 0.0;
         };
 
+        #[cfg(feature = "harfbuzz")]
         let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+        #[cfg(feature = "harfbuzz")]
         let glyph_infos =
             unsafe { hb::ffi::hb_buffer_get_glyph_infos(last_buf, glyph_infos_len.as_mut_ptr()) };
+        #[cfg(feature = "harfbuzz")]
         let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+        #[cfg(feature = "harfbuzz")]
         let glyph_positions = unsafe {
             hb::ffi::hb_buffer_get_glyph_positions(last_buf, glyph_positions_len.as_mut_ptr())
         };
+        #[cfg(feature = "harfbuzz")]
         assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
             glyph_positions_len.assume_init()
         });
 
+        #[cfg(feature = "harfbuzz")]
         let font = font_set.select(font).faces[fallback_index];
+        #[cfg(feature = "harfbuzz")]
         let mut left_cursor = left_base;
+        #[cfg(feature = "harfbuzz")]
         let mut width = 0.0f32;
+        #[cfg(feature = "harfbuzz")]
         for n in 0..unsafe { glyph_positions_len.assume_init() } {
             let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
             let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
@@ -830,10 +1225,105 @@ impl TextLayout {
             left_cursor += glyph_position.x_advance as f32 / 64.0;
         }
 
+        #[cfg(target_os = "macos")]
+        let ak_spacing_inline_start = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_spacing_inline_start(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let ak_font_id = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_font_id(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let lines = layout.frame.lines();
+        #[cfg(target_os = "macos")]
+        tracing::debug!(line_count = lines.len(), "frameset lines");
+        #[cfg(target_os = "macos")]
+        let mut width = 0.0;
+        #[cfg(target_os = "macos")]
+        for n in 0..lines.len() {
+            let runs = lines[n].glyph_runs();
+
+            let mut line_width = 0.0;
+            let mut x_shift = 0.0;
+            for m in 0..runs.len() {
+                let run = &runs[m];
+
+                let attributes = run.attributes();
+                attributes.apply_untyped_value(|key, value| {
+                    tracing::debug!(?key, ?value, "run attribute");
+                });
+                let font = match attributes
+                    .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
+                {
+                    Some(x) => unsafe {
+                        apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                    },
+                    None => font_set.select(Default::default()),
+                };
+                let spacing_inline_start =
+                    match attributes.get_untyped_value(ak_spacing_inline_start) {
+                        Some(x) => unsafe {
+                            apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
+                                .f32_value()
+                                .expect("invalid attr value") as _
+                        },
+                        None => 0,
+                    };
+                let font_id = match attributes.get_untyped_value(ak_font_id) {
+                    Some(x) => unsafe {
+                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
+                            .i64_value()
+                            .expect("invalid attr value") as usize as _
+                    },
+                    None => 0,
+                };
+                x_shift += spacing_inline_start;
+
+                let glyph_count = run.glyph_count();
+                tracing::debug!(count = glyph_count, "run");
+                let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
+                font.bounding_rects_for_glyphs(
+                    apple_sdk_port::text::FontOrientation::Horizontal,
+                    unsafe { core::slice::from_raw_parts(run.glyphs_ptr(), glyph_count as _) },
+                    glyph_bounding_rects.spare_capacity_mut(),
+                );
+                unsafe {
+                    glyph_bounding_rects.set_len(glyph_count as _);
+                }
+
+                for g in 0..glyph_count {
+                    let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
+                    let pos = unsafe { &*run.positions().add(g as usize) };
+                    let bounding_rect = &glyph_bounding_rects[g as usize];
+
+                    if bounding_rect.size.width == 0.0 && bounding_rect.size.height == 0.0 {
+                        // empty shape(whitespace)
+                        continue;
+                    }
+
+                    line_width = line_width.max(
+                        ((pos.x + bounding_rect.origin.x) as f32 + x_shift) * render_scale
+                            + (bounding_rect.size.width as f32 * render_scale).ceil(),
+                    );
+                }
+            }
+
+            width = width.max(line_width);
+        }
+
         width
     }
 
-    pub fn measure_total_advances(text: &str, font: FontID, font_set: &PerWindowFontSet) -> f32 {
+    pub fn measure_total_advances(
+        text: &str,
+        font: FontID,
+        font_set: &PerWindowFontSet,
+        render_scale: f32,
+    ) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -842,23 +1332,119 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
-            1.0,
+            render_scale,
         );
 
+        #[cfg(feature = "harfbuzz")]
         let Some(&(last_buf, left_base, _, _)) = layout.buffers.last() else {
             return 0.0;
         };
 
+        #[cfg(feature = "harfbuzz")]
         let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+        #[cfg(feature = "harfbuzz")]
         let glyph_positions = unsafe {
             hb::ffi::hb_buffer_get_glyph_positions(last_buf, glyph_positions_len.as_mut_ptr())
         };
 
+        #[cfg(feature = "harfbuzz")]
         let mut left_cursor = left_base;
+        #[cfg(feature = "harfbuzz")]
         for n in 0..unsafe { glyph_positions_len.assume_init() } {
             let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
 
             left_cursor += glyph_position.x_advance as f32 / 64.0;
+        }
+
+        #[cfg(target_os = "macos")]
+        let ak_spacing_inline_start = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_spacing_inline_start(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let ak_font_id = unsafe {
+            apple_sdk_port::foundation::String::from_internal_ref(
+                &*crate::platform::mac::bridge::ni_ak_font_id(),
+            )
+        };
+        #[cfg(target_os = "macos")]
+        let lines = layout.frame.lines();
+        #[cfg(target_os = "macos")]
+        tracing::debug!(line_count = lines.len(), "frameset lines");
+        #[cfg(target_os = "macos")]
+        let mut left_cursor = 0.0;
+        #[cfg(target_os = "macos")]
+        for n in 0..lines.len() {
+            let runs = lines[n].glyph_runs();
+
+            let mut line_left_cursor = 0.0;
+            let mut x_shift = 0.0;
+            for m in 0..runs.len() {
+                let run = &runs[m];
+
+                let attributes = run.attributes();
+                attributes.apply_untyped_value(|key, value| {
+                    tracing::debug!(?key, ?value, "run attribute");
+                });
+                let font = match attributes
+                    .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
+                {
+                    Some(x) => unsafe {
+                        apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
+                    },
+                    None => font_set.select(Default::default()),
+                };
+                let spacing_inline_start =
+                    match attributes.get_untyped_value(ak_spacing_inline_start) {
+                        Some(x) => unsafe {
+                            apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
+                                .f32_value()
+                                .expect("invalid attr value") as _
+                        },
+                        None => 0,
+                    };
+                let font_id = match attributes.get_untyped_value(ak_font_id) {
+                    Some(x) => unsafe {
+                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
+                            .i64_value()
+                            .expect("invalid attr value") as usize as _
+                    },
+                    None => 0,
+                };
+                x_shift += spacing_inline_start;
+
+                let glyph_count = run.glyph_count();
+                tracing::debug!(count = glyph_count, "run");
+                let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
+                font.bounding_rects_for_glyphs(
+                    apple_sdk_port::text::FontOrientation::Horizontal,
+                    unsafe { core::slice::from_raw_parts(run.glyphs_ptr(), glyph_count as _) },
+                    glyph_bounding_rects.spare_capacity_mut(),
+                );
+                unsafe {
+                    glyph_bounding_rects.set_len(glyph_count as _);
+                }
+
+                for g in 0..glyph_count {
+                    let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
+                    let pos = unsafe { &*run.positions().add(g as usize) };
+                    let bounding_rect = &glyph_bounding_rects[g as usize];
+
+                    if bounding_rect.size.width == 0.0 && bounding_rect.size.height == 0.0 {
+                        // empty shape(whitespace)
+                        continue;
+                    }
+
+                    // TODO: 最後がスペースのとき正しい値にならない気がする
+                    line_left_cursor = line_left_cursor.max(
+                        ((pos.x + bounding_rect.origin.x) as f32 + x_shift) * render_scale
+                            + (bounding_rect.size.width as f32 * render_scale).ceil(),
+                    );
+                }
+            }
+
+            left_cursor = left_cursor.max(line_left_cursor);
         }
 
         left_cursor
