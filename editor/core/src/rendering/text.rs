@@ -4,6 +4,10 @@ use peridot_tp_fontconfig as fc;
 use peridot_tp_freetype as ft;
 #[cfg(feature = "harfbuzz")]
 use peridot_tp_harfbuzz as hb;
+#[cfg(windows)]
+use windows::Win32::Graphics::{Direct2D::Common::*, DirectWrite::*};
+#[cfg(windows)]
+use windows_core::*;
 
 use crate::rendering::{MaskTextureAtlasManager, composite::VectorRasterizationState};
 
@@ -448,6 +452,9 @@ pub struct TextLayout {
     baseline_y_offset: f32,
     #[cfg(target_os = "macos")]
     frame: apple_sdk_port::Owned<apple_sdk_port::text::Frame>,
+    #[cfg(windows)]
+    layout: windows::Win32::Graphics::DirectWrite::IDWriteTextLayout,
+    render_scale: f32,
 }
 impl Drop for TextLayout {
     fn drop(&mut self) {
@@ -660,6 +667,79 @@ impl TextLayout {
             )
             .expect("Frame.create");
 
+        #[cfg(windows)]
+        let mut run_str_utf16s = Vec::new();
+        #[cfg(windows)]
+        let mut run_parts = Vec::with_capacity(ub.unwrap_or(lb));
+        #[cfg(windows)]
+        for r in text_runs {
+            let start_pos = run_str_utf16s.len();
+            run_str_utf16s.extend(r.content.encode_utf16());
+            run_parts.push((
+                r.font,
+                r.spacing_inline_start,
+                windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_RANGE {
+                    startPosition: start_pos as _,
+                    length: (run_str_utf16s.len() - start_pos) as _,
+                },
+            ));
+        }
+        #[cfg(windows)]
+        let layout = unsafe {
+            font_set
+                .native_factory()
+                .CreateTextLayout(
+                    &run_str_utf16s,
+                    font_set.select(FontID::UIDefault),
+                    f32::MAX,
+                    f32::MAX,
+                )
+                .expect("dwrite.layout.create")
+        };
+        #[cfg(windows)]
+        let mut inline_spacing_sum = 0.0;
+        #[cfg(windows)]
+        for (font_id, spacing_inline_start, range) in run_parts.into_iter() {
+            let font = font_set.select(font_id);
+            inline_spacing_sum += spacing_inline_start;
+
+            unsafe {
+                let mut family_name =
+                    Vec::with_capacity(font.GetFontFamilyNameLength() as usize + 1);
+                font.GetFontFamilyName(core::mem::transmute::<
+                    &mut [core::mem::MaybeUninit<_>],
+                    &mut [_],
+                >(family_name.spare_capacity_mut()))
+                    .expect("dwrite.format.get_font_family_name");
+                family_name.set_len(family_name.capacity());
+
+                layout
+                    .SetFontFamilyName(windows::core::PCWSTR(family_name.as_ptr()), range)
+                    .expect("dwrite.layout.set_font_family_name");
+                layout
+                    .SetFontSize(font.GetFontSize(), range)
+                    .expect("dwrite.layout.set_font_size");
+                layout
+                    .SetFontStretch(font.GetFontStretch(), range)
+                    .expect("dwrite.layout.set_font_stretch");
+                layout
+                    .SetFontStyle(font.GetFontStyle(), range)
+                    .expect("dwrite.layout.set_font_style");
+                layout
+                    .SetFontWeight(font.GetFontWeight(), range)
+                    .expect("dwrite.layout.set_font_weight");
+                layout
+                    .SetDrawingEffect(
+                        &IUnknown::from(DrawingEffect {
+                            font_id,
+                            offset_x: inline_spacing_sum,
+                        }),
+                        range,
+                    )
+                    .expect("dwrite.layout.set_drawing_effect");
+            }
+        }
+
         Self {
             #[cfg(feature = "harfbuzz")]
             buffers,
@@ -669,6 +749,9 @@ impl TextLayout {
             baseline_y_offset,
             #[cfg(target_os = "macos")]
             frame,
+            #[cfg(windows)]
+            layout,
+            render_scale,
         }
     }
 
@@ -1152,12 +1235,440 @@ impl TextLayout {
             }
         }
 
+        #[cfg(windows)]
+        unsafe {
+            self.layout
+                .Draw(
+                    None,
+                    &IDWriteTextRenderer::from(TextLayoutRenderer {
+                        dip_to_pixels_scaling: render_scale,
+                        vector_raster_state: vector_rasterization_state,
+                        atlas,
+                        boxes: &mut boxes,
+                    }),
+                    0.0,
+                    0.0,
+                )
+                .expect("dwrite.layout.draw");
+        }
+
+        #[cfg(windows)]
+        #[implement(IDWriteTextRenderer)]
+        pub struct TextLayoutRenderer<'d> {
+            dip_to_pixels_scaling: f32,
+            vector_raster_state: *mut VectorRasterizationState,
+            atlas: *mut MaskTextureAtlasManager<'d>,
+            boxes: *mut Vec<GlyphPlacementBox>,
+        }
+        #[cfg(windows)]
+        impl IDWritePixelSnapping_Impl for TextLayoutRenderer_Impl<'_> {
+            fn GetCurrentTransform(
+                &self,
+                _clientdrawingcontext: *const core::ffi::c_void,
+                transform: *mut windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX,
+            ) -> windows_core::Result<()> {
+                unsafe {
+                    *transform = windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX {
+                        m11: 1.0,
+                        m12: 0.0,
+                        m21: 0.0,
+                        m22: 1.0,
+                        dx: 0.0,
+                        dy: 0.0,
+                    };
+                }
+
+                Ok(())
+            }
+
+            fn GetPixelsPerDip(
+                &self,
+                _clientdrawingcontext: *const core::ffi::c_void,
+            ) -> windows_core::Result<f32> {
+                Ok(self.dip_to_pixels_scaling)
+            }
+
+            fn IsPixelSnappingDisabled(
+                &self,
+                _clientdrawingcontext: *const core::ffi::c_void,
+            ) -> windows_core::Result<windows_core::BOOL> {
+                Ok(BOOL(0))
+            }
+        }
+        #[cfg(windows)]
+        impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl<'_> {
+            fn DrawGlyphRun(
+                &self,
+                _clientdrawingcontext: *const core::ffi::c_void,
+                mut baselineoriginx: f32,
+                baselineoriginy: f32,
+                _measuringmode: windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE,
+                glyphrun: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN,
+                _glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
+                clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+            ) -> windows_core::Result<()> {
+                use windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_METRICS;
+
+                let var = clientdrawingeffect
+                    .unwrap()
+                    .cast::<IAppDrawingEffect>()
+                    .expect("clientdrawingeffect.cast.appDrawingEffect");
+                tracing::debug!(?var, fid = ?unsafe { var.font_id() }, baselineoriginx);
+
+                let glyphrun = unsafe { &*glyphrun };
+                let font_face = glyphrun.fontFace.as_ref().expect("no font face");
+                let mut font_metrics = core::mem::MaybeUninit::uninit();
+                unsafe { font_face.GetMetrics(font_metrics.as_mut_ptr()) };
+                let font_metrics = unsafe { font_metrics.assume_init_ref() };
+                let design_unit = font_metrics.designUnitsPerEm;
+                let mut glyph_metrics: Vec<DWRITE_GLYPH_METRICS> =
+                    Vec::with_capacity(glyphrun.glyphCount as _);
+                tracing::debug!(count = glyphrun.glyphCount, "glyphrun");
+                unsafe {
+                    font_face
+                        .GetDesignGlyphMetrics(
+                            glyphrun.glyphIndices,
+                            glyphrun.glyphCount,
+                            glyph_metrics.spare_capacity_mut().as_mut_ptr() as _,
+                            glyphrun.isSideways.as_bool(),
+                        )
+                        .expect("GetDesignGlyphMetrics");
+                    glyph_metrics.set_len(glyphrun.glyphCount as _);
+                }
+                for n in 0..glyphrun.glyphCount as usize {
+                    let glyph_width = (glyph_metrics[n].advanceWidth as i32
+                        - glyph_metrics[n].leftSideBearing
+                        - glyph_metrics[n].rightSideBearing)
+                        as f32
+                        * glyphrun.fontEmSize
+                        * self.dip_to_pixels_scaling
+                        / design_unit as f32;
+                    let glyph_height = (glyph_metrics[n].advanceHeight as i32
+                        - glyph_metrics[n].topSideBearing
+                        - glyph_metrics[n].bottomSideBearing)
+                        as f32
+                        * glyphrun.fontEmSize
+                        * self.dip_to_pixels_scaling
+                        / design_unit as f32;
+
+                    let (r, is_new) = unsafe {
+                        (*self.atlas).acquire_for_glyph(
+                            (var.font_id() as _, *glyphrun.glyphIndices.add(n)),
+                            glyph_width.ceil() as _,
+                            glyph_height.ceil() as _,
+                        )
+                    };
+
+                    let glyph_placement_box = GlyphPlacementBox {
+                        left: ((baselineoriginx
+                            + glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize
+                                / design_unit as f32)
+                            + unsafe { var.offset_x() })
+                            * self.dip_to_pixels_scaling,
+                        top: (baselineoriginy
+                            - (glyph_metrics[n].verticalOriginY as f32
+                                - glyph_metrics[n].topSideBearing as f32)
+                                * glyphrun.fontEmSize
+                                / design_unit as f32)
+                            * self.dip_to_pixels_scaling,
+                        tex_left: r.left,
+                        tex_top: r.top,
+                        width: r.width(),
+                        height: r.height(),
+                    };
+                    tracing::debug!(
+                        met = ?glyph_metrics[n],
+                        font_em_size = glyphrun.fontEmSize,
+                        design_unit,
+                        scaling = self.dip_to_pixels_scaling,
+                        ?glyph_placement_box,
+                        is_new
+                    );
+
+                    unsafe {
+                        (*self.boxes).push(glyph_placement_box);
+                    }
+                    if is_new {
+                        unsafe {
+                            (*self.vector_raster_state).updated_rects.push(r.vk_rect());
+                        }
+
+                        use windows::Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink;
+                        let mut current_figure_state = None;
+                        let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
+                            translate: windows_numerics::Vector2 {
+                                X: r.left as f32
+                                    - glyph_metrics[n].leftSideBearing as f32
+                                        * glyphrun.fontEmSize
+                                        * self.dip_to_pixels_scaling
+                                        / design_unit as f32,
+                                Y: -(r.top as f32)
+                                    - (glyph_metrics[n].verticalOriginY as f32
+                                        - glyph_metrics[n].topSideBearing as f32)
+                                        * glyphrun.fontEmSize
+                                        * self.dip_to_pixels_scaling
+                                        / design_unit as f32,
+                            },
+                            dip_to_pixels_scale: self.dip_to_pixels_scaling,
+                            current_figure_state: &mut current_figure_state,
+                            vector_raster_state: self.vector_raster_state,
+                        });
+                        unsafe {
+                            font_face
+                                .GetGlyphRunOutline(
+                                    glyphrun.fontEmSize,
+                                    glyphrun.glyphIndices.add(n),
+                                    None,
+                                    None,
+                                    1,
+                                    glyphrun.isSideways.as_bool(),
+                                    false,
+                                    &sink,
+                                )
+                                .expect("GetGlyphRunOutline");
+                        }
+                        assert!(current_figure_state.is_none());
+                    }
+
+                    baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) };
+                }
+
+                Ok(())
+            }
+
+            fn DrawInlineObject(
+                &self,
+                _clientdrawingcontext: *const core::ffi::c_void,
+                _originx: f32,
+                _originy: f32,
+                _inlineobject: windows_core::Ref<
+                    windows::Win32::Graphics::DirectWrite::IDWriteInlineObject,
+                >,
+                _issideways: windows_core::BOOL,
+                _isrighttoleft: windows_core::BOOL,
+                _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+            ) -> windows_core::Result<()> {
+                unimplemented!();
+            }
+
+            fn DrawStrikethrough(
+                &self,
+                _clientdrawingcontext: *const core::ffi::c_void,
+                _baselineoriginx: f32,
+                _baselineoriginy: f32,
+                _strikethrough: *const windows::Win32::Graphics::DirectWrite::DWRITE_STRIKETHROUGH,
+                _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+            ) -> windows_core::Result<()> {
+                unimplemented!();
+            }
+
+            fn DrawUnderline(
+                &self,
+                _clientdrawingcontext: *const core::ffi::c_void,
+                _baselineoriginx: f32,
+                _baselineoriginy: f32,
+                _underline: *const windows::Win32::Graphics::DirectWrite::DWRITE_UNDERLINE,
+                _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
+            ) -> windows_core::Result<()> {
+                unimplemented!();
+            }
+        }
+        #[cfg(windows)]
+        #[implement(ID2D1SimplifiedGeometrySink)]
+        struct GlyphOutlineSink {
+            translate: windows_numerics::Vector2,
+            dip_to_pixels_scale: f32,
+            current_figure_state: *mut Option<(windows_numerics::Vector2, u16)>,
+            vector_raster_state: *mut VectorRasterizationState,
+        }
+        #[cfg(windows)]
+        impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
+            fn BeginFigure(
+                &self,
+                startpoint: &windows_numerics::Vector2,
+                figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
+            ) {
+                use windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN_FILLED;
+
+                assert_eq!(figurebegin, D2D1_FIGURE_BEGIN_FILLED, "not filled figure");
+
+                unsafe {
+                    *self.current_figure_state = Some((
+                        *startpoint,
+                        (*self.vector_raster_state).fill_tri_points.len() as _,
+                    ));
+                    (*self.vector_raster_state).fill_tri_points.push([
+                        startpoint.X * self.dip_to_pixels_scale + self.translate.X,
+                        -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y,
+                    ]);
+                }
+            }
+
+            fn EndFigure(
+                &self,
+                figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END,
+            ) {
+                use windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END_CLOSED;
+
+                let (start_point, filltri_index0) = unsafe {
+                    (*self.current_figure_state)
+                        .take()
+                        .expect("no figure started?")
+                };
+
+                if figureend == D2D1_FIGURE_END_CLOSED {
+                    // line to start
+                    unsafe {
+                        let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
+                        (*self.vector_raster_state).fill_tri_points.push([
+                            start_point.X * self.dip_to_pixels_scale + self.translate.X,
+                            -start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
+                        ]);
+                        (*self.vector_raster_state).fill_tri_indices.extend([
+                            filltri_index0,
+                            filltri_point1 as u16,
+                            (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
+                        ]);
+                    }
+                }
+            }
+
+            fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
+                let &(_, filltri_index0) = unsafe {
+                    (*self.current_figure_state)
+                        .as_ref()
+                        .expect("no figure started?")
+                };
+
+                for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
+                    unsafe {
+                        let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
+                        (*self.vector_raster_state).fill_tri_points.push([
+                            p.X * self.dip_to_pixels_scale + self.translate.X,
+                            -p.Y * self.dip_to_pixels_scale + self.translate.Y,
+                        ]);
+                        (*self.vector_raster_state).fill_tri_indices.extend([
+                            filltri_index0,
+                            filltri_point1 as u16,
+                            (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
+                        ]);
+                    }
+                }
+            }
+
+            fn AddBeziers(
+                &self,
+                beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
+                bezierscount: u32,
+            ) {
+                let &(_, filltri_index0) = unsafe {
+                    (*self.current_figure_state)
+                        .as_ref()
+                        .expect("no figure started?")
+                };
+
+                for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
+                    let from_p = unsafe {
+                        (*self.vector_raster_state)
+                            .fill_tri_points
+                            .last()
+                            .expect("no points emitted")
+                    };
+                    let bez = lyon_geom::CubicBezierSegment {
+                        from: lyon_geom::point(from_p[0], from_p[1]),
+                        ctrl1: lyon_geom::point(
+                            p.point1.X * self.dip_to_pixels_scale + self.translate.X,
+                            -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y,
+                        ),
+                        ctrl2: lyon_geom::point(
+                            p.point2.X * self.dip_to_pixels_scale + self.translate.X,
+                            -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y,
+                        ),
+                        to: lyon_geom::point(
+                            p.point3.X * self.dip_to_pixels_scale + self.translate.X,
+                            -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y,
+                        ),
+                    };
+
+                    bez.for_each_quadratic_bezier(0.1, &mut |q| unsafe {
+                        let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
+                        (*self.vector_raster_state)
+                            .fill_tri_points
+                            .push([q.to.x, q.to.y]);
+                        (*self.vector_raster_state).fill_tri_indices.extend([
+                            filltri_index0,
+                            filltri_point1 as u16,
+                            (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
+                        ]);
+
+                        (*self.vector_raster_state).curve_tris.extend([
+                            [q.from.x, q.from.y, 0.0, 0.0],
+                            [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
+                            [q.to.x, q.to.y, 1.0, 1.0],
+                        ]);
+                    });
+                }
+            }
+
+            fn Close(&self) -> windows_core::Result<()> {
+                let &(ref start_point, filltri_index0) = unsafe {
+                    (*self.current_figure_state)
+                        .as_ref()
+                        .expect("no figure started?")
+                };
+
+                // line to start
+                unsafe {
+                    let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
+                    (*self.vector_raster_state).fill_tri_points.push([
+                        start_point.X * self.dip_to_pixels_scale + self.translate.X,
+                        start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
+                    ]);
+                    (*self.vector_raster_state).fill_tri_indices.extend([
+                        filltri_index0,
+                        filltri_point1 as u16,
+                        (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
+                    ]);
+                }
+
+                Ok(())
+            }
+
+            fn SetFillMode(
+                &self,
+                fillmode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE,
+            ) {
+                if fillmode != windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE_WINDING {
+                    tracing::warn!("not winding fill mode specified");
+                }
+            }
+
+            fn SetSegmentFlags(
+                &self,
+                vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
+            ) {
+                unimplemented!("SetSegmentFlags {vertexflags:?}")
+            }
+        }
+
         boxes
     }
 
+    #[cfg(not(windows))]
     #[inline(always)]
     pub fn height(&self) -> f32 {
         self.height
+    }
+
+    #[cfg(windows)]
+    pub fn height(&self) -> f32 {
+        let mut metrics = core::mem::MaybeUninit::uninit();
+        unsafe {
+            self.layout
+                .GetMetrics(metrics.as_mut_ptr())
+                .expect("layout.GetMetrics")
+        };
+        unsafe { metrics.assume_init().height * self.render_scale }
     }
 
     pub fn measure_visual_width(
@@ -1315,6 +1826,18 @@ impl TextLayout {
             width = width.max(line_width);
         }
 
+        #[cfg(windows)]
+        let mut metrics = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        unsafe {
+            layout
+                .layout
+                .GetMetrics(metrics.as_mut_ptr())
+                .expect("layout.GetMetrics")
+        };
+        #[cfg(windows)]
+        let width = unsafe { metrics.assume_init().width * render_scale };
+
         width
     }
 
@@ -1447,6 +1970,19 @@ impl TextLayout {
             left_cursor = left_cursor.max(line_left_cursor);
         }
 
+        #[cfg(windows)]
+        let mut metrics = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        unsafe {
+            layout
+                .layout
+                .GetMetrics(metrics.as_mut_ptr())
+                .expect("layout.GetMetrics")
+        };
+        #[cfg(windows)]
+        let left_cursor =
+            unsafe { metrics.assume_init().widthIncludingTrailingWhitespace * render_scale };
+
         left_cursor
     }
 
@@ -1455,6 +1991,7 @@ impl TextLayout {
         text: &str,
         font: FontID,
         font_set: &PerWindowFontSet,
+        render_scale: f32,
     ) -> (f32, usize) {
         // TODO: 最適化はあとで
         let layout = Self::new(
@@ -1468,7 +2005,9 @@ impl TextLayout {
         );
 
         // TODO: LTR前提
+        #[cfg(feature = "harfbuzz")]
         let mut left_cursor = 0.0;
+        #[cfg(feature = "harfbuzz")]
         let mut bytes = 0;
         #[cfg(feature = "harfbuzz")]
         for &(buf, left_base, _, _) in layout.buffers.iter() {
@@ -1515,8 +2054,50 @@ impl TextLayout {
             }
         }
 
+        #[cfg(feature = "harfbuzz")]
         // beyond
-        (left_cursor, bytes)
+        return (left_cursor, bytes);
+
+        #[cfg(windows)]
+        let mut is_trailing_hit = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        let mut is_inside = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        let mut metrics = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        unsafe {
+            layout
+                .layout
+                .HitTestPoint(
+                    x / render_scale,
+                    1.0,
+                    is_trailing_hit.as_mut_ptr(),
+                    is_inside.as_mut_ptr(),
+                    metrics.as_mut_ptr(),
+                )
+                .expect("layout.hittestpoint")
+        }
+        #[cfg(windows)]
+        let is_trailing_hit = unsafe { is_trailing_hit.assume_init().as_bool() };
+        #[cfg(windows)]
+        let metrics = unsafe { metrics.assume_init() };
+        #[cfg(windows)]
+        if is_trailing_hit {
+            // trailing hitの場合は次の文字を返す（そっちのが近い）
+            (
+                metrics.left + metrics.width,
+                text.chars()
+                    .take(metrics.textPosition as usize + 1)
+                    .fold(0, |a, c| a + c.len_utf8()),
+            )
+        } else {
+            (
+                metrics.left,
+                text.chars()
+                    .take(metrics.textPosition as _)
+                    .fold(0, |a, c| a + c.len_utf8()),
+            )
+        }
     }
 }
 
@@ -1538,5 +2119,31 @@ impl GlyphPlacementBox {
     #[inline(always)]
     pub const fn bottom(&self) -> f32 {
         self.top + self.height as f32
+    }
+}
+
+// Note: windows_core::interfaceがcfg(windows)をうまく処理してくれないらしいのでこうややこしい感じになってる
+#[cfg_attr(not(windows), cfg(windows))]
+#[cfg_attr(windows, interface("317f101a-1c78-488b-b1d5-39fedc987e05"))]
+unsafe trait IAppDrawingEffect: IUnknown {
+    fn font_id(&self) -> FontID;
+    fn offset_x(&self) -> f32;
+}
+#[cfg(windows)]
+#[implement(IAppDrawingEffect)]
+pub struct DrawingEffect {
+    font_id: FontID,
+    offset_x: f32,
+}
+#[cfg(windows)]
+impl IAppDrawingEffect_Impl for DrawingEffect_Impl {
+    #[inline(always)]
+    unsafe fn font_id(&self) -> FontID {
+        self.font_id
+    }
+
+    #[inline(always)]
+    unsafe fn offset_x(&self) -> f32 {
+        self.offset_x
     }
 }

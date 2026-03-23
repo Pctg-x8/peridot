@@ -42,11 +42,12 @@ use windows::{
                 SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
                 SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE,
                 WA_CLICKACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE,
-                WM_DESTROY, WM_DPICHANGED, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
-                WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
-                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+                WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND,
+                WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
+                WS_POPUP,
             },
         },
     },
@@ -61,7 +62,8 @@ use crate::{
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
     input::{
-        PointerInputManager, PointerInputUnit, ShellPointerActions,
+        KeyInputCode, PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit,
+        ShellPointerActions,
         hittest::{
             CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
         },
@@ -69,9 +71,10 @@ use crate::{
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
+        text::RootFontSet,
     },
     utils::{
-        LogicalUnit, PixelsUnit, Point, Size,
+        LogicalUnit, PixelsUnit, Point, Rect, Size,
         platform::windows::{current_instance_handle, register_class},
     },
 };
@@ -116,7 +119,7 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub unsafe fn extra_data_ref_mut<'a, T>(&'a self) -> &'a mut T {
+    pub unsafe fn extra_data_mut<'a, T>(&'a self) -> &'a mut T {
         unsafe {
             &mut *core::ptr::with_exposed_provenance_mut(
                 GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
@@ -144,6 +147,15 @@ impl WindowHandle {
     pub fn state<'a>(&'a self) -> &'a WindowState {
         unsafe {
             &*core::ptr::with_exposed_provenance(
+                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub fn state_mut<'a>(&'a mut self) -> &'a mut WindowState {
+        unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut(
                 GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
             )
         }
@@ -254,6 +266,16 @@ impl WindowHandle {
             tracing::error!(reason = %e, "postmessage");
         }
     }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &self.state().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
+        &mut self.state_mut().keyboard_focus_state
+    }
 }
 impl ShellPointerActions for WindowHandle {
     #[inline(always)]
@@ -323,6 +345,7 @@ impl NativeWindow {
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
+        appctx: *const ApplicationContext,
     ) -> Self {
         let w = unsafe {
             CreateWindowExW(
@@ -344,13 +367,14 @@ impl NativeWindow {
         let event_handler = Box::new(WindowEventHandler {
             state: WindowState {
                 r#type: window_type,
+                appctx,
                 content_scale: unsafe { GetDpiForWindow(w) as f32 / 96.0 },
                 composite_root,
                 ht_root,
                 latest_ui_scale_changes: Mutex::new(None),
+                keyboard_focus_state: PerWindowKeyboardFocusState::new(),
             },
             event_dispatcher,
-            text_services_mgr: None,
             edit_context: None,
         });
         unsafe {
@@ -387,10 +411,12 @@ impl NativeWindow {
 
 pub struct WindowState {
     r#type: WindowType,
+    appctx: *const ApplicationContext,
     content_scale: f32,
     pub composite_root: CompositeTreeRef,
     pub ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
+    pub keyboard_focus_state: PerWindowKeyboardFocusState,
 }
 
 // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタをグローバルにおいて参照もたせる（実際どうするかはあとで考える）
@@ -416,7 +442,6 @@ pub unsafe fn unlocate_non_client_hittest_managers() {
 struct WindowEventHandler {
     state: WindowState,
     event_dispatcher: LogicFiberEventDispatcher,
-    text_services_mgr: Option<CoreTextServicesManager>,
     edit_context: Option<CoreTextEditContext>,
 }
 impl WindowEventHandler {
@@ -667,13 +692,12 @@ impl WindowEventHandler {
                 let state = Self::get_for_window(hwnd);
 
                 // test for text services
-                if state.text_services_mgr.is_none() {
+                if state.edit_context.is_none() {
                     // first time activation
-                    let text_services_mgr = CoreTextServicesManager::GetForCurrentView()
-                        .expect("coretextservicesmanager.get");
-                    let edit_context = text_services_mgr
+                    let edit_context = unsafe { &(*state.state.appctx).ctm }
                         .CreateEditContext()
                         .expect("edit_context.create");
+                    let wh = WindowHandle(hwnd);
                     edit_context
                         .LayoutRequested(&TypedEventHandler::<
                             CoreTextEditContext,
@@ -734,7 +758,7 @@ impl WindowEventHandler {
                         .TextUpdating(&TypedEventHandler::<
                             CoreTextEditContext,
                             CoreTextTextUpdatingEventArgs,
-                        >::new(|sender, e| {
+                        >::new(move |sender, e| {
                             let e = e.ok().expect("event_args.null");
                             tracing::trace!(
                                 input_language = ?e.InputLanguage(),
@@ -744,6 +768,12 @@ impl WindowEventHandler {
                                 text = ?e.Text().map(|x| x.to_string_lossy()),
                                 "edit_context.text_updating"
                             );
+                            let state = Self::get_for_window(wh.0);
+                            state.event_dispatcher.dispatch(Event::IMEStateChanges {
+                                window: wh,
+                                committed_string: String::new(),
+                                preedit_string: e.Text().expect("e.text").to_string_lossy(),
+                            });
 
                             Ok(())
                         }))
@@ -859,7 +889,6 @@ impl WindowEventHandler {
                         }))
                         .expect("edit_context.selection_updating");
 
-                    state.text_services_mgr = Some(text_services_mgr);
                     state.edit_context = Some(edit_context);
                 }
             }
@@ -903,8 +932,68 @@ impl WindowEventHandler {
             return LRESULT(0);
         }
 
+        if msg == WM_KEYDOWN {
+            tracing::trace!(keycode = wparam.0, "keydown");
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::KeyDown {
+                    code: match wparam.0 {
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_LEFT.0 as _ => {
+                            KeyInputCode::LeftArrow
+                        }
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_RIGHT.0 as _ => {
+                            KeyInputCode::RightArrow
+                        }
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_UP.0 as _ => {
+                            KeyInputCode::UpArrow
+                        }
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_DOWN.0 as _ => {
+                            KeyInputCode::DownArrow
+                        }
+                        _ => KeyInputCode::UnknownNativeCode(wparam.0 as _),
+                    },
+                    window: WindowHandle(hwnd),
+                });
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_KEYUP {
+            tracing::trace!(keycode = wparam.0, "keyup");
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::KeyUp {
+                    code: match wparam.0 {
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_LEFT.0 as _ => {
+                            KeyInputCode::LeftArrow
+                        }
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_RIGHT.0 as _ => {
+                            KeyInputCode::RightArrow
+                        }
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_UP.0 as _ => {
+                            KeyInputCode::UpArrow
+                        }
+                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_DOWN.0 as _ => {
+                            KeyInputCode::DownArrow
+                        }
+                        _ => KeyInputCode::UnknownNativeCode(wparam.0 as _),
+                    },
+                    window: WindowHandle(hwnd),
+                });
+
+            return LRESULT(0);
+        }
+
         if msg == WM_CHAR {
             tracing::trace!(keycode = wparam.0, "char input");
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::KeyDown {
+                    code: KeyInputCode::Character(unsafe {
+                        char::from_u32_unchecked(wparam.0 as _)
+                    }),
+                    window: WindowHandle(hwnd),
+                });
 
             return LRESULT(0);
         }
@@ -1276,6 +1365,7 @@ pub struct ApplicationContext {
     wc_set: WindowClassSet,
     _dispatcher_queue: DispatcherQueueController,
     native_compositor: Compositor,
+    ctm: CoreTextServicesManager,
 }
 impl ApplicationContext {
     pub fn new() -> Self {
@@ -1293,17 +1383,22 @@ impl ApplicationContext {
         let wc_set = WindowClassSet::register(hinstance);
         let native_compositor = Compositor::new().expect("win.compositor.create");
 
+        let ctm =
+            CoreTextServicesManager::GetForCurrentView().expect("coretextservicesmanager.get");
+
         Self {
             hinstance,
             wc_set,
             _dispatcher_queue: dispatcher_queue,
             native_compositor,
+            ctm,
         }
     }
 }
 
 pub struct SystemLink<'sys> {
     pub drag_preview_popover: DragPreviewPopoverHandle,
+    pub root_font_set: *const RootFontSet,
     pub vk_device: *const VulkanDevice<'sys>,
     pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
@@ -1331,6 +1426,7 @@ impl SystemLink<'_> {
                 ..Default::default()
             }),
             dispatcher,
+            app,
         );
         let main_window_handle = w.make_handle();
 
@@ -1366,6 +1462,11 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
+    pub fn root_font_set(&self) -> &RootFontSet {
+        unsafe { &*self.root_font_set }
+    }
+
+    #[inline(always)]
     pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
         &self.drag_preview_popover
     }
@@ -1389,6 +1490,7 @@ impl SystemLink<'_> {
                 ..Default::default()
             }),
             unsafe { &*self.event_dispatcher }.clone(),
+            self.app_context_ptr,
         );
         let h = w.make_handle();
 

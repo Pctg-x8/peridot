@@ -17,8 +17,6 @@ use std::{
     sync::Mutex,
 };
 
-#[cfg(not(windows))]
-use crate::rendering::text::ThreadLocalTypingContext;
 use crate::{
     graphics::VulkanDevice,
     input::{
@@ -37,7 +35,7 @@ use crate::{
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef, CompositeTreeSyncBuffer,
         },
-        text::{FontID, PerWindowFontSet, RootFontSet, TextLayout},
+        text::{FontID, PerWindowFontSet, RootFontSet, TextLayout, ThreadLocalTypingContext},
     },
     uikit::{
         MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
@@ -404,6 +402,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(windows)]
         SystemLink {
             drag_preview_popover,
+            root_font_set: &root_font_set,
             rt_sender: rt_sender.clone(),
             vk_device: &vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
@@ -1341,6 +1340,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
                     .extra_data_ref::<PerWindowData>()
                     .font_set
             },
+            context.sender_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
         self.selection_begin_bytes.set(bytes); // 最初は同じところ(=範囲選択なし)
@@ -1388,6 +1388,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
                     .extra_data_ref::<PerWindowData>()
                     .font_set
             },
+            context.sender_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
         self.update_cursor_position(
@@ -1428,6 +1429,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
                     .extra_data_ref::<PerWindowData>()
                     .font_set
             },
+            context.sender_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
         self.update_cursor_position(
@@ -1654,15 +1656,18 @@ impl TextInputViewEventHandler {
             client_size.width,
             client_size.height,
         );
+        #[cfg(feature = "wayland")]
         system_link.set_ime_cursor_rect(Rect::from_lt_size(
             Point::new_logical(sx, sy),
             Size::new_logical(2.0, 16.0),
         ));
+        #[cfg(feature = "wayland")]
         system_link.ime_set_surrounding_text(
             &self.content.borrow(),
             self.cursor_pos_bytes.get(),
             self.selection_begin_bytes.get(),
         );
+        #[cfg(feature = "wayland")]
         system_link.ime_commit();
 
         composite_tree.mark_dirty(self.ct_cursor);
@@ -2185,6 +2190,7 @@ async fn run<'sys>(
                 new_scale,
             } => {
                 let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
+                #[cfg(feature = "freetype")]
                 wd.font_set.rescale((new_scale * 72.0) as _);
                 wd.header
                     .rescale(new_scale, &mut composite_tree, &texture_id_set);
