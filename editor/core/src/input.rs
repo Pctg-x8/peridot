@@ -7,7 +7,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    DragPreviewPopoverHandle, Event, SystemLink, WindowHandle,
+    DragPreviewPopoverHandle, Event, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, HitTestTreeManager, HitTestTreeManagerCreateOnlyAccess, HitTestTreeRef,
         PointerActionArgs, Role,
@@ -22,7 +22,7 @@ pub type PointerInputUnit = LogicalUnit;
 pub struct InputEventContext<'env, 'h> {
     pub sender_window: WindowHandle,
     pub current_sec: f32,
-    pub composite_tree: &'env mut CompositeTree<Event>,
+    pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub drag_preview: &'env DragPreviewPopoverHandle,
     pub system_link: &'env SystemLink<'env>,
     pub ht_create_only_access: &'env mut HitTestTreeManagerCreateOnlyAccess<'h>,

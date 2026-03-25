@@ -1313,7 +1313,7 @@ impl TextLayout {
                     .unwrap()
                     .cast::<IAppDrawingEffect>()
                     .expect("clientdrawingeffect.cast.appDrawingEffect");
-                tracing::debug!(?var, fid = ?unsafe { var.font_id() }, baselineoriginx);
+                // tracing::debug!(?var, fid = ?unsafe { var.font_id() }, baselineoriginx);
 
                 let glyphrun = unsafe { &*glyphrun };
                 let font_face = glyphrun.fontFace.as_ref().expect("no font face");
@@ -1323,7 +1323,7 @@ impl TextLayout {
                 let design_unit = font_metrics.designUnitsPerEm;
                 let mut glyph_metrics: Vec<DWRITE_GLYPH_METRICS> =
                     Vec::with_capacity(glyphrun.glyphCount as _);
-                tracing::debug!(count = glyphrun.glyphCount, "glyphrun");
+                // tracing::debug!(count = glyphrun.glyphCount, "glyphrun");
                 unsafe {
                     font_face
                         .GetDesignGlyphMetrics(
@@ -1376,14 +1376,14 @@ impl TextLayout {
                         width: r.width(),
                         height: r.height(),
                     };
-                    tracing::debug!(
+                    /*tracing::debug!(
                         met = ?glyph_metrics[n],
                         font_em_size = glyphrun.fontEmSize,
                         design_unit,
                         scaling = self.dip_to_pixels_scaling,
                         ?glyph_placement_box,
                         is_new
-                    );
+                    );*/
 
                     unsafe {
                         (*self.boxes).push(glyph_placement_box);

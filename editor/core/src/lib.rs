@@ -121,7 +121,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     run_app: impl FnOnce(
         &'sys std::time::Instant,
         &'sys Mutex<RendererSync>,
-        CompositeTree<Event>,
+        CompositeTree<SyncEvent>,
         HitTestTreeManager<'sys>,
         WindowHandle,
         SystemLink<'sys>,
@@ -496,6 +496,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             core::task::Waker::new(&(), &APP_WAKER_VTABLE)
         }));
 
+    SystemLink::prelaunch(main_window_handle);
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
@@ -793,7 +794,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 }
 
 #[derive(Clone)]
+pub enum SyncEvent {
+    WindowPostResizeRenderBuffer { window: WindowHandle },
+    PopupUnmount { id: PopupID },
+}
+
+#[derive(Clone)]
 pub enum Event {
+    Sync(SyncEvent),
     Quit,
     PointerDown {
         window: WindowHandle,
@@ -825,9 +833,6 @@ pub enum Event {
         window: WindowHandle,
         size: Size<PointerInputUnit>,
     },
-    WindowPostResizeRenderBuffer {
-        window: WindowHandle,
-    },
     WindowRescaleUI {
         window: WindowHandle,
         new_scale: f32,
@@ -847,8 +852,23 @@ pub enum Event {
     PopupClose {
         id: PopupID,
     },
-    PopupUnmount {
-        id: PopupID,
+    #[cfg(windows)]
+    CoreTextLayoutRequested {
+        ht: HitTestTreeRef,
+        request: windows::UI::Text::Core::CoreTextLayoutRequest,
+        deferral: Option<windows::Foundation::Deferral>,
+    },
+    #[cfg(windows)]
+    CoreTextTextUpdating {
+        ht: HitTestTreeRef,
+        e: windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
+        deferral: Option<windows::Foundation::Deferral>,
+    },
+    #[cfg(windows)]
+    CoreTextFormatUpdating {
+        ht: HitTestTreeRef,
+        e: windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
+        deferral: Option<windows::Foundation::Deferral>,
     },
 }
 
@@ -884,6 +904,10 @@ impl LogicFiberEventDispatcher {
                 *self.polling = false;
             }
         }
+    }
+
+    pub fn can_immediate_dispatch(&self) -> bool {
+        unsafe { !*self.polling }
     }
 }
 
@@ -972,7 +996,7 @@ impl Popup for AlertDialogPresenter {
             .play_open_animation(ctx.composite_tree, ctx.current_sec);
     }
 
-    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
+    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
         self.frame.rescale(scale, composite_tree);
         self.confirm_button.rescale(scale, composite_tree);
         composite_tree.get_mut(self.ct_message).base_scale_factor = scale;
@@ -985,7 +1009,7 @@ impl Popup for AlertDialogPresenter {
 
     fn close(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     ) {
@@ -996,7 +1020,7 @@ impl Popup for AlertDialogPresenter {
         self.frame.play_close_animation(
             composite_tree,
             current_sec,
-            Event::PopupUnmount { id: self.id },
+            SyncEvent::PopupUnmount { id: self.id },
         );
     }
 }
@@ -1017,18 +1041,25 @@ struct TextInputViewEventHandler {
     preedit_range_end_bytes: core::cell::Cell<usize>,
     selection_begin_bytes: core::cell::Cell<usize>,
     dragging: core::cell::Cell<bool>,
+    #[cfg(windows)]
+    native_text_input_context: platform::windows::NativeTextInputContext,
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         self.update(context);
+        #[cfg(windows)]
+        self.native_text_input_context.notify_focus_enter();
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
         self.update(context);
+        #[cfg(windows)]
+        self.native_text_input_context.notify_focus_leave();
 
         // clear selection
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
         self.update_selection(context.composite_tree, context.sender_window);
+        self.sync_selection_native();
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {
@@ -1054,6 +1085,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.sender_window.client_size(),
                 );
                 self.update_selection(context.composite_tree, context.sender_window);
+                self.sync_selection_native();
             }
             KeyInputCode::RightArrow => {
                 let mut new_cursor_pos = self
@@ -1078,6 +1110,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.sender_window.client_size(),
                 );
                 self.update_selection(context.composite_tree, context.sender_window);
+                self.sync_selection_native();
             }
             KeyInputCode::Home => {
                 self.cursor_pos_bytes.set(0);
@@ -1090,6 +1123,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.sender_window.client_size(),
                 );
                 self.update_selection(context.composite_tree, context.sender_window);
+                self.sync_selection_native();
             }
             KeyInputCode::End => {
                 self.cursor_pos_bytes.set(self.content.borrow().len());
@@ -1102,6 +1136,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.sender_window.client_size(),
                 );
                 self.update_selection(context.composite_tree, context.sender_window);
+                self.sync_selection_native();
             }
             KeyInputCode::Insert => {
                 // TODO: insert mode
@@ -1136,6 +1171,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                             context.ht_manager,
                             context.sender_window.client_size(),
                         );
+                        self.sync_selection_native();
                     }
                 } else {
                     // remove selection
@@ -1154,6 +1190,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         context.sender_window.client_size(),
                     );
                     self.update_selection(context.composite_tree, context.sender_window);
+                    self.sync_selection_native();
                 }
             }
             KeyInputCode::Character(c) if c == '\x7f' => {
@@ -1174,6 +1211,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                             .borrow_mut()
                             .replace_range(self.cursor_pos_bytes.get()..remove_to, "");
                         self.update_text(context.composite_tree);
+                        self.sync_selection_native();
                     }
                 } else {
                     // remove selection
@@ -1192,6 +1230,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         context.sender_window.client_size(),
                     );
                     self.update_selection(context.composite_tree, context.sender_window);
+                    self.sync_selection_native();
                 }
             }
             KeyInputCode::Character(c) if !c.is_control() => {
@@ -1222,6 +1261,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     context.sender_window.client_size(),
                 );
                 self.update_selection(context.composite_tree, context.sender_window);
+                self.sync_selection_native();
             }
             _ => (),
         }
@@ -1311,6 +1351,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             context.sender_window.client_size(),
         );
         self.update_selection(context.composite_tree, context.sender_window);
+        self.sync_selection_native();
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
@@ -1352,6 +1393,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size,
         );
         self.update_selection(context.composite_tree, context.sender_window);
+        self.sync_selection_native();
         self.dragging.set(true);
 
         input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
@@ -1399,6 +1441,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size,
         );
         self.update_selection(context.composite_tree, context.sender_window);
+        self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION
     }
@@ -1440,6 +1483,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size,
         );
         self.update_selection(context.composite_tree, context.sender_window);
+        self.sync_selection_native();
         self.dragging.set(false);
 
         input::EventContinueControl::STOP_PROPAGATION
@@ -1556,6 +1600,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size,
         );
         self.update_selection(context.composite_tree, context.sender_window);
+        self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION
     }
@@ -1598,7 +1643,7 @@ impl TextInputViewEventHandler {
         context.composite_tree.mark_dirty(self.ct_cursor);
     }
 
-    fn update_text(&self, composite_tree: &mut CompositeTree<Event>) {
+    fn update_text(&self, composite_tree: &mut CompositeTree<SyncEvent>) {
         composite_tree.get_mut(self.ct_text).text = Some(CompositeRectText {
             runs: vec![CompositeRectTextRun {
                 font_id: FontID::UIDefault,
@@ -1615,7 +1660,7 @@ impl TextInputViewEventHandler {
 
     fn update_cursor_position(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         window: WindowHandle,
         system_link: &SystemLink,
         ht_manager: &HitTestTreeManager,
@@ -1683,7 +1728,7 @@ impl TextInputViewEventHandler {
 
     fn update_preedit_underline(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         window: WindowHandle,
     ) {
         let preedit_range =
@@ -1718,7 +1763,11 @@ impl TextInputViewEventHandler {
         composite_tree.mark_dirty(self.ct_preedit_underline);
     }
 
-    fn update_selection(&self, composite_tree: &mut CompositeTree<Event>, window: WindowHandle) {
+    fn update_selection(
+        &self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        window: WindowHandle,
+    ) {
         let selection_range = self.selection_range();
         if selection_range.is_empty() {
             // no selection
@@ -1748,6 +1797,32 @@ impl TextInputViewEventHandler {
         composite_tree.mark_dirty(self.ct_selection_bg);
     }
 
+    fn sync_selection_native(&self) {
+        #[cfg(windows)]
+        let selection_begin_bytes = self.selection_begin_bytes.get();
+        #[cfg(windows)]
+        let cursor_pos_bytes = self.cursor_pos_bytes.get();
+        #[cfg(windows)]
+        let selection_begin_acp = self
+            .content
+            .borrow()
+            .char_indices()
+            .take_while(|&(i, _)| i < selection_begin_bytes)
+            .count();
+        #[cfg(windows)]
+        let cursor_pos_acp = self
+            .content
+            .borrow()
+            .char_indices()
+            .take_while(|&(i, _)| i < cursor_pos_bytes)
+            .count();
+        #[cfg(windows)]
+        self.native_text_input_context.notify_selection_changed(
+            selection_begin_acp.min(cursor_pos_acp) as _,
+            selection_begin_acp.max(cursor_pos_acp) as _,
+        );
+    }
+
     fn selection_range(&self) -> core::ops::Range<usize> {
         match (
             self.cursor_pos_bytes.get(),
@@ -1756,6 +1831,226 @@ impl TextInputViewEventHandler {
             (a, b) if a <= b => a..b,
             (a, b) => b..a,
         }
+    }
+}
+#[cfg(windows)]
+impl platform::windows::TextProvider for TextInputViewEventHandler {
+    fn text(
+        &self,
+        range: windows::UI::Text::Core::CoreTextRange,
+    ) -> windows_core::Result<windows_core::HSTRING> {
+        let mut u16s = Vec::with_capacity((range.EndCaretPosition - range.StartCaretPosition) as _);
+        for c in self
+            .content
+            .borrow()
+            .chars()
+            .skip(range.StartCaretPosition as _)
+            .take((range.EndCaretPosition - range.StartCaretPosition) as _)
+        {
+            let mut buf = [0; 2];
+            u16s.extend_from_slice(c.encode_utf16(&mut buf));
+        }
+
+        Ok(windows_core::HSTRING::from_wide(&u16s))
+    }
+
+    fn selection(
+        &self,
+        req: &windows::UI::Text::Core::CoreTextSelectionRequest,
+    ) -> windows_core::Result<()> {
+        let selection_begin_bytes = self.selection_begin_bytes.get();
+        let cursor_pos_bytes = self.cursor_pos_bytes.get();
+        let selection_begin_acp = self
+            .content
+            .borrow()
+            .char_indices()
+            .take_while(|&(i, _)| i < selection_begin_bytes)
+            .count();
+        let cursor_pos_acp = self
+            .content
+            .borrow()
+            .char_indices()
+            .take_while(|&(i, _)| i < cursor_pos_bytes)
+            .count();
+
+        req.SetSelection(windows::UI::Text::Core::CoreTextRange {
+            StartCaretPosition: selection_begin_acp.min(cursor_pos_acp) as _,
+            EndCaretPosition: selection_begin_acp.max(cursor_pos_acp) as _,
+        })
+    }
+}
+#[cfg(windows)]
+impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHandler {
+    fn layout(
+        &self,
+        ctx: &mut InputEventContext,
+        req: &windows::UI::Text::Core::CoreTextLayoutRequest,
+    ) -> windows_core::Result<()> {
+        let range = req.Range()?;
+        tracing::trace!(
+            req.range = ?range,
+            "edit_context.layout_requested"
+        );
+
+        let start_bytes = self
+            .content
+            .borrow()
+            .chars()
+            .take(range.StartCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+        let end_bytes = self
+            .content
+            .borrow()
+            .chars()
+            .take(range.EndCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+
+        let window = ctx
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("no window bound");
+        let r = ctx.ht_manager.compute_screen_rect_pixels_with_insets(
+            self.ht_root,
+            Point::new_logical(2.0, 2.0),
+            Point::new_logical(2.0, 2.0),
+        );
+        let o = TextLayout::measure_total_advances(
+            &self.content.borrow()[..start_bytes],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            window.ui_scale_factor(),
+        ) + self.content_h_offset.get() * window.ui_scale_factor();
+        let w = TextLayout::measure_total_advances(
+            &self.content.borrow()[start_bytes..end_bytes],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            window.ui_scale_factor(),
+        );
+
+        req.LayoutBounds()?
+            .SetTextBounds(windows::Foundation::Rect {
+                X: r.left as f32 + o,
+                Y: r.top as _,
+                Width: w,
+                Height: r.height as _,
+            })
+    }
+
+    fn text_updating(
+        &self,
+        ctx: &mut InputEventContext,
+        e: &windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
+    ) -> windows_core::Result<()> {
+        let range = e.Range()?;
+        let text = e.Text()?.to_string_lossy();
+        let new_selection = e.NewSelection()?;
+        tracing::trace!(
+            ?new_selection,
+            ?range,
+            ?text,
+            current = &self.content.borrow() as &str,
+            "edit_context.text_updating"
+        );
+
+        let replace_start_bytes = self
+            .content
+            .borrow()
+            .chars()
+            .take(range.StartCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+        let replace_end_bytes = self
+            .content
+            .borrow()
+            .chars()
+            .take(range.EndCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+
+        self.content
+            .borrow_mut()
+            .replace_range(replace_start_bytes..replace_end_bytes, &text);
+
+        let new_cursor_start_bytes = self
+            .content
+            .borrow()
+            .chars()
+            .take(new_selection.StartCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+        let new_cursor_end_bytes = self
+            .content
+            .borrow()
+            .chars()
+            .take(new_selection.EndCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+
+        let window = ctx
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("no root window");
+        self.selection_begin_bytes.set(new_cursor_start_bytes);
+        self.cursor_pos_bytes.set(new_cursor_end_bytes);
+
+        self.update_text(ctx.composite_tree);
+        self.update_cursor_position(
+            ctx.composite_tree,
+            window,
+            ctx.system_link,
+            ctx.ht_manager,
+            window.client_size(),
+        );
+        self.update_selection(ctx.composite_tree, window);
+
+        e.SetResult(windows::UI::Text::Core::CoreTextTextUpdatingResult::Succeeded)?;
+        Ok(())
+    }
+
+    fn format_updating(
+        &self,
+        ctx: &mut InputEventContext,
+        e: &windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
+    ) -> windows_core::Result<()> {
+        let underline_type = e.UnderlineType()?.Value()?;
+        let range = e.Range()?;
+        let reason = e.Reason()?;
+        tracing::trace!(
+            background_color = ?e.BackgroundColor(),
+            ?range,
+            ?reason,
+            text_color = ?e.TextColor(),
+            underline_color = ?e.UnderlineColor(),
+            ?underline_type,
+            "edit_context.format_updating"
+        );
+
+        // TODO: Windowsの場合は複数下線要素ができる場合がある（部分的に変換する場合など）
+        let window = ctx
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("no root window");
+        if underline_type == windows::UI::Text::UnderlineType::None {
+            self.preedit_range_start_bytes.set(0);
+            self.preedit_range_end_bytes.set(0);
+        } else {
+            self.preedit_range_start_bytes.set(
+                self.content
+                    .borrow()
+                    .chars()
+                    .take(range.StartCaretPosition as _)
+                    .map(|x| x.len_utf8())
+                    .sum(),
+            );
+            self.preedit_range_end_bytes.set(
+                self.content
+                    .borrow()
+                    .chars()
+                    .take(range.EndCaretPosition as _)
+                    .map(|x| x.len_utf8())
+                    .sum(),
+            );
+        }
+
+        self.update_preedit_underline(ctx.composite_tree, window);
+
+        Ok(())
     }
 }
 
@@ -1855,9 +2150,19 @@ impl TextInputView {
             preedit_range_end_bytes: core::cell::Cell::new(0),
             selection_begin_bytes: core::cell::Cell::new(0),
             dragging: core::cell::Cell::new(false),
+            #[cfg(windows)]
+            native_text_input_context: platform::windows::NativeTextInputContext::new(
+                ctx.system_link,
+            ),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);
+        #[cfg(windows)]
+        ctx.ht_manager
+            .set_native_text_deferrable_event_handler(ht_root, &eh);
+        #[cfg(windows)]
+        eh.native_text_input_context
+            .bind_action(ctx.system_link, &eh, ht_root);
 
         eh.update_text(ctx.composite_tree);
 
@@ -1872,7 +2177,7 @@ impl TextInputView {
 
     pub fn rescale(
         &self,
-        ct: &mut CompositeTree<Event>,
+        ct: &mut CompositeTree<SyncEvent>,
         window: WindowHandle,
         syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
@@ -1907,7 +2212,7 @@ async fn run<'sys>(
     event_queue: EventQueue,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
-    mut composite_tree: CompositeTree<Event>,
+    mut composite_tree: CompositeTree<SyncEvent>,
     mut ht_manager: HitTestTreeManager<'sys>,
     mut main_window: WindowHandle,
     system_link: SystemLink<'sys>,
@@ -1952,6 +2257,7 @@ async fn run<'sys>(
         },
         keyboard_focus_registry: &mut keyboard_focus_registry,
         ui_scale_factor: init_scale,
+        system_link: &system_link,
     };
     let window_header_view = ui::window_header::View::new(
         &mut view_init_ctx,
@@ -2136,6 +2442,8 @@ async fn run<'sys>(
                     &mut composite_tree,
                     &mut ht_manager,
                     |mut w, composite_tree, ht_manager| {
+                        ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
+
                         composite_tree.get_mut(w.composite_root()).has_bitmap = true;
                         composite_tree.get_mut(w.composite_root()).composite_mode =
                             CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
@@ -2149,6 +2457,7 @@ async fn run<'sys>(
                             },
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                             ui_scale_factor: init_scale,
+                            system_link: &system_link,
                         };
                         let window_header_view = ui::window_header::View::new(
                             &mut view_init_ctx,
@@ -2181,7 +2490,7 @@ async fn run<'sys>(
             Event::WindowResize { window, size } => {
                 pointer_input_manager.set_client_size(window, size);
             }
-            Event::WindowPostResizeRenderBuffer { window } => {
+            Event::Sync(SyncEvent::WindowPostResizeRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
             }
@@ -2393,6 +2702,7 @@ async fn run<'sys>(
                         },
                         keyboard_focus_registry: &mut keyboard_focus_registry,
                         ui_scale_factor: main_window.ui_scale_factor(),
+                        system_link: &system_link,
                     },
                     target_window,
                     |id, ctx| AlertDialogPresenter::new(ctx, id, message),
@@ -2412,7 +2722,7 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::PopupUnmount { id } => {
+            Event::Sync(SyncEvent::PopupUnmount { id }) => {
                 if popup_manager.unmount(
                     &mut MountContext {
                         composite_tree: &mut composite_tree,
@@ -2423,6 +2733,131 @@ async fn run<'sys>(
                 ) {
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
+            }
+            #[cfg(windows)]
+            Event::CoreTextLayoutRequested {
+                ht,
+                request,
+                deferral,
+            } => {
+                if deferral.is_none()
+                    || request
+                        .IsCanceled()
+                        .inspect_err(|e| tracing::error!(reason = %e, "request.is_canceled"))
+                        == Ok(false)
+                {
+                    if let Some(w) = ht_manager
+                        .get_data(ht)
+                        .native_text_deferrable_event_handler()
+                    {
+                        let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                        if let Err(e) = w.layout(
+                            &mut InputEventContext {
+                                sender_window: main_window,
+                                composite_tree: &mut composite_tree,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                drag_preview: system_link.drag_preview_popover(),
+                                system_link: &system_link,
+                                ht_create_only_access: &mut ht_create_only_access,
+                                ht_manager: &ht_manager,
+                            },
+                            &request,
+                        ) {
+                            tracing::error!(reason = %e, "CoreTextLayoutRequested");
+                            if let Some(d) = deferral {
+                                if let Err(e) = d.Close() {
+                                    tracing::error!(reason = %e, "deferral.close");
+                                }
+                            }
+                        } else {
+                            if let Some(d) = deferral {
+                                if let Err(e) = d.Complete() {
+                                    tracing::error!(reason = %e, "deferral.complete");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            #[cfg(windows)]
+            Event::CoreTextTextUpdating { ht, e, deferral } => {
+                if deferral.is_none()
+                    || e.IsCanceled()
+                        .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
+                        == Ok(false)
+                {
+                    if let Some(w) = ht_manager
+                        .get_data(ht)
+                        .native_text_deferrable_event_handler()
+                    {
+                        let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                        if let Err(e) = w.text_updating(
+                            &mut InputEventContext {
+                                sender_window: main_window,
+                                composite_tree: &mut composite_tree,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                drag_preview: system_link.drag_preview_popover(),
+                                system_link: &system_link,
+                                ht_create_only_access: &mut ht_create_only_access,
+                                ht_manager: &ht_manager,
+                            },
+                            &e,
+                        ) {
+                            tracing::error!(reason = %e, "CoreTextTextUpdating");
+                            if let Some(d) = deferral {
+                                if let Err(e) = d.Close() {
+                                    tracing::error!(reason = %e, "deferral.close");
+                                }
+                            }
+                        } else {
+                            if let Some(d) = deferral {
+                                if let Err(e) = d.Complete() {
+                                    tracing::error!(reason = %e, "deferral.complete");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            #[cfg(windows)]
+            Event::CoreTextFormatUpdating { ht, e, deferral } => {
+                if deferral.is_none()
+                    || e.IsCanceled()
+                        .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
+                        == Ok(false)
+                {
+                    if let Some(w) = ht_manager
+                        .get_data(ht)
+                        .native_text_deferrable_event_handler()
+                    {
+                        let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                        if let Err(e) = w.format_updating(
+                            &mut InputEventContext {
+                                sender_window: main_window,
+                                composite_tree: &mut composite_tree,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                drag_preview: system_link.drag_preview_popover(),
+                                system_link: &system_link,
+                                ht_create_only_access: &mut ht_create_only_access,
+                                ht_manager: &ht_manager,
+                            },
+                            &e,
+                        ) {
+                            tracing::error!(reason = %e, "CoreTextFormatUpdating");
+                            if let Some(d) = deferral {
+                                if let Err(e) = d.Close() {
+                                    tracing::error!(reason = %e, "deferral.close");
+                                }
+                            }
+                        } else {
+                            if let Some(d) = deferral {
+                                if let Err(e) = d.Complete() {
+                                    tracing::error!(reason = %e, "deferral.complete");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2703,7 +3138,7 @@ impl input::ShellPointerActions for WindowHandle {
 }
 
 pub struct SyncEventBus {
-    queue: std::sync::Mutex<VecDeque<Event>>,
+    queue: std::sync::Mutex<VecDeque<SyncEvent>>,
     #[cfg(target_os = "linux")]
     efd: linux_eventfd::EventFD,
     #[cfg(windows)]
@@ -2724,7 +3159,7 @@ impl Drop for SyncEventBus {
     }
 }
 impl SyncEventBus {
-    pub fn push(&self, e: Event) {
+    pub fn push(&self, e: SyncEvent) {
         self.queue.lock().expect("poisoned").push_back(e);
         #[cfg(target_os = "linux")]
         self.efd.inc(1).unwrap();
@@ -2738,7 +3173,7 @@ impl SyncEventBus {
     fn redispatch(&self, dispatcher: &LogicFiberEventDispatcher) {
         let mut queue = self.queue.lock().expect("poisoned");
         while let Some(event) = queue.pop_front() {
-            dispatcher.dispatch(event);
+            dispatcher.dispatch(Event::Sync(event));
         }
         if let Err(e) = self.notify_clear() {
             tracing::error!(reason = ?e, "notify_clear");

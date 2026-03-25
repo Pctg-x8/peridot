@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    Event, WindowHandle,
+    Event, SyncEvent, WindowHandle,
     input::hittest::{HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
@@ -23,10 +23,10 @@ impl PopupID {
 
 pub trait Popup {
     fn mount(&self, ctx: &mut MountContext, parent: &RawMountTarget);
-    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>);
+    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>);
     fn close(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     );
@@ -62,7 +62,7 @@ impl PopupManager {
     pub fn close(
         &self,
         id: PopupID,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     ) -> bool {
@@ -89,7 +89,7 @@ impl PopupManager {
         &self,
         for_window: WindowHandle,
         scale: f32,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
     ) {
         for (x, bound_window) in self.instance_by_id.values() {
             if bound_window == &for_window {
@@ -150,7 +150,11 @@ impl OverlayPopupBasicMaskView {
         ctx.ht_manager.remove_child(self.ht_root);
     }
 
-    pub fn play_open_animation(&self, composite_tree: &mut CompositeTree<Event>, current_sec: f32) {
+    pub fn play_open_animation(
+        &self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
         composite_tree.get_mut(self.ct_root).composite_mode = CompositeMode::FillColorBackdropBlur(
             AnimatableColor::Animated {
                 from_value: [0.0, 0.0, 0.0, 0.0],
@@ -174,7 +178,7 @@ impl OverlayPopupBasicMaskView {
 
     pub fn play_close_animation(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
         composite_tree.get_mut(self.ct_root).composite_mode = CompositeMode::FillColorBackdropBlur(
@@ -290,7 +294,11 @@ impl OverlayPopupBasicFrameView {
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
 
-    pub fn play_open_animation(&self, composite_tree: &mut CompositeTree<Event>, current_sec: f32) {
+    pub fn play_open_animation(
+        &self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
         composite_tree.get_mut(self.ct_root).offset[1] = AnimatableFloat::Animated {
             from_value: -self.size.height * 0.5 + 4.0,
             to_value: -self.size.height * 0.5,
@@ -337,9 +345,9 @@ impl OverlayPopupBasicFrameView {
 
     pub fn play_close_animation(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
-        event_on_complete: Event,
+        event_on_complete: SyncEvent,
     ) {
         composite_tree.get_mut(self.ct_root).offset[1] = AnimatableFloat::Animated {
             from_value: -self.size.height * 0.5,
@@ -385,7 +393,7 @@ impl OverlayPopupBasicFrameView {
         composite_tree.mark_dirty(self.ct_root);
     }
 
-    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
+    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
         composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
         composite_tree.get_mut(self.ct_shadow).base_scale_factor = scale;
         composite_tree.get_mut(self.ct_visual).base_scale_factor = scale;

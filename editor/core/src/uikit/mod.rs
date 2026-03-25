@@ -1,7 +1,7 @@
 //! Non-Application related common ui kits
 
 use crate::{
-    Event, WindowHandle,
+    SyncEvent, SystemLink, WindowHandle,
     input::{
         KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub struct MountContext<'a, 'h> {
-    pub composite_tree: &'a mut CompositeTree<Event>,
+    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
     pub ht_manager: &'a mut HitTestTreeManager<'h>,
     pub current_sec: f32,
 }
@@ -18,6 +18,7 @@ pub struct MountContext<'a, 'h> {
 pub struct ViewInitContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
     pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
+    pub system_link: &'a SystemLink<'a>,
     pub ui_scale_factor: f32,
 }
 impl<'a, 'h> core::ops::Deref for ViewInitContext<'a, 'h> {

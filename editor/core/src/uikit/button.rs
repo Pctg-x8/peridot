@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Event,
+    Event, SyncEvent,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -86,7 +86,7 @@ impl SimpleButtonView {
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
 
-    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<Event>) {
+    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
         composite_tree
             .get_mut(self.action_handler.ct_root)
             .base_scale_factor = scale;
@@ -96,7 +96,7 @@ impl SimpleButtonView {
     pub fn locate(
         &self,
         pos: &Positioning,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         let ht = ht_manager.get_data_mut(self.ht_root);
@@ -211,7 +211,7 @@ impl SimpleButtonActionHandler {
     fn transit(
         &self,
         new_state: ButtonState,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
         let before = Self::alpha(self.state.get());

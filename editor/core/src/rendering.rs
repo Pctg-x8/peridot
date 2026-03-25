@@ -9,7 +9,7 @@ use bedrock::{
 };
 
 use crate::{
-    Event, SyncEventBus, WindowHandle,
+    SyncEvent, SyncEventBus, WindowHandle,
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP,
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
@@ -58,7 +58,7 @@ pub enum RenderMessage {
 }
 
 pub struct RendererSync {
-    pub composite_buffer: CompositeTreeSyncBuffer<Event>,
+    pub composite_buffer: CompositeTreeSyncBuffer<SyncEvent>,
 }
 
 pub struct MainThreadTextureIDIssuer {
@@ -677,7 +677,7 @@ impl<'d> WindowRenderer<'d> {
     pub fn update(
         &mut self,
         current_sec: f32,
-        composite_tree: &mut CompositeTreeRender<Event>,
+        composite_tree: &mut CompositeTreeRender<SyncEvent>,
         glyph_atlas: &mut MaskTextureAtlasManager,
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
@@ -777,7 +777,7 @@ impl<'d> WindowRenderer<'d> {
             descriptor_writes,
         );
 
-        event_bus.push(Event::WindowPostResizeRenderBuffer { window: self.w });
+        event_bus.push(SyncEvent::WindowPostResizeRenderBuffer { window: self.w });
         self.swapchain_invalidated = false;
     }
 

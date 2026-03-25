@@ -1,8 +1,9 @@
 use std::collections::BTreeSet;
 
 use crate::{
+    WindowHandle,
     input::{EventContinueControl, FocusTargetToken, InputEventContext},
-    utils::{LogicalUnit, Point, Rect, Size},
+    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
 
 pub struct HitTestTreeData<'h> {
@@ -19,7 +20,11 @@ pub struct HitTestTreeData<'h> {
     pub role: Option<Role>,
     pub cursor_shape: CursorShape,
     pub keyboard_focus: Option<FocusTargetToken>,
+    pub root_of_window: Option<WindowHandle>,
     pub action_handler: Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>>,
+    #[cfg(windows)]
+    pub native_text_deferrable_event_handler:
+        Option<std::rc::Weak<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'h>>,
 }
 impl Default for HitTestTreeData<'_> {
     #[inline]
@@ -38,7 +43,10 @@ impl Default for HitTestTreeData<'_> {
             role: None,
             cursor_shape: CursorShape::Default,
             keyboard_focus: None,
+            root_of_window: None,
             action_handler: None,
+            #[cfg(windows)]
+            native_text_deferrable_event_handler: None,
         }
     }
 }
@@ -46,6 +54,17 @@ impl<'h> HitTestTreeData<'h> {
     #[inline]
     pub fn action_handler(&self) -> Option<std::rc::Rc<dyn HitTestTreeActionHandler + 'h>> {
         self.action_handler
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+    }
+
+    #[cfg(windows)]
+    #[inline]
+    pub fn native_text_deferrable_event_handler(
+        &self,
+    ) -> Option<std::rc::Rc<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'h>>
+    {
+        self.native_text_deferrable_event_handler
             .as_ref()
             .and_then(std::rc::Weak::upgrade)
     }
@@ -140,6 +159,16 @@ impl<'h> HitTestTreeManager<'h> {
         h: &std::rc::Rc<impl HitTestTreeActionHandler + 'h>,
     ) {
         self.data[r.0].action_handler = Some(std::rc::Rc::downgrade(h) as _);
+    }
+
+    #[cfg(windows)]
+    #[inline]
+    pub fn set_native_text_deferrable_event_handler(
+        &mut self,
+        r: HitTestTreeRef,
+        h: &std::rc::Rc<impl crate::platform::windows::CoreTextDeferrableEventHandler + 'h>,
+    ) {
+        self.data[r.0].native_text_deferrable_event_handler = Some(std::rc::Rc::downgrade(h) as _);
     }
 
     #[inline]
@@ -281,7 +310,7 @@ impl<'h> HitTestTreeManager<'h> {
         r: HitTestTreeRef,
         root_width: f32,
         root_height: f32,
-    ) -> (f32, f32, f32, f32) {
+    ) -> (f32, f32, f32, f32, HitTestTreeRef) {
         let d = &self.data[r.0];
         match self.relations[r.0].parent {
             None => (
@@ -289,17 +318,88 @@ impl<'h> HitTestTreeManager<'h> {
                 root_height * d.top_adjustment_factor + d.top,
                 root_width * d.width_adjustment_factor + d.width,
                 root_height * d.height_adjustment_factor + d.height,
+                r,
             ),
             Some(parent) => {
-                let (parent_x, parent_y, parent_w, parent_h) =
+                let (parent_x, parent_y, parent_w, parent_h, root_ht) =
                     self.compute_global_rect(HitTestTreeRef(parent), root_width, root_height);
                 (
                     parent_x + parent_w * d.left_adjustment_factor + d.left,
                     parent_y + parent_h * d.top_adjustment_factor + d.top,
                     parent_w * d.width_adjustment_factor + d.width,
                     parent_h * d.height_adjustment_factor + d.height,
+                    root_ht,
                 )
             }
+        }
+    }
+
+    fn compute_global_rect_autoroot(
+        &self,
+        r: HitTestTreeRef,
+    ) -> (f32, f32, f32, f32, HitTestTreeRef) {
+        let d = &self.data[r.0];
+        match self.relations[r.0].parent {
+            None => {
+                let (root_width, root_height) = match d.root_of_window {
+                    None => (0.0, 0.0),
+                    Some(root) => {
+                        let s = root.client_size();
+                        (s.width, s.height)
+                    }
+                };
+
+                (
+                    root_width * d.left_adjustment_factor + d.left,
+                    root_height * d.top_adjustment_factor + d.top,
+                    root_width * d.width_adjustment_factor + d.width,
+                    root_height * d.height_adjustment_factor + d.height,
+                    r,
+                )
+            }
+            Some(parent) => {
+                let (parent_x, parent_y, parent_w, parent_h, root_ht) =
+                    self.compute_global_rect_autoroot(HitTestTreeRef(parent));
+                (
+                    parent_x + parent_w * d.left_adjustment_factor + d.left,
+                    parent_y + parent_h * d.top_adjustment_factor + d.top,
+                    parent_w * d.width_adjustment_factor + d.width,
+                    parent_h * d.height_adjustment_factor + d.height,
+                    root_ht,
+                )
+            }
+        }
+    }
+
+    pub fn compute_screen_rect_pixels_with_insets(
+        &self,
+        r: HitTestTreeRef,
+        inset_lt: Point<LogicalUnit>,
+        inset_rb: Point<LogicalUnit>,
+    ) -> Rect<PixelsUnit> {
+        let (gx, gy, gw, gh, root_ht) = self.compute_global_rect_autoroot(r);
+        let (wx, wy, s) = match self.data[root_ht.0].root_of_window {
+            None => (0, 0, 1.0),
+            Some(window_handle) => {
+                let p = window_handle.screen_position();
+                (p.x, p.y, window_handle.ui_scale_factor())
+            }
+        };
+
+        Rect::from_lt_size(
+            Point::new_pixels(
+                ((gx + inset_lt.x) * s).ceil() as i32 + wx,
+                ((gy + inset_lt.y) * s).ceil() as i32 + wy,
+            ),
+            Size::new_logical(gw - inset_lt.x - inset_rb.x, gh - inset_lt.y - inset_rb.y)
+                .to_pixels_ceil(s),
+        )
+    }
+
+    pub fn query_root_window(&self, r: HitTestTreeRef) -> Option<WindowHandle> {
+        match self.relations[r.0].parent {
+            Some(p) => self.query_root_window(HitTestTreeRef(p)),
+            None => self.data[r.0].root_of_window,
         }
     }
 
@@ -311,7 +411,7 @@ impl<'h> HitTestTreeManager<'h> {
         root_width: f32,
         root_height: f32,
     ) -> (f32, f32) {
-        let (gx, gy, _, _) = self.compute_global_rect(from, root_width, root_height);
+        let (gx, gy, _, _, _) = self.compute_global_rect(from, root_width, root_height);
         (gx + x, gy + y)
     }
 

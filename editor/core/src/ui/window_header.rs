@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Event,
+    Event, SyncEvent,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -136,7 +136,7 @@ impl View {
     pub fn rescale(
         &self,
         scale_factor: f32,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         texture_id_set: &SystemCommandTextureIDSet,
     ) {
         composite_tree.get_mut(self.ct_root).base_scale_factor = scale_factor;
@@ -151,7 +151,7 @@ impl View {
     pub fn set_maximize_state(
         &self,
         is_maximized: bool,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager<'_>,
         texture_id_set: &SystemCommandTextureIDSet,
     ) {
@@ -240,7 +240,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
     }
 }
 impl SystemCommandButtonActionHandler {
-    fn update(&self, ct: &mut CompositeTree<Event>, current_sec: f32) {
+    fn update(&self, ct: &mut CompositeTree<SyncEvent>, current_sec: f32) {
         if self.is_dirty.replace(false) {
             ct.get_mut(self.ct_hover).opacity = if self.hovering.get() {
                 AnimatableFloat::Animated {
@@ -424,7 +424,7 @@ impl SystemCommandButtonView {
 
     fn rescale(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         texture_id_set: &SystemCommandTextureIDSet,
         ui_scale_factor: f32,
     ) {
@@ -438,7 +438,7 @@ impl SystemCommandButtonView {
 
     fn replace_cmd(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         texture_id_set: &SystemCommandTextureIDSet,
         cmd: SystemCommand,

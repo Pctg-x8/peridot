@@ -9,7 +9,8 @@ use windows::{
         },
         Text::Core::{
             CoreTextCompositionCompletedEventArgs, CoreTextCompositionStartedEventArgs,
-            CoreTextEditContext, CoreTextFormatUpdatingEventArgs, CoreTextLayoutRequestedEventArgs,
+            CoreTextEditContext, CoreTextFormatUpdatingEventArgs, CoreTextLayoutRequest,
+            CoreTextLayoutRequestedEventArgs, CoreTextRange, CoreTextSelectionRequest,
             CoreTextSelectionRequestedEventArgs, CoreTextSelectionUpdatingEventArgs,
             CoreTextServicesManager, CoreTextTextRequestedEventArgs, CoreTextTextUpdatingEventArgs,
         },
@@ -17,7 +18,9 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
-            Dwm::DwmExtendFrameIntoClientArea,
+            Dwm::{
+                DWMWA_EXTENDED_FRAME_BOUNDS, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute,
+            },
             Gdi::{
                 GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
                 MonitorFromWindow,
@@ -33,37 +36,40 @@ use windows::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
-                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
-                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
-                IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
-                PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
-                SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
-                SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_ACTIVE,
-                WA_CLICKACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE,
-                WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-                WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND,
-                WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
-                WS_POPUP,
+                GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, HCURSOR, HICON, HTBOTTOM,
+                HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON,
+                HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM,
+                IDC_SIZEWE, IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS,
+                PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
+                SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW,
+                SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+                WA_ACTIVE, WA_CLICKACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
+                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
+                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE,
+                WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+                WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
 };
-use windows_core::{IInspectable, Interface, PCWSTR, h, w};
+use windows_core::{HSTRING, IInspectable, Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
-use std::sync::Mutex;
+use std::{
+    rc::{Rc, Weak},
+    sync::{Arc, Mutex},
+};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, WindowType,
+    Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
     input::{
-        KeyInputCode, PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit,
-        ShellPointerActions,
+        InputEventContext, KeyInputCode, PerWindowKeyboardFocusState, PointerInputManager,
+        PointerInputUnit, ShellPointerActions,
         hittest::{
             CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
         },
@@ -172,6 +178,26 @@ impl WindowHandle {
         let rc = unsafe { rc.assume_init_ref() };
         Size::new_pixels(rc.right as _, rc.bottom as _)
             .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
+    }
+
+    #[inline(always)]
+    pub fn screen_position(&self) -> Point<PixelsUnit> {
+        let mut extended_frame_bounds = core::mem::MaybeUninit::<RECT>::uninit();
+        unsafe {
+            DwmGetWindowAttribute(
+                self.0,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                extended_frame_bounds.as_mut_ptr().cast(),
+                core::mem::size_of::<RECT>() as _,
+            )
+            .expect("DwmGetWindowAttribute")
+        }
+        let extended_frame_bounds = unsafe { extended_frame_bounds.assume_init_ref() };
+
+        Point::new_pixels(
+            extended_frame_bounds.left as _,
+            extended_frame_bounds.top as _,
+        )
     }
 
     #[inline(always)]
@@ -688,211 +714,6 @@ impl WindowEventHandler {
                 tracing::error!(reason = %e, "DwmExtendFrameIntoClientArea");
             }
 
-            if wparam.0 == WA_ACTIVE as _ || wparam.0 == WA_CLICKACTIVE as _ {
-                let state = Self::get_for_window(hwnd);
-
-                // test for text services
-                if state.edit_context.is_none() {
-                    // first time activation
-                    let edit_context = unsafe { &(*state.state.appctx).ctm }
-                        .CreateEditContext()
-                        .expect("edit_context.create");
-                    let wh = WindowHandle(hwnd);
-                    edit_context
-                        .LayoutRequested(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            CoreTextLayoutRequestedEventArgs,
-                        >::new(|sender, e| {
-                            let e = e.ok().expect("event_args.null");
-                            let req = e.Request().expect("layout_requested.event_args.request");
-                            tracing::trace!(
-                                req.is_canceled = ?req.IsCanceled(),
-                                req.range = ?req.Range(),
-                                "edit_context.layout_requested"
-                            );
-
-                            req.LayoutBounds()
-                        .expect("layout_requested.event_args.request.layout_bounds")
-                        .SetControlBounds(windows::Foundation::Rect {
-                            X: 0.0,
-                            Y: 0.0,
-                            Width: 100.0,
-                            Height: 20.0,
-                        })
-                        .expect(
-                            "layout_requested.event_args.request.layout_bounds.set_control_bounds",
-                        );
-                            req.LayoutBounds()
-                            .expect("layout_requested.event_args.request.layout_bounds")
-                            .SetTextBounds(windows::Foundation::Rect {
-                                X: 0.0,
-                                Y: 0.0,
-                                Width: 100.0,
-                                Height: 20.0,
-                            })
-                            .expect(
-                                "layout_requested.event_args.request.layout_bounds.set_text_bounds",
-                            );
-
-                            Ok(())
-                        }))
-                        .expect("edit_context.layout_requested");
-                    edit_context
-                        .TextRequested(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            CoreTextTextRequestedEventArgs,
-                        >::new(|sender, e| {
-                            let e = e.ok().expect("event_args.null");
-                            let req = e.Request().expect("text_requested.event_args.request");
-                            tracing::trace!(
-                                req.is_canceled = ?req.IsCanceled(),
-                                req.range = ?req.Range(),
-                                req.text = ?req.Text(),
-                                "edit_context.text_requested"
-                            );
-
-                            Ok(())
-                        }))
-                        .expect("edit_context.text_requested");
-                    edit_context
-                        .TextUpdating(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            CoreTextTextUpdatingEventArgs,
-                        >::new(move |sender, e| {
-                            let e = e.ok().expect("event_args.null");
-                            tracing::trace!(
-                                input_language = ?e.InputLanguage(),
-                                is_canceled = ?e.IsCanceled(),
-                                new_selection = ?e.NewSelection(),
-                                range = ?e.Range(),
-                                text = ?e.Text().map(|x| x.to_string_lossy()),
-                                "edit_context.text_updating"
-                            );
-                            let state = Self::get_for_window(wh.0);
-                            state.event_dispatcher.dispatch(Event::IMEStateChanges {
-                                window: wh,
-                                committed_string: String::new(),
-                                preedit_string: e.Text().expect("e.text").to_string_lossy(),
-                            });
-
-                            Ok(())
-                        }))
-                        .expect("edit_context.text_updating");
-                    edit_context
-                        .CompositionStarted(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            CoreTextCompositionStartedEventArgs,
-                        >::new(|sender, e| {
-                            tracing::trace!("composition_started");
-                            let e = e.ok().expect("event_args.null");
-                            tracing::trace!(
-                                is_canceled = ?e.IsCanceled(),
-                                "edit_context.composition_started"
-                            );
-                            Ok(())
-                        }))
-                        .expect("edit_context.composition_started");
-                    edit_context.CompositionCompleted(&TypedEventHandler::<
-                    CoreTextEditContext,
-                    CoreTextCompositionCompletedEventArgs,
-                >::new(move |sender, e| {
-                    let e = e.ok().expect("event_args.null");
-                    tracing::trace!(
-                        composition_segments = ?e.CompositionSegments(),
-                        composition_segments.len = ?e.CompositionSegments().and_then(|x| x.Size()),
-                        is_canceled = ?e.IsCanceled(),
-                        "edit_context.composition_completed"
-                    );
-
-                    for segment in e.CompositionSegments().expect("edit_context.composition_copmleted.composition_segments") {
-                        tracing::trace!(
-                            preconversion_string = ?segment.PreconversionString().map(|x| x.to_string_lossy()),
-                            range = ?segment.Range(),
-                            "edit_context.composition_completed.segment"
-                        );
-                    }
-
-                    Ok(())
-                }))
-                .expect("edit_context.composition_completed");
-                    edit_context
-                        .FormatUpdating(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            CoreTextFormatUpdatingEventArgs,
-                        >::new(|sender, e| {
-                            let e = e.ok().expect("event_args.null");
-                            tracing::trace!(
-                                background_color = ?e.BackgroundColor(),
-                                is_canceled = ?e.IsCanceled(),
-                                range = ?e.Range(),
-                                reason = ?e.Reason(),
-                                text_color = ?e.TextColor(),
-                                underline_color = ?e.UnderlineColor(),
-                                underline_type = ?e.UnderlineType(),
-                                "edit_context.format_updating"
-                            );
-
-                            Ok(())
-                        }))
-                        .expect("edit_context.format_updating");
-                    edit_context
-                        .FocusRemoved(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            windows_core::IInspectable,
-                        >::new(|sender, e| {
-                            tracing::trace!(e = ?e.ok(), "edit_context.focus_removed");
-
-                            Ok(())
-                        }))
-                        .expect("edit_context.focus_removed");
-                    edit_context
-                    .NotifyFocusLeaveCompleted(&TypedEventHandler::<
-                        CoreTextEditContext,
-                        IInspectable,
-                    >::new(|sender, e| {
-                        tracing::trace!(e = ?e.ok(), "edit_context.notify_focus_leave_completed");
-
-                        Ok(())
-                    }))
-                    .expect("edit_context.notify_focus_leave_completed");
-                    edit_context
-                        .SelectionRequested(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            CoreTextSelectionRequestedEventArgs,
-                        >::new(|sender, e| {
-                            let e = e.ok().expect("event_args.null");
-                            let req = e
-                                .Request()
-                                .expect("edit_context.selection_requested.event_args.request");
-                            tracing::trace!(
-                                req.is_canceled = ?req.IsCanceled(),
-                                req.selection = ?req.Selection(),
-                                "edit_context.selection_requested"
-                            );
-
-                            Ok(())
-                        }))
-                        .expect("edit_context.selection_requested");
-                    edit_context
-                        .SelectionUpdating(&TypedEventHandler::<
-                            CoreTextEditContext,
-                            CoreTextSelectionUpdatingEventArgs,
-                        >::new(|sender, e| {
-                            let e = e.ok().expect("event_args.null");
-                            tracing::trace!(
-                                is_canceled = ?e.IsCanceled(),
-                                selection = ?e.Selection(),
-                                "edit_context.selection_updating"
-                            );
-
-                            Ok(())
-                        }))
-                        .expect("edit_context.selection_updating");
-
-                    state.edit_context = Some(edit_context);
-                }
-            }
-
             return LRESULT(0);
         }
 
@@ -909,12 +730,12 @@ impl WindowEventHandler {
         if msg == WM_SETFOCUS {
             let state = Self::get_for_window(hwnd);
 
-            state
-                .edit_context
-                .as_ref()
-                .expect("not activated?")
-                .NotifyFocusEnter()
-                .expect("edit_context.notify_focus_enter");
+            /*state
+            .edit_context
+            .as_ref()
+            .expect("not activated?")
+            .NotifyFocusEnter()
+            .expect("edit_context.notify_focus_enter");*/
 
             return LRESULT(0);
         }
@@ -922,12 +743,12 @@ impl WindowEventHandler {
         if msg == WM_KILLFOCUS {
             let state = Self::get_for_window(hwnd);
 
-            state
-                .edit_context
-                .as_ref()
-                .expect("not activated?")
-                .NotifyFocusLeave()
-                .expect("edit_context.notify_focus_leave");
+            /*state
+            .edit_context
+            .as_ref()
+            .expect("not activated?")
+            .NotifyFocusLeave()
+            .expect("edit_context.notify_focus_leave");*/
 
             return LRESULT(0);
         }
@@ -1408,11 +1229,16 @@ impl SystemLink<'_> {
     pub fn init_main_window(
         vk_device: &VulkanDevice,
         dispatcher: LogicFiberEventDispatcher,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
         app: &ApplicationContext,
     ) -> WindowHandle {
+        let ht = ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
         let w = NativeWindow::new(
             &app.wc_set,
             WindowType::Main {},
@@ -1420,15 +1246,12 @@ impl SystemLink<'_> {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
             }),
-            ht_manager.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            }),
+            ht,
             dispatcher,
             app,
         );
         let main_window_handle = w.make_handle();
+        ht_manager.get_data_mut(ht).root_of_window = Some(main_window_handle);
 
         let vk_surface = w.create_vk_surface(vk_device);
         rt_sender
@@ -1446,6 +1269,9 @@ impl SystemLink<'_> {
         canonical_dispatcher: LogicFiberEventDispatcher,
     ) {
         WindowEventHandler::get_for_window(handle.0).event_dispatcher = canonical_dispatcher;
+    }
+
+    pub fn prelaunch(handle: WindowHandle) {
         unsafe {
             let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
         }
@@ -1473,9 +1299,9 @@ impl SystemLink<'_> {
 
     pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HT,
-        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<Event>, &mut HT),
+        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<SyncEvent>, &mut HT),
     ) -> WindowHandle {
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },
@@ -1512,7 +1338,7 @@ impl SystemLink<'_> {
     pub fn close_window(
         &self,
         mut window_handle: WindowHandle,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
     ) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
@@ -1558,5 +1384,310 @@ impl SystemLink<'_> {
             .latest_ui_scale_changes
             .lock()
             .expect("poisoned") = Some(new_scale);
+    }
+}
+
+pub trait TextProvider {
+    fn text(&self, range: CoreTextRange) -> windows_core::Result<HSTRING>;
+    fn selection(&self, req: &CoreTextSelectionRequest) -> windows_core::Result<()>;
+}
+pub trait CoreTextDeferrableEventHandler {
+    fn layout(
+        &self,
+        ctx: &mut InputEventContext,
+        req: &CoreTextLayoutRequest,
+    ) -> windows_core::Result<()>;
+    fn text_updating(
+        &self,
+        ctx: &mut InputEventContext,
+        e: &CoreTextTextUpdatingEventArgs,
+    ) -> windows_core::Result<()>;
+    fn format_updating(
+        &self,
+        ctx: &mut InputEventContext,
+        e: &CoreTextFormatUpdatingEventArgs,
+    ) -> windows_core::Result<()>;
+}
+pub struct NativeTextInputContext {
+    edit_context: CoreTextEditContext,
+}
+impl NativeTextInputContext {
+    pub fn new(system_link: &SystemLink) -> Self {
+        let edit_context = unsafe { &*system_link.app_context_ptr }
+            .ctm
+            .CreateEditContext()
+            .expect("CoreTextServicesManager.CreateEditContext");
+
+        Self { edit_context }
+    }
+
+    pub fn bind_action<T: TextProvider + 'static>(
+        &self,
+        system_link: &SystemLink,
+        text_provider: &Rc<T>,
+        layout_provider_ht: HitTestTreeRef,
+    ) {
+        let caller_thread_id = std::thread::current().id();
+        self.edit_context
+            .LayoutRequested(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextLayoutRequestedEventArgs,
+            >::new({
+                let event_dispatcher =
+                    std::sync::atomic::AtomicPtr::new(system_link.event_dispatcher);
+                move |_sender, e| {
+                    let e = e.ok().expect("event_args.null");
+                    let req = e.Request().expect("layout_requested.event_args.request");
+
+                    assert_eq!(
+                        std::thread::current().id(),
+                        caller_thread_id,
+                        "not main thread"
+                    );
+
+                    let ed_ref = unsafe { &**event_dispatcher.as_ptr() };
+                    if ed_ref.can_immediate_dispatch() {
+                        ed_ref.dispatch(Event::CoreTextLayoutRequested {
+                            ht: layout_provider_ht,
+                            request: req,
+                            deferral: None,
+                        });
+                    } else {
+                        let deferral = req.GetDeferral()?;
+                        ed_ref.dispatch(Event::CoreTextLayoutRequested {
+                            ht: layout_provider_ht,
+                            request: req,
+                            deferral: Some(deferral),
+                        });
+                    }
+
+                    Ok(())
+                }
+            }))
+            .expect("edit_context.layout_requested");
+        self.edit_context
+            .TextRequested(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextTextRequestedEventArgs,
+            >::new({
+                let text_provider = std::sync::atomic::AtomicPtr::new(Rc::as_ptr(&text_provider)
+                    as *const T
+                    as *mut T);
+                move |_sender, e| {
+                    let e = e.ok().expect("event_args.null");
+                    let req = e.Request().expect("text_requested.event_args.request");
+                    tracing::trace!(
+                        req.range = ?req.Range(),
+                        "edit_context.text_requested"
+                    );
+
+                    assert_eq!(
+                        std::thread::current().id(),
+                        caller_thread_id,
+                        "not main thread"
+                    );
+
+                    req.SetText(&unsafe { &**text_provider.as_ptr() }.text(req.Range()?)?)?;
+                    Ok(())
+                }
+            }))
+            .expect("edit_context.text_requested");
+        self.edit_context
+            .TextUpdating(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextTextUpdatingEventArgs,
+            >::new({
+                let event_dispatcher =
+                    std::sync::atomic::AtomicPtr::new(system_link.event_dispatcher);
+                move |_sender, e| {
+                    let e = e.cloned().expect("event_args.null");
+
+                    assert_eq!(
+                        std::thread::current().id(),
+                        caller_thread_id,
+                        "not main thread"
+                    );
+
+                    let ed_ref = unsafe { &**event_dispatcher.as_ptr() };
+                    if ed_ref.can_immediate_dispatch() {
+                        ed_ref.dispatch(Event::CoreTextTextUpdating {
+                            ht: layout_provider_ht,
+                            e,
+                            deferral: None,
+                        });
+                    } else {
+                        let deferral = e.GetDeferral()?;
+                        ed_ref.dispatch(Event::CoreTextTextUpdating {
+                            ht: layout_provider_ht,
+                            e,
+                            deferral: Some(deferral),
+                        });
+                    }
+
+                    Ok(())
+                }
+            }))
+            .expect("edit_context.text_updating");
+        self.edit_context
+            .CompositionStarted(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextCompositionStartedEventArgs,
+            >::new(|_sender, e| {
+                tracing::trace!("composition_started");
+                let e = e.ok().expect("event_args.null");
+                tracing::trace!(
+                    // is_canceled = ?e.IsCanceled(),
+                    "edit_context.composition_started"
+                );
+                Ok(())
+            }))
+            .expect("edit_context.composition_started");
+        self.edit_context
+            .CompositionCompleted(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextCompositionCompletedEventArgs,
+            >::new(move |_sender, e| {
+                let e = e.ok().expect("event_args.null");
+                tracing::trace!(
+                    composition_segments = ?e.CompositionSegments(),
+                    composition_segments.len = ?e.CompositionSegments().and_then(|x| x.Size()),
+                    // is_canceled = ?e.IsCanceled(),
+                    "edit_context.composition_completed"
+                );
+
+                for segment in e.CompositionSegments().expect("edit_context.composition_copmleted.composition_segments") {
+                    tracing::trace!(
+                        preconversion_string = ?segment.PreconversionString().map(|x| x.to_string_lossy()),
+                        range = ?segment.Range(),
+                        "edit_context.composition_completed.segment"
+                    );
+                }
+
+                Ok(())
+            }))
+            .expect("edit_context.composition_completed");
+        self.edit_context
+            .FormatUpdating(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextFormatUpdatingEventArgs,
+            >::new({
+                let event_dispatcher =
+                    std::sync::atomic::AtomicPtr::new(system_link.event_dispatcher);
+                move |_sender, e| {
+                    let e = e.cloned().expect("event_args.null");
+
+                    assert_eq!(
+                        std::thread::current().id(),
+                        caller_thread_id,
+                        "not main thread"
+                    );
+
+                    let ed_ref = unsafe { &**event_dispatcher.as_ptr() };
+                    if ed_ref.can_immediate_dispatch() {
+                        ed_ref.dispatch(Event::CoreTextFormatUpdating {
+                            ht: layout_provider_ht,
+                            e,
+                            deferral: None,
+                        });
+                    } else {
+                        let deferral = e.GetDeferral()?;
+                        ed_ref.dispatch(Event::CoreTextFormatUpdating {
+                            ht: layout_provider_ht,
+                            e,
+                            deferral: Some(deferral),
+                        });
+                    }
+
+                    Ok(())
+                }
+            }))
+            .expect("edit_context.format_updating");
+        self.edit_context
+            .FocusRemoved(&TypedEventHandler::<
+                CoreTextEditContext,
+                windows_core::IInspectable,
+            >::new(|_sender, e| {
+                tracing::trace!(e = ?e.ok(), "edit_context.focus_removed");
+
+                Ok(())
+            }))
+            .expect("edit_context.focus_removed");
+        self.edit_context
+            .NotifyFocusLeaveCompleted(
+                &TypedEventHandler::<CoreTextEditContext, IInspectable>::new(|_sender, e| {
+                    tracing::trace!(e = ?e.ok(), "edit_context.notify_focus_leave_completed");
+
+                    Ok(())
+                }),
+            )
+            .expect("edit_context.notify_focus_leave_completed");
+        self.edit_context
+            .SelectionRequested(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextSelectionRequestedEventArgs,
+            >::new({
+                let text_provider = std::sync::atomic::AtomicPtr::new(Rc::as_ptr(&text_provider)
+                    as *const T
+                    as *mut T);
+                move |_sender, e| {
+                    let e = e.ok().expect("event_args.null");
+                    let req = e
+                        .Request()
+                        .expect("edit_context.selection_requested.event_args.request");
+                    tracing::trace!("edit_context.selection_requested");
+
+                    assert_eq!(
+                        std::thread::current().id(),
+                        caller_thread_id,
+                        "not main thread"
+                    );
+
+                    unsafe { &**text_provider.as_ptr() }.selection(&req)?;
+                    Ok(())
+                }
+            }))
+            .expect("edit_context.selection_requested");
+        self.edit_context
+            .SelectionUpdating(&TypedEventHandler::<
+                CoreTextEditContext,
+                CoreTextSelectionUpdatingEventArgs,
+            >::new(|_sender, e| {
+                let e = e.ok().expect("event_args.null");
+                tracing::trace!(
+                    // is_canceled = ?e.IsCanceled(),
+                    selection = ?e.Selection(),
+                    "edit_context.selection_updating"
+                );
+
+                Ok(())
+            }))
+            .expect("edit_context.selection_updating");
+    }
+
+    pub fn notify_focus_enter(&self) {
+        self.edit_context
+            .NotifyFocusEnter()
+            .expect("edit_context.NotifyFocusEnter");
+    }
+
+    pub fn notify_focus_leave(&self) {
+        self.edit_context
+            .NotifyFocusLeave()
+            .expect("edit_context.NotifyFocusLeave");
+    }
+
+    pub fn notify_layout_changed(&self) {
+        self.edit_context
+            .NotifyLayoutChanged()
+            .expect("edit_context.NotifyLayoutChanged");
+    }
+
+    pub fn notify_selection_changed(&self, start_acp: i32, end_acp: i32) {
+        self.edit_context
+            .NotifySelectionChanged(CoreTextRange {
+                StartCaretPosition: start_acp,
+                EndCaretPosition: end_acp,
+            })
+            .expect("edit_context.NotifySelectionChanged");
     }
 }
