@@ -10,13 +10,6 @@ use bedrock::{
     QueueMut, RenderPass, ShaderModule, TypedVulkanStructure, VkHandle,
 };
 use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
-#[cfg(windows)]
-use windows::Win32::Graphics::{
-    Direct2D::Common::{ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl},
-    DirectWrite::{IDWritePixelSnapping_Impl, IDWriteTextRenderer, IDWriteTextRenderer_Impl},
-};
-#[cfg(windows)]
-use windows_core::*;
 
 use crate::{
     graphics::{

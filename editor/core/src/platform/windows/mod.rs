@@ -36,21 +36,20 @@ use windows::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, HCURSOR, HICON, HTBOTTOM,
-                HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON,
-                HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM,
-                IDC_SIZEWE, IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS,
-                PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
-                SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW,
-                SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-                WA_ACTIVE, WA_CLICKACTIVE, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
-                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST,
-                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE,
-                WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
-                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-                WS_OVERLAPPEDWINDOW, WS_POPUP,
+                GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
+                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
+                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
+                IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
+                PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
+                SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+                SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
+                WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+                WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
+                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -58,10 +57,7 @@ use windows::{
 use windows_core::{HSTRING, IInspectable, Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
-use std::{
-    rc::{Rc, Weak},
-    sync::{Arc, Mutex},
-};
+use std::{rc::Rc, sync::Mutex};
 
 use crate::{
     Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
@@ -80,7 +76,7 @@ use crate::{
         text::RootFontSet,
     },
     utils::{
-        LogicalUnit, PixelsUnit, Point, Rect, Size,
+        LogicalUnit, PixelsUnit, Point, Size,
         platform::windows::{current_instance_handle, register_class},
     },
 };
@@ -371,7 +367,6 @@ impl NativeWindow {
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
-        appctx: *const ApplicationContext,
     ) -> Self {
         let w = unsafe {
             CreateWindowExW(
@@ -393,7 +388,6 @@ impl NativeWindow {
         let event_handler = Box::new(WindowEventHandler {
             state: WindowState {
                 r#type: window_type,
-                appctx,
                 content_scale: unsafe { GetDpiForWindow(w) as f32 / 96.0 },
                 composite_root,
                 ht_root,
@@ -437,7 +431,6 @@ impl NativeWindow {
 
 pub struct WindowState {
     r#type: WindowType,
-    appctx: *const ApplicationContext,
     content_scale: f32,
     pub composite_root: CompositeTreeRef,
     pub ht_root: HitTestTreeRef,
@@ -1248,7 +1241,6 @@ impl SystemLink<'_> {
             }),
             ht,
             dispatcher,
-            app,
         );
         let main_window_handle = w.make_handle();
         ht_manager.get_data_mut(ht).root_of_window = Some(main_window_handle);
@@ -1316,7 +1308,6 @@ impl SystemLink<'_> {
                 ..Default::default()
             }),
             unsafe { &*self.event_dispatcher }.clone(),
-            self.app_context_ptr,
         );
         let h = w.make_handle();
 
@@ -1533,12 +1524,8 @@ impl NativeTextInputContext {
                 CoreTextEditContext,
                 CoreTextCompositionStartedEventArgs,
             >::new(|_sender, e| {
-                tracing::trace!("composition_started");
                 let e = e.ok().expect("event_args.null");
-                tracing::trace!(
-                    // is_canceled = ?e.IsCanceled(),
-                    "edit_context.composition_started"
-                );
+                tracing::trace!("edit_context.composition_started");
                 Ok(())
             }))
             .expect("edit_context.composition_started");
@@ -1551,7 +1538,6 @@ impl NativeTextInputContext {
                 tracing::trace!(
                     composition_segments = ?e.CompositionSegments(),
                     composition_segments.len = ?e.CompositionSegments().and_then(|x| x.Size()),
-                    // is_canceled = ?e.IsCanceled(),
                     "edit_context.composition_completed"
                 );
 

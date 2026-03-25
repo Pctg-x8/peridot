@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Event, SyncEvent,
+    SyncEvent,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{

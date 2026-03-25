@@ -100,7 +100,10 @@ pub struct PerWindowFontSet<'d> {
     ui_title_project_name: &'d apple_sdk_port::text::Font,
 }
 impl<'d> PerWindowFontSet<'d> {
-    pub fn new(root_set: &'d RootFontSet, ctx: &ThreadLocalTypingContext) -> Self {
+    pub fn new(
+        root_set: &'d RootFontSet,
+        #[allow(unused_variables)] ctx: &ThreadLocalTypingContext,
+    ) -> Self {
         #[cfg(feature = "freetype")]
         let ui_default = root_set
             .ui_common_font_data

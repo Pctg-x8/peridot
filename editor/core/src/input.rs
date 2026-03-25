@@ -7,7 +7,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    DragPreviewPopoverHandle, Event, SyncEvent, SystemLink, WindowHandle,
+    DragPreviewPopoverHandle, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, HitTestTreeManager, HitTestTreeManagerCreateOnlyAccess, HitTestTreeRef,
         PointerActionArgs, Role,
