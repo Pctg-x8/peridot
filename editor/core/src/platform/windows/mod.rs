@@ -721,27 +721,23 @@ impl WindowEventHandler {
         }
 
         if msg == WM_SETFOCUS {
-            let state = Self::get_for_window(hwnd);
-
-            /*state
-            .edit_context
-            .as_ref()
-            .expect("not activated?")
-            .NotifyFocusEnter()
-            .expect("edit_context.notify_focus_enter");*/
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::WindowFocusChanged {
+                    window: WindowHandle(hwnd),
+                    focused: true,
+                });
 
             return LRESULT(0);
         }
 
         if msg == WM_KILLFOCUS {
-            let state = Self::get_for_window(hwnd);
-
-            /*state
-            .edit_context
-            .as_ref()
-            .expect("not activated?")
-            .NotifyFocusLeave()
-            .expect("edit_context.notify_focus_leave");*/
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::WindowFocusChanged {
+                    window: WindowHandle(hwnd),
+                    focused: false,
+                });
 
             return LRESULT(0);
         }

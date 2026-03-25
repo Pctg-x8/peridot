@@ -841,6 +841,10 @@ pub enum Event {
         window: WindowHandle,
         is_maximized: bool,
     },
+    WindowFocusChanged {
+        window: WindowHandle,
+        focused: bool,
+    },
     SubWindowOpen,
     SubWindowClose {
         window: WindowHandle,
@@ -2607,6 +2611,28 @@ async fn run<'sys>(
                         &texture_id_set,
                     );
             },
+            Event::WindowFocusChanged {
+                mut window,
+                focused,
+            } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                let mut input_context = InputEventContext {
+                    sender_window: window,
+                    composite_tree: &mut composite_tree,
+                    current_sec: global_time_base.elapsed().as_secs_f32(),
+                    drag_preview: system_link.drag_preview_popover(),
+                    system_link: &system_link,
+                    ht_create_only_access: &mut ht_create_only_access,
+                    ht_manager: &ht_manager,
+                };
+                let mgr = window.keyboard_focus_state_mut();
+
+                if focused {
+                    mgr.notify_window_focus(&mut input_context, &keyboard_focus_registry);
+                } else {
+                    mgr.notify_window_lost_focus(&mut input_context, &keyboard_focus_registry);
+                }
+            }
             Event::PointerDown {
                 window,
                 #[cfg(feature = "wayland")]

@@ -1051,17 +1051,53 @@ impl KeyboardFocusTokenData {
 }
 
 pub struct PerWindowKeyboardFocusState {
+    window_focused: bool,
     current_focus: Option<usize>,
 }
 impl PerWindowKeyboardFocusState {
     pub fn new() -> Self {
         Self {
             current_focus: None,
+            window_focused: false,
         }
     }
 
     pub fn has_focus(&self, tok: &FocusTargetToken) -> bool {
-        self.current_focus.is_some_and(|x| x == tok.0)
+        self.window_focused && self.current_focus.is_some_and(|x| x == tok.0)
+    }
+
+    pub fn notify_window_focus(
+        &mut self,
+        context: &mut InputEventContext,
+        registry: &KeyboardFocusTokenRegistry,
+    ) {
+        self.window_focused = true;
+
+        let Some(f) = self.current_focus else {
+            return;
+        };
+        let Some(eh) = registry.event_handler(FocusTargetToken(f)) else {
+            return;
+        };
+
+        eh.focus_taken(context);
+    }
+
+    pub fn notify_window_lost_focus(
+        &mut self,
+        context: &mut InputEventContext,
+        registry: &KeyboardFocusTokenRegistry,
+    ) {
+        self.window_focused = false;
+
+        let Some(f) = self.current_focus else {
+            return;
+        };
+        let Some(eh) = registry.event_handler(FocusTargetToken(f)) else {
+            return;
+        };
+
+        eh.focus_released(context);
     }
 
     pub fn set_focus(
