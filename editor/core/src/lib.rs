@@ -1496,13 +1496,73 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
+        #[cfg(windows)]
+        let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
+            .expect("globalization_preferences.languages")
+            .First()
+            .expect("vector_view.first")
+            .Current()
+            .expect("iterator.current");
+        #[cfg(windows)]
+        let word_segmenter =
+            windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
+                .expect("words_segmenter.create");
+        #[cfg(windows)]
+        let ws = word_segmenter
+            .GetTokenAt(
+                &windows_core::HSTRING::from_wide(&{
+                    let mut u16s = Vec::new();
+                    for c in self.content.borrow().chars() {
+                        let mut b = [0; 2];
+                        u16s.extend_from_slice(c.encode_utf16(&mut b));
+                    }
+                    u16s
+                }),
+                self.content
+                    .borrow()
+                    .char_indices()
+                    .take_while(|&(i, _)| i < self.cursor_pos_bytes.get())
+                    .count() as _,
+            )
+            .expect("word_segmenter.get_token_at");
+        #[cfg(windows)]
+        let text_segment = ws
+            .SourceTextSegment()
+            .expect("word_segment.source_text_segment");
+        #[cfg(windows)]
+        self.selection_begin_bytes.set(
+            self.content
+                .borrow()
+                .chars()
+                .take(text_segment.StartPosition as _)
+                .map(|c| c.len_utf8())
+                .sum(),
+        );
+        #[cfg(windows)]
+        self.cursor_pos_bytes.set(
+            self.content
+                .borrow()
+                .chars()
+                .take((text_segment.StartPosition + text_segment.Length) as _)
+                .map(|c| c.len_utf8())
+                .sum(),
+        );
+
+        #[cfg(not(windows))]
         use unicode_segmentation::UnicodeSegmentation;
+        #[cfg(not(windows))]
         let mut words = Vec::new();
+        #[cfg(not(windows))]
         let content = self.content.borrow();
+        #[cfg(not(windows))]
         let mut chars = content.chars();
+        #[cfg(not(windows))]
         let mut is_budou_cluster = false;
+        #[cfg(not(windows))]
         let mut same_cluster_range = 0..0;
+        #[cfg(not(windows))]
         let mut cb = 0;
+        #[cfg(not(windows))]
         while let Some(c) = chars.next() {
             let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
                 || peridot_tp_unicode_properties::script::is_katakana(c)
@@ -1537,6 +1597,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             same_cluster_range.end += c.len_utf8();
             cb += c.len_utf8();
         }
+        #[cfg(not(windows))]
         if !same_cluster_range.is_empty() {
             if !is_budou_cluster {
                 words.extend(
@@ -1556,9 +1617,11 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             }
         }
 
+        #[cfg(not(windows))]
         tracing::debug!(?words, "double click");
 
         // TODO: LTR前提 最適化はあとで
+        #[cfg(not(windows))]
         let (sx, _, _, _) = context.ht_manager.translate_client_to_tree_local(
             sender,
             args.client_pos.x - 2.0 - self.content_h_offset.get(),
@@ -1566,9 +1629,13 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size.width,
             args.client_size.height,
         );
+        #[cfg(not(windows))]
         let target_x_pixels = sx * context.composite_tree.get(self.ct_text).base_scale_factor;
+        #[cfg(not(windows))]
         let mut measure_range = 0..0;
+        #[cfg(not(windows))]
         let mut select_range = 0..content.len();
+        #[cfg(not(windows))]
         for w in words {
             let starting_byte = measure_range.end;
             measure_range.end += w.len();
@@ -1590,8 +1657,11 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             }
         }
 
+        #[cfg(not(windows))]
         self.cursor_pos_bytes.set(select_range.end);
+        #[cfg(not(windows))]
         self.selection_begin_bytes.set(select_range.start);
+
         self.update_cursor_position(
             context.composite_tree,
             context.sender_window,
