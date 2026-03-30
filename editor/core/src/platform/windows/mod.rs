@@ -96,6 +96,7 @@ impl core::hash::Hash for WindowHandle {
 impl WindowHandle {
     #[inline(always)]
     pub fn destroy(&mut self) {
+        self.state_mut().destroying = true;
         if let Err(e) = unsafe { DestroyWindow(self.0) } {
             tracing::error!(reason = %e, "window.destroy");
         }
@@ -395,6 +396,7 @@ impl NativeWindow {
                 ht_root,
                 latest_ui_scale_changes: Mutex::new(None),
                 keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+                destroying: false,
             },
             event_dispatcher,
             edit_context: None,
@@ -438,6 +440,7 @@ pub struct WindowState {
     pub ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     pub keyboard_focus_state: PerWindowKeyboardFocusState,
+    destroying: bool,
 }
 
 // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタをグローバルにおいて参照もたせる（実際どうするかはあとで考える）
@@ -572,6 +575,7 @@ impl WindowEventHandler {
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
+            button: PointerButton::Primary,
         });
     }
 
@@ -746,23 +750,31 @@ impl WindowEventHandler {
         }
 
         if msg == WM_SETFOCUS {
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::WindowFocusChanged {
-                    window: WindowHandle(hwnd),
-                    focused: true,
-                });
+            let st = Self::get_for_window(hwnd);
+            if st.state.destroying {
+                // in destroy sequence
+                return LRESULT(0);
+            }
+
+            st.event_dispatcher.dispatch(Event::WindowFocusChanged {
+                window: WindowHandle(hwnd),
+                focused: true,
+            });
 
             return LRESULT(0);
         }
 
         if msg == WM_KILLFOCUS {
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::WindowFocusChanged {
-                    window: WindowHandle(hwnd),
-                    focused: false,
-                });
+            let st = Self::get_for_window(hwnd);
+            if st.state.destroying {
+                // in destroy sequence
+                return LRESULT(0);
+            }
+
+            st.event_dispatcher.dispatch(Event::WindowFocusChanged {
+                window: WindowHandle(hwnd),
+                focused: false,
+            });
 
             return LRESULT(0);
         }
@@ -1450,6 +1462,11 @@ impl SystemLink<'_> {
             .expect("poisoned") = Some(new_scale);
     }
 }
+
+pub struct ContextMenuInstance {
+    hwnd: HWND,
+}
+impl ContextMenuInstance {}
 
 pub trait TextProvider {
     fn text(&self, range: CoreTextRange) -> windows_core::Result<HSTRING>;
