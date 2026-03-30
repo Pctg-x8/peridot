@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     WindowHandle,
-    input::{EventContinueControl, FocusTargetToken, InputEventContext},
+    input::{EventContinueControl, FocusTargetToken, InputEventContext, PointerInputUnit},
     utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
 
@@ -25,6 +25,8 @@ pub struct HitTestTreeData<'h> {
     #[cfg(windows)]
     pub native_text_deferrable_event_handler:
         Option<std::rc::Weak<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'h>>,
+    pub screen_reposition_handler:
+        Option<std::rc::Weak<dyn HitTestTreeScreenRepositionHandler + 'h>>,
 }
 impl Default for HitTestTreeData<'_> {
     #[inline]
@@ -47,6 +49,7 @@ impl Default for HitTestTreeData<'_> {
             action_handler: None,
             #[cfg(windows)]
             native_text_deferrable_event_handler: None,
+            screen_reposition_handler: None,
         }
     }
 }
@@ -68,10 +71,19 @@ impl<'h> HitTestTreeData<'h> {
             .as_ref()
             .and_then(std::rc::Weak::upgrade)
     }
+
+    #[inline]
+    pub fn screen_reposition_handler(
+        &self,
+    ) -> Option<std::rc::Rc<dyn HitTestTreeScreenRepositionHandler + 'h>> {
+        self.screen_reposition_handler
+            .as_ref()
+            .and_then(std::rc::Weak::upgrade)
+    }
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct HitTestTreeRef(usize);
 
 struct HitTestTreeRelationData {
@@ -130,6 +142,7 @@ impl<'h> HitTestTreeManager<'h> {
         HitTestTreeManagerCreateOnlyAccess { ptr: self }
     }
 
+    #[inline]
     pub fn free(&mut self, r: HitTestTreeRef) {
         self.free_index.insert(r.0);
     }
@@ -169,6 +182,15 @@ impl<'h> HitTestTreeManager<'h> {
         h: &std::rc::Rc<impl crate::platform::windows::CoreTextDeferrableEventHandler + 'h>,
     ) {
         self.data[r.0].native_text_deferrable_event_handler = Some(std::rc::Rc::downgrade(h) as _);
+    }
+
+    #[inline]
+    pub fn set_screen_reposition_handler(
+        &mut self,
+        r: HitTestTreeRef,
+        h: &std::rc::Rc<impl HitTestTreeScreenRepositionHandler + 'h>,
+    ) {
+        self.data[r.0].screen_reposition_handler = Some(std::rc::Rc::downgrade(h) as _);
     }
 
     #[inline]
@@ -616,4 +638,13 @@ pub trait HitTestTreeActionHandler {
     ) -> EventContinueControl {
         EventContinueControl::empty()
     }
+}
+
+pub trait HitTestTreeScreenRepositionHandler {
+    fn on_screen_reposition_required(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        window_screen_pos: Point<PointerInputUnit>,
+    );
 }

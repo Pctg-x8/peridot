@@ -11,7 +11,7 @@ use peridot_tp_xkbcommon as xkbcommon;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,
@@ -24,7 +24,8 @@ use crate::{
         KeyboardFocusTokenRegistry, PointerInputManager, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
-            HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
+            HitTestTreeManager, HitTestTreeRef, HitTestTreeScreenRepositionHandler,
+            PointerActionArgs,
         },
     },
     rendering::{
@@ -811,6 +812,10 @@ pub enum Event {
         window: WindowHandle,
         committed_string: String,
         preedit_string: String,
+    },
+    WindowMove {
+        window: WindowHandle,
+        pos: Point<PointerInputUnit>,
     },
     WindowResize {
         window: WindowHandle,
@@ -1662,6 +1667,19 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         input::EventContinueControl::STOP_PROPAGATION
     }
 }
+impl HitTestTreeScreenRepositionHandler for TextInputViewEventHandler {
+    fn on_screen_reposition_required(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        window_screen_pos: Point<PointerInputUnit>,
+    ) {
+        #[cfg(windows)]
+        {
+            self.native_text_input_context.notify_layout_changed();
+        }
+    }
+}
 impl TextInputViewEventHandler {
     fn update(&self, context: &mut InputEventContext) {
         if context
@@ -2222,6 +2240,8 @@ impl TextInputView {
         eh.native_text_input_context
             .bind_action(ctx.system_link, &eh, ht_root);
 
+        ctx.ht_manager.set_screen_reposition_handler(ht_root, &eh);
+
         eh.update_text(ctx.composite_tree);
 
         Self { ct_text_clip, eh }
@@ -2231,6 +2251,15 @@ impl TextInputView {
         ctx.composite_tree
             .add_child(parent.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+
+        unsafe {
+            ctx.ht_manager
+                .query_root_window(parent.ht_root())
+                .expect("no root window")
+                .extra_data_mut::<PerWindowData>()
+                .screen_reposition_interests
+                .insert(self.eh.ht_root);
+        }
     }
 
     pub fn rescale(
@@ -2262,6 +2291,7 @@ impl TextInputView {
 
 struct PerWindowData {
     font_set: PerWindowFontSet<'static>,
+    screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
 }
 
@@ -2343,6 +2373,7 @@ async fn run<'sys>(
         font_set: unsafe {
             PerWindowFontSet::new(system_link.root_font_set(), &typing_context).lifetime_unbound()
         },
+        screen_reposition_interests: HashSet::new(),
         header: window_header_view,
     }));
 
@@ -2542,6 +2573,7 @@ async fn run<'sys>(
                                 PerWindowFontSet::new(system_link.root_font_set(), &typing_context)
                                     .lifetime_unbound()
                             },
+                            screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
                         }));
                     },
@@ -2563,6 +2595,25 @@ async fn run<'sys>(
             Event::Sync(SyncEvent::WindowPostResizeRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
+            }
+            Event::WindowMove { window, pos } => {
+                let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                let mut input_context = InputEventContext {
+                    sender_window: window,
+                    composite_tree: &mut composite_tree,
+                    current_sec: global_time_base.elapsed().as_secs_f32(),
+                    drag_preview: system_link.drag_preview_popover(),
+                    system_link: &system_link,
+                    ht_create_only_access: &mut ht_create_only_access,
+                    ht_manager: &ht_manager,
+                };
+
+                for &ht in wd.screen_reposition_interests.iter() {
+                    if let Some(e) = ht_manager.get_data(ht).screen_reposition_handler() {
+                        e.on_screen_reposition_required(ht, &mut input_context, pos);
+                    }
+                }
             }
             Event::WindowRescaleUI {
                 mut window,

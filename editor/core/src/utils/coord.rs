@@ -77,10 +77,10 @@ impl Point<PixelsUnit> {
     }
 
     #[inline(always)]
-    pub const fn to_logical(&self, scale: f32) -> Point<LogicalUnit> {
+    pub const fn to_logical(&self, pixels_scale: f32) -> Point<LogicalUnit> {
         Point {
-            x: self.x as f32 / scale,
-            y: self.y as f32 / scale,
+            x: self.x as f32 / pixels_scale,
+            y: self.y as f32 / pixels_scale,
             _marker: PhantomData,
         }
     }

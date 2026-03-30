@@ -46,10 +46,11 @@ use windows::{
                 SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
                 WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
-                WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
-                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                WM_MOUSEMOVE, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+                WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND,
+                WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
+                WS_POPUP,
             },
         },
     },
@@ -804,6 +805,24 @@ impl WindowEventHandler {
                     }),
                     window: WindowHandle(hwnd),
                 });
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_MOVE {
+            let Some(ref st) = Self::try_get_for_window(hwnd) else {
+                // preinitialized
+                return LRESULT(0);
+            };
+
+            let p = Point::new_pixels(
+                (lparam.0 & 0xffff) as u16 as i16 as _,
+                ((lparam.0 >> 16) & 0xffff) as u16 as i16 as _,
+            );
+            st.event_dispatcher.dispatch(Event::WindowMove {
+                window: WindowHandle(hwnd),
+                pos: p.to_logical(unsafe { GetDpiForWindow(hwnd) as f32 / 96.0 }),
+            });
 
             return LRESULT(0);
         }
