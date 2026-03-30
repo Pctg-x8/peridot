@@ -1,7 +1,7 @@
 //! UI Rect Compositioning
 
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -10,6 +10,7 @@ use bedrock::{
     QueueMut, RenderPass, ShaderModule, TypedVulkanStructure, VkHandle,
 };
 use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
+use windows::Win32::UI::Input::KeyboardAndMouse::NLSKBD_OEM_DEC;
 
 use crate::{
     graphics::{
@@ -47,7 +48,15 @@ pub struct CompositeInstanceData {
     pub border_color: [f32; 4],
     pub border_thickness: f32,
     pub softedge: f32,
-    pub _padding: [f32; 2],
+    pub gradient_data_index: f32,
+    pub _padding: f32,
+}
+
+#[repr(C)]
+pub struct GradientData {
+    pub start_color: [f32; 4],
+    pub end_color: [f32; 4],
+    pub params: [f32; 4],
 }
 
 #[repr(C)]
@@ -83,6 +92,8 @@ pub enum CompositeMode<Event> {
     FillColor(AnimatableColor<Event>),
     ColorTintBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
     FillColorBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
+    FillLinearGradient(GradientRef),
+    FillRadialGradient(GradientRef),
 }
 impl<Event> CompositeMode<Event> {
     const fn shader_mode_value(&self) -> f32 {
@@ -92,6 +103,8 @@ impl<Event> CompositeMode<Event> {
             Self::FillColor(_) => 2.0,
             Self::ColorTintBackdropBlur(_, _) => 3.0,
             Self::FillColorBackdropBlur(_, _) => 4.0,
+            Self::FillLinearGradient(_) => 5.0,
+            Self::FillRadialGradient(_) => 6.0,
         }
     }
 }
@@ -624,27 +637,55 @@ impl<Event> Default for CompositeRect<Event> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Gradient {
+    Linear {
+        start_color: [f32; 4],
+        end_color: [f32; 4],
+        start_pos_relative: [f32; 2],
+        end_pos_relative: [f32; 2],
+    },
+    Radial {
+        start_color: [f32; 4],
+        end_color: [f32; 4],
+        center_relative: [f32; 2],
+        radius: [f32; 2],
+    },
+}
+
 struct CompositeInstanceManager {
     buffer: br::vk::VkBuffer,
     memory: br::vk::VkDeviceMemory,
+    gradient_data_buffer: br::vk::VkBuffer,
+    gradient_data_memory: br::vk::VkDeviceMemory,
     streaming_buffer: br::vk::VkBuffer,
     streaming_memory: br::vk::VkDeviceMemory,
     streaming_memory_requires_flush: bool,
     buffer_stg: br::vk::VkBuffer,
     memory_stg: br::vk::VkDeviceMemory,
+    gradient_data_buffer_stg: br::vk::VkBuffer,
+    gradient_data_memory_stg: br::vk::VkDeviceMemory,
     stg_mem_requires_flush: bool,
     capacity: usize,
     count: usize,
     free: BTreeSet<usize>,
+    capacity_gradient: usize,
+    count_gradient: usize,
 }
 impl CompositeInstanceManager {
     unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
+            br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.gradient_data_buffer_stg, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.gradient_data_memory_stg, None);
+
             br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.buffer_stg, None);
             br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory_stg, None);
 
             br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.streaming_buffer, None);
             br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.streaming_memory, None);
+
+            br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.gradient_data_buffer, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.gradient_data_memory, None);
 
             br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.buffer, None);
             br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory, None);
@@ -652,6 +693,7 @@ impl CompositeInstanceManager {
     }
 
     const INIT_CAP: usize = 1024;
+    const INIT_CAP_GRADIENT: usize = 256;
 
     fn new(gfx: &VulkanDevice) -> Self {
         let mut buffer = br::BufferObject::new(
@@ -673,6 +715,26 @@ impl CompositeInstanceManager {
         buffer
             .bind(&memory, 0)
             .expect("Failed to bind buffer memory");
+
+        let mut gradient_data_buffer = br::BufferObject::new(
+            gfx,
+            &br::BufferCreateInfo::new(
+                core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT,
+                br::BufferUsage::STORAGE_BUFFER | br::BufferUsage::TRANSFER_DEST,
+            ),
+        )
+        .expect("gradient_data_buffer.create");
+        let req = gradient_data_buffer.requirements();
+        let Some(memory_index) = gfx.find_device_local_memory_index(req.memoryTypeBits) else {
+            tracing::error!(memory_index_mask = req.memoryTypeBits, "no suitable memory");
+            std::process::exit(1);
+        };
+        let gradient_data_memory =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(req.size, memory_index))
+                .expect("gradient_data_memory.create");
+        gradient_data_buffer
+            .bind(&gradient_data_memory, 0)
+            .expect("gradient_data_buffer.bind");
 
         let mut streaming_buffer = br::BufferObject::new(
             gfx,
@@ -709,7 +771,6 @@ impl CompositeInstanceManager {
         let memory_index = gfx
             .find_host_visible_memory_index(buffer_mreq.memoryTypeBits)
             .expect("no suitable memory");
-        let stg_mem_requires_flush = !gfx.is_coherent_memory(memory_index);
         let memory_stg = br::DeviceMemoryObject::new(
             gfx,
             &br::MemoryAllocateInfo::new(buffer_mreq.size, memory_index),
@@ -718,26 +779,58 @@ impl CompositeInstanceManager {
         buffer_stg
             .bind(&memory_stg, 0)
             .expect("Failed to bind staging buffer memory");
+        let buffer_memory_index = memory_index;
+
+        let mut gradient_data_buffer_stg = br::BufferObject::new(
+            gfx,
+            &br::BufferCreateInfo::new(
+                core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT,
+                br::BufferUsage::TRANSFER_SRC,
+            ),
+        )
+        .expect("gradient_data_buffer_stg.create");
+        let req = buffer.requirements();
+        let memory_index = gfx
+            .find_host_visible_memory_index(req.memoryTypeBits)
+            .expect("no suitable memory");
+        assert_eq!(buffer_memory_index, memory_index);
+        let stg_mem_requires_flush = !gfx.is_coherent_memory(memory_index);
+        let gradient_data_memory_stg =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(req.size, memory_index))
+                .expect("gradient_data_memory_stg.create");
+        gradient_data_buffer_stg
+            .bind(&gradient_data_memory_stg, 0)
+            .expect("gradient_data_memory_stg.bind");
 
         let (buffer, _) = buffer.unmanage();
         let (memory, _) = memory.unmanage();
+        let (gradient_data_buffer, _) = gradient_data_buffer.unmanage();
+        let (gradient_data_memory, _) = gradient_data_memory.unmanage();
         let (streaming_buffer, _) = streaming_buffer.unmanage();
         let (streaming_memory, _) = streaming_memory.unmanage();
         let (buffer_stg, _) = buffer_stg.unmanage();
         let (memory_stg, _) = memory_stg.unmanage();
+        let (gradient_data_buffer_stg, _) = gradient_data_buffer_stg.unmanage();
+        let (gradient_data_memory_stg, _) = gradient_data_memory_stg.unmanage();
 
         Self {
             buffer,
             memory,
+            gradient_data_buffer,
+            gradient_data_memory,
             streaming_buffer,
             streaming_memory,
             streaming_memory_requires_flush,
             buffer_stg,
             memory_stg,
+            gradient_data_buffer_stg,
+            gradient_data_memory_stg,
             stg_mem_requires_flush,
             capacity: Self::INIT_CAP,
             count: 0,
             free: BTreeSet::new(),
+            capacity_gradient: Self::INIT_CAP_GRADIENT,
+            count_gradient: 0,
         }
     }
 
@@ -763,6 +856,14 @@ impl CompositeInstanceManager {
                 (core::mem::size_of::<CompositeInstanceData>() * self.capacity) as _,
             )],
         )
+        .copy_buffer(
+            &unsafe { br::VkHandleRef::dangling(self.gradient_data_buffer_stg) },
+            &unsafe { br::VkHandleRef::dangling(self.gradient_data_buffer) },
+            &[br::BufferCopy::mirror(
+                0,
+                (core::mem::size_of::<GradientData>() * self.capacity) as _,
+            )],
+        )
     }
 
     const fn streaming_memory_requires_flush(&self) -> bool {
@@ -775,10 +876,6 @@ impl CompositeInstanceManager {
 
     const fn memory_stg_requires_explicit_flush(&self) -> bool {
         self.stg_mem_requires_flush
-    }
-
-    const fn range_all(&self) -> core::ops::Range<usize> {
-        0..core::mem::size_of::<CompositeInstanceData>() * self.count
     }
 
     const fn buffer_transparent_ref<'x>(&'x self) -> &'x br::VkHandleRef<'x, br::vk::VkBuffer> {
@@ -795,21 +892,20 @@ impl CompositeInstanceManager {
         self.memory_stg
     }
 
-    unsafe fn map_staging<'s, 'g>(
-        &'s mut self,
-        gfx_device: &'g VulkanDevice,
-    ) -> br::Result<CompositeInstanceMappedStagingMemory<'s, 'g>> {
-        let ptr = unsafe {
-            br::vkfn_wrapper::map_memory(
-                gfx_device.native_ptr(),
-                self.memory_stg,
-                0,
-                (core::mem::size_of::<CompositeInstanceData>() * self.capacity) as _,
-                0,
-            )?
-        };
+    const fn range_all(&self) -> core::ops::Range<usize> {
+        0..core::mem::size_of::<CompositeInstanceData>() * self.count
+    }
 
-        Ok(CompositeInstanceMappedStagingMemory(ptr, self, gfx_device))
+    const fn available_byte_length(&self) -> usize {
+        core::mem::size_of::<CompositeInstanceData>() * self.capacity
+    }
+
+    const fn gradient_data_range_all(&self) -> core::ops::Range<usize> {
+        0..core::mem::size_of::<GradientData>() * self.count_gradient
+    }
+
+    const fn gradient_data_available_byte_length(&self) -> usize {
+        core::mem::size_of::<GradientData>() * self.capacity_gradient
     }
 
     const fn streaming_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
@@ -833,6 +929,24 @@ impl CompositeInstanceManager {
         Ok(CompositeInstanceMappedStreamingMemory(
             ptr, self, gfx_device,
         ))
+    }
+}
+
+pub struct MappedStagingMemory<'g>(
+    *mut core::ffi::c_void,
+    br::vk::VkDeviceMemory,
+    &'g VulkanDevice<'g>,
+);
+impl Drop for MappedStagingMemory<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::unmap_memory(self.2.native_ptr(), self.1);
+        }
+    }
+}
+impl MappedStagingMemory<'_> {
+    pub const fn ptr(&self) -> *mut core::ffi::c_void {
+        self.0
     }
 }
 
@@ -903,6 +1017,10 @@ impl CompositeTreeRef {
         mgr.mark_dirty(*self);
     }
 }
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GradientRef(u32);
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1372,7 +1490,9 @@ enum DirtyRectSync<Event> {
 
 pub struct CompositeTreeRender<Event> {
     rects: Vec<CompositeRect<Event>>,
+    gradients: Vec<Gradient>,
     dirty_flags: Vec<DirtyFlagSet>,
+    gradient_dirty_flags: Vec<bool>,
     caches: Vec<CompositeRectCache>,
     parameter_store: CompositeTreeParameterStoreRender<Event>,
 }
@@ -1380,7 +1500,9 @@ impl<Event> CompositeTreeRender<Event> {
     pub fn new() -> Self {
         Self {
             rects: Vec::new(),
+            gradients: Vec::new(),
             dirty_flags: Vec::new(),
+            gradient_dirty_flags: Vec::new(),
             caches: Vec::new(),
             parameter_store: CompositeTreeParameterStoreRender {
                 float_parameters: Vec::new(),
@@ -1400,6 +1522,7 @@ impl<Event> CompositeTreeRender<Event> {
         size: br::Extent2D,
         current_sec: f32,
         mapped_head: *mut core::ffi::c_void,
+        gradient_mapped_head: *mut core::ffi::c_void,
         font_set: &PerWindowFontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
         mask_atlas_rects: &[AtlasRect],
@@ -1407,6 +1530,48 @@ impl<Event> CompositeTreeRender<Event> {
         mut on_event: impl FnMut(Event),
     ) {
         // let update_timer = std::time::Instant::now();
+
+        // update gradient brushes
+        for (n, g) in self.gradients.iter().enumerate() {
+            if !core::mem::replace(&mut self.gradient_dirty_flags[n], false) {
+                // not dirty
+                continue;
+            }
+
+            tracing::debug!(n, ?g, "write gradient");
+            unsafe {
+                core::ptr::write(
+                    gradient_mapped_head.cast::<GradientData>().add(n),
+                    match g {
+                        Gradient::Linear {
+                            start_color,
+                            end_color,
+                            start_pos_relative,
+                            end_pos_relative,
+                        } => GradientData {
+                            start_color: start_color.clone(),
+                            end_color: end_color.clone(),
+                            params: [
+                                start_pos_relative[0],
+                                start_pos_relative[1],
+                                end_pos_relative[0],
+                                end_pos_relative[1],
+                            ],
+                        },
+                        Gradient::Radial {
+                            start_color,
+                            end_color,
+                            center_relative,
+                            radius,
+                        } => GradientData {
+                            start_color: start_color.clone(),
+                            end_color: end_color.clone(),
+                            params: [center_relative[0], center_relative[1], radius[0], radius[1]],
+                        },
+                    },
+                );
+            }
+        }
 
         let mut instance_slot_index = 0;
         let mut processes = vec![(
@@ -1496,6 +1661,8 @@ impl<Event> CompositeTreeRender<Event> {
                     t.process_on_complete(current_sec, &mut on_event);
                     stdev.process_on_complete(current_sec, &mut on_event);
                 }
+                CompositeMode::FillLinearGradient(_) => {}
+                CompositeMode::FillRadialGradient(_) => {}
             }
             if let Some(ref mut b) = r.border {
                 b.color.process_on_complete(current_sec, &mut on_event);
@@ -1562,6 +1729,8 @@ impl<Event> CompositeTreeRender<Event> {
                                 CompositeMode::FillColorBackdropBlur(ref t, _) => {
                                     t.evaluate(current_sec, &self.parameter_store)
                                 }
+                                CompositeMode::FillLinearGradient(_) => [0.0; 4],
+                                CompositeMode::FillRadialGradient(_) => [0.0; 4],
                             },
                             corner_radius_x: [
                                 r.corner_radius.left_top[0] * r.base_scale_factor,
@@ -1581,7 +1750,12 @@ impl<Event> CompositeTreeRender<Event> {
                                 .as_ref()
                                 .map_or(0.0, |b| b.thickness * r.base_scale_factor),
                             softedge: r.softedge * r.base_scale_factor,
-                            _padding: [0.0; 2],
+                            gradient_data_index: match r.composite_mode {
+                                CompositeMode::FillLinearGradient(x)
+                                | CompositeMode::FillRadialGradient(x) => x.0 as f32,
+                                _ => 0.0,
+                            },
+                            _padding: 0.0,
                         },
                     );
                 }
@@ -1675,7 +1849,8 @@ impl<Event> CompositeTreeRender<Event> {
                                 border_thickness: 0.0,
                                 border_color: [0.0; 4],
                                 softedge: 0.0,
-                                _padding: [0.0; 2],
+                                gradient_data_index: 0.0,
+                                _padding: 0.0,
                             },
                         );
                     }
@@ -2071,6 +2246,8 @@ struct DirtyFlagSet {
 pub struct CompositeTreeSyncBuffer<Event> {
     pushed_rects: Vec<CompositeRect<Event>>,
     dirty_rects: Vec<(usize, DirtyRectSync<Event>)>,
+    pushed_gradients: Vec<Gradient>,
+    dirty_gradients: Vec<(u32, Gradient)>,
     parameter_store: CompositeTreeParameterStoreSyncBuffer<Event>,
 }
 impl<Event> CompositeTreeSyncBuffer<Event> {
@@ -2078,6 +2255,8 @@ impl<Event> CompositeTreeSyncBuffer<Event> {
         Self {
             pushed_rects: Vec::new(),
             dirty_rects: Vec::new(),
+            pushed_gradients: Vec::new(),
+            dirty_gradients: Vec::new(),
             parameter_store: CompositeTreeParameterStoreSyncBuffer {
                 push_float_parameters: Vec::new(),
                 dirty_float_parameters: Vec::new(),
@@ -2088,6 +2267,7 @@ impl<Event> CompositeTreeSyncBuffer<Event> {
     pub fn clean(&mut self, render: &mut CompositeTreeRender<Event>) {
         let _ = render.rects.try_reserve(self.pushed_rects.len());
         let _ = render.caches.try_reserve(self.pushed_rects.len());
+        let _ = render.dirty_flags.try_reserve(self.pushed_rects.len());
         for x in self.pushed_rects.drain(..) {
             render.rects.push(x);
             render.dirty_flags.push(DirtyFlagSet {
@@ -2112,6 +2292,19 @@ impl<Event> CompositeTreeSyncBuffer<Event> {
             }
         }
 
+        let _ = render.gradients.try_reserve(self.pushed_gradients.len());
+        let _ = render
+            .gradient_dirty_flags
+            .try_reserve(self.pushed_gradients.len());
+        for x in self.pushed_gradients.drain(..) {
+            render.gradients.push(x);
+            render.gradient_dirty_flags.push(true);
+        }
+        for (id, data) in self.dirty_gradients.drain(..) {
+            render.gradients[id as usize] = data;
+            render.gradient_dirty_flags[id as usize] = true;
+        }
+
         self.parameter_store.clean(&mut render.parameter_store);
     }
 }
@@ -2122,6 +2315,10 @@ pub struct CompositeTree<Event> {
     pushed_rects: Vec<usize>,
     dirty_rects: HashMap<usize, DirtyRect>,
     unused: BTreeSet<usize>,
+    gradients: Vec<Gradient>,
+    pushed_gradients: Vec<u32>,
+    dirty_gradients: HashSet<u32>,
+    unused_gradients: BTreeSet<u32>,
     dirty: bool,
     parameter_store: CompositeTreeParameterStore<Event>,
     custom_render_unused: BTreeSet<usize>,
@@ -2135,6 +2332,10 @@ impl<Event> CompositeTree<Event> {
             pushed_rects: Vec::new(),
             dirty_rects: HashMap::new(),
             unused: BTreeSet::new(),
+            gradients: Vec::new(),
+            pushed_gradients: Vec::new(),
+            dirty_gradients: HashSet::new(),
+            unused_gradients: BTreeSet::new(),
             dirty: false,
             parameter_store: CompositeTreeParameterStore {
                 push_float_parameters: Vec::new(),
@@ -2169,6 +2370,24 @@ impl<Event> CompositeTree<Event> {
     pub fn free(&mut self, index: CompositeTreeRef) {
         self.unused.insert(index.0);
         self.dirty_rects.insert(index.0, DirtyRect::Deleted);
+    }
+
+    pub fn create_gradient(&mut self, data: Gradient) -> GradientRef {
+        if let Some(x) = self.unused_gradients.pop_first() {
+            self.gradients[x as usize] = data;
+            self.dirty_gradients.insert(x);
+
+            return GradientRef(x);
+        }
+
+        let id = self.gradients.len().try_into().expect("too many gradients");
+        self.gradients.push(data);
+        self.pushed_gradients.push(id);
+        GradientRef(id)
+    }
+
+    pub fn free_gradient(&mut self, index: GradientRef) {
+        self.unused_gradients.insert(index.0);
     }
 
     pub fn free_all(&mut self, index: CompositeTreeRef) {
@@ -2228,14 +2447,12 @@ impl<Event> CompositeTree<Event> {
     {
         let _ = sync_buffer
             .pushed_rects
-            .try_reserve(self.pushed_rects.len());
+            .try_reserve(self.pushed_rects.len() + self.dirty_rects.len());
         for n in self.pushed_rects.drain(..) {
             sync_buffer.pushed_rects.push(self.rects[n].clone());
             self.dirty_flags[n].dirty = false;
             self.dirty_flags[n].text_layout_dirty = false;
         }
-
-        let _ = sync_buffer.dirty_rects.try_reserve(self.dirty_rects.len());
         for (n, x) in self.dirty_rects.drain() {
             match x {
                 DirtyRect::Modified => {
@@ -2250,6 +2467,21 @@ impl<Event> CompositeTree<Event> {
                     sync_buffer.dirty_rects.push((n, DirtyRectSync::Deleted));
                 }
             }
+        }
+
+        let _ = sync_buffer
+            .pushed_gradients
+            .try_reserve(self.pushed_gradients.len() + self.dirty_gradients.len());
+        for n in self.pushed_gradients.drain(..) {
+            sync_buffer
+                .pushed_gradients
+                .push(self.gradients[n as usize].clone());
+            self.dirty_gradients.remove(&n);
+        }
+        for n in self.dirty_gradients.drain() {
+            sync_buffer
+                .pushed_gradients
+                .push(self.gradients[n as usize].clone());
         }
 
         self.parameter_store
@@ -2296,13 +2528,19 @@ impl CompositeDescriptorSet {
             .for_shader_stage(
                 br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
             ),
+        // gradient data
+        br::DescriptorType::StorageBuffer
+            .make_binding(1, 1)
+            .for_shader_stage(
+                br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+            ),
         // streaming data
         br::DescriptorType::UniformBuffer
-            .make_binding(1, 1)
+            .make_binding(2, 1)
             .only_for_vertex(),
         // texture atlas
         br::DescriptorType::CombinedImageSampler
-            .make_binding(2, 1)
+            .make_binding(3, 1)
             .only_for_fragment(),
     ];
 
@@ -2316,11 +2554,20 @@ impl CompositeDescriptorSet {
     }
 
     #[inline(always)]
-    pub fn set_streaming_buffer<'s>(
+    pub fn set_gradient_buffer<'s>(
         set: br::DescriptorSet,
         info: br::DescriptorBufferInfo<'s>,
     ) -> br::DescriptorSetWriteInfo<'s> {
         set.binding_at(1)
+            .write(br::DescriptorContents::StorageBuffer(vec![info]))
+    }
+
+    #[inline(always)]
+    pub fn set_streaming_buffer<'s>(
+        set: br::DescriptorSet,
+        info: br::DescriptorBufferInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(2)
             .write(br::DescriptorContents::UniformBuffer(vec![info]))
     }
 
@@ -2329,7 +2576,7 @@ impl CompositeDescriptorSet {
         set: br::DescriptorSet,
         info: br::DescriptorImageInfo<'s>,
     ) -> br::DescriptorSetWriteInfo<'s> {
-        set.binding_at(2)
+        set.binding_at(3)
             .write(br::DescriptorContents::CombinedImageSampler(vec![info]))
     }
 }
@@ -2780,7 +3027,7 @@ impl CompositeRenderer {
                         (1 + backdrop_fx_blur_processor.fixed_descriptor_set_count()) as _,
                     ),
                     br::DescriptorType::UniformBuffer.make_size(1),
-                    br::DescriptorType::StorageBuffer.make_size(1),
+                    br::DescriptorType::StorageBuffer.make_size(2),
                 ],
             ),
         )
@@ -2797,6 +3044,13 @@ impl CompositeRenderer {
                 br::DescriptorBufferInfo::new(
                     instance_manager.buffer_transparent_ref(),
                     0..(core::mem::size_of::<CompositeInstanceData>() * 1024) as _,
+                ),
+            ),
+            CompositeDescriptorSet::set_gradient_buffer(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorBufferInfo::new(
+                    br::VkHandleRef::from_raw_ref(&instance_manager.gradient_data_buffer),
+                    0..(core::mem::size_of::<GradientData>() * 256) as _,
                 ),
             ),
             CompositeDescriptorSet::set_streaming_buffer(
@@ -2884,14 +3138,38 @@ impl CompositeRenderer {
         on_event: impl FnMut(Event),
         current_sec: f32,
     ) -> CompositeRenderingData {
-        let h = self.instance_manager.staging_memory_raw_handle();
         let r = self.instance_manager.range_all();
+        let gr = self.instance_manager.gradient_data_range_all();
         let flush_required = self.instance_manager.memory_stg_requires_explicit_flush();
-        let ptr = unsafe {
-            self.instance_manager
-                .map_staging(gfx)
-                .expect("composite.instances.stg.map")
-        };
+        let ptr = MappedStagingMemory(
+            unsafe {
+                br::vkfn_wrapper::map_memory(
+                    gfx.native_ptr(),
+                    self.instance_manager.memory_stg,
+                    0,
+                    self.instance_manager.available_byte_length() as _,
+                    0,
+                )
+                .expect("comopsite.instances.stg.map")
+            },
+            self.instance_manager.memory_stg,
+            gfx,
+        );
+        let gradient_ptr = MappedStagingMemory(
+            unsafe {
+                br::vkfn_wrapper::map_memory(
+                    gfx.native_ptr(),
+                    self.instance_manager.gradient_data_memory_stg,
+                    0,
+                    self.instance_manager.gradient_data_available_byte_length() as _,
+                    0,
+                )
+                .expect("comopsite.instances.gradient_stg.map")
+            },
+            self.instance_manager.gradient_data_memory_stg,
+            gfx,
+        );
+
         let mut inst_builder = CompositeRenderingInstructionBuilder::new(rt_size);
         unsafe {
             tree.update(
@@ -2900,6 +3178,7 @@ impl CompositeRenderer {
                 rt_size,
                 current_sec,
                 ptr.ptr(),
+                gradient_ptr.ptr(),
                 font_set,
                 mask_atlas,
                 mask_atlas_rects,
@@ -2907,20 +3186,26 @@ impl CompositeRenderer {
                 on_event,
             )
         };
-        let render_data = inst_builder.build();
+
         if flush_required {
             unsafe {
-                gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
-                    h,
-                    r.start as _,
-                    (r.end - r.start) as _,
-                )])
+                gfx.flush_mapped_memory_ranges(&[
+                    br::MappedMemoryRange::new_raw(
+                        self.instance_manager.memory_stg,
+                        r.start as _,
+                        (r.end - r.start) as _,
+                    ),
+                    br::MappedMemoryRange::new_raw(
+                        self.instance_manager.gradient_data_memory_stg,
+                        gr.start as _,
+                        (gr.end - gr.start) as _,
+                    ),
+                ])
                 .expect("composite.instance.stg.flush");
             }
         }
-        drop(ptr);
 
-        render_data
+        inst_builder.build()
     }
 
     pub fn update_streaming_data(&mut self, gfx: &VulkanDevice, data: CompositeStreamingData) {

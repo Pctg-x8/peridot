@@ -8,6 +8,25 @@ struct PushConstants {
 [vk::push_constant]
 PushConstants pushConstants;
 
+/// composite mode constant(mapped with composite.rs)
+enum CompositeMode : uint {
+  DirectSourceOver,
+  ColorTint,
+  FillColor,
+  ColorTintBackdropBlur,
+  FillColorBackdropBlur,
+  FillLinearGradient,
+  FillRadialGradient,
+}
+extension CompositeMode {
+  property requiresBackdropComposition : bool {
+    inline get {
+      return this == CompositeMode.ColorTintBackdropBlur ||
+             this == CompositeMode.FillColorBackdropBlur;
+    }
+  }
+}
+
 struct CompositeInstanceData {
   /// scale_x(width), scale_y(height), translate_x(left), translate_y(top)
   float4 posSTStatic;
@@ -23,7 +42,7 @@ struct CompositeInstanceData {
   /// lt, rt, lb, rb (in pixels)
   float4 cornerRadiusY;
   float4 borderColor;
-  /// border_thickness, softedge, .., ..
+  /// border_thickness, softedge, gradientDataIndex, ..
   float4 miscValues2;
 
   property texSlicedSizedPixels : float2 {
@@ -53,6 +72,12 @@ struct CompositeInstanceData {
   }
 }
 
+struct GradientData {
+  float4 startColor;
+  float4 endColor;
+  float4 params;
+}
+
 struct StreamingData {
   float currentSec;
 }
@@ -60,8 +85,10 @@ struct StreamingData {
 [vk::binding(0, 0)]
 StructuredBuffer<CompositeInstanceData> instanceDataArray;
 [vk::binding(1, 0)]
-ConstantBuffer<StreamingData> streamingData;
+StructuredBuffer<GradientData> gradientDataArray;
 [vk::binding(2, 0)]
+ConstantBuffer<StreamingData> streamingData;
+[vk::binding(3, 0)]
 Sampler2D<float4> texture;
 [vk::binding(0, 1)]
 Sampler2D<float4> backdropTexture;
@@ -103,25 +130,9 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
       premultiplyAlpha(instanceDataArray[iindex].borderColor);
   vo.fragmentInput.packedValues4.x = instanceDataArray[iindex].borderThickness;
   vo.fragmentInput.packedValues4.y = instanceDataArray[iindex].softedge;
+  vo.fragmentInput.packedValues4.z = instanceDataArray[iindex].miscValues2.z;
 
   return vo;
-}
-
-/// composite mode constant(mapped with composite.rs)
-enum CompositeMode : uint {
-  DirectSourceOver,
-  ColorTint,
-  FillColor,
-  ColorTintBackdropBlur,
-  FillColorBackdropBlur
-}
-extension CompositeMode {
-  property requiresBackdropComposition : bool {
-    inline get {
-      return this == CompositeMode.ColorTintBackdropBlur ||
-             this == CompositeMode.FillColorBackdropBlur;
-    }
-  }
 }
 
 struct FragmentInput {
@@ -131,7 +142,7 @@ struct FragmentInput {
   float4 packedValues2;
   /// relativePixelCoord.xy, renderSizePixels.xy
   float4 packedValues3;
-  /// borderThickness, softedge, .., ..
+  /// borderThickness, softedge, gradientDataIndex, ..
   float4 packedValues4;
   float4 sliceBordersLTRB;
   float4 colorTint;
@@ -222,6 +233,10 @@ struct FragmentInput {
   property softedge : float {
     inline get { return this.packedValues4.y; }
   }
+
+  property gradientDataIndex : uint {
+    inline get { return uint(this.packedValues4.z); }
+  }
 }
 
 [shader("fragment")]
@@ -257,6 +272,31 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   case CompositeMode.FillColorBackdropBlur:
     col = input.colorTint;
     break;
+  case CompositeMode.FillLinearGradient: {
+    // nearest point on gradient line
+    let a = saturate(dot(
+                normalize(gradientDataArray[input.gradientDataIndex].params.zw -
+                          gradientDataArray[input.gradientDataIndex].params.xy),
+                input.relativePixelCoord / input.renderSizePixels -
+                    gradientDataArray[input.gradientDataIndex].params.xy)) /
+            length(gradientDataArray[input.gradientDataIndex].params.zw -
+                   gradientDataArray[input.gradientDataIndex].params.xy);
+    col = lerp(gradientDataArray[input.gradientDataIndex].startColor,
+               gradientDataArray[input.gradientDataIndex].endColor, a);
+    break;
+  }
+  case CompositeMode.FillRadialGradient: {
+    // starting from center
+    let a =
+        1.0 -
+        saturate(length((input.relativePixelCoord / input.renderSizePixels -
+                         gradientDataArray[input.gradientDataIndex].params.xy) /
+                        gradientDataArray[input.gradientDataIndex].params.zw));
+    col = lerp(gradientDataArray[input.gradientDataIndex].startColor,
+               gradientDataArray[input.gradientDataIndex].endColor, a);
+    break;
+  }
+  case CompositeMode.DirectSourceOver:
   default:
     // fallback: direct source-over
     col = input.colorTint;

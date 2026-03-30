@@ -34,7 +34,7 @@ use crate::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
-            CompositeTreeRef, CompositeTreeSyncBuffer,
+            CompositeTreeRef, CompositeTreeSyncBuffer, Gradient,
         },
         text::{FontID, PerWindowFontSet, RootFontSet, TextLayout, ThreadLocalTypingContext},
     },
@@ -2397,6 +2397,22 @@ async fn run<'sys>(
         }),
         ..Default::default()
     });
+    let tab_bg_grad = view_init_ctx
+        .composite_tree
+        .create_gradient(Gradient::Radial {
+            start_color: [1.0, 1.0, 1.0, 0.0],
+            end_color: [1.0, 1.0, 1.0, 1.0],
+            center_relative: [0.5, 0.5],
+            radius: [0.5, 0.1],
+        });
+    let tab_bg = view_init_ctx.composite_tree.create(CompositeRect {
+        base_scale_factor: init_scale,
+        relative_size_adjustment: [1.0, 1.0],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillRadialGradient(tab_bg_grad),
+        ..Default::default()
+    });
+    view_init_ctx.composite_tree.add_child(tab_main, tab_bg);
     view_init_ctx
         .composite_tree
         .add_child(main_window.composite_root(), tab_main);

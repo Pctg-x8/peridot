@@ -162,6 +162,36 @@ impl<'fs> VulkanDevice<'fs> {
             .next()
             .expect("no physical devices");
 
+        #[cfg(windows)]
+        extern "system" fn cb_win(
+            severity: br::vk::VkDebugUtilsMessageSeverityFlagBitsEXT,
+            r#type: br::vk::VkDebugUtilsMessageTypeFlagsEXT,
+            data: *const br::vk::VkDebugUtilsMessengerCallbackDataEXT,
+            user_data: *mut core::ffi::c_void,
+        ) -> br::vk::VkBool32 {
+            unsafe {
+                windows::Win32::System::Diagnostics::Debug::OutputDebugStringA(
+                    windows_core::PCSTR((*data).pMessage.cast()),
+                );
+            }
+            false as _
+        }
+        #[cfg(windows)]
+        let eh = br::DebugUtilsMessengerObject::new(
+            &vk_instance,
+            &br::DebugUtilsMessengerCreateInfo::new(
+                br::DebugUtilsMessageSeverityFlags::ERROR
+                    | br::DebugUtilsMessageSeverityFlags::WARNING
+                    | br::DebugUtilsMessageSeverityFlags::INFO,
+                br::DebugUtilsMessageTypeFlags::GENERAL
+                    | br::DebugUtilsMessageTypeFlags::PERFORMANCE
+                    | br::DebugUtilsMessageTypeFlags::VALIDATION,
+                cb_win,
+            ),
+        )
+        .expect("cb")
+        .unmanage();
+
         for x in vk_adapter
             .enumerate_extension_properties_cstr_alloc(None)
             .unwrap_or_else(|e| {
