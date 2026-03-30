@@ -86,51 +86,8 @@ pub fn launch() {
         .init();
 
     let mut event_store = VecDeque::new();
-    let event_queue = EventQueue {
-        event_store: &mut event_store,
-    };
     let global_time_base = std::time::Instant::now();
     let fs = FileSystem::new();
-    main_wrapper(
-        move |global_time_base,
-              renderer_sync,
-              composite_tree,
-              ht_manager,
-              main_window,
-              system_link| {
-            run(
-                event_queue,
-                global_time_base,
-                renderer_sync,
-                composite_tree,
-                ht_manager,
-                main_window,
-                system_link,
-            )
-        },
-        &mut event_store,
-        &global_time_base,
-        &Mutex::new(RendererSync {
-            composite_buffer: CompositeTreeSyncBuffer::new(),
-        }),
-        &fs,
-    );
-}
-
-fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-    run_app: impl FnOnce(
-        &'sys std::time::Instant,
-        &'sys Mutex<RendererSync>,
-        CompositeTree<SyncEvent>,
-        HitTestTreeManager<'sys>,
-        WindowHandle,
-        SystemLink<'sys>,
-    ) -> AppFuture,
-    event_store: &mut VecDeque<Event>,
-    global_time_base: &'sys std::time::Instant,
-    renderer_sync: &'sys Mutex<RendererSync>,
-    fs: &'sys FileSystem,
-) {
     let events = SyncEventBus {
         queue: std::sync::Mutex::new(VecDeque::new()),
         #[cfg(target_os = "linux")]
@@ -143,7 +100,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         },
     };
     let vk_device = VulkanDevice::new(&fs);
-    let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
     #[cfg(windows)]
     assert!(
         vk_device.presentation_support(),
@@ -152,6 +108,42 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(windows)]
     let app_context = platform::windows::ApplicationContext::new();
+
+    main_wrapper(
+        move |args| run(args),
+        &mut event_store,
+        &global_time_base,
+        &Mutex::new(RendererSync {
+            composite_buffer: CompositeTreeSyncBuffer::new(),
+        }),
+        &fs,
+        &vk_device,
+        &events,
+        #[cfg(windows)]
+        &app_context,
+    );
+}
+
+fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
+    run_app: impl FnOnce(LaunchArgs<'sys>) -> AppFuture,
+    event_store: &mut VecDeque<Event>,
+    global_time_base: &'sys std::time::Instant,
+    renderer_sync: &'sys Mutex<RendererSync>,
+    fs: &'sys FileSystem,
+    vk_device: &'sys VulkanDevice,
+    sync_event_bus: &'sys SyncEventBus,
+    #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
+) {
+    let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
+    let mut composite_tree = CompositeTree::new();
+    let mut ht_manager = HitTestTreeManager::new();
+    let mut polling = false;
+    let empty_dispatcher = LogicFiberEventDispatcher {
+        event_store,
+        polling: &mut polling,
+        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
+        future_ptr: core::ptr::null_mut(),
+    };
 
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
@@ -175,7 +167,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let mut window_registry = platform::unix::wayland::WindowRegistry::new();
 
     #[cfg(windows)]
-    let drag_preview_popover = DragPreviewPopoverHandle::new(&app_context);
+    let drag_preview_popover = DragPreviewPopoverHandle::new(app_context);
 
     #[cfg(feature = "wayland")]
     let popover_buf_shm_bytes = if wl_interfaces.single_pixel_buffer_manager.is_some() {
@@ -285,24 +277,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         position_base_window_link: core::cell::Cell::new(core::ptr::null_mut()),
     };
 
-    let mut composite_tree = CompositeTree::new();
-    let mut ht_manager = HitTestTreeManager::new();
-    let mut polling = false;
-    let empty_dispatcher = LogicFiberEventDispatcher {
-        event_store,
-        polling: &mut polling,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
-        future_ptr: core::ptr::null_mut(),
-    };
-
     #[cfg(windows)]
     let main_window_handle = SystemLink::init_main_window(
-        &vk_device,
+        vk_device,
         empty_dispatcher.clone(),
         &mut composite_tree,
         &mut ht_manager,
         &rt_sender,
-        &app_context,
+        app_context,
     );
 
     #[cfg(feature = "wayland")]
@@ -393,26 +375,27 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     });
 
     let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
-    let mut app = core::pin::pin!(run_app(
+    let mut app = core::pin::pin!(run_app(LaunchArgs {
+        event_queue: EventQueue { event_store },
         global_time_base,
         renderer_sync,
         composite_tree,
         ht_manager,
-        main_window_handle,
+        main_window: main_window_handle,
         #[cfg(windows)]
-        SystemLink {
+        system_link: SystemLink {
             drag_preview_popover,
             root_font_set: &root_font_set,
             rt_sender: rt_sender.clone(),
-            vk_device: &vk_device,
+            vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
-            app_context_ptr: &app_context,
+            app_context_ptr: app_context,
         },
         #[cfg(not(windows))]
-        SystemLink {
+        system_link: SystemLink {
             drag_preview_popover,
             rt_sender: rt_sender.clone(),
-            vk_device: &vk_device,
+            vk_device,
             root_font_set: &root_font_set,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
@@ -433,7 +416,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
             }
         }
-    ));
+    }));
 
     app_event_dispatcher.future_ptr = unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ };
     #[cfg(feature = "wayland")]
@@ -503,11 +486,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
-            vk_device: &vk_device,
+            vk_device,
             shutdown_signal: &shutdown,
-            renderer_sync: &renderer_sync,
-            global_time_base: &global_time_base,
-            event_bus: &events,
+            renderer_sync,
+            global_time_base,
+            event_bus: sync_event_bus,
             message_receiver: rt_receiver,
             root_font_set: &root_font_set,
         };
@@ -727,7 +710,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }
 
         #[cfg(windows)]
-        let handles = [events.event_notify];
+        let handles = [sync_event_bus.event_notify];
         #[cfg(windows)]
         let mut msg = core::mem::MaybeUninit::uninit();
         #[cfg(windows)]
@@ -742,7 +725,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             };
 
             if r == windows::Win32::Foundation::WAIT_OBJECT_0 {
-                events.redispatch(&app_event_dispatcher);
+                sync_event_bus.redispatch(&app_event_dispatcher);
             } else if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
                 while unsafe {
                     windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
@@ -1768,6 +1751,7 @@ impl TextInputViewEventHandler {
         }
         cursor_rect.offset[0] = AnimatableFloat::Value(cursor_display_x);
 
+        #[cfg(feature = "wayland")]
         let (sx, sy) = ht_manager.translate_tree_local_to_root(
             self.ht_root,
             2.0 + cursor_display_x,
@@ -2133,7 +2117,7 @@ pub struct TextInputView {
     eh: Rc<TextInputViewEventHandler>,
 }
 impl TextInputView {
-    pub fn new(ctx: &mut ViewInitContext, window: WindowHandle, syslink: &SystemLink) -> Self {
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
@@ -2281,15 +2265,27 @@ struct PerWindowData {
     header: ui::window_header::View,
 }
 
+struct LaunchArgs<'sys> {
+    pub event_queue: EventQueue,
+    pub global_time_base: &'sys std::time::Instant,
+    pub renderer_sync: &'sys Mutex<RendererSync>,
+    pub composite_tree: CompositeTree<SyncEvent>,
+    pub ht_manager: HitTestTreeManager<'sys>,
+    pub main_window: WindowHandle,
+    pub system_link: SystemLink<'sys>,
+}
+
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
 async fn run<'sys>(
-    event_queue: EventQueue,
-    global_time_base: &'sys std::time::Instant,
-    renderer_sync: &'sys Mutex<RendererSync>,
-    mut composite_tree: CompositeTree<SyncEvent>,
-    mut ht_manager: HitTestTreeManager<'sys>,
-    mut main_window: WindowHandle,
-    system_link: SystemLink<'sys>,
+    LaunchArgs {
+        event_queue,
+        global_time_base,
+        renderer_sync,
+        mut composite_tree,
+        mut ht_manager,
+        mut main_window,
+        system_link,
+    }: LaunchArgs<'sys>,
 ) {
     tracing::info!("app start");
 
@@ -2502,7 +2498,7 @@ async fn run<'sys>(
     );
     test_alert_btn.mount(&mut view_init_ctx, &main_window);
 
-    let text_input_view = TextInputView::new(&mut view_init_ctx, main_window, &system_link);
+    let text_input_view = TextInputView::new(&mut view_init_ctx);
     text_input_view.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
