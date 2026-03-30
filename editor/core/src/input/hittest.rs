@@ -533,7 +533,21 @@ pub enum Role {
     RestoreButton,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerButton {
+    /// だいたいは左
+    Primary,
+    /// だいたいは右
+    Secondary,
+}
+
 pub struct PointerActionArgs {
+    pub client_pos: Point<LogicalUnit>,
+    pub client_size: Size<LogicalUnit>,
+}
+
+pub struct PointerButtonActionArgs {
+    pub button: PointerButton,
     pub client_pos: Point<LogicalUnit>,
     pub client_size: Size<LogicalUnit>,
 }
@@ -574,7 +588,7 @@ pub trait HitTestTreeActionHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
     }
@@ -584,7 +598,7 @@ pub trait HitTestTreeActionHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
     }
@@ -594,7 +608,7 @@ pub trait HitTestTreeActionHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
     }
@@ -604,7 +618,7 @@ pub trait HitTestTreeActionHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
     }
@@ -614,7 +628,7 @@ pub trait HitTestTreeActionHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
     }
@@ -634,7 +648,7 @@ pub trait HitTestTreeActionHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
     }

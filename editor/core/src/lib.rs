@@ -25,7 +25,7 @@ use crate::{
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
             HitTestTreeManager, HitTestTreeRef, HitTestTreeScreenRepositionHandler,
-            PointerActionArgs,
+            PointerActionArgs, PointerButton, PointerButtonActionArgs,
         },
     },
     rendering::{
@@ -789,6 +789,7 @@ pub enum Event {
     Quit,
     PointerDown {
         window: WindowHandle,
+        button: PointerButton,
         #[cfg(feature = "wayland")]
         event_id: platform::unix::wayland::PointerEventID,
     },
@@ -799,6 +800,7 @@ pub enum Event {
     },
     PointerUp {
         window: WindowHandle,
+        button: PointerButton,
     },
     KeyDown {
         window: WindowHandle,
@@ -1351,7 +1353,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> input::EventContinueControl {
         let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
             sender,
@@ -1442,7 +1444,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> input::EventContinueControl {
         let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
             sender,
@@ -1486,7 +1488,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         &self,
         sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &PointerButtonActionArgs,
     ) -> input::EventContinueControl {
         #[cfg(windows)]
         let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
@@ -2476,8 +2478,12 @@ async fn run<'sys>(
             &self,
             sender: HitTestTreeRef,
             context: &mut InputEventContext,
-            args: &PointerActionArgs,
+            args: &PointerButtonActionArgs,
         ) -> input::EventContinueControl {
+            if args.button != PointerButton::Primary {
+                return input::EventContinueControl::empty();
+            }
+
             context
                 .drag_preview
                 .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
@@ -2501,8 +2507,12 @@ async fn run<'sys>(
             &self,
             sender: HitTestTreeRef,
             context: &mut InputEventContext,
-            args: &PointerActionArgs,
+            args: &PointerButtonActionArgs,
         ) -> input::EventContinueControl {
+            if args.button != PointerButton::Primary {
+                return input::EventContinueControl::empty();
+            }
+
             context.drag_preview.hide();
 
             input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
@@ -2513,11 +2523,16 @@ async fn run<'sys>(
             &self,
             sender: HitTestTreeRef,
             context: &mut InputEventContext,
-            args: &PointerActionArgs,
+            args: &PointerButtonActionArgs,
         ) -> input::EventContinueControl {
-            context.system_link.dispatch_event(Event::SubWindowOpen);
+            if args.button == PointerButton::Primary {
+                context.system_link.dispatch_event(Event::SubWindowOpen);
 
-            input::EventContinueControl::STOP_PROPAGATION
+                input::EventContinueControl::STOP_PROPAGATION
+            } else {
+                tracing::debug!("right click!");
+                input::EventContinueControl::STOP_PROPAGATION
+            }
         }
     }
     let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
@@ -2698,6 +2713,7 @@ async fn run<'sys>(
             }
             Event::PointerDown {
                 window,
+                button,
                 #[cfg(feature = "wayland")]
                 event_id,
             } => {
@@ -2724,7 +2740,7 @@ async fn run<'sys>(
                 }
 
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
-                pointer_input_manager.handle_mouse_left_down(
+                pointer_input_manager.handle_mouse_down(
                     &window,
                     &ht_manager,
                     &mut InputEventContext {
@@ -2736,6 +2752,7 @@ async fn run<'sys>(
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
+                    button,
                     window.ht_root(),
                     &mut keyboard_focus_registry,
                 );
@@ -2770,9 +2787,9 @@ async fn run<'sys>(
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
             }
-            Event::PointerUp { window } => {
+            Event::PointerUp { window, button } => {
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
-                pointer_input_manager.handle_mouse_left_up(
+                pointer_input_manager.handle_mouse_up(
                     &window,
                     &ht_manager,
                     &mut InputEventContext {
@@ -2784,6 +2801,7 @@ async fn run<'sys>(
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
+                    button,
                     window.ht_root(),
                 );
                 composite_tree

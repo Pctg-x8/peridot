@@ -10,7 +10,7 @@ use crate::{
     DragPreviewPopoverHandle, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, HitTestTreeManager, HitTestTreeManagerCreateOnlyAccess, HitTestTreeRef,
-        PointerActionArgs, Role,
+        PointerActionArgs, PointerButton, PointerButtonActionArgs, Role,
     },
     rendering::composite::CompositeTree,
     utils::{LogicalUnit, Point, Size},
@@ -50,6 +50,7 @@ enum PointerDownGestureState {
     None,
     Click {
         base_client_pos: Point<PointerInputUnit>,
+        initiator_button: PointerButton,
     },
     Drag,
 }
@@ -58,8 +59,9 @@ impl PointerDownGestureState {
         matches!(self, Self::Drag)
     }
 
-    const fn is_click(&self) -> bool {
-        matches!(self, Self::Click { .. })
+    #[inline(always)]
+    fn is_click(&self, button: PointerButton) -> bool {
+        matches!(self, &Self::Click { initiator_button, .. } if initiator_button == button)
     }
 }
 
@@ -142,7 +144,7 @@ impl PointerInputManager {
     fn dispatch_pointer_down(
         &self,
         sh: &(impl ShellPointerActions + ?Sized),
-        action_args: &PointerActionArgs,
+        action_args: &PointerButtonActionArgs,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
@@ -209,7 +211,7 @@ impl PointerInputManager {
     fn dispatch_pointer_up(
         &self,
         sh: &(impl ShellPointerActions + ?Sized),
-        action_args: &PointerActionArgs,
+        action_args: &PointerButtonActionArgs,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
@@ -241,7 +243,7 @@ impl PointerInputManager {
     fn dispatch_click(
         &self,
         sh: &(impl ShellPointerActions + ?Sized),
-        action_args: &PointerActionArgs,
+        action_args: &PointerButtonActionArgs,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
@@ -274,7 +276,7 @@ impl PointerInputManager {
         &mut self,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
-        action_args: &PointerActionArgs,
+        action_args: &PointerButtonActionArgs,
         shell: &(impl ShellPointerActions + ?Sized),
     ) {
         self.down_gesture = PointerDownGestureState::Drag;
@@ -338,7 +340,7 @@ impl PointerInputManager {
     fn dispatch_drag_end(
         &self,
         sh: &(impl ShellPointerActions + ?Sized),
-        action_args: &PointerActionArgs,
+        action_args: &PointerButtonActionArgs,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
@@ -435,7 +437,10 @@ impl PointerInputManager {
     ) {
         self.last_client_pointer_pos = Some((window, client_pos));
 
-        if let PointerDownGestureState::Click { base_client_pos } = self.down_gesture
+        if let PointerDownGestureState::Click {
+            base_client_pos,
+            initiator_button,
+        } = self.down_gesture
             && client_pos.distance_sq(&base_client_pos)
                 >= Self::CLICK_DETECTION_MAX_DISTANCE.powi(2)
         {
@@ -443,7 +448,8 @@ impl PointerInputManager {
             self.begin_drag(
                 ht,
                 action_context,
-                &PointerActionArgs {
+                &PointerButtonActionArgs {
+                    button: initiator_button,
                     client_pos,
                     client_size: self.client_size_by_window[&window],
                 },
@@ -509,11 +515,12 @@ impl PointerInputManager {
         }
     }
 
-    pub fn handle_mouse_left_down(
+    pub fn handle_mouse_down(
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
+        button: PointerButton,
         ht_root: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
     ) {
@@ -524,6 +531,7 @@ impl PointerInputManager {
 
         self.down_gesture = PointerDownGestureState::Click {
             base_client_pos: client_pos.1,
+            initiator_button: button,
         };
 
         match self.pointer_focus {
@@ -534,7 +542,8 @@ impl PointerInputManager {
                         h.on_pointer_down(
                             ht_ref,
                             action_context,
-                            &PointerActionArgs {
+                            &PointerButtonActionArgs {
+                                button,
                                 client_pos: client_pos.1,
                                 client_size: self.client_size_by_window[&client_pos.0],
                             },
@@ -571,7 +580,8 @@ impl PointerInputManager {
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, new_captured) = self.dispatch_pointer_down(
                     sh,
-                    &PointerActionArgs {
+                    &PointerButtonActionArgs {
+                        button,
                         client_pos: client_pos.1,
                         client_size: self.client_size_by_window[&client_pos.0],
                     },
@@ -597,11 +607,12 @@ impl PointerInputManager {
         }
     }
 
-    pub fn handle_mouse_left_up(
+    pub fn handle_mouse_up(
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
+        button: PointerButton,
         ht_root: HitTestTreeRef,
     ) {
         let Some(client_pos) = self.last_client_pointer_pos else {
@@ -619,7 +630,8 @@ impl PointerInputManager {
                             h.on_drag_end(
                                 ht_ref,
                                 action_context,
-                                &PointerActionArgs {
+                                &PointerButtonActionArgs {
+                                    button,
                                     client_pos: client_pos.1,
                                     client_size: self.client_size_by_window[&client_pos.0],
                                 },
@@ -650,7 +662,8 @@ impl PointerInputManager {
                 PointerFocusState::Entering(ht_ref) => {
                     let (needs_recompute_pointer_enter, capture_released) = self.dispatch_drag_end(
                         sh,
-                        &PointerActionArgs {
+                        &PointerButtonActionArgs {
+                            button,
                             client_pos: client_pos.1,
                             client_size: self.client_size_by_window[&client_pos.0],
                         },
@@ -685,7 +698,8 @@ impl PointerInputManager {
                         h.on_pointer_up(
                             ht_ref,
                             action_context,
-                            &PointerActionArgs {
+                            &PointerButtonActionArgs {
+                                button,
                                 client_pos: client_pos.1,
                                 client_size: self.client_size_by_window[&client_pos.0],
                             },
@@ -716,7 +730,8 @@ impl PointerInputManager {
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, capture_released) = self.dispatch_pointer_up(
                     sh,
-                    &PointerActionArgs {
+                    &PointerButtonActionArgs {
+                        button,
                         client_pos: client_pos.1,
                         client_size: self.client_size_by_window[&client_pos.0],
                     },
@@ -742,7 +757,7 @@ impl PointerInputManager {
             PointerFocusState::None => (),
         };
 
-        if self.down_gesture.is_click() {
+        if self.down_gesture.is_click(button) {
             // クリック判定持続してた
 
             match self.last_click {
@@ -767,7 +782,8 @@ impl PointerInputManager {
                                     h.on_double_click(
                                         ht_ref,
                                         action_context,
-                                        &PointerActionArgs {
+                                        &PointerButtonActionArgs {
+                                            button,
                                             client_pos: client_pos.1,
                                             client_size: self.client_size_by_window[&client_pos.0],
                                         },
@@ -807,7 +823,8 @@ impl PointerInputManager {
                                 let flags = a.on_double_click(
                                     ht_ref,
                                     action_context,
-                                    &PointerActionArgs {
+                                    &PointerButtonActionArgs {
+                                        button,
                                         client_pos: client_pos.1,
                                         client_size: self.client_size_by_window[&client_pos.0],
                                     },
@@ -856,7 +873,8 @@ impl PointerInputManager {
                                     h.on_click(
                                         ht_ref,
                                         action_context,
-                                        &PointerActionArgs {
+                                        &PointerButtonActionArgs {
+                                            button,
                                             client_pos: client_pos.1,
                                             client_size: self.client_size_by_window[&client_pos.0],
                                         },
@@ -888,7 +906,8 @@ impl PointerInputManager {
                             let (needs_recompute_pointer_enter, new_captured) = self
                                 .dispatch_click(
                                     sh,
-                                    &PointerActionArgs {
+                                    &PointerButtonActionArgs {
+                                        button,
                                         client_pos: client_pos.1,
                                         client_size: self.client_size_by_window[&client_pos.0],
                                     },

@@ -6,7 +6,7 @@ use crate::{
         EventContinueControl, InputEventContext,
         hittest::{
             HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager,
-            HitTestTreeRef, PointerActionArgs,
+            HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
         },
     },
     rendering::{
@@ -209,7 +209,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
         &self,
         _sender: HitTestTreeRef,
         _context: &mut InputEventContext,
-        _args: &PointerActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
     }
@@ -218,7 +218,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
         &self,
         _sender: HitTestTreeRef,
         _context: &mut InputEventContext,
-        _args: &PointerActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
@@ -227,7 +227,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
         &self,
         _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        _args: &PointerActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         match self.cmd.get() {
             SystemCommand::Close => context.sender_window.on_click_sys_close_button(),

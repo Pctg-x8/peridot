@@ -47,10 +47,10 @@ use windows::{
                 WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
                 WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
                 WM_MOUSEMOVE, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-                WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND,
-                WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
-                WS_POPUP,
+                WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
+                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
+                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -69,6 +69,7 @@ use crate::{
         PointerInputUnit, ShellPointerActions,
         hittest::{
             CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+            PointerButton,
         },
     },
     rendering::{
@@ -578,6 +579,29 @@ impl WindowEventHandler {
     fn left_button_up(&mut self, hwnd: HWND) {
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
+            button: PointerButton::Primary,
+        });
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn right_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
+        // move then down
+        self.event_dispatcher.dispatch(Event::PointerMove {
+            pointer_id: PointerID(),
+            window: WindowHandle(hwnd),
+            client_pos: client_pos.to_logical(self.state.content_scale),
+        });
+        self.event_dispatcher.dispatch(Event::PointerDown {
+            window: WindowHandle(hwnd),
+            button: PointerButton::Secondary,
+        });
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn right_button_up(&mut self, hwnd: HWND) {
+        self.event_dispatcher.dispatch(Event::PointerUp {
+            window: WindowHandle(hwnd),
+            button: PointerButton::Secondary,
         });
     }
 
@@ -937,6 +961,40 @@ impl WindowEventHandler {
             || (msg == WM_NCLBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
         {
             Self::get_for_window(hwnd).left_button_up(hwnd);
+            return LRESULT(0);
+        }
+
+        if msg == WM_RBUTTONDOWN {
+            Self::get_for_window(hwnd).right_button_down(
+                hwnd,
+                Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                ),
+            );
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_NCRBUTTONDOWN && Self::is_application_handled_hittest(wparam.0 as _) {
+            // アプリケーションでハンドリングするNonClientエリア
+            // NonClientイベントはスクリーン座標で来る
+            let mut p = [POINT {
+                x: (lparam.0 & 0xffff) as i16 as _,
+                y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            }];
+            unsafe {
+                MapWindowPoints(None, Some(hwnd), &mut p);
+            }
+
+            Self::get_for_window(hwnd).right_button_down(hwnd, Point::new_pixels(p[0].x, p[0].y));
+            return LRESULT(0);
+        }
+
+        if msg == WM_RBUTTONUP
+            || (msg == WM_NCLBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
+        {
+            Self::get_for_window(hwnd).right_button_up(hwnd);
             return LRESULT(0);
         }
 

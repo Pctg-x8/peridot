@@ -6,7 +6,7 @@ use crate::{
         EventContinueControl, InputEventContext,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
-            HitTestTreeManager, HitTestTreeRef, PointerActionArgs,
+            HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
         },
     },
     rendering::{
@@ -160,7 +160,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
         &self,
         _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        _args: &PointerActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         self.transit(
             ButtonState::Pressing,
@@ -175,7 +175,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
         &self,
         _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        _args: &PointerActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         self.transit(
             ButtonState::Hovering,
@@ -190,7 +190,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
         &self,
         _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        _args: &PointerActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         if let Some(ref c) = self.click_event {
             context.system_link.dispatch_event(c.clone());
