@@ -18,22 +18,6 @@ struct CompositeInstanceData {
   /// tex_size_w_px, tex_size_h_px, composite_mode, opacity
   float4 miscValues;
   float4 colorTint;
-  /// start_sec, end_sec, to_value(fromはposSTに設定されている値), reserved
-  float4 animationDataPosX;
-  /// p1x, p1y, p2x, p2y
-  float4 animationCurvePosX;
-  /// start_sec, end_sec, to_value(fromはposSTに設定されている値), reserved
-  float4 animationDataPosY;
-  /// p1x, p1y, p2x, p2y
-  float4 animationCurvePosY;
-  /// start_sec, end_sec, to_value(fromはposSTに設定されている値), reserved
-  float4 animationDataPosWidth;
-  /// p1x, p1y, p2x, p2y
-  float4 animationCurvePosWidth;
-  /// start_sec, end_sec, to_value(fromはposSTに設定されている値), reserved
-  float4 animationDataPosHeight;
-  /// p1x, p1y, p2x, p2y
-  float4 animationCurvePosHeight;
   /// lt, rt, lb, rb (in pixels)
   float4 cornerRadiusX;
   /// lt, rt, lb, rb (in pixels)
@@ -67,45 +51,6 @@ struct CompositeInstanceData {
                 interpolateCurve(curvePos1, curvePos2,
                                  timeRemap(startSec, endSec, currentSec)));
   }
-
-  inline func posST(currentSec: float)->float4 {
-    let hasAnimationW =
-        this.animationDataPosWidth.x != this.animationDataPosWidth.y;
-    let hasAnimationH =
-        this.animationDataPosHeight.x != this.animationDataPosHeight.y;
-    let hasAnimationL = this.animationDataPosX.x != this.animationDataPosX.y;
-    let hasAnimationT = this.animationDataPosY.x != this.animationDataPosY.y;
-
-    let w = hasAnimationW ? computeAnimatedValue(currentSec, this.posSTStatic.x,
-                                                 this.animationDataPosWidth.z,
-                                                 this.animationCurvePosWidth.xy,
-                                                 this.animationCurvePosWidth.zw,
-                                                 this.animationDataPosWidth.x,
-                                                 this.animationDataPosWidth.y)
-                          : this.posSTStatic.x;
-    let h = hasAnimationH
-                ? computeAnimatedValue(currentSec, this.posSTStatic.y,
-                                       this.animationDataPosHeight.z,
-                                       this.animationCurvePosHeight.xy,
-                                       this.animationCurvePosHeight.zw,
-                                       this.animationDataPosHeight.x,
-                                       this.animationDataPosHeight.y)
-                : this.posSTStatic.y;
-    let l = hasAnimationL
-                ? computeAnimatedValue(
-                      currentSec, this.posSTStatic.z, this.animationDataPosX.z,
-                      this.animationCurvePosX.xy, this.animationCurvePosX.zw,
-                      this.animationDataPosX.x, this.animationDataPosX.y)
-                : this.posSTStatic.z;
-    let t = hasAnimationT
-                ? computeAnimatedValue(
-                      currentSec, this.posSTStatic.w, this.animationDataPosY.z,
-                      this.animationCurvePosY.xy, this.animationCurvePosY.zw,
-                      this.animationDataPosY.x, this.animationDataPosY.y)
-                : this.posSTStatic.w;
-
-    return float4(w, h, l, t);
-  }
 }
 
 struct StreamingData {
@@ -133,7 +78,7 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
   let iindex = iindexBase + iindexOffset;
   let p = float2((vindex & 0x01) == 0 ? 0.0 : 1.0,
                  (vindex & 0x02) == 0.0 ? 0.0 : 1.0);
-  let posST = instanceDataArray[iindex].posST(streamingData.currentSec);
+  let posST = instanceDataArray[iindex].posSTStatic;
   let pos4 = mul(instanceDataArray[iindex].positionModifierMatrix,
                  float4(p * posST.xy + posST.zw, 0.0, 1.0));
 

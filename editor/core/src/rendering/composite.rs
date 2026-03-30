@@ -40,22 +40,6 @@ pub struct CompositeInstanceData {
     pub opacity: f32,
     // float param1 end
     pub color_tint: [f32; 4],
-    /// start_sec, end_sec, to_value(fromはpos_stに設定されている値), reserved
-    pub pos_x_animation_data: [f32; 4],
-    /// x_p1x, x_p1y, x_p2x, x_p2y
-    pub pos_x_curve_control_points: [f32; 4],
-    /// start_sec, end_sec, to_value(fromはpos_stに設定されている値), reserved
-    pub pos_y_animation_data: [f32; 4],
-    /// y_p1x, y_p1y, y_p2x, y_p2y
-    pub pos_y_curve_control_points: [f32; 4],
-    /// start_sec, end_sec, to_value(fromはpos_stに設定されている値), reserved
-    pub pos_width_animation_data: [f32; 4],
-    /// w_p1x, w_p1y, w_p2x, w_p2y
-    pub pos_width_curve_control_points: [f32; 4],
-    /// start_sec, end_sec, to_value(fromはpos_stに設定されている値), reserved
-    pub pos_height_animation_data: [f32; 4],
-    /// h_p1x, h_p1y, h_p2x, h_p2y
-    pub pos_height_curve_control_points: [f32; 4],
     /// lt, rt, lb, rb (in pixels)
     pub corner_radius_x: [f32; 4],
     /// lt, rt, lb, rb (in pixels)
@@ -1579,14 +1563,6 @@ impl<Event> CompositeTreeRender<Event> {
                                     t.evaluate(current_sec, &self.parameter_store)
                                 }
                             },
-                            pos_x_animation_data: [0.0; 4],
-                            pos_x_curve_control_points: [0.0; 4],
-                            pos_y_animation_data: [0.0; 4],
-                            pos_y_curve_control_points: [0.0; 4],
-                            pos_width_animation_data: [0.0; 4],
-                            pos_width_curve_control_points: [0.0; 4],
-                            pos_height_animation_data: [0.0; 4],
-                            pos_height_curve_control_points: [0.0; 4],
                             corner_radius_x: [
                                 r.corner_radius.left_top[0] * r.base_scale_factor,
                                 r.corner_radius.right_top[0] * r.base_scale_factor,
@@ -1694,14 +1670,6 @@ impl<Event> CompositeTreeRender<Event> {
                                 color_tint: t.runs[0]
                                     .color
                                     .evaluate(current_sec, &self.parameter_store),
-                                pos_x_animation_data: [0.0; 4],
-                                pos_x_curve_control_points: [0.0; 4],
-                                pos_y_animation_data: [0.0; 4],
-                                pos_y_curve_control_points: [0.0; 4],
-                                pos_width_animation_data: [0.0; 4],
-                                pos_width_curve_control_points: [0.0; 4],
-                                pos_height_animation_data: [0.0; 4],
-                                pos_height_curve_control_points: [0.0; 4],
                                 corner_radius_x: [0.0; 4],
                                 corner_radius_y: [0.0; 4],
                                 border_thickness: 0.0,
