@@ -820,6 +820,10 @@ pub enum Event {
         pointer_id: PointerID,
         button: PointerButton,
     },
+    PointerLeaveWindow {
+        window: WindowHandle,
+        pointer_id: PointerID,
+    },
     KeyDown {
         window: WindowHandle,
         code: KeyInputCode,
@@ -2838,6 +2842,26 @@ async fn run<'sys>(
                     button,
                     window.ht_root(),
                 );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::PointerLeaveWindow { window, pointer_id } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                pointer_input_manager.handle_mouse_leave(
+                    window,
+                    pointer_id,
+                    &ht_manager,
+                    &mut InputEventContext {
+                        sender_window: window,
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }

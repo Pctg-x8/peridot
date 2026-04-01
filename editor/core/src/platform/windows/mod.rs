@@ -35,9 +35,12 @@ use windows::{
             },
         },
         UI::{
-            Controls::MARGINS,
+            Controls::{MARGINS, WM_MOUSELEAVE},
             HiDpi::GetDpiForWindow,
-            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
+            Input::KeyboardAndMouse::{
+                ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+                TrackMouseEvent,
+            },
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 GET_CLASS_LONG_INDEX, GetClassLongPtrW, GetClientRect, GetCursorPos,
@@ -54,11 +57,11 @@ use windows::{
                 WINDOW_LONG_PTR_INDEX, WINDOWPOS, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE,
                 WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
                 WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST,
-                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN,
-                WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED,
-                WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
-                WS_POPUP, WindowFromPoint,
+                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+                WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE,
+                WM_SYSCOMMAND, WM_WINDOWPOSCHANGED, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
+                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
+                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP, WindowFromPoint,
             },
         },
     },
@@ -1023,6 +1026,16 @@ impl WindowEventHandler {
         }
 
         if msg == WM_MOUSEMOVE {
+            unsafe {
+                TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                    cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                })
+                .expect("TrackMouseEvent");
+            }
+
             Self::get_for_window(hwnd).mouse_move(
                 hwnd,
                 Point::new_pixels(
@@ -1035,6 +1048,16 @@ impl WindowEventHandler {
         }
 
         if msg == WM_NCMOUSEMOVE {
+            unsafe {
+                TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                    cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
+                    dwFlags: TME_LEAVE | TME_NONCLIENT,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                })
+                .expect("TrackMouseEvent");
+            }
+
             // NonClientイベントはスクリーン座標で来る
             let mut p = [POINT {
                 x: (lparam.0 & 0xffff) as i16 as _,
@@ -1046,6 +1069,17 @@ impl WindowEventHandler {
 
             Self::get_for_window(hwnd).mouse_move(hwnd, Point::new_pixels(p[0].x, p[0].y));
             // Note: NCMOUSEMOVEはデフォルト動作もさせる
+        }
+
+        if msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE {
+            Self::get_for_window(hwnd)
+                .event_dispatcher
+                .dispatch(Event::PointerLeaveWindow {
+                    window: WindowHandle(hwnd),
+                    pointer_id: PointerID(),
+                });
+
+            return LRESULT(0);
         }
 
         unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }

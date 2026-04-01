@@ -431,6 +431,40 @@ impl PointerInputManager {
         }
     }
 
+    pub fn handle_mouse_leave(
+        &mut self,
+        window: WindowHandle,
+        pointer_id: PointerID,
+        ht: &HitTestTreeManager,
+        action_context: &mut InputEventContext,
+    ) {
+        let new_leave = match &self.pointer_focus {
+            // in capturing, this routine is never called
+            &PointerFocusState::Capturing(_) => unreachable!(),
+            // just leave
+            &PointerFocusState::Entering(old) => Some(old),
+            // nothing changed
+            &PointerFocusState::None => None,
+        };
+
+        if let Some(ht_ref) = new_leave {
+            self.dispatch_pointer_leave(
+                &PointerActionArgs {
+                    pointer_id,
+                    // TODO: leaveにclient_posいるか？
+                    client_pos: Point::new_logical(0.0, 0.0),
+                    client_size: self.client_size_by_window[&window],
+                },
+                ht,
+                action_context,
+                ht_ref,
+            );
+            self.pointer_focus = PointerFocusState::None;
+            // leaveしたときはジェスチャもなかったことにする
+            self.down_gesture = PointerDownGestureState::None;
+        }
+    }
+
     pub fn handle_mouse_move(
         &mut self,
         window: WindowHandle,
