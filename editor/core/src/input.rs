@@ -73,6 +73,7 @@ pub trait ShellPointerActions {
 struct LastClickState {
     count: usize,
     window: WindowHandle,
+    button: PointerButton,
     pos: Point<PointerInputUnit>,
     time: Instant,
 }
@@ -800,6 +801,7 @@ impl PointerInputManager {
                     if last_click.count == 1
                         && last_click.time.elapsed() <= Self::DOUBLE_CLICK_DETECTION_MAX_TIME
                         && last_click.window == client_pos.0
+                        && last_click.button == button
                         && last_click.pos.distance_sq(&client_pos.1)
                             <= Self::DOUBLE_CLICK_DETECTION_MAX_DISTANCE
                                 * Self::DOUBLE_CLICK_DETECTION_MAX_DISTANCE =>
@@ -900,6 +902,7 @@ impl PointerInputManager {
                     self.last_click = Some(LastClickState {
                         count: 1,
                         window: client_pos.0,
+                        button,
                         pos: client_pos.1,
                         time: Instant::now(),
                     });
