@@ -7,7 +7,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    DragPreviewPopoverHandle, SyncEvent, SystemLink, WindowHandle,
+    DragPreviewPopoverHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, HitTestTreeManager, HitTestTreeManagerCreateOnlyAccess, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role,
@@ -77,6 +77,7 @@ struct LastClickState {
     time: Instant,
 }
 
+// TODO: マルチタッチ対応（PointerIDごとにジェスチャー管理を分ける必要があるはず）
 pub struct PointerInputManager {
     last_client_pointer_pos: Option<(WindowHandle, Point<PointerInputUnit>)>,
     pointer_focus: PointerFocusState,
@@ -372,6 +373,7 @@ impl PointerInputManager {
     fn handle_mouse_enter_leave(
         &mut self,
         window: WindowHandle,
+        pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
@@ -400,6 +402,7 @@ impl PointerInputManager {
         if let Some(ht_ref) = new_leave {
             self.dispatch_pointer_leave(
                 &PointerActionArgs {
+                    pointer_id,
                     client_pos,
                     client_size: self.client_size_by_window[&window],
                 },
@@ -416,6 +419,7 @@ impl PointerInputManager {
             self.pointer_focus = PointerFocusState::Entering(ht_ref);
             self.dispatch_pointer_enter(
                 &PointerActionArgs {
+                    pointer_id,
                     client_pos,
                     client_size: self.client_size_by_window[&window],
                 },
@@ -429,6 +433,7 @@ impl PointerInputManager {
     pub fn handle_mouse_move(
         &mut self,
         window: WindowHandle,
+        pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         sh: &(impl ShellPointerActions + ?Sized),
         ht: &HitTestTreeManager,
@@ -450,6 +455,7 @@ impl PointerInputManager {
                 action_context,
                 &PointerButtonActionArgs {
                     button: initiator_button,
+                    pointer_id,
                     client_pos,
                     client_size: self.client_size_by_window[&window],
                 },
@@ -465,6 +471,7 @@ impl PointerInputManager {
                         ht_ref,
                         action_context,
                         &PointerActionArgs {
+                            pointer_id,
                             client_pos,
                             client_size: self.client_size_by_window[&window],
                         },
@@ -474,6 +481,7 @@ impl PointerInputManager {
                         ht_ref,
                         action_context,
                         &PointerActionArgs {
+                            pointer_id,
                             client_pos,
                             client_size: self.client_size_by_window[&window],
                         },
@@ -484,12 +492,13 @@ impl PointerInputManager {
             return;
         }
 
-        self.handle_mouse_enter_leave(window, client_pos, ht, action_context, ht_root);
+        self.handle_mouse_enter_leave(window, pointer_id, client_pos, ht, action_context, ht_root);
 
         if let PointerFocusState::Entering(ht_ref) = self.pointer_focus {
             let needs_recompute_pointer_enter = if self.down_gesture.is_dragging() {
                 self.dispatch_drag_move(
                     &PointerActionArgs {
+                        pointer_id,
                         client_pos,
                         client_size: self.client_size_by_window[&window],
                     },
@@ -500,6 +509,7 @@ impl PointerInputManager {
             } else {
                 self.dispatch_pointer_move(
                     &PointerActionArgs {
+                        pointer_id,
                         client_pos,
                         client_size: self.client_size_by_window[&window],
                     },
@@ -510,7 +520,14 @@ impl PointerInputManager {
             };
 
             if needs_recompute_pointer_enter {
-                self.handle_mouse_enter_leave(window, client_pos, ht, action_context, ht_root);
+                self.handle_mouse_enter_leave(
+                    window,
+                    pointer_id,
+                    client_pos,
+                    ht,
+                    action_context,
+                    ht_root,
+                );
             }
         }
     }
@@ -518,6 +535,7 @@ impl PointerInputManager {
     pub fn handle_mouse_down(
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
+        pointer_id: PointerID,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         button: PointerButton,
@@ -544,6 +562,7 @@ impl PointerInputManager {
                             action_context,
                             &PointerButtonActionArgs {
                                 button,
+                                pointer_id,
                                 client_pos: client_pos.1,
                                 client_size: self.client_size_by_window[&client_pos.0],
                             },
@@ -559,6 +578,7 @@ impl PointerInputManager {
                 if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                     self.handle_mouse_enter_leave(
                         client_pos.0,
+                        pointer_id,
                         client_pos.1,
                         ht,
                         action_context,
@@ -570,6 +590,7 @@ impl PointerInputManager {
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                     self.handle_mouse_enter_leave(
                         client_pos.0,
+                        pointer_id,
                         client_pos.1,
                         ht,
                         action_context,
@@ -582,6 +603,7 @@ impl PointerInputManager {
                     sh,
                     &PointerButtonActionArgs {
                         button,
+                        pointer_id,
                         client_pos: client_pos.1,
                         client_size: self.client_size_by_window[&client_pos.0],
                     },
@@ -596,6 +618,7 @@ impl PointerInputManager {
                 } else if needs_recompute_pointer_enter {
                     self.handle_mouse_enter_leave(
                         client_pos.0,
+                        pointer_id,
                         client_pos.1,
                         ht,
                         action_context,
@@ -610,6 +633,7 @@ impl PointerInputManager {
     pub fn handle_mouse_up(
         &mut self,
         sh: &(impl ShellPointerActions + ?Sized),
+        pointer_id: PointerID,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         button: PointerButton,
@@ -632,6 +656,7 @@ impl PointerInputManager {
                                 action_context,
                                 &PointerButtonActionArgs {
                                     button,
+                                    pointer_id,
                                     client_pos: client_pos.1,
                                     client_size: self.client_size_by_window[&client_pos.0],
                                 },
@@ -641,6 +666,7 @@ impl PointerInputManager {
                     if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                         self.handle_mouse_enter_leave(
                             client_pos.0,
+                            pointer_id,
                             client_pos.1,
                             ht,
                             action_context,
@@ -652,6 +678,7 @@ impl PointerInputManager {
                         self.pointer_focus = PointerFocusState::Entering(ht_ref);
                         self.handle_mouse_enter_leave(
                             client_pos.0,
+                            pointer_id,
                             client_pos.1,
                             ht,
                             action_context,
@@ -664,6 +691,7 @@ impl PointerInputManager {
                         sh,
                         &PointerButtonActionArgs {
                             button,
+                            pointer_id,
                             client_pos: client_pos.1,
                             client_size: self.client_size_by_window[&client_pos.0],
                         },
@@ -679,6 +707,7 @@ impl PointerInputManager {
                         // PointerCaptureを解除したときもEnter/Leaveの再計算をさせる
                         self.handle_mouse_enter_leave(
                             client_pos.0,
+                            pointer_id,
                             client_pos.1,
                             ht,
                             action_context,
@@ -700,6 +729,7 @@ impl PointerInputManager {
                             action_context,
                             &PointerButtonActionArgs {
                                 button,
+                                pointer_id,
                                 client_pos: client_pos.1,
                                 client_size: self.client_size_by_window[&client_pos.0],
                             },
@@ -709,6 +739,7 @@ impl PointerInputManager {
                 if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                     self.handle_mouse_enter_leave(
                         client_pos.0,
+                        pointer_id,
                         client_pos.1,
                         ht,
                         action_context,
@@ -720,6 +751,7 @@ impl PointerInputManager {
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                     self.handle_mouse_enter_leave(
                         client_pos.0,
+                        pointer_id,
                         client_pos.1,
                         ht,
                         action_context,
@@ -732,6 +764,7 @@ impl PointerInputManager {
                     sh,
                     &PointerButtonActionArgs {
                         button,
+                        pointer_id,
                         client_pos: client_pos.1,
                         client_size: self.client_size_by_window[&client_pos.0],
                     },
@@ -747,6 +780,7 @@ impl PointerInputManager {
                     // PointerCaptureを解除したときもEnter/Leaveの再計算をさせる
                     self.handle_mouse_enter_leave(
                         client_pos.0,
+                        pointer_id,
                         client_pos.1,
                         ht,
                         action_context,
@@ -784,6 +818,7 @@ impl PointerInputManager {
                                         action_context,
                                         &PointerButtonActionArgs {
                                             button,
+                                            pointer_id,
                                             client_pos: client_pos.1,
                                             client_size: self.client_size_by_window[&client_pos.0],
                                         },
@@ -793,6 +828,7 @@ impl PointerInputManager {
                             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                                 self.handle_mouse_enter_leave(
                                     client_pos.0,
+                                    pointer_id,
                                     client_pos.1,
                                     ht,
                                     action_context,
@@ -804,6 +840,7 @@ impl PointerInputManager {
                                 self.pointer_focus = PointerFocusState::Entering(ht_ref);
                                 self.handle_mouse_enter_leave(
                                     client_pos.0,
+                                    pointer_id,
                                     client_pos.1,
                                     ht,
                                     action_context,
@@ -825,6 +862,7 @@ impl PointerInputManager {
                                     action_context,
                                     &PointerButtonActionArgs {
                                         button,
+                                        pointer_id,
                                         client_pos: client_pos.1,
                                         client_size: self.client_size_by_window[&client_pos.0],
                                     },
@@ -846,6 +884,7 @@ impl PointerInputManager {
                             } else if needs_recompute_pointer_enter {
                                 self.handle_mouse_enter_leave(
                                     client_pos.0,
+                                    pointer_id,
                                     client_pos.1,
                                     ht,
                                     action_context,
@@ -875,6 +914,7 @@ impl PointerInputManager {
                                         action_context,
                                         &PointerButtonActionArgs {
                                             button,
+                                            pointer_id,
                                             client_pos: client_pos.1,
                                             client_size: self.client_size_by_window[&client_pos.0],
                                         },
@@ -884,6 +924,7 @@ impl PointerInputManager {
                             if flags.contains(EventContinueControl::RECOMPUTE_POINTER_ENTER) {
                                 self.handle_mouse_enter_leave(
                                     client_pos.0,
+                                    pointer_id,
                                     client_pos.1,
                                     ht,
                                     action_context,
@@ -895,6 +936,7 @@ impl PointerInputManager {
                                 self.pointer_focus = PointerFocusState::Entering(ht_ref);
                                 self.handle_mouse_enter_leave(
                                     client_pos.0,
+                                    pointer_id,
                                     client_pos.1,
                                     ht,
                                     action_context,
@@ -908,6 +950,7 @@ impl PointerInputManager {
                                     sh,
                                     &PointerButtonActionArgs {
                                         button,
+                                        pointer_id,
                                         client_pos: client_pos.1,
                                         client_size: self.client_size_by_window[&client_pos.0],
                                     },
@@ -921,6 +964,7 @@ impl PointerInputManager {
                             } else if needs_recompute_pointer_enter {
                                 self.handle_mouse_enter_leave(
                                     client_pos.0,
+                                    pointer_id,
                                     client_pos.1,
                                     ht,
                                     action_context,

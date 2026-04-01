@@ -583,6 +583,7 @@ impl WindowEventHandler {
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
+            pointer_id: PointerID(),
             button: PointerButton::Primary,
         });
     }
@@ -591,6 +592,7 @@ impl WindowEventHandler {
     fn left_button_up(&mut self, hwnd: HWND) {
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
+            pointer_id: PointerID(),
             button: PointerButton::Primary,
         });
     }
@@ -605,6 +607,7 @@ impl WindowEventHandler {
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
+            pointer_id: PointerID(),
             button: PointerButton::Secondary,
         });
     }
@@ -613,6 +616,7 @@ impl WindowEventHandler {
     fn right_button_up(&mut self, hwnd: HWND) {
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
+            pointer_id: PointerID(),
             button: PointerButton::Secondary,
         });
     }
@@ -1527,7 +1531,11 @@ impl ContextMenuInstance {
         }
     }
 
-    pub fn new(syslink: &SystemLink, composite_tree: &mut CompositeTree<SyncEvent>) -> Self {
+    pub fn new(
+        syslink: &SystemLink,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        screen_pos: Point<PixelsUnit>,
+    ) -> Self {
         let hinstance = current_instance_handle();
         let h = unsafe {
             CreateWindowExW(
@@ -1535,8 +1543,8 @@ impl ContextMenuInstance {
                 PCWSTR(ContextMenuSharedState::window_class() as _),
                 w!(""),
                 WS_POPUP,
-                0,
-                0,
+                screen_pos.x,
+                screen_pos.y,
                 100,
                 100,
                 None,
@@ -1670,8 +1678,12 @@ pub fn initialize_context_menu(rt_sender: std::sync::mpsc::Sender<RenderMessage>
     }
 }
 
-pub fn pop_context_menu(syslink: &SystemLink, composite_tree: &mut CompositeTree<SyncEvent>) {
-    ContextMenuInstance::new(syslink, composite_tree);
+pub fn pop_context_menu(
+    syslink: &SystemLink,
+    composite_tree: &mut CompositeTree<SyncEvent>,
+    screen_pos: Point<PixelsUnit>,
+) {
+    ContextMenuInstance::new(syslink, composite_tree, screen_pos);
 }
 
 pub fn finalize_context_menu() {
@@ -1681,6 +1693,17 @@ pub fn finalize_context_menu() {
             core::ptr::null_mut(),
         )));
     }
+}
+
+pub fn pointer_pos(_p: PointerID) -> Point<PixelsUnit> {
+    // WindowsではPointerIDは無視（マルチタッチ対応を本格的に考えないといけなくなった場合に考える）
+    let mut p = core::mem::MaybeUninit::uninit();
+    unsafe {
+        GetCursorPos(p.as_mut_ptr()).expect("GetCursorPos");
+    }
+    let p = unsafe { p.assume_init() };
+
+    Point::new_pixels(p.x, p.y)
 }
 
 pub trait TextProvider {

@@ -42,7 +42,7 @@ use crate::{
         MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
         PopupID, PopupManager, Positioning, RawMountTarget, SimpleButtonView, ViewInitContext,
     },
-    utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
+    utils::{Color32, LogicalUnit, PixelsUnit, Point, Rect, SafeF32, Size},
 };
 #[cfg(target_os = "macos")]
 use crate::{input::PerWindowKeyboardFocusState, utils::PixelsUnit};
@@ -798,6 +798,7 @@ pub enum Event {
     Quit,
     PointerDown {
         window: WindowHandle,
+        pointer_id: PointerID,
         button: PointerButton,
         #[cfg(feature = "wayland")]
         event_id: platform::unix::wayland::PointerEventID,
@@ -809,6 +810,7 @@ pub enum Event {
     },
     PointerUp {
         window: WindowHandle,
+        pointer_id: PointerID,
         button: PointerButton,
     },
     KeyDown {
@@ -855,7 +857,9 @@ pub enum Event {
     PopupClose {
         id: PopupID,
     },
-    ContextMenuPop,
+    ContextMenuPop {
+        screen_pos: Point<PixelsUnit>,
+    },
     #[cfg(windows)]
     CoreTextLayoutRequested {
         ht: HitTestTreeRef,
@@ -2541,7 +2545,9 @@ async fn run<'sys>(
                 input::EventContinueControl::STOP_PROPAGATION
             } else {
                 // tracing::debug!("right click!");
-                context.system_link.dispatch_event(Event::ContextMenuPop);
+                context.system_link.dispatch_event(Event::ContextMenuPop {
+                    screen_pos: platform::windows::pointer_pos(args.pointer_id),
+                });
 
                 input::EventContinueControl::STOP_PROPAGATION
             }
@@ -2725,6 +2731,7 @@ async fn run<'sys>(
             }
             Event::PointerDown {
                 window,
+                pointer_id,
                 button,
                 #[cfg(feature = "wayland")]
                 event_id,
@@ -2754,6 +2761,7 @@ async fn run<'sys>(
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_down(
                     &window,
+                    pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
                         sender_window: window,
@@ -2779,6 +2787,7 @@ async fn run<'sys>(
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_move(
                     window,
+                    pointer_id,
                     client_pos,
                     &window,
                     &ht_manager,
@@ -2799,10 +2808,15 @@ async fn run<'sys>(
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
             }
-            Event::PointerUp { window, button } => {
+            Event::PointerUp {
+                window,
+                pointer_id,
+                button,
+            } => {
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_up(
                     &window,
+                    pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
                         sender_window: window,
@@ -2924,9 +2938,12 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::ContextMenuPop => {
+            Event::ContextMenuPop { screen_pos } => {
                 #[cfg(windows)]
-                platform::windows::pop_context_menu(&system_link, &mut composite_tree);
+                platform::windows::pop_context_menu(&system_link, &mut composite_tree, screen_pos);
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    WindowHandle,
+    PointerID, WindowHandle,
     input::{EventContinueControl, FocusTargetToken, InputEventContext, PointerInputUnit},
     utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
@@ -542,12 +542,14 @@ pub enum PointerButton {
 }
 
 pub struct PointerActionArgs {
+    pub pointer_id: PointerID,
     pub client_pos: Point<LogicalUnit>,
     pub client_size: Size<LogicalUnit>,
 }
 
 pub struct PointerButtonActionArgs {
     pub button: PointerButton,
+    pub pointer_id: PointerID,
     pub client_pos: Point<LogicalUnit>,
     pub client_size: Size<LogicalUnit>,
 }
