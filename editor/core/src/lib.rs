@@ -87,7 +87,7 @@ pub fn launch() {
         .init();
 
     let mut event_store = VecDeque::new();
-    let global_time_base = std::time::Instant::now();
+    let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
     let fs = FileSystem::new();
     let events = SyncEventBus {
         queue: std::sync::Mutex::new(VecDeque::new()),
@@ -109,7 +109,10 @@ pub fn launch() {
 
     #[cfg(windows)]
     let app_context = platform::windows::ApplicationContext::new();
+    #[cfg(windows)]
+    platform::windows::initialize_context_menu(rt_sender.clone());
 
+    let global_time_base = std::time::Instant::now();
     main_wrapper(
         move |args| run(args),
         &mut event_store,
@@ -120,9 +123,14 @@ pub fn launch() {
         &fs,
         &vk_device,
         &events,
+        rt_sender,
+        rt_receiver,
         #[cfg(windows)]
         &app_context,
     );
+
+    #[cfg(windows)]
+    platform::windows::finalize_context_menu();
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
@@ -133,9 +141,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     fs: &'sys FileSystem,
     vk_device: &'sys VulkanDevice,
     sync_event_bus: &'sys SyncEventBus,
+    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
 ) {
-    let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
     let mut polling = false;
@@ -846,6 +855,7 @@ pub enum Event {
     PopupClose {
         id: PopupID,
     },
+    ContextMenuPop,
     #[cfg(windows)]
     CoreTextLayoutRequested {
         ht: HitTestTreeRef,
@@ -2530,7 +2540,9 @@ async fn run<'sys>(
 
                 input::EventContinueControl::STOP_PROPAGATION
             } else {
-                tracing::debug!("right click!");
+                // tracing::debug!("right click!");
+                context.system_link.dispatch_event(Event::ContextMenuPop);
+
                 input::EventContinueControl::STOP_PROPAGATION
             }
         }
@@ -2911,6 +2923,10 @@ async fn run<'sys>(
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
+            }
+            Event::ContextMenuPop => {
+                #[cfg(windows)]
+                platform::windows::pop_context_menu(&system_link, &mut composite_tree);
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {

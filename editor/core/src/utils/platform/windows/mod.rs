@@ -2,14 +2,15 @@ mod log_writer;
 
 use windows::{
     Win32::{
-        Foundation::HINSTANCE,
+        Foundation::{HINSTANCE, HWND},
         System::{Diagnostics::Debug::OutputDebugStringA, LibraryLoader::GetModuleHandleW},
         UI::WindowsAndMessaging::{
-            MB_ICONERROR, MB_OK, MessageBoxA, RegisterClassExW, WNDCLASSEXW,
+            FindWindowExW, MB_ICONERROR, MB_OK, MessageBoxA, RegisterClassExW, WNDCLASSEXW,
         },
     },
     core::PCSTR,
 };
+use windows_core::PCWSTR;
 
 pub use self::log_writer::DebugOutputWriter;
 
@@ -42,5 +43,31 @@ pub unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
     match unsafe { RegisterClassExW(x) } {
         r if r == 0 => Err(std::io::Error::last_os_error()),
         r => Ok(r),
+    }
+}
+
+pub struct WindowByClassIter {
+    class: PCWSTR,
+    window_after: HWND,
+}
+impl WindowByClassIter {
+    pub fn new(class: PCWSTR) -> Self {
+        Self {
+            class,
+            window_after: HWND(core::ptr::null_mut()),
+        }
+    }
+}
+impl Iterator for WindowByClassIter {
+    type Item = HWND;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match unsafe { FindWindowExW(None, Some(self.window_after), self.class, None) } {
+            Ok(x) => {
+                self.window_after = x;
+                Some(x)
+            }
+            Err(_) => None,
+        }
     }
 }

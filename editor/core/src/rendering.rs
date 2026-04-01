@@ -45,9 +45,20 @@ pub struct NewWindowData {
     pub init_scale: SafeF32,
 }
 
+pub struct NewContextMenuData {
+    pub w: crate::platform::windows::ContextMenuHandle,
+    pub vk_surface: NewWindowVulkanSurface,
+    pub composite_root: CompositeTreeRef,
+}
+
 pub enum RenderMessage {
     NewWindow(NewWindowData),
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
+    NewContextMenu(NewContextMenuData),
+    DestroyContextMenu(
+        crate::platform::windows::ContextMenuHandle,
+        std::sync::mpsc::Sender<()>,
+    ),
     RegisterNormalized2DStaticMeshTexture {
         id: usize,
         vertices: &'static [[f32; 2]],
@@ -118,6 +129,10 @@ impl<'main> RenderThread<'main> {
             ft_lib: self::text::FreeType::init().expect("freetype.init"),
         };
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
+        let mut context_menus: HashMap<
+            crate::platform::windows::ContextMenuHandle,
+            ContextMenuRenderer,
+        > = HashMap::new();
         let mut normalized_2d_static_mesh_textures: HashMap<
             usize,
             Normalized2DStaticMeshTextureEntry,
@@ -197,6 +212,69 @@ impl<'main> RenderThread<'main> {
                             tracing::error!(reason = %e, "done_event_bus.send");
                         };
                     }
+                    Ok(RenderMessage::NewContextMenu(create_data)) => {
+                        #[cfg(feature = "wayland")]
+                        let init_scale = SafeF32::new(
+                            wd.key
+                                .state()
+                                .committed_state
+                                .lock()
+                                .expect("poisoned")
+                                .active_buffer_scale,
+                        )
+                        .expect("invalid scale");
+                        #[cfg(windows)]
+                        let init_scale =
+                            SafeF32::new(create_data.w.render_scale()).expect("invalid scale");
+                        #[cfg(not(any(feature = "wayland", windows)))]
+                        let init_scale = wd.init_scale;
+
+                        let window_glyph_atlas = match glyph_atlas_per_scale.entry(init_scale) {
+                            // use existing
+                            std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
+                            // create new one
+                            std::collections::hash_map::Entry::Vacant(x) => {
+                                x.insert(GlyphAtlasDataPerDpi {
+                                    manager: MaskTextureAtlasManager::new(
+                                        &glyph_atlas_manager_common_resources,
+                                        &mut render_queue,
+                                        self.vk_device.present_queue_family_index(),
+                                    ),
+                                    atlas_rects: Vec::new(),
+                                    vector_raster_state: VectorRasterizationState::new(),
+                                    ref_count: 0,
+                                })
+                            }
+                        };
+                        window_glyph_atlas.ref_count += 1;
+                        context_menus.insert(
+                            create_data.w,
+                            ContextMenuRenderer::new(
+                                self.vk_device,
+                                create_data,
+                                init_scale,
+                                window_glyph_atlas.manager.atlas(),
+                                self.root_font_set,
+                                &typing_context,
+                            ),
+                        );
+                    }
+                    Ok(RenderMessage::DestroyContextMenu(handle, done_event_bus)) => {
+                        if let Some(x) = context_menus.remove(&handle) {
+                            let current = glyph_atlas_per_scale
+                                .get_mut(&x.active_scale)
+                                .expect("invalid state");
+                            current.ref_count -= 1;
+                            if current.ref_count == 0 {
+                                // no references
+                                glyph_atlas_per_scale.remove(&x.active_scale);
+                            }
+                        }
+
+                        if let Err(e) = done_event_bus.send(()) {
+                            tracing::error!(reason = %e, "done_event_bus.send");
+                        };
+                    }
                     Ok(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                         id,
                         vertices,
@@ -269,7 +347,7 @@ impl<'main> RenderThread<'main> {
 
             // いったん最適化とかは考えないで直列でまわす(パフォーマンス気になったらそのとき考える)
             struct SubmitParameters<'x> {
-                renderer: &'x WindowRenderer<'x>,
+                swapchain_ref: br::VkHandleRef<'x, br::vk::VkSwapchainKHR>,
                 render_wait_semaphores: Vec<br::VkHandleRef<'x, br::vk::VkSemaphore>>,
                 render_wait_stages: Vec<br::PipelineStageFlags>,
                 render_commands: Vec<br::VkHandleRef<'x, br::vk::VkCommandBuffer>>,
@@ -409,7 +487,94 @@ impl<'main> RenderThread<'main> {
                 render_wait_stages.push(br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
 
                 submit_parameters.push(SubmitParameters {
-                    renderer: x,
+                    swapchain_ref: x.swapchain_ref(),
+                    render_wait_semaphores,
+                    render_wait_stages,
+                    render_commands: vec![x.primary_render_commands_ref(backbuffer_index)],
+                    render_signal_semaphores: vec![x.present_ready_semaphore_ref(backbuffer_index)],
+                    present_backbuffer_index: backbuffer_index,
+                });
+            }
+            for x in context_menus.values_mut() {
+                let backbuffer_index = match x.acquire_backbuffer_with_wait() {
+                    Ok(x) => x,
+                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                        x.invalidate_swapchain();
+                        any_swapchain_invalidated = true;
+                        continue;
+                    }
+                    Err(e) => Err(e).expect("acquire next"),
+                };
+
+                let glyph_atlas_mgr = glyph_atlas_per_scale
+                    .get_mut(&x.active_scale)
+                    .expect("invalid state");
+                // TODO: ここも重いようならあとで改善する
+                for (&id, e) in &normalized_2d_static_mesh_textures {
+                    if glyph_atlas_mgr.atlas_rects.get(id).is_none_or(|x| {
+                        x == &AtlasRect {
+                            left: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                        }
+                    }) {
+                        tracing::trace!(id, "rasterize mesh");
+                        let rect = glyph_atlas_mgr.manager.acquire(
+                            (e.width * x.active_scale.value()).ceil() as _,
+                            (e.height * x.active_scale.value()).ceil() as _,
+                        );
+                        if glyph_atlas_mgr.atlas_rects.len() <= id {
+                            // extend with zero
+                            glyph_atlas_mgr
+                                .atlas_rects
+                                .resize_with(id + 1, || AtlasRect {
+                                    left: 0,
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                });
+                        }
+                        glyph_atlas_mgr.atlas_rects[id] = rect;
+                        if glyph_atlas_mgr
+                            .vector_raster_state
+                            .normalized_2d_mesh_requests
+                            .insert(id, (rect.left, rect.top))
+                            .is_none()
+                        {
+                            // new entry
+                            glyph_atlas_mgr
+                                .vector_raster_state
+                                .updated_rects
+                                .push(rect.vk_rect());
+                        }
+                    }
+                }
+                let needs_update_command = x.update(
+                    current_t.as_secs_f32(),
+                    &mut composite_tree,
+                    &mut glyph_atlas_mgr.manager,
+                    &mut glyph_atlas_mgr.atlas_rects,
+                    &mut glyph_atlas_mgr.vector_raster_state,
+                    self.event_bus,
+                );
+
+                let mut render_wait_semaphores = Vec::with_capacity(1);
+                let mut render_wait_stages = Vec::with_capacity(1);
+
+                // TODO: いったんめんどうなので毎回更新
+                if true || needs_update_command {
+                    x.submit_update_commands(&mut render_queue);
+
+                    render_wait_semaphores.push(x.update_completion_semaphore_ref());
+                    render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
+                }
+
+                render_wait_semaphores.push(x.backbuffer_ready_semaphore.as_transparent_ref());
+                render_wait_stages.push(br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
+
+                submit_parameters.push(SubmitParameters {
+                    swapchain_ref: x.swapchain_ref(),
                     render_wait_semaphores,
                     render_wait_stages,
                     render_commands: vec![x.primary_render_commands_ref(backbuffer_index)],
@@ -464,7 +629,7 @@ impl<'main> RenderThread<'main> {
                         .collect::<Vec<_>>(),
                     &submit_parameters
                         .iter()
-                        .map(|x| x.renderer.swapchain_ref())
+                        .map(|x| x.swapchain_ref)
                         .collect::<Vec<_>>(),
                     &submit_parameters
                         .iter()
@@ -496,6 +661,379 @@ impl<'main> RenderThread<'main> {
             self.vk_device.wait().expect("device wait");
         }
         tracing::info!("RenderThread terminated");
+    }
+}
+
+struct ContextMenuRenderer<'d> {
+    #[cfg(windows)]
+    w: crate::platform::windows::ContextMenuHandle,
+    active_scale: SafeF32,
+    vk_device: &'d VulkanDevice<'d>,
+    composite_root: CompositeTreeRef,
+    composite_renderer: BoundCompositeRenderer<'d>,
+    last_composite_render_data: CompositeRenderingData,
+    update_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
+    update_cb: br::CommandBufferObject<&'d VulkanDevice<'d>>,
+    update_completion_fence: br::FenceObject<&'d VulkanDevice<'d>>,
+    update_completion_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
+    updating: bool,
+    render_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
+    render_cb: Vec<br::CommandBufferObject<&'d VulkanDevice<'d>>>,
+    render_cb_invalid: bool,
+    present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
+    backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
+    swapchain_invalidated: bool,
+    swapchain: VulkanSwapchain<'d, 'd>,
+    surface: VulkanSurface<'d, 'd>,
+    font_set: PerWindowFontSet<'d>,
+}
+impl<'d> ContextMenuRenderer<'d> {
+    fn new(
+        device: &'d VulkanDevice<'d>,
+        create_data: NewContextMenuData,
+        init_scale: SafeF32,
+        glyph_atlas: &TextureAtlas,
+        root_font_set: &'d RootFontSet,
+        typing_context: &ThreadLocalTypingContext,
+    ) -> Self {
+        #[allow(unused_mut)]
+        let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
+        #[cfg(feature = "wayland")]
+        font_set.rescale((init_scale.value() * 72.0) as _);
+
+        let surface = unsafe { create_data.vk_surface.0.bound(device) };
+        let vk_swapchain = VulkanSwapchain::new(
+            &surface,
+            #[cfg(windows)]
+            || create_data.w.pixels_size(),
+            #[cfg(feature = "wayland")]
+            || create_data.w.pixels_client_size(),
+            #[cfg(target_os = "macos")]
+            || {
+                *create_data
+                    .key
+                    .state()
+                    .active_rt_size
+                    .lock()
+                    .expect("poisoned")
+            },
+        );
+
+        let mut update_cp = br::CommandPoolObject::new(
+            device,
+            &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
+        )
+        .expect("update_cp.create");
+        let [mut update_cb] = br::CommandBufferObject::alloc_array(
+            device,
+            &br::CommandBufferFixedCountAllocateInfo::new(
+                &mut update_cp,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("update_cb.create");
+        unsafe {
+            update_cb
+                .begin(&br::CommandBufferBeginInfo::new())
+                .expect("update_cb.begin")
+                .end()
+                .expect("update_cb.end");
+        }
+
+        let mut render_cp = br::CommandPoolObject::new(
+            device,
+            &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
+        )
+        .expect("command pool create");
+        let render_cb = br::CommandBufferObject::alloc(
+            device,
+            &br::CommandBufferAllocateInfo::new(
+                &mut render_cp,
+                vk_swapchain.image_count() as _,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("command buffer alloc");
+        for (n, x) in render_cb.iter().enumerate() {
+            device.dbg_set_name(x, &unsafe {
+                std::ffi::CString::from_vec_unchecked(
+                    format!("Window Render Commands #{n}").into_bytes(),
+                )
+            });
+        }
+
+        let composite_renderer = BoundCompositeRenderer::new(
+            device,
+            glyph_atlas.view(),
+            surface.format(),
+            vk_swapchain.size(),
+            vk_swapchain.image_view_refs(),
+        );
+
+        Self {
+            w: create_data.w,
+            #[cfg(any(feature = "wayland", windows))]
+            active_scale: init_scale,
+            #[cfg(not(any(feature = "wayland", windows)))]
+            active_scale: create_data.init_scale,
+            font_set,
+            vk_device: device,
+            composite_root: create_data.composite_root,
+            composite_renderer,
+            last_composite_render_data: CompositeRenderingData::EMPTY,
+            update_cp,
+            update_cb,
+            update_completion_fence: br::FenceObject::new(device, &br::FenceCreateInfo::new(0))
+                .expect("update_completion_fence.create"),
+            update_completion_semaphore: br::SemaphoreObject::new(
+                device,
+                &br::SemaphoreCreateInfo::new(),
+            )
+            .expect("update_completion_semaphore.create"),
+            updating: false,
+            render_cp,
+            render_cb,
+            render_cb_invalid: true,
+            present_ready_semaphores: (0..vk_swapchain.image_count())
+                .map(|_| {
+                    br::SemaphoreObject::new(device, &br::SemaphoreCreateInfo::new())
+                        .expect("rendering_timeline_semaphore create")
+                })
+                .collect::<Vec<_>>(),
+            backbuffer_ready_semaphore: br::SemaphoreObject::new(
+                device,
+                &br::SemaphoreCreateInfo::new(),
+            )
+            .expect("backbuffer_ready_semaphore.create"),
+            surface,
+            swapchain: vk_swapchain,
+            swapchain_invalidated: false,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        current_sec: f32,
+        composite_tree: &mut CompositeTreeRender<SyncEvent>,
+        glyph_atlas: &mut MaskTextureAtlasManager,
+        mask_atlas_rects: &[AtlasRect],
+        vector_raster_state: &mut VectorRasterizationState,
+        events: &SyncEventBus,
+    ) -> bool {
+        let composite_render_data = self.composite_renderer.update(
+            self.vk_device,
+            composite_tree,
+            self.composite_root,
+            self.swapchain.size(),
+            &self.font_set,
+            glyph_atlas,
+            mask_atlas_rects,
+            vector_raster_state,
+            |e| events.push(e),
+            current_sec,
+        );
+        if composite_render_data != self.last_composite_render_data {
+            // requires repopulate render commands
+            self.invalidate_render_commands();
+
+            self.composite_renderer
+                .prepare_input_backdrop_descriptor_sets(
+                    self.vk_device,
+                    composite_render_data.required_backdrop_buffer_count,
+                );
+
+            self.last_composite_render_data = composite_render_data;
+        }
+
+        self.composite_renderer
+            .update_streaming_data(self.vk_device, CompositeStreamingData { current_sec });
+        let needs_update_commands = self.composite_renderer.update_backdrop_resources(
+            self.vk_device,
+            self.surface.format(),
+            self.swapchain.size(),
+            self.last_composite_render_data
+                .required_backdrop_buffer_count
+                == 0,
+        );
+
+        // update_backdrop_resourcesでDescriptorSetの更新がはしるのでここでやる
+        self.validate_render_commands();
+
+        needs_update_commands
+    }
+
+    pub fn invalidate_swapchain(&mut self) {
+        self.swapchain_invalidated = true;
+    }
+
+    pub fn validate_swapchain<'s>(
+        &'s mut self,
+        descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+        event_bus: &SyncEventBus,
+    ) {
+        if !self.swapchain_invalidated {
+            // already valid
+            return;
+        }
+
+        self.invalidate_render_commands();
+
+        self.surface.refresh_caps();
+        self.swapchain.recreate(
+            &self.surface,
+            #[cfg(any(windows, feature = "wayland"))]
+            || self.w.pixels_size(),
+            #[cfg(target_os = "macos")]
+            || *self.w.state().active_rt_size.lock().expect("poisoned"),
+        );
+
+        // recrease rt resources
+        self.composite_renderer.recreate_rt_resources(
+            self.vk_device,
+            self.surface.format(),
+            self.swapchain.image_view_refs(),
+            self.swapchain.size(),
+            descriptor_writes,
+        );
+
+        // event_bus.push(SyncEvent::WindowPostResizeRenderBuffer { window: self.w });
+        self.swapchain_invalidated = false;
+    }
+
+    pub fn acquire_backbuffer_with_wait(&mut self) -> br::Result<u32> {
+        let backbuffer_index = self.swapchain.acquire_next(
+            None,
+            br::CompletionHandlerMut::Queue(
+                self.backbuffer_ready_semaphore.as_transparent_ref_mut(),
+            ),
+        )?;
+        /*self.backbuffer_ready_fence
+            .wait()
+            .expect("last render completion fence wait");
+        self.backbuffer_ready_fence
+            .reset()
+            .expect("last render completion fence reset");*/
+
+        Ok(backbuffer_index)
+    }
+
+    pub fn invalidate_render_commands(&mut self) {
+        if self.render_cb_invalid {
+            // already invalid
+            return;
+        }
+
+        unsafe {
+            self.render_cp
+                .reset(br::CommandPoolResetFlags::EMPTY)
+                .expect("render_cp.reset");
+        }
+        self.render_cb_invalid = true;
+    }
+
+    pub fn validate_render_commands(&mut self) {
+        if !self.render_cb_invalid {
+            // already valid
+            return;
+        }
+
+        for (n, cb) in self.render_cb.iter_mut().enumerate() {
+            unsafe {
+                cb.begin(&br::CommandBufferBeginInfo::new())
+                    .expect("command buffer begin")
+            }
+            .inject(|r| {
+                self.composite_renderer.populate_commands(
+                    r,
+                    self.vk_device,
+                    &self.last_composite_render_data,
+                    self.swapchain.size(),
+                    &self.swapchain.image_ref(n),
+                    n,
+                    |_, r| r,
+                )
+            })
+            .inject(|r| self.vk_device.cmd_end_render_pass(r))
+            .end()
+            .expect("command buffer end");
+        }
+
+        self.render_cb_invalid = false;
+    }
+
+    pub fn wait_for_last_update_completion(&mut self) {
+        if !self.updating {
+            // no updating work
+            return;
+        }
+
+        self.update_completion_fence
+            .wait()
+            .expect("update_completion_fence.wait");
+        self.update_completion_fence
+            .reset()
+            .expect("update_completion_fence.reset");
+        self.updating = false;
+    }
+
+    pub fn repopulate_update_commands(&mut self) {
+        unsafe {
+            self.update_cp
+                .reset(br::CommandPoolResetFlags::EMPTY)
+                .expect("update_cp.reset");
+        }
+        unsafe {
+            self.update_cb
+                .begin(&br::CommandBufferBeginInfo::new())
+                .expect("update_cb.begin")
+        }
+        .inject(|r| self.composite_renderer.sync_buffer(r))
+        .end()
+        .expect("update_cb.end");
+    }
+
+    pub fn submit_update_commands(&mut self, device_queue: &mut br::QueueObject<&'d VulkanDevice>) {
+        self.wait_for_last_update_completion();
+        self.repopulate_update_commands();
+
+        unsafe {
+            device_queue
+                .submit_raw(
+                    &[br::SubmitInfo::new(
+                        &[],
+                        &[],
+                        &[self.update_cb.as_transparent_ref()],
+                        &[self.update_completion_semaphore.as_transparent_ref()],
+                    )],
+                    Some(self.update_completion_fence.as_transparent_ref_mut()),
+                )
+                .expect("gfx.update.submit");
+        }
+        self.updating = true;
+    }
+
+    pub fn swapchain_ref<'x>(&'x self) -> br::VkHandleRef<'x, br::vk::VkSwapchainKHR> {
+        self.swapchain.as_transparent_ref()
+    }
+
+    pub fn update_completion_semaphore_ref<'x>(
+        &'x self,
+    ) -> br::VkHandleRef<'x, br::vk::VkSemaphore> {
+        self.update_completion_semaphore.as_transparent_ref()
+    }
+
+    pub fn primary_render_commands_ref<'x>(
+        &'x self,
+        backbuffer_index: u32,
+    ) -> br::VkHandleRef<'x, br::vk::VkCommandBuffer> {
+        self.render_cb[backbuffer_index as usize].as_transparent_ref()
+    }
+
+    pub fn present_ready_semaphore_ref<'x>(
+        &'x self,
+        backbuffer_index: u32,
+    ) -> br::VkHandleRef<'x, br::vk::VkSemaphore> {
+        self.present_ready_semaphores[backbuffer_index as usize].as_transparent_ref()
     }
 }
 

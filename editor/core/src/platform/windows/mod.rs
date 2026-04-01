@@ -23,34 +23,42 @@ use windows::{
             },
             Gdi::{
                 GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
-                MonitorFromWindow,
+                MonitorFromWindow, PtInRect,
             },
         },
-        System::WinRT::{
-            Composition::ICompositorDesktopInterop, CreateDispatcherQueueController,
-            DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
+        System::{
+            self,
+            Threading::GetCurrentThreadId,
+            WinRT::{
+                Composition::ICompositorDesktopInterop, CreateDispatcherQueueController,
+                DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
+            },
         },
         UI::{
             Controls::MARGINS,
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
-                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
-                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
-                IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
-                PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
-                SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
-                SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-                SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
-                WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEMOVE, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-                WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
-                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                CW_USEDEFAULT, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
+                GET_CLASS_LONG_INDEX, GetClassLongPtrW, GetClientRect, GetCursorPos,
+                GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowWord, HCURSOR, HHOOK,
+                HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT,
+                HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW,
+                IDC_HAND, IDC_IBEAM, IDC_SIZEWE, IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW,
+                NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE,
+                SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
+                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+                SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_NOZORDER, SWP_SHOWWINDOW, SetClassLongPtrW, SetCursor, SetWindowLongPtrW,
+                SetWindowPos, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_MOUSE,
+                WINDOW_LONG_PTR_INDEX, WINDOWPOS, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST,
+                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WM_WINDOWPOSCHANGED,
+                WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
+                WS_POPUP, WindowFromPoint,
             },
         },
     },
@@ -73,13 +81,13 @@ use crate::{
         },
     },
     rendering::{
-        NewWindowData, NewWindowVulkanSurface, RenderMessage,
+        NewContextMenuData, NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
         text::RootFontSet,
     },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
-        platform::windows::{current_instance_handle, register_class},
+        platform::windows::{WindowByClassIter, current_instance_handle, register_class},
     },
 };
 
@@ -1463,10 +1471,217 @@ impl SystemLink<'_> {
     }
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ContextMenuHandle(HWND);
+impl core::hash::Hash for ContextMenuHandle {
+    #[inline(always)]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.0.addr().hash(state)
+    }
+}
+unsafe impl Sync for ContextMenuHandle {}
+unsafe impl Send for ContextMenuHandle {}
+impl ContextMenuHandle {
+    #[deprecated]
+    pub const fn internal(&self) -> HWND {
+        self.0
+    }
+
+    #[inline(always)]
+    pub fn pixels_size(&self) -> Size<PixelsUnit> {
+        let mut r = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(self.0, r.as_mut_ptr()).expect("GetClientRect");
+        }
+        let r = unsafe { r.assume_init_ref() };
+
+        Size::new_pixels(r.right as _, r.bottom as _)
+    }
+
+    #[inline(always)]
+    pub fn logical_size(&self) -> Size<LogicalUnit> {
+        self.pixels_size().to_logical(self.render_scale())
+    }
+
+    #[inline(always)]
+    pub fn render_scale(&self) -> f32 {
+        unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
+    }
+}
+
 pub struct ContextMenuInstance {
     hwnd: HWND,
 }
-impl ContextMenuInstance {}
+impl ContextMenuInstance {
+    fn register_class(hinstance: HINSTANCE) -> u16 {
+        unsafe {
+            register_class(&WNDCLASSEXW {
+                cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
+                lpfnWndProc: Some(Self::wndproc),
+                hInstance: hinstance,
+                lpszClassName: w!("ContextMenu"),
+                ..core::mem::MaybeUninit::zeroed().assume_init()
+            })
+            .expect("context_menu.register_class")
+        }
+    }
+
+    pub fn new(syslink: &SystemLink, composite_tree: &mut CompositeTree<SyncEvent>) -> Self {
+        let hinstance = current_instance_handle();
+        let h = unsafe {
+            CreateWindowExW(
+                WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+                PCWSTR(ContextMenuSharedState::window_class() as _),
+                w!(""),
+                WS_POPUP,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                Some(hinstance),
+                None,
+            )
+            .expect("context_menu.create_window")
+        };
+        let composite_root = composite_tree.create(CompositeRect {
+            relative_size_adjustment: [1.0, 1.0],
+            ..Default::default()
+        });
+        syslink
+            .rt_sender
+            .send(RenderMessage::NewContextMenu(NewContextMenuData {
+                w: ContextMenuHandle(h),
+                vk_surface: NewWindowVulkanSurface(
+                    VulkanSurface::new(unsafe { &*syslink.vk_device }, unsafe {
+                        br::Win32SurfaceCreateInfo::new(
+                            core::mem::transmute(hinstance),
+                            core::mem::transmute(h),
+                        )
+                        .execute((&*syslink.vk_device).instance(), None)
+                        .expect("vk_surface.create")
+                    })
+                    .unbound()
+                    .1,
+                ),
+                composite_root,
+            }))
+            .expect("rt_sender.send");
+
+        let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
+        Self { hwnd: h }
+    }
+
+    extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+}
+
+struct ContextMenuSharedState {
+    window_class: u16,
+    installed_hook: HHOOK,
+    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+}
+impl Drop for ContextMenuSharedState {
+    fn drop(&mut self) {
+        if let Err(e) = unsafe { UnhookWindowsHookEx(self.installed_hook) } {
+            tracing::error!(reason = %e, "UnhookWindowsHookEx");
+        }
+    }
+}
+impl ContextMenuSharedState {
+    #[inline(always)]
+    const fn get() -> &'static Self {
+        unsafe { &*CONTEXT_MENU_SHARED_STATE }
+    }
+
+    #[inline(always)]
+    const fn window_class() -> u16 {
+        Self::get().window_class
+    }
+
+    // hiding by mouse hook: https://www.codeproject.com/Tips/751520/Custom-Context-Menu
+    extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        if WM_LBUTTONDOWN as usize <= wparam.0 && wparam.0 <= WM_MBUTTONDBLCLK as usize {
+            let mut p = core::mem::MaybeUninit::<POINT>::uninit();
+            unsafe {
+                GetCursorPos(p.as_mut_ptr()).expect("Failed to get cursor pos");
+            }
+            let p = unsafe { p.assume_init() };
+
+            let has_pointing_menu =
+                WindowByClassIter::new(PCWSTR(Self::window_class() as _)).any(|x| {
+                    let mut w = core::mem::MaybeUninit::uninit();
+                    if let Err(e) = unsafe { GetWindowRect(x, w.as_mut_ptr()) } {
+                        tracing::error!(reason = %e, "GetWindowRect");
+                        return false;
+                    }
+
+                    unsafe { PtInRect(w.as_ptr(), p).as_bool() }
+                });
+
+            if !has_pointing_menu {
+                let window_handles =
+                    WindowByClassIter::new(PCWSTR(Self::window_class() as _)).collect::<Vec<_>>();
+                for window_handle in window_handles {
+                    let (tx, rx) = std::sync::mpsc::channel::<()>();
+                    Self::get()
+                        .rt_sender
+                        .send(RenderMessage::DestroyContextMenu(
+                            ContextMenuHandle(window_handle),
+                            tx,
+                        ))
+                        .expect("rt_sender.send");
+                    rx.recv().expect("rx.recv");
+
+                    if let Err(e) = unsafe { DestroyWindow(window_handle) } {
+                        tracing::error!(reason = %e, "DestroyWindow");
+                    }
+                }
+            }
+        }
+
+        unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
+}
+
+static mut CONTEXT_MENU_SHARED_STATE: *mut ContextMenuSharedState = core::ptr::null_mut();
+
+pub fn initialize_context_menu(rt_sender: std::sync::mpsc::Sender<RenderMessage>) {
+    let window_class = ContextMenuInstance::register_class(current_instance_handle());
+    let installed_hook = unsafe {
+        SetWindowsHookExW(
+            WH_MOUSE,
+            Some(ContextMenuSharedState::mouse_hook),
+            None,
+            GetCurrentThreadId(),
+        )
+        .expect("SetWindowsHookExW")
+    };
+
+    unsafe {
+        CONTEXT_MENU_SHARED_STATE = Box::into_raw(Box::new(ContextMenuSharedState {
+            window_class,
+            installed_hook,
+            rt_sender,
+        }));
+    }
+}
+
+pub fn pop_context_menu(syslink: &SystemLink, composite_tree: &mut CompositeTree<SyncEvent>) {
+    ContextMenuInstance::new(syslink, composite_tree);
+}
+
+pub fn finalize_context_menu() {
+    unsafe {
+        drop(Box::from_raw(core::ptr::replace(
+            core::ptr::addr_of_mut!(CONTEXT_MENU_SHARED_STATE),
+            core::ptr::null_mut(),
+        )));
+    }
+}
 
 pub trait TextProvider {
     fn text(&self, range: CoreTextRange) -> windows_core::Result<HSTRING>;
