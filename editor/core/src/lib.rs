@@ -461,6 +461,13 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
         },
     );
+    #[cfg(windows)]
+    platform::windows::post_initialize_context_menu(LogicFiberEventDispatcher {
+        event_store,
+        polling: &mut polling,
+        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
+        future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
+    });
     #[cfg(target_os = "macos")]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store,
@@ -860,6 +867,7 @@ pub enum Event {
     ContextMenuPop {
         screen_pos: Point<PixelsUnit>,
     },
+    ContextMenuCloseAll,
     #[cfg(windows)]
     CoreTextLayoutRequested {
         ht: HitTestTreeRef,
@@ -2941,6 +2949,13 @@ async fn run<'sys>(
             Event::ContextMenuPop { screen_pos } => {
                 #[cfg(windows)]
                 platform::windows::pop_context_menu(&system_link, &mut composite_tree, screen_pos);
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::ContextMenuCloseAll => {
+                #[cfg(windows)]
+                platform::windows::close_all_context_menus(&mut composite_tree);
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);

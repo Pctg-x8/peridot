@@ -1518,10 +1518,13 @@ pub struct ContextMenuInstance {
     hwnd: HWND,
 }
 impl ContextMenuInstance {
+    const WINDOW_PTR_COMPOSITE_ROOT: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+
     fn register_class(hinstance: HINSTANCE) -> u16 {
         unsafe {
             register_class(&WNDCLASSEXW {
                 cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
+                cbWndExtra: core::mem::size_of::<usize>() as _,
                 lpfnWndProc: Some(Self::wndproc),
                 hInstance: hinstance,
                 lpszClassName: w!("ContextMenu"),
@@ -1558,6 +1561,13 @@ impl ContextMenuInstance {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
         });
+        unsafe {
+            SetWindowLongPtrW(
+                h,
+                Self::WINDOW_PTR_COMPOSITE_ROOT,
+                core::mem::transmute(composite_root),
+            );
+        }
         syslink
             .rt_sender
             .send(RenderMessage::NewContextMenu(NewContextMenuData {
@@ -1591,6 +1601,7 @@ struct ContextMenuSharedState {
     window_class: u16,
     installed_hook: HHOOK,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    event_dispatcher: LogicFiberEventDispatcher,
 }
 impl Drop for ContextMenuSharedState {
     fn drop(&mut self) {
@@ -1631,23 +1642,9 @@ impl ContextMenuSharedState {
                 });
 
             if !has_pointing_menu {
-                let window_handles =
-                    WindowByClassIter::new(PCWSTR(Self::window_class() as _)).collect::<Vec<_>>();
-                for window_handle in window_handles {
-                    let (tx, rx) = std::sync::mpsc::channel::<()>();
-                    Self::get()
-                        .rt_sender
-                        .send(RenderMessage::DestroyContextMenu(
-                            ContextMenuHandle(window_handle),
-                            tx,
-                        ))
-                        .expect("rt_sender.send");
-                    rx.recv().expect("rx.recv");
-
-                    if let Err(e) = unsafe { DestroyWindow(window_handle) } {
-                        tracing::error!(reason = %e, "DestroyWindow");
-                    }
-                }
+                Self::get()
+                    .event_dispatcher
+                    .dispatch(Event::ContextMenuCloseAll);
             }
         }
 
@@ -1674,7 +1671,16 @@ pub fn initialize_context_menu(rt_sender: std::sync::mpsc::Sender<RenderMessage>
             window_class,
             installed_hook,
             rt_sender,
+            // あとで初期化するので一旦適当に埋める
+            #[allow(invalid_value)]
+            event_dispatcher: core::mem::MaybeUninit::uninit().assume_init(),
         }));
+    }
+}
+
+pub fn post_initialize_context_menu(event_dispatcher: LogicFiberEventDispatcher) {
+    unsafe {
+        (*CONTEXT_MENU_SHARED_STATE).event_dispatcher = event_dispatcher;
     }
 }
 
@@ -1684,6 +1690,35 @@ pub fn pop_context_menu(
     screen_pos: Point<PixelsUnit>,
 ) {
     ContextMenuInstance::new(syslink, composite_tree, screen_pos);
+}
+
+pub fn close_all_context_menus(composite_tree: &mut CompositeTree<SyncEvent>) {
+    let window_handles =
+        WindowByClassIter::new(PCWSTR(ContextMenuSharedState::window_class() as _))
+            .collect::<Vec<_>>();
+    for window_handle in window_handles {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        ContextMenuSharedState::get()
+            .rt_sender
+            .send(RenderMessage::DestroyContextMenu(
+                ContextMenuHandle(window_handle),
+                tx,
+            ))
+            .expect("rt_sender.send");
+        rx.recv().expect("rx.recv");
+
+        let composite_root: CompositeTreeRef = unsafe {
+            core::mem::transmute(GetWindowLongPtrW(
+                window_handle,
+                ContextMenuInstance::WINDOW_PTR_COMPOSITE_ROOT,
+            ))
+        };
+        composite_tree.free_all(composite_root);
+
+        if let Err(e) = unsafe { DestroyWindow(window_handle) } {
+            tracing::error!(reason = %e, "DestroyWindow");
+        }
+    }
 }
 
 pub fn finalize_context_menu() {
