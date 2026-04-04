@@ -155,6 +155,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         future_ptr: core::ptr::null_mut(),
     };
 
+    #[cfg(windows)]
+    platform::windows::initialize_context_menu_composite_resources(&mut composite_tree);
+
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
@@ -2430,8 +2433,8 @@ async fn run<'sys>(
     let tab_bg_grad = view_init_ctx
         .composite_tree
         .create_gradient(Gradient::Radial {
-            start_color: [1.0, 1.0, 1.0, 0.0],
-            end_color: [1.0, 1.0, 1.0, 1.0],
+            start_color: [1.0, 1.0, 1.0, 1.0],
+            end_color: [1.0, 1.0, 1.0, 0.0],
             center_relative: [0.5, 0.5],
             radius: [0.5, 0.1],
         });

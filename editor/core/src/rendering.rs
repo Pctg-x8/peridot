@@ -19,8 +19,8 @@ use crate::{
     rendering::{
         atlas::{AtlasRect, TextureAtlas},
         composite::{
-            BoundCompositeRenderer, CompositeRenderingData, CompositeStreamingData,
-            CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
+            BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
+            CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
             VectorRasterizationState,
         },
         text::{PerWindowFontSet, RootFontSet, ThreadLocalTypingContext},
@@ -127,6 +127,7 @@ impl<'main> RenderThread<'main> {
             .queue(self.vk_device.present_queue_family_index(), 0);
 
         let mut composite_tree = CompositeTreeRender::new();
+        let composite_shared_buffers = CompositeSharedBuffers::new(self.vk_device);
         let vg_render_formats = GlyphAtlasRenderingFormats {
             color: br::vk::VK_FORMAT_R8_UNORM,
             stencil: br::vk::VK_FORMAT_S8_UINT,
@@ -153,6 +154,27 @@ impl<'main> RenderThread<'main> {
             usize,
             Normalized2DStaticMeshTextureEntry,
         > = HashMap::new();
+
+        let mut shared_update_cp = br::CommandPoolObject::new(
+            self.vk_device,
+            &br::CommandPoolCreateInfo::new(self.vk_device.present_queue_family_index()),
+        )
+        .expect("shared_update_cp.create");
+        let [mut shared_update_commands] = br::CommandBufferObject::alloc_array(
+            self.vk_device,
+            &br::CommandBufferFixedCountAllocateInfo::new(
+                &mut shared_update_cp,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("shared_update_commands.alloc");
+        unsafe {
+            shared_update_commands
+                .begin(&br::CommandBufferBeginInfo::new())
+                .expect("shared_update_commands.begin")
+                .end()
+                .expect("shared_update_commands.end");
+        }
 
         let mut any_swapchain_invalidated = false;
         'lp: while !self
@@ -204,6 +226,7 @@ impl<'main> RenderThread<'main> {
                             wd.key,
                             WindowRenderer::new(
                                 self.vk_device,
+                                &composite_shared_buffers,
                                 wd,
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
@@ -267,6 +290,7 @@ impl<'main> RenderThread<'main> {
                             create_data.w,
                             ContextMenuRenderer::new(
                                 self.vk_device,
+                                &composite_shared_buffers,
                                 create_data,
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
@@ -317,6 +341,36 @@ impl<'main> RenderThread<'main> {
                     }
                 }
             }
+
+            // TODO: 必要なら後で最適化する
+            composite_tree.update_gradients(self.vk_device, &composite_shared_buffers);
+            unsafe {
+                shared_update_cp
+                    .reset(br::CommandPoolResetFlags::EMPTY)
+                    .expect("shared_update_cp.reset");
+            }
+            unsafe {
+                shared_update_commands
+                    .begin(&br::CommandBufferBeginInfo::new())
+                    .expect("shared_update_commands.begin")
+            }
+            .inject(|r| composite_shared_buffers.sync_buffer(r))
+            .end()
+            .expect("shared_update_commands.end");
+            unsafe {
+                render_queue
+                    .submit_raw(
+                        &[br::SubmitInfo::new_array(
+                            &[],
+                            &[],
+                            &[shared_update_commands.as_transparent_ref()],
+                            &[],
+                        )],
+                        None,
+                    )
+                    .expect("shared_update.submit");
+            }
+            render_queue.wait().expect("shared_update.wait");
 
             for x in windows.values_mut() {
                 if x.take_swapchain_externally_invalidation_signal() {
@@ -824,6 +878,7 @@ struct ContextMenuRenderer<'d> {
 impl<'d> ContextMenuRenderer<'d> {
     fn new(
         device: &'d VulkanDevice<'d>,
+        shared_buffers: &CompositeSharedBuffers,
         create_data: NewContextMenuData,
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
@@ -1027,6 +1082,7 @@ impl<'d> ContextMenuRenderer<'d> {
 
         let composite_renderer = BoundCompositeRenderer::new(
             device,
+            shared_buffers,
             glyph_atlas.view(),
             #[cfg(not(windows))]
             surface.format(),
@@ -1388,6 +1444,7 @@ struct WindowRenderer<'d> {
 impl<'d> WindowRenderer<'d> {
     fn new(
         device: &'d VulkanDevice<'d>,
+        shared_buffers: &CompositeSharedBuffers,
         create_data: NewWindowData,
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
@@ -1460,6 +1517,7 @@ impl<'d> WindowRenderer<'d> {
 
         let composite_renderer = BoundCompositeRenderer::new(
             device,
+            shared_buffers,
             glyph_atlas.view(),
             surface.format(),
             vk_swapchain.size(),
@@ -2670,27 +2728,34 @@ impl<'d> MaskTextureAtlasManager<'d> {
         .next_subpass(br::SubpassContents::Inline)
         .bind_pipeline(br::PipelineBindPoint::Graphics, &self.colorize_pipeline)
         .draw(3, 1, 0, 0)
-        .bind_pipeline(
-            br::PipelineBindPoint::Graphics,
-            &self.fill_tri_white_pipeline,
-        )
-        .bind_vertex_buffer_array(
-            0,
-            &[vector_draw_buffer.as_transparent_ref()],
-            &[normalized_2d_static_mesh_vertices_offset as _],
-        )
-        .bind_index_buffer(
-            &vector_draw_buffer,
-            normalized_2d_static_mesh_indices_offset as _,
-            br::IndexType::U16,
-        )
-        .draw_indexed(
-            normalized_2d_static_mesh_indices_fused.len() as _,
-            1,
-            0,
-            0,
-            0,
-        )
+        .inject(|r| {
+            if normalized_2d_static_mesh_vertices_fused.is_empty() {
+                // no render requested
+                return r;
+            }
+
+            r.bind_pipeline(
+                br::PipelineBindPoint::Graphics,
+                &self.fill_tri_white_pipeline,
+            )
+            .bind_vertex_buffer_array(
+                0,
+                &[vector_draw_buffer.as_transparent_ref()],
+                &[normalized_2d_static_mesh_vertices_offset as _],
+            )
+            .bind_index_buffer(
+                &vector_draw_buffer,
+                normalized_2d_static_mesh_indices_offset as _,
+                br::IndexType::U16,
+            )
+            .draw_indexed(
+                normalized_2d_static_mesh_indices_fused.len() as _,
+                1,
+                0,
+                0,
+                0,
+            )
+        })
         .end_render_pass()
         .inject(|r| {
             self.device.cmd_pipeline_barrier(

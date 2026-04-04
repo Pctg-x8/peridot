@@ -115,9 +115,12 @@ use crate::{
         NewContextMenuData, NewWindowData, NewWindowVulkanSurface, RenderMessage,
         SendableCompositionSurfaceHandle,
         composite::{
-            AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
+            AnimatableColor, AnimatableFloat, CompositeMode, CompositeRect, CompositeRectText,
+            CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, Gradient,
+            GradientRef,
         },
-        text::RootFontSet,
+        text::{FontID, RootFontSet},
     },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
@@ -1684,6 +1687,7 @@ pub struct ContextMenuSharedState {
     compositor: Compositor,
     compositor_desktop_interop: ICompositorDesktopInterop,
     compositor_interop: ICompositorInterop,
+    entry_light_grad: GradientRef,
 }
 impl Drop for ContextMenuSharedState {
     fn drop(&mut self) {
@@ -1817,9 +1821,6 @@ pub fn initialize_context_menu(
             window_class,
             installed_hook,
             rt_sender,
-            // あとで初期化するので一旦適当に埋める
-            #[allow(invalid_value)]
-            event_dispatcher: core::mem::MaybeUninit::uninit().assume_init(),
             dxgi_factory,
             d3d12_device,
             d3d12_cq,
@@ -1836,7 +1837,24 @@ pub fn initialize_context_menu(
                 .native_compositor
                 .cast()
                 .expect("native_compositor.cast"),
+            // あとで初期化するので一旦適当に埋める
+            #[allow(invalid_value)]
+            event_dispatcher: core::mem::MaybeUninit::uninit().assume_init(),
+            #[allow(invalid_value)]
+            entry_light_grad: core::mem::MaybeUninit::uninit().assume_init(),
         }));
+    }
+}
+
+pub fn initialize_context_menu_composite_resources(composite_tree: &mut CompositeTree<SyncEvent>) {
+    unsafe {
+        (*CONTEXT_MENU_SHARED_STATE).entry_light_grad =
+            composite_tree.create_gradient(Gradient::Radial {
+                start_color: [0.75, 1.0, 1.5, 1.0],
+                end_color: [0.25, 0.5, 1.0, 0.0],
+                center_relative: [0.5, 0.9],
+                radius: [0.5, 0.1],
+            });
     }
 }
 
@@ -1874,7 +1892,7 @@ pub fn pop_context_menu(
     let composite_root = composite_tree.create(CompositeRect {
         relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.5])),
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.375])),
         ..Default::default()
     });
     let dcomp_surface_handle = unsafe {
@@ -2022,6 +2040,34 @@ pub fn pop_context_menu(
         .expect("rt_sender.send");
 
     let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
+
+    let ct_entry = composite_tree.create(CompositeRect {
+        base_scale_factor: ContextMenuHandle(h).render_scale(),
+        relative_size_adjustment: [1.0, 0.0],
+        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
+        text: Some(CompositeRectText {
+            runs: vec![CompositeRectTextRun {
+                font_id: FontID::UIDefault,
+                content: "Entry1".into(),
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let ct_entry_light = composite_tree.create(CompositeRect {
+        base_scale_factor: ContextMenuHandle(h).render_scale(),
+        relative_size_adjustment: [1.0, 0.0],
+        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillRadialGradient(shared_state.entry_light_grad),
+        ..Default::default()
+    });
+    composite_tree.add_child(composite_root, ct_entry_light);
+    composite_tree.add_child(composite_root, ct_entry);
 }
 
 pub fn close_all_context_menus(composite_tree: &mut CompositeTree<SyncEvent>) {

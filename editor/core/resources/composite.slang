@@ -288,7 +288,6 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   case CompositeMode.FillRadialGradient: {
     // starting from center
     let a =
-        1.0 -
         saturate(length((input.relativePixelCoord / input.renderSizePixels -
                          gradientDataArray[input.gradientDataIndex].params.xy) /
                         gradientDataArray[input.gradientDataIndex].params.zw));
