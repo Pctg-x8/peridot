@@ -43,11 +43,14 @@ use windows_numerics::{Vector2, Vector3};
 use crate::{
     Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
+    input::hittest::{
+        CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+    },
     rendering::{
         NewContextMenuData, RenderMessage,
         composite::{
-            AnimatableColor, AnimatableFloat, CompositeMode, CompositeRect, CompositeRectText,
-            CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+            AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
+            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, Gradient,
             GradientRef,
         },
@@ -103,12 +106,18 @@ impl Handle {
 
 pub struct InstanceState {
     composite_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
     cv_root: SpriteVisual,
     c_target: DesktopWindowTarget,
 }
 impl InstanceState {
-    fn done(self, composite_tree: &mut CompositeTree<SyncEvent>) {
+    fn done(
+        self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
         composite_tree.free_all(self.composite_root);
+        ht_manager.free_all(self.ht_root);
     }
 }
 
@@ -359,6 +368,8 @@ pub fn post_initialize(event_dispatcher: LogicFiberEventDispatcher) {
 pub fn pop(
     syslink: &SystemLink,
     composite_tree: &mut CompositeTree<SyncEvent>,
+    ht_manager: &mut HitTestTreeManager,
+    current_sec: f32,
     screen_pos: Point<PixelsUnit>,
 ) {
     let shared_state = SharedState::get();
@@ -385,6 +396,11 @@ pub fn pop(
         relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.375])),
+        ..Default::default()
+    });
+    let ht_root = ht_manager.create(HitTestTreeData {
+        width_adjustment_factor: 1.0,
+        height_adjustment_factor: 1.0,
         ..Default::default()
     });
     let c_target = unsafe {
@@ -508,6 +524,7 @@ pub fn pop(
         h,
         Box::new(InstanceState {
             composite_root,
+            ht_root,
             cv_root,
             c_target,
         }),
@@ -524,10 +541,40 @@ pub fn pop(
 
     let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
 
+    let ht_entry = ht_manager.create(HitTestTreeData {
+        width_adjustment_factor: 1.0,
+        height: 20.0,
+        cursor_shape: CursorShape::Pointer,
+        ..Default::default()
+    });
     let ct_entry = composite_tree.create(CompositeRect {
         base_scale_factor: Handle(h).render_scale(),
         relative_size_adjustment: [1.0, 0.0],
         size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
+        offset: [
+            AnimatableFloat::Animated {
+                from_value: 4.0,
+                to_value: 0.0,
+                start_sec: current_sec,
+                end_sec: current_sec + 0.25,
+                curve: AnimationCurve::EASE_OUT,
+                event_on_complete: None,
+            },
+            AnimatableFloat::Value(0.0),
+        ],
+        opacity: AnimatableFloat::Animated {
+            from_value: 0.0,
+            to_value: 1.0,
+            start_sec: current_sec,
+            end_sec: current_sec + 0.25,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        },
+        ..Default::default()
+    });
+    let ct_entry_label = composite_tree.create(CompositeRect {
+        base_scale_factor: Handle(h).render_scale(),
+        relative_size_adjustment: [1.0, 1.0],
         text: Some(CompositeRectText {
             runs: vec![CompositeRectTextRun {
                 font_id: FontID::UIDefault,
@@ -543,17 +590,21 @@ pub fn pop(
     });
     let ct_entry_light = composite_tree.create(CompositeRect {
         base_scale_factor: Handle(h).render_scale(),
-        relative_size_adjustment: [1.0, 0.0],
-        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
+        relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
         composite_mode: CompositeMode::FillRadialGradient(shared_state.entry_light_grad),
         ..Default::default()
     });
-    composite_tree.add_child(composite_root, ct_entry_light);
+    composite_tree.add_child(ct_entry, ct_entry_light);
+    composite_tree.add_child(ct_entry, ct_entry_label);
     composite_tree.add_child(composite_root, ct_entry);
+    ht_manager.add_child(ht_root, ht_entry);
 }
 
-pub fn close_all(composite_tree: &mut CompositeTree<SyncEvent>) {
+pub fn close_all(
+    composite_tree: &mut CompositeTree<SyncEvent>,
+    ht_manager: &mut HitTestTreeManager,
+) {
     let window_handles =
         WindowByClassIter::new(PCWSTR(SharedState::get().window_class as _)).collect::<Vec<_>>();
     for window_handle in window_handles {
@@ -564,7 +615,7 @@ pub fn close_all(composite_tree: &mut CompositeTree<SyncEvent>) {
             .expect("rt_sender.send");
         rx.recv().expect("rx.recv");
 
-        take_state(window_handle).done(composite_tree);
+        take_state(window_handle).done(composite_tree, ht_manager);
 
         if let Err(e) = unsafe { DestroyWindow(window_handle) } {
             tracing::error!(reason = %e, "DestroyWindow");

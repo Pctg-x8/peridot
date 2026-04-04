@@ -2977,14 +2977,20 @@ async fn run<'sys>(
             }
             Event::ContextMenuPop { screen_pos } => {
                 #[cfg(windows)]
-                platform::windows::context_menu::pop(&system_link, &mut composite_tree, screen_pos);
+                platform::windows::context_menu::pop(
+                    &system_link,
+                    &mut composite_tree,
+                    &mut ht_manager,
+                    global_time_base.elapsed().as_secs_f32(),
+                    screen_pos,
+                );
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::ContextMenuCloseAll => {
                 #[cfg(windows)]
-                platform::windows::context_menu::close_all(&mut composite_tree);
+                platform::windows::context_menu::close_all(&mut composite_tree, &mut ht_manager);
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -3295,6 +3301,9 @@ pub type DragPreviewPopoverHandle = platform::unix::wayland::DragPreviewPopoverH
 pub type WindowHandle = platform::windows::WindowHandle;
 #[cfg(feature = "wayland")]
 pub type WindowHandle = platform::unix::wayland::WindowHandle;
+
+#[cfg(windows)]
+pub type ContextMenuHandle = platform::windows::context_menu::Handle;
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

@@ -321,6 +321,12 @@ pub enum AnimationCurve {
     CubicBezier { p1: (f32, f32), p2: (f32, f32) },
 }
 impl AnimationCurve {
+    // predefined curves
+    pub const EASE_OUT: Self = Self::CubicBezier {
+        p1: (0.0, 0.0),
+        p2: (0.5, 1.0),
+    };
+
     #[inline]
     fn interpolate(&self, t: f32) -> f32 {
         match self {
