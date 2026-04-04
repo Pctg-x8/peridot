@@ -158,6 +158,14 @@ impl Size<PixelsUnit> {
             _marker: PhantomData,
         }
     }
+
+    #[inline(always)]
+    pub const fn to_vk(&self) -> bedrock::Extent2D {
+        bedrock::Extent2D {
+            width: self.width,
+            height: self.height,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -16,10 +16,37 @@ use windows::{
         },
     },
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{
+            CloseHandle, GENERIC_ALL, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+        },
         Graphics::{
+            CompositionSwapchain::{
+                CreatePresentationFactory, IPresentationBuffer, IPresentationFactory,
+                IPresentationManager, IPresentationSurface,
+            },
+            Direct3D::D3D_FEATURE_LEVEL_12_0,
+            Direct3D12::{
+                D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+                D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_CPU_PAGE_PROPERTY_NOT_AVAILABLE,
+                D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_DEFAULT_RESOURCE_PLACEMENT_ALIGNMENT,
+                D3D12_FENCE_FLAG_NONE, D3D12_HEAP_DESC, D3D12_HEAP_FLAG_ALLOW_DISPLAY,
+                D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES, D3D12_HEAP_FLAG_SHARED,
+                D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_MEMORY_POOL_UNKNOWN,
+                D3D12_RESOURCE_DESC, D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+                D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT,
+                D3D12_TEXTURE_LAYOUT_64KB_STANDARD_SWIZZLE, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+                D3D12CreateDevice, D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug,
+                ID3D12Device, ID3D12Fence, ID3D12Heap, ID3D12Resource,
+            },
+            DirectComposition::{
+                COMPOSITIONOBJECT_READ, COMPOSITIONOBJECT_WRITE, DCompositionCreateSurfaceHandle,
+            },
             Dwm::{
                 DWMWA_EXTENDED_FRAME_BOUNDS, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute,
+            },
+            Dxgi::{
+                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
+                CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, IDXGIFactory2, IDXGISwapChain3,
             },
             Gdi::{
                 GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
@@ -28,10 +55,11 @@ use windows::{
         },
         System::{
             self,
-            Threading::GetCurrentThreadId,
+            Threading::{CreateEventW, GetCurrentThreadId},
             WinRT::{
-                Composition::ICompositorDesktopInterop, CreateDispatcherQueueController,
-                DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
+                Composition::{ICompositorDesktopInterop, ICompositorInterop},
+                CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
+                DispatcherQueueOptions,
             },
         },
         UI::{
@@ -85,12 +113,16 @@ use crate::{
     },
     rendering::{
         NewContextMenuData, NewWindowData, NewWindowVulkanSurface, RenderMessage,
-        composite::{CompositeRect, CompositeTree, CompositeTreeRef},
+        SendableCompositionSurfaceHandle,
+        composite::{
+            AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
+        },
         text::RootFontSet,
     },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
         platform::windows::{WindowByClassIter, current_instance_handle, register_class},
+        rup2, rup2_u64,
     },
 };
 
@@ -1534,7 +1566,10 @@ impl ContextMenuHandle {
         }
         let r = unsafe { r.assume_init_ref() };
 
-        Size::new_pixels(r.right as _, r.bottom as _)
+        Size::new_pixels(
+            r.right as u32 - (ContextMenuInstance::SHADOW_SIZE * 2.0).ceil() as u32,
+            r.bottom as u32 - (ContextMenuInstance::SHADOW_SIZE * 2.0).ceil() as u32,
+        )
     }
 
     #[inline(always)]
@@ -1548,11 +1583,30 @@ impl ContextMenuHandle {
     }
 }
 
-pub struct ContextMenuInstance {
-    hwnd: HWND,
+pub struct ContextMenuInstanceState {
+    composite_root: CompositeTreeRef,
+    dcomp_surface_handle: HANDLE,
+    cv_root: SpriteVisual,
+    c_target: DesktopWindowTarget,
 }
+impl Drop for ContextMenuInstanceState {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.dcomp_surface_handle).expect("CloseHandle");
+        }
+    }
+}
+impl ContextMenuInstanceState {}
+
+struct ContextMenuInstance;
 impl ContextMenuInstance {
-    const WINDOW_PTR_COMPOSITE_ROOT: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+    const WINDOW_PTR_STATE: WINDOW_LONG_PTR_INDEX = WINDOW_LONG_PTR_INDEX(0);
+    const SHADOW_SIZE: f32 = 16.0;
+    const SHADOW_OFFSET: Vector3 = Vector3 {
+        X: 0.0,
+        Y: 4.0,
+        Z: 0.0,
+    };
 
     fn register_class(hinstance: HINSTANCE) -> u16 {
         unsafe {
@@ -1568,62 +1622,46 @@ impl ContextMenuInstance {
         }
     }
 
-    pub fn new(
-        syslink: &SystemLink,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        screen_pos: Point<PixelsUnit>,
-    ) -> Self {
-        let hinstance = current_instance_handle();
-        let h = unsafe {
-            CreateWindowExW(
-                WS_EX_NOACTIVATE | WS_EX_TOPMOST,
-                PCWSTR(ContextMenuSharedState::window_class() as _),
-                w!(""),
-                WS_POPUP,
-                screen_pos.x,
-                screen_pos.y,
-                100,
-                100,
-                None,
-                None,
-                Some(hinstance),
-                None,
-            )
-            .expect("context_menu.create_window")
-        };
-        let composite_root = composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        });
+    #[inline(always)]
+    fn set_state(hwnd: HWND, state: Box<ContextMenuInstanceState>) {
         unsafe {
             SetWindowLongPtrW(
-                h,
-                Self::WINDOW_PTR_COMPOSITE_ROOT,
-                core::mem::transmute(composite_root),
+                hwnd,
+                Self::WINDOW_PTR_STATE,
+                Box::into_raw(state).addr().cast_signed(),
             );
         }
-        syslink
-            .rt_sender
-            .send(RenderMessage::NewContextMenu(NewContextMenuData {
-                w: ContextMenuHandle(h),
-                vk_surface: NewWindowVulkanSurface(
-                    VulkanSurface::new(unsafe { &*syslink.vk_device }, unsafe {
-                        br::Win32SurfaceCreateInfo::new(
-                            core::mem::transmute(hinstance),
-                            core::mem::transmute(h),
-                        )
-                        .execute((&*syslink.vk_device).instance(), None)
-                        .expect("vk_surface.create")
-                    })
-                    .unbound()
-                    .1,
-                ),
-                composite_root,
-            }))
-            .expect("rt_sender.send");
+    }
 
-        let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
-        Self { hwnd: h }
+    fn take_state(hwnd: HWND) -> Box<ContextMenuInstanceState> {
+        let r = unsafe {
+            Box::from_raw(core::ptr::with_exposed_provenance_mut(
+                GetWindowLongPtrW(hwnd, Self::WINDOW_PTR_STATE).cast_unsigned(),
+            ))
+        };
+        unsafe {
+            SetWindowLongPtrW(hwnd, Self::WINDOW_PTR_STATE, 0);
+        }
+
+        r
+    }
+
+    #[inline(always)]
+    fn state<'a>(hwnd: HWND) -> &'a ContextMenuInstanceState {
+        unsafe {
+            &*core::ptr::with_exposed_provenance(
+                GetWindowLongPtrW(hwnd, Self::WINDOW_PTR_STATE).cast_unsigned(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn state_mut<'a>(hwnd: HWND) -> &'a mut ContextMenuInstanceState {
+        unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut(
+                GetWindowLongPtrW(hwnd, Self::WINDOW_PTR_STATE).cast_unsigned(),
+            )
+        }
     }
 
     extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -1631,14 +1669,28 @@ impl ContextMenuInstance {
     }
 }
 
-struct ContextMenuSharedState {
+pub struct ContextMenuSharedState {
     window_class: u16,
     installed_hook: HHOOK,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     event_dispatcher: LogicFiberEventDispatcher,
+    pub dxgi_factory: IDXGIFactory2,
+    pub d3d12_device: ID3D12Device,
+    pub d3d12_cq: ID3D12CommandQueue,
+    pub d3d12_present_fence: ID3D12Fence,
+    pub d3d12_present_fence_event: HANDLE,
+    presentation_factory: IPresentationFactory,
+    pub presentation_manager: IPresentationManager,
+    compositor: Compositor,
+    compositor_desktop_interop: ICompositorDesktopInterop,
+    compositor_interop: ICompositorInterop,
 }
 impl Drop for ContextMenuSharedState {
     fn drop(&mut self) {
+        if let Err(e) = unsafe { CloseHandle(self.d3d12_present_fence_event) } {
+            tracing::error!(reason = %e, "CloseHandle");
+        }
+
         if let Err(e) = unsafe { UnhookWindowsHookEx(self.installed_hook) } {
             tracing::error!(reason = %e, "UnhookWindowsHookEx");
         }
@@ -1646,7 +1698,7 @@ impl Drop for ContextMenuSharedState {
 }
 impl ContextMenuSharedState {
     #[inline(always)]
-    const fn get() -> &'static Self {
+    pub const fn get() -> &'static Self {
         unsafe { &*CONTEXT_MENU_SHARED_STATE }
     }
 
@@ -1688,7 +1740,10 @@ impl ContextMenuSharedState {
 
 static mut CONTEXT_MENU_SHARED_STATE: *mut ContextMenuSharedState = core::ptr::null_mut();
 
-pub fn initialize_context_menu(rt_sender: std::sync::mpsc::Sender<RenderMessage>) {
+pub fn initialize_context_menu(
+    app_context: &ApplicationContext,
+    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+) {
     let window_class = ContextMenuInstance::register_class(current_instance_handle());
     let installed_hook = unsafe {
         SetWindowsHookExW(
@@ -1700,6 +1755,63 @@ pub fn initialize_context_menu(rt_sender: std::sync::mpsc::Sender<RenderMessage>
         .expect("SetWindowsHookExW")
     };
 
+    let mut d3d12_debug = core::mem::MaybeUninit::uninit();
+    unsafe {
+        D3D12GetDebugInterface(d3d12_debug.as_mut_ptr()).expect("D3D12GetDebugInterface");
+    }
+    let d3d12_debug: ID3D12Debug = unsafe {
+        d3d12_debug
+            .assume_init()
+            .expect("D3D12GetDebugInterface.null")
+    };
+    unsafe {
+        d3d12_debug.EnableDebugLayer();
+    }
+
+    let dxgi_factory: IDXGIFactory2 =
+        unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG).expect("CreateDXGIFactory2") };
+    let adapter = unsafe {
+        dxgi_factory
+            .EnumAdapters1(0)
+            .expect("dxgi_factory.EnumAdapters1")
+    };
+    let mut d3d12_device = core::mem::MaybeUninit::uninit();
+    unsafe {
+        D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, d3d12_device.as_mut_ptr())
+            .expect("D3D12CreateDevice")
+    };
+    let d3d12_device: ID3D12Device =
+        unsafe { d3d12_device.assume_init().expect("D3D12CreateDevice.null") };
+    let d3d12_cq: ID3D12CommandQueue = unsafe {
+        d3d12_device
+            .CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+                Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+                Priority: 0,
+                Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+                NodeMask: 0,
+            })
+            .expect("d3d12_device.CreateCommandQueue")
+    };
+    unsafe {
+        d3d12_cq
+            .SetName(w!("D3D12 Main Command Queue"))
+            .expect("d3d12_cq.SetName");
+    }
+    let d3d12_present_fence: ID3D12Fence = unsafe {
+        d3d12_device
+            .CreateFence(0, D3D12_FENCE_FLAG_NONE)
+            .expect("d3d12_device.CreateFence")
+    };
+    let d3d12_present_fence_event =
+        unsafe { CreateEventW(None, false, false, None).expect("CreateEvent") };
+    let presentation_factory: IPresentationFactory =
+        unsafe { CreatePresentationFactory(&d3d12_device).expect("CreatePresentationFactory") };
+    let presentation_manager = unsafe {
+        presentation_factory
+            .CreatePresentationManager()
+            .expect("presentation_factory.CreatePresentationManager")
+    };
+
     unsafe {
         CONTEXT_MENU_SHARED_STATE = Box::into_raw(Box::new(ContextMenuSharedState {
             window_class,
@@ -1708,6 +1820,22 @@ pub fn initialize_context_menu(rt_sender: std::sync::mpsc::Sender<RenderMessage>
             // あとで初期化するので一旦適当に埋める
             #[allow(invalid_value)]
             event_dispatcher: core::mem::MaybeUninit::uninit().assume_init(),
+            dxgi_factory,
+            d3d12_device,
+            d3d12_cq,
+            d3d12_present_fence,
+            d3d12_present_fence_event,
+            presentation_factory,
+            presentation_manager,
+            compositor: app_context.native_compositor.clone(),
+            compositor_desktop_interop: app_context
+                .native_compositor
+                .cast()
+                .expect("native_compositor.cast"),
+            compositor_interop: app_context
+                .native_compositor
+                .cast()
+                .expect("native_compositor.cast"),
         }));
     }
 }
@@ -1723,7 +1851,177 @@ pub fn pop_context_menu(
     composite_tree: &mut CompositeTree<SyncEvent>,
     screen_pos: Point<PixelsUnit>,
 ) {
-    ContextMenuInstance::new(syslink, composite_tree, screen_pos);
+    let shared_state = ContextMenuSharedState::get();
+
+    let hinstance = current_instance_handle();
+    let h = unsafe {
+        CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
+            PCWSTR(shared_state.window_class as _),
+            w!(""),
+            WS_POPUP,
+            screen_pos.x - ContextMenuInstance::SHADOW_SIZE.ceil() as i32,
+            screen_pos.y - ContextMenuInstance::SHADOW_SIZE.ceil() as i32,
+            100 + (ContextMenuInstance::SHADOW_SIZE * 2.0).ceil() as i32,
+            100 + (ContextMenuInstance::SHADOW_SIZE * 2.0).ceil() as i32,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        )
+        .expect("context_menu.create_window")
+    };
+    let composite_root = composite_tree.create(CompositeRect {
+        relative_size_adjustment: [1.0, 1.0],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.5])),
+        ..Default::default()
+    });
+    let dcomp_surface_handle = unsafe {
+        DCompositionCreateSurfaceHandle(
+            (COMPOSITIONOBJECT_READ | COMPOSITIONOBJECT_WRITE) as _,
+            None,
+        )
+        .expect("DCompositionCreateSurfaceHandle")
+    };
+    let c_target = unsafe {
+        shared_state
+            .compositor_desktop_interop
+            .CreateDesktopWindowTarget(h, true)
+            .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
+    };
+    let cv_root = shared_state
+        .compositor
+        .CreateSpriteVisual()
+        .expect("compositor.CreateSpriteVisual");
+    c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
+
+    let swapchain = unsafe {
+        crate::platform::windows::ContextMenuSharedState::get()
+            .dxgi_factory
+            .CreateSwapChainForComposition(
+                &crate::platform::windows::ContextMenuSharedState::get().d3d12_cq,
+                &windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_DESC1 {
+                    Width: 100,
+                    Height: 100,
+                    Format: windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
+                    },
+                    BufferCount: 2,
+                    BufferUsage: windows::Win32::Graphics::Dxgi::DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                    Stereo: windows::Win32::Foundation::FALSE,
+                    Scaling: windows::Win32::Graphics::Dxgi::DXGI_SCALING_STRETCH,
+                    SwapEffect: windows::Win32::Graphics::Dxgi::DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                    AlphaMode:
+                        windows::Win32::Graphics::Dxgi::Common::DXGI_ALPHA_MODE_PREMULTIPLIED,
+                    Flags: 0,
+                },
+                None,
+            )
+            .expect("dxgi_factory.CreateSwapChainForComposition")
+    };
+    let swapchain: IDXGISwapChain3 = swapchain.cast().expect("swapchain.cast");
+    let fx = GaussianBlurEffect::new().expect("drag.fx.create");
+    fx.SetSource(
+        &CompositionEffectSourceParameter::Create(h!("source"))
+            .expect("compositioneffectsourceparameter.create"),
+    )
+    .expect("drag.fx.set_source");
+    fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
+    fx.SetOptimization(EffectOptimization::Speed)
+        .expect("drag.fx.set_optimization");
+    let effect_factory = shared_state
+        .compositor
+        .CreateEffectFactory(&fx)
+        .expect("drag.fx.create_factory");
+    let backdrop_brush = shared_state
+        .compositor
+        .CreateBackdropBrush()
+        .expect("drag.backdrop_brush.create");
+    let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
+    blur_brush
+        .SetSourceParameter(h!("Source"), &backdrop_brush)
+        .expect("drag.fx.set_blur_source");
+    cv_root
+        .SetSize(Vector2 { X: 100.0, Y: 100.0 })
+        .expect("cv_root.SetSize");
+    cv_root
+        .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
+        .expect("drag.visual.blur.set_center_point");
+    cv_root
+        .SetAnchorPoint(Vector2::new(0.5, 0.5))
+        .expect("drag.visual.blur.set_anchor_point");
+    cv_root
+        .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
+        .expect("drag.visual.blur.set_relative_offset_adjustment");
+    cv_root
+        .SetBrush(&blur_brush)
+        .expect("drag.visual.blur.set_brush");
+    cv_root
+        .SetShadow(&{
+            let x = shared_state
+                .compositor
+                .CreateDropShadow()
+                .expect("drag.visual.shadow.create");
+            x.SetBlurRadius(ContextMenuInstance::SHADOW_SIZE)
+                .expect("drag.visual.shadow.set_blur_radius");
+            x.SetOffset(ContextMenuInstance::SHADOW_OFFSET)
+                .expect("drag.visual.shadow.set_offset");
+            x.SetOpacity(0.3).expect("drag.visual.shadow.set_opacity");
+            x
+        })
+        .expect("drag.visual.set_shadow");
+    let cv_composited = shared_state
+        .compositor
+        .CreateSpriteVisual()
+        .expect("drag.visual.color_tint.create");
+    cv_composited
+        .SetBrush(
+            &shared_state
+                .compositor
+                .CreateSurfaceBrushWithSurface(&unsafe {
+                    shared_state
+                        .compositor_interop
+                        .CreateCompositionSurfaceForSwapChain(&swapchain)
+                        .expect("compositor_interop.CreateCompositionSurfaceForSwapChain")
+                })
+                .expect("compositor.CreateSurfaceBrushWithSurface"),
+        )
+        .expect("cv_root.SetBrush");
+    cv_composited
+        .SetRelativeOffsetAdjustment(Vector3::zero())
+        .expect("drag.visual.color_tint.set_relative_offset_adjustment");
+    cv_composited
+        .SetRelativeSizeAdjustment(Vector2::one())
+        .expect("drag.visual.color_tint.set_relative_size_adjustment");
+    cv_root
+        .Children()
+        .expect("drag.visual.get_children")
+        .InsertAtTop(&cv_composited)
+        .expect("drag.visual.add_child");
+
+    ContextMenuInstance::set_state(
+        h,
+        Box::new(ContextMenuInstanceState {
+            composite_root,
+            dcomp_surface_handle,
+            cv_root,
+            c_target,
+        }),
+    );
+    syslink
+        .rt_sender
+        .send(RenderMessage::NewContextMenu(NewContextMenuData {
+            w: ContextMenuHandle(h),
+            // composition_surface_handle: SendableCompositionSurfaceHandle(dcomp_surface_handle),
+            swapchain,
+            composite_root,
+        }))
+        .expect("rt_sender.send");
+
+    let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
 }
 
 pub fn close_all_context_menus(composite_tree: &mut CompositeTree<SyncEvent>) {
@@ -1741,13 +2039,9 @@ pub fn close_all_context_menus(composite_tree: &mut CompositeTree<SyncEvent>) {
             .expect("rt_sender.send");
         rx.recv().expect("rx.recv");
 
-        let composite_root: CompositeTreeRef = unsafe {
-            core::mem::transmute(GetWindowLongPtrW(
-                window_handle,
-                ContextMenuInstance::WINDOW_PTR_COMPOSITE_ROOT,
-            ))
-        };
-        composite_tree.free_all(composite_root);
+        let state = ContextMenuInstance::take_state(window_handle);
+        composite_tree.free_all(state.composite_root);
+        drop(state);
 
         if let Err(e) = unsafe { DestroyWindow(window_handle) } {
             tracing::error!(reason = %e, "DestroyWindow");

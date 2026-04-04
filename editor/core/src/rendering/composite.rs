@@ -87,12 +87,19 @@ pub struct CompositeStreamingData {
 
 #[derive(Debug, Clone)]
 pub enum CompositeMode<Event> {
+    /// テクスチャの内容を直接描画
     DirectSourceOver,
+    /// マスクテクスチャに色を付けて描画
     ColorTint(AnimatableColor<Event>),
+    /// 矩形を塗りつぶし
     FillColor(AnimatableColor<Event>),
+    /// マスクテクスチャに色を付けて描画 背景ブラーと合成
     ColorTintBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
+    /// 矩形を塗りつぶし 背景ブラーと合成
     FillColorBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
+    /// 直線グラデーションで矩形を塗りつぶし
     FillLinearGradient(GradientRef),
+    /// 円形グラデーションで矩形を塗りつぶし
     FillRadialGradient(GradientRef),
 }
 impl<Event> CompositeMode<Event> {
@@ -861,7 +868,7 @@ impl CompositeInstanceManager {
             &unsafe { br::VkHandleRef::dangling(self.gradient_data_buffer) },
             &[br::BufferCopy::mirror(
                 0,
-                (core::mem::size_of::<GradientData>() * self.capacity) as _,
+                (core::mem::size_of::<GradientData>() * self.capacity_gradient) as _,
             )],
         )
     }
@@ -2728,7 +2735,7 @@ impl CompositeRenderer {
             .create_render_pass(&br::RenderPassCreateInfo2::new(
                 &[br::AttachmentDescription2::new(rt_format)
                     .with_layout_to(br::ImageLayout::TransferSrcOpt.from_undefined())
-                    .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store)],
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
                 &[br::SubpassDescription2::new()
                     .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
                 &[br::SubpassDependency2::new(
@@ -2750,7 +2757,7 @@ impl CompositeRenderer {
             .create_render_pass(&br::RenderPassCreateInfo2::new(
                 &[br::AttachmentDescription2::new(rt_format)
                     .with_layout_to(br::ImageLayout::PresentSrc.from_undefined())
-                    .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store)],
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
                 &[br::SubpassDescription2::new()
                     .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
                 &[br::SubpassDependency2::new(
@@ -3839,7 +3846,7 @@ impl CompositeRenderer {
                         rp,
                         br::VkHandleRef::from_raw_ref(&fb),
                         render_region,
-                        &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0])],
+                        &[br::ClearValue::color_f32([0.0; 4])],
                     ),
                 )
             })

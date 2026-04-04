@@ -88,3 +88,8 @@ impl core::fmt::Display for ByteLengthFormatter {
 pub const fn rup2(x: usize, a: usize) -> usize {
     (x + a - 1) & !(a - 1)
 }
+
+#[inline(always)]
+pub const fn rup2_u64(x: u64, a: u64) -> u64 {
+    (x + a - 1) & !(a - 1)
+}

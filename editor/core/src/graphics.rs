@@ -48,6 +48,8 @@ pub struct VulkanDevice<'fs> {
     fp_cmd_begin_render_pass2: br::vk::PFN_vkCmdBeginRenderPass2KHR,
     fp_cmd_end_render_pass2: br::vk::PFN_vkCmdEndRenderPass2KHR,
     fp_debug_utils_set_object_name: br::vk::PFN_vkSetDebugUtilsObjectNameEXT,
+    #[cfg(windows)]
+    fp_get_memory_win32_handle_properties: br::vk::PFN_vkGetMemoryWin32HandlePropertiesKHR,
 }
 unsafe impl Sync for VulkanDevice<'_> {}
 unsafe impl Send for VulkanDevice<'_> {}
@@ -78,6 +80,20 @@ impl br::InstanceChild for VulkanDevice<'_> {
     }
 }
 impl br::Device for VulkanDevice<'_> {}
+#[cfg(windows)]
+impl br::DeviceExternalMemoryWin32Extension for VulkanDevice<'_> {
+    #[inline(always)]
+    fn get_memory_win32_handle_khr_fn(&self) -> br::vk::PFN_vkGetMemoryWin32HandleKHR {
+        unimplemented!("not planned to use")
+    }
+
+    #[inline(always)]
+    fn get_memory_win32_handle_properties_khr_fn(
+        &self,
+    ) -> br::vk::PFN_vkGetMemoryWin32HandlePropertiesKHR {
+        self.fp_get_memory_win32_handle_properties
+    }
+}
 impl<'fs> VulkanDevice<'fs> {
     pub fn new(fs: &'fs FileSystem) -> Self {
         let api_version = match br::instance_version() {
@@ -169,9 +185,30 @@ impl<'fs> VulkanDevice<'fs> {
             data: *const br::vk::VkDebugUtilsMessengerCallbackDataEXT,
             user_data: *mut core::ffi::c_void,
         ) -> br::vk::VkBool32 {
+            let sev_str = match severity {
+                v if v == br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT => {
+                    "VERBOSE".into()
+                }
+                v if v == br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT => "INFO".into(),
+                v if v == br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT => {
+                    "WARNING".into()
+                }
+                v if v == br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT => "ERROR".into(),
+                _ => format!("{severity}"),
+            };
             unsafe {
                 windows::Win32::System::Diagnostics::Debug::OutputDebugStringA(
-                    windows_core::PCSTR((*data).pMessage.cast()),
+                    windows_core::PCSTR(
+                        std::ffi::CString::new(format!(
+                            "VK DIAG[{sev_str}]: {}\n",
+                            core::ffi::CStr::from_ptr((*data).pMessage)
+                                .to_str()
+                                .expect("invalid msg")
+                        ))
+                        .expect("invalid fmt")
+                        .as_ptr()
+                        .cast(),
+                    ),
                 );
             }
             false as _
@@ -243,12 +280,14 @@ impl<'fs> VulkanDevice<'fs> {
             }
         }
 
-        let device_extensions = [
+        let mut device_extensions = vec![
             c"VK_KHR_swapchain",
             c"VK_KHR_timeline_semaphore",
             c"VK_KHR_synchronization2",
             c"VK_KHR_create_renderpass2",
         ];
+        #[cfg(windows)]
+        device_extensions.push(c"VK_KHR_external_memory_win32");
         let vk_adapter_memory_properties = vk_adapter.memory_properties();
         let vk_adapter_queue_family_properties = vk_adapter.queue_family_properties_alloc();
         let graphics_queue_family_index = vk_adapter_queue_family_properties
@@ -333,6 +372,10 @@ impl<'fs> VulkanDevice<'fs> {
                 vk_device.native_ptr().load_function_unconstrainted()
             },
             fp_cmd_pipeline_barrier2: unsafe {
+                vk_device.native_ptr().load_function_unconstrainted()
+            },
+            #[cfg(windows)]
+            fp_get_memory_win32_handle_properties: unsafe {
                 vk_device.native_ptr().load_function_unconstrainted()
             },
             pipeline_cache: pipeline_cache.unmanage().0,

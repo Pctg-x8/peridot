@@ -110,7 +110,7 @@ pub fn launch() {
     #[cfg(windows)]
     let app_context = platform::windows::ApplicationContext::new();
     #[cfg(windows)]
-    platform::windows::initialize_context_menu(rt_sender.clone());
+    platform::windows::initialize_context_menu(&app_context, rt_sender.clone());
 
     let global_time_base = std::time::Instant::now();
     main_wrapper(
@@ -510,6 +510,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_bus: sync_event_bus,
             message_receiver: rt_receiver,
             root_font_set: &root_font_set,
+            #[cfg(windows)]
+            d3d12_present_counter: 0,
         };
         let render_thread = std::thread::Builder::new()
             .name("Render".into())

@@ -15,6 +15,7 @@ use crate::{
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
         VulkanSurface, VulkanSwapchain,
     },
+    platform::windows::ContextMenuHandle,
     rendering::{
         atlas::{AtlasRect, TextureAtlas},
         composite::{
@@ -36,6 +37,14 @@ pub struct NewWindowVulkanSurface(pub UnboundVulkanSurface);
 unsafe impl Sync for NewWindowVulkanSurface {}
 unsafe impl Send for NewWindowVulkanSurface {}
 
+#[cfg(windows)]
+#[repr(transparent)]
+pub struct SendableCompositionSurfaceHandle(pub windows::Win32::Foundation::HANDLE);
+#[cfg(windows)]
+unsafe impl Sync for SendableCompositionSurfaceHandle {}
+#[cfg(windows)]
+unsafe impl Send for SendableCompositionSurfaceHandle {}
+
 pub struct NewWindowData {
     pub key: WindowHandle,
     pub vk_surface: NewWindowVulkanSurface,
@@ -47,7 +56,12 @@ pub struct NewWindowData {
 
 pub struct NewContextMenuData {
     pub w: crate::platform::windows::ContextMenuHandle,
+    #[cfg(not(windows))]
     pub vk_surface: NewWindowVulkanSurface,
+    // #[cfg(windows)]
+    // pub composition_surface_handle: SendableCompositionSurfaceHandle,
+    #[cfg(windows)]
+    pub swapchain: windows::Win32::Graphics::Dxgi::IDXGISwapChain3,
     pub composite_root: CompositeTreeRef,
 }
 
@@ -102,9 +116,11 @@ pub struct RenderThread<'main> {
     pub event_bus: &'main SyncEventBus,
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     pub root_font_set: &'main RootFontSet,
+    #[cfg(windows)]
+    pub d3d12_present_counter: u64,
 }
 impl<'main> RenderThread<'main> {
-    pub fn run(self) {
+    pub fn run(mut self) {
         tracing::info!("Starting RenderThread...");
         let mut render_queue = self
             .vk_device
@@ -347,15 +363,26 @@ impl<'main> RenderThread<'main> {
 
             // いったん最適化とかは考えないで直列でまわす(パフォーマンス気になったらそのとき考える)
             struct SubmitParameters<'x> {
-                swapchain_ref: br::VkHandleRef<'x, br::vk::VkSwapchainKHR>,
                 render_wait_semaphores: Vec<br::VkHandleRef<'x, br::vk::VkSemaphore>>,
                 render_wait_stages: Vec<br::PipelineStageFlags>,
                 render_commands: Vec<br::VkHandleRef<'x, br::vk::VkCommandBuffer>>,
                 render_signal_semaphores: Vec<br::VkHandleRef<'x, br::vk::VkSemaphore>>,
-                present_backbuffer_index: u32,
             }
-            let mut submit_parameters = Vec::with_capacity(windows.len());
-            for x in windows.values_mut() {
+            enum PresentKey {
+                Window(WindowHandle),
+                ContextMenu(ContextMenuHandle),
+            }
+            struct VkPresentParameters<'x> {
+                key: PresentKey,
+                swapchain_ref: br::VkHandleRef<'x, br::vk::VkSwapchainKHR>,
+                render_signal_semaphores: Vec<br::VkHandleRef<'x, br::vk::VkSemaphore>>,
+                backbuffer_index: u32,
+            }
+            let mut submit_parameters = Vec::with_capacity(windows.len() + context_menus.len());
+            let mut present_parameters = Vec::with_capacity(windows.len() + context_menus.len());
+            #[cfg(windows)]
+            let mut present_swapchains = Vec::with_capacity(context_menus.len());
+            for (k, x) in windows.iter_mut() {
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
                     Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -487,15 +514,19 @@ impl<'main> RenderThread<'main> {
                 render_wait_stages.push(br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
 
                 submit_parameters.push(SubmitParameters {
-                    swapchain_ref: x.swapchain_ref(),
                     render_wait_semaphores,
                     render_wait_stages,
                     render_commands: vec![x.primary_render_commands_ref(backbuffer_index)],
                     render_signal_semaphores: vec![x.present_ready_semaphore_ref(backbuffer_index)],
-                    present_backbuffer_index: backbuffer_index,
+                });
+                present_parameters.push(VkPresentParameters {
+                    key: PresentKey::Window(*k),
+                    swapchain_ref: x.swapchain_ref(),
+                    render_signal_semaphores: vec![x.present_ready_semaphore_ref(backbuffer_index)],
+                    backbuffer_index,
                 });
             }
-            for x in context_menus.values_mut() {
+            for (k, x) in context_menus.iter_mut() {
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
                     Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -570,17 +601,31 @@ impl<'main> RenderThread<'main> {
                     render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
                 }
 
+                #[cfg(not(windows))]
                 render_wait_semaphores.push(x.backbuffer_ready_semaphore.as_transparent_ref());
+                #[cfg(not(windows))]
                 render_wait_stages.push(br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT);
 
                 submit_parameters.push(SubmitParameters {
-                    swapchain_ref: x.swapchain_ref(),
                     render_wait_semaphores,
                     render_wait_stages,
                     render_commands: vec![x.primary_render_commands_ref(backbuffer_index)],
+                    #[cfg(windows)]
+                    render_signal_semaphores: vec![],
+                    #[cfg(not(windows))]
                     render_signal_semaphores: vec![x.present_ready_semaphore_ref(backbuffer_index)],
-                    present_backbuffer_index: backbuffer_index,
                 });
+                #[cfg(not(windows))]
+                present_parameters.push(VkPresentParameters {
+                    key: PresentKey::ContextMenu(*k),
+                    swapchain_ref: x.swapchain_ref(),
+                    render_signal_semaphores: vec![x.present_ready_semaphore_ref(backbuffer_index)],
+                    backbuffer_index,
+                });
+                #[cfg(windows)]
+                {
+                    present_swapchains.push(x.swapchain.clone());
+                }
             }
 
             for (s, x) in glyph_atlas_per_scale.iter() {
@@ -618,22 +663,25 @@ impl<'main> RenderThread<'main> {
                         )
                         .expect("queue submit")
                 };
-                let mut results = submit_parameters
+            }
+
+            if !present_parameters.is_empty() {
+                let mut results = present_parameters
                     .iter()
                     .map(|_| br::vk::VK_SUCCESS)
                     .collect::<Vec<_>>();
                 match render_queue.present(&br::PresentInfo::new(
-                    &submit_parameters
+                    &present_parameters
                         .iter()
                         .map(|x| x.render_signal_semaphores[0])
                         .collect::<Vec<_>>(),
-                    &submit_parameters
+                    &present_parameters
                         .iter()
                         .map(|x| x.swapchain_ref)
                         .collect::<Vec<_>>(),
-                    &submit_parameters
+                    &present_parameters
                         .iter()
-                        .map(|x| x.present_backbuffer_index)
+                        .map(|x| x.backbuffer_index)
                         .collect::<Vec<_>>(),
                     &mut results,
                 )) {
@@ -642,14 +690,64 @@ impl<'main> RenderThread<'main> {
                     Err(e) => Err::<(), _>(e).expect("queue present"),
                 }
 
-                for (r, w) in results.iter().zip(windows.values_mut()) {
-                    if *r == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
-                        w.invalidate_swapchain();
+                let present_keys = present_parameters
+                    .into_iter()
+                    .map(|x| x.key)
+                    .collect::<Vec<_>>();
+                for (r, p) in results.into_iter().zip(present_keys.into_iter()) {
+                    if r == br::vk::VK_ERROR_OUT_OF_DATE_KHR {
+                        match p {
+                            PresentKey::Window(w) => windows
+                                .get_mut(&w)
+                                .expect("invalid entry")
+                                .invalidate_swapchain(),
+                            PresentKey::ContextMenu(w) => context_menus
+                                .get_mut(&w)
+                                .expect("invalid entry")
+                                .invalidate_swapchain(),
+                        }
                         any_swapchain_invalidated = true;
                     }
                 }
+            }
 
-                render_queue.wait().expect("render_queue.wait");
+            render_queue.wait().expect("render_queue.wait");
+
+            #[cfg(windows)]
+            if !present_swapchains.is_empty() {
+                for x in present_swapchains {
+                    unsafe {
+                        x.Present(0, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
+                            .ok()
+                            .expect("swaphain.Present");
+                    }
+                }
+
+                self.d3d12_present_counter += 1;
+                let wait_for_counter = self.d3d12_present_counter;
+                unsafe {
+                    crate::platform::windows::ContextMenuSharedState::get()
+                        .d3d12_present_fence
+                        .SetEventOnCompletion(
+                            wait_for_counter,
+                            crate::platform::windows::ContextMenuSharedState::get()
+                                .d3d12_present_fence_event,
+                        )
+                        .expect("d3d12_present_fence.SetEventOnCompletion");
+                    crate::platform::windows::ContextMenuSharedState::get()
+                        .d3d12_cq
+                        .Signal(
+                            &crate::platform::windows::ContextMenuSharedState::get()
+                                .d3d12_present_fence,
+                            wait_for_counter,
+                        )
+                        .expect("d3d12_cq.Wait");
+                    windows::Win32::System::Threading::WaitForSingleObject(
+                        crate::platform::windows::ContextMenuSharedState::get()
+                            .d3d12_present_fence_event,
+                        windows::Win32::System::Threading::INFINITE,
+                    );
+                }
             }
 
             // unsafe {
@@ -664,6 +762,30 @@ impl<'main> RenderThread<'main> {
     }
 }
 
+#[cfg(windows)]
+struct CompositionSwapchainBuffer<'d> {
+    vk_device: &'d VulkanDevice<'d>,
+    d3d12_resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    shared_handle: windows::Win32::Foundation::HANDLE,
+    // presentation_buffer: windows::Win32::Graphics::CompositionSwapchain::IPresentationBuffer,
+    vk_device_memory: br::vk::VkDeviceMemory,
+    vk_image: br::vk::VkImage,
+    vk_image_view: br::vk::VkImageView,
+}
+#[cfg(windows)]
+impl<'d> Drop for CompositionSwapchainBuffer<'d> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image_view(
+                self.vk_device.native_ptr(),
+                self.vk_image_view,
+                None,
+            );
+            br::vkfn_wrapper::destroy_image(self.vk_device.native_ptr(), self.vk_image, None);
+            br::vkfn_wrapper::free_memory(self.vk_device.native_ptr(), self.vk_device_memory, None);
+        }
+    }
+}
 struct ContextMenuRenderer<'d> {
     #[cfg(windows)]
     w: crate::platform::windows::ContextMenuHandle,
@@ -683,8 +805,20 @@ struct ContextMenuRenderer<'d> {
     present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
     backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
     swapchain_invalidated: bool,
+    #[cfg(not(windows))]
     swapchain: VulkanSwapchain<'d, 'd>,
+    #[cfg(not(windows))]
     surface: VulkanSurface<'d, 'd>,
+    // #[cfg(windows)]
+    // presentation_surface: windows::Win32::Graphics::CompositionSwapchain::IPresentationSurface,
+    #[cfg(windows)]
+    swapchain: windows::Win32::Graphics::Dxgi::IDXGISwapChain3,
+    #[cfg(windows)]
+    presentation_buffers: Vec<CompositionSwapchainBuffer<'d>>,
+    #[cfg(windows)]
+    presentation_size: br::Extent2D,
+    #[cfg(windows)]
+    next_backbuffer_index: usize,
     font_set: PerWindowFontSet<'d>,
 }
 impl<'d> ContextMenuRenderer<'d> {
@@ -701,7 +835,9 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(feature = "wayland")]
         font_set.rescale((init_scale.value() * 72.0) as _);
 
+        #[cfg(not(windows))]
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
+        #[cfg(not(windows))]
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
             #[cfg(windows)]
@@ -718,6 +854,126 @@ impl<'d> ContextMenuRenderer<'d> {
                     .expect("poisoned")
             },
         );
+
+        #[cfg(windows)]
+        let presentation_size = create_data.w.pixels_size().to_vk();
+        #[cfg(windows)]
+        let mut presentation_buffers = Vec::with_capacity(2);
+        #[cfg(windows)]
+        for n in 0..2 {
+            use bedrock::{
+                DeviceExternalMemoryWin32Extension, TypedVulkanSinkStructure, VulkanStructure,
+            };
+
+            let d3d12_resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource = unsafe {
+                create_data
+                    .swapchain
+                    .GetBuffer(n)
+                    .expect("swapchain.GetBuffer")
+            };
+            let shared_handle = unsafe {
+                crate::platform::windows::ContextMenuSharedState::get()
+                    .d3d12_device
+                    .CreateSharedHandle(
+                        &d3d12_resource,
+                        None,
+                        windows::Win32::Foundation::GENERIC_ALL.0,
+                        None,
+                    )
+                    .expect("d3d12_device.CreateSharedHandle")
+            };
+            // let presentation_buffer = unsafe {
+            //     crate::platform::windows::ContextMenuSharedState::get()
+            //         .presentation_manager
+            //         .AddBufferFromResource(&d3d12_resource)
+            //         .expect("presentation_manager.AddBufferFromResource")
+            // };
+
+            let mut vk_image = br::ImageObject::new(
+                device,
+                &br::ImageCreateInfo::new(presentation_size, br::vk::VK_FORMAT_B8G8R8A8_UNORM)
+                    .set_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
+                    .with_next(&br::ExternalMemoryImageCreateInfo::new(
+                        br::ExternalMemoryHandleTypeWin32::D3D12Resource as _,
+                    )),
+            )
+            .expect("vk_image.create");
+            let mut mreq_dedicated = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
+            let mut mreq = br::vk::VkMemoryRequirements2KHR::uninit_sink();
+            unsafe {
+                core::ptr::write(
+                    core::ptr::addr_of_mut!((*mreq.as_mut_ptr()).pNext),
+                    mreq_dedicated.as_mut_ptr().cast(),
+                );
+            }
+            vk_image.requirements2().query(&mut mreq);
+            let mreq = unsafe { mreq.assume_init_ref() };
+            let mreq_dedicated = unsafe { mreq_dedicated.assume_init_ref() };
+            let dedicated_allocation = mreq_dedicated.requiresDedicatedAllocation != 0;
+            let mut import_props = br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink();
+            unsafe {
+                device
+                    .memory_win32_handle_properties(
+                        br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                        core::mem::transmute(shared_handle),
+                        &mut import_props,
+                    )
+                    .expect("device.memory_win32_handle_properties")
+            };
+            let import_props = unsafe { import_props.assume_init() };
+            let memindex = device
+                .find_device_local_memory_index(
+                    mreq.memoryRequirements.memoryTypeBits & import_props.memoryTypeBits,
+                )
+                .expect("find_device_local_memory_index");
+            let mut malloc_info_ext = br::ImportMemoryWin32HandleInfo::new(
+                br::ExternalMemoryHandleTypeWin32::D3D12Resource,
+                unsafe { core::mem::transmute(shared_handle) },
+                None,
+            );
+            let mut malloc_info_d =
+                dedicated_allocation.then(|| br::MemoryDedicatedAllocateInfo::for_image(&vk_image));
+            let mut malloc_info = br::MemoryAllocateInfo::new(1, memindex);
+            br::chain_structures(
+                [
+                    malloc_info.as_generic_mut(),
+                    malloc_info_ext.as_generic_mut(),
+                ]
+                .into_iter()
+                .chain(
+                    malloc_info_d
+                        .iter_mut()
+                        .map(br::VulkanStructure::as_generic_mut),
+                ),
+            );
+            let vk_device_memory =
+                br::DeviceMemoryObject::new(device, &malloc_info).expect("vk_device_memory.create");
+            br::bind_memory(&mut vk_image, &vk_device_memory, 0).expect("vk_image.bind");
+            let vk_image_view = br::ImageViewBuilder::new(
+                vk_image,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+            )
+            .create()
+            .expect("vk_image_view.create");
+
+            device.dbg_set_name(&vk_image_view, c"ContextMenu.InteropImage.View");
+            device.dbg_set_name(vk_image_view.image(), c"ContextMenu.InteropImage");
+            device.dbg_set_name(&vk_device_memory, c"ContextMenu.InteropImage.Memory");
+
+            let (vk_image_view, vk_image) = vk_image_view.unmanage();
+            let vk_image = vk_image.unmanage().0;
+            let vk_device_memory = vk_device_memory.unmanage().0;
+
+            presentation_buffers.push(CompositionSwapchainBuffer {
+                vk_device: device,
+                d3d12_resource,
+                shared_handle,
+                // presentation_buffer,
+                vk_device_memory,
+                vk_image,
+                vk_image_view,
+            });
+        }
 
         let mut update_cp = br::CommandPoolObject::new(
             device,
@@ -749,7 +1005,14 @@ impl<'d> ContextMenuRenderer<'d> {
             device,
             &br::CommandBufferAllocateInfo::new(
                 &mut render_cp,
-                vk_swapchain.image_count() as _,
+                #[cfg(not(windows))]
+                {
+                    vk_swapchain.image_count() as _
+                },
+                #[cfg(windows)]
+                {
+                    2
+                },
                 br::CommandBufferLevel::Primary,
             ),
         )
@@ -765,9 +1028,20 @@ impl<'d> ContextMenuRenderer<'d> {
         let composite_renderer = BoundCompositeRenderer::new(
             device,
             glyph_atlas.view(),
+            #[cfg(not(windows))]
             surface.format(),
+            #[cfg(windows)]
+            br::vk::VK_FORMAT_B8G8R8A8_UNORM,
+            #[cfg(not(windows))]
             vk_swapchain.size(),
+            #[cfg(windows)]
+            presentation_size,
+            #[cfg(not(windows))]
             vk_swapchain.image_view_refs(),
+            #[cfg(windows)]
+            presentation_buffers
+                .iter()
+                .map(|b| unsafe { br::VkHandleRef::dangling(b.vk_image_view) }),
         );
 
         Self {
@@ -794,7 +1068,15 @@ impl<'d> ContextMenuRenderer<'d> {
             render_cp,
             render_cb,
             render_cb_invalid: true,
+            #[cfg(not(windows))]
             present_ready_semaphores: (0..vk_swapchain.image_count())
+                .map(|_| {
+                    br::SemaphoreObject::new(device, &br::SemaphoreCreateInfo::new())
+                        .expect("rendering_timeline_semaphore create")
+                })
+                .collect::<Vec<_>>(),
+            #[cfg(windows)]
+            present_ready_semaphores: (0..2)
                 .map(|_| {
                     br::SemaphoreObject::new(device, &br::SemaphoreCreateInfo::new())
                         .expect("rendering_timeline_semaphore create")
@@ -805,8 +1087,20 @@ impl<'d> ContextMenuRenderer<'d> {
                 &br::SemaphoreCreateInfo::new(),
             )
             .expect("backbuffer_ready_semaphore.create"),
+            #[cfg(not(windows))]
             surface,
+            #[cfg(not(windows))]
             swapchain: vk_swapchain,
+            // #[cfg(windows)]
+            // presentation_surface,
+            #[cfg(windows)]
+            swapchain: create_data.swapchain,
+            #[cfg(windows)]
+            presentation_buffers,
+            #[cfg(windows)]
+            presentation_size,
+            #[cfg(windows)]
+            next_backbuffer_index: 0,
             swapchain_invalidated: false,
         }
     }
@@ -824,7 +1118,10 @@ impl<'d> ContextMenuRenderer<'d> {
             self.vk_device,
             composite_tree,
             self.composite_root,
+            #[cfg(not(windows))]
             self.swapchain.size(),
+            #[cfg(windows)]
+            self.presentation_size,
             &self.font_set,
             glyph_atlas,
             mask_atlas_rects,
@@ -849,8 +1146,14 @@ impl<'d> ContextMenuRenderer<'d> {
             .update_streaming_data(self.vk_device, CompositeStreamingData { current_sec });
         let needs_update_commands = self.composite_renderer.update_backdrop_resources(
             self.vk_device,
+            #[cfg(not(windows))]
             self.surface.format(),
+            #[cfg(windows)]
+            br::vk::VK_FORMAT_B8G8R8A8_UNORM,
+            #[cfg(not(windows))]
             self.swapchain.size(),
+            #[cfg(windows)]
+            self.presentation_size,
             self.last_composite_render_data
                 .required_backdrop_buffer_count
                 == 0,
@@ -878,7 +1181,9 @@ impl<'d> ContextMenuRenderer<'d> {
 
         self.invalidate_render_commands();
 
+        #[cfg(not(windows))]
         self.surface.refresh_caps();
+        #[cfg(not(windows))]
         self.swapchain.recreate(
             &self.surface,
             #[cfg(any(windows, feature = "wayland"))]
@@ -888,6 +1193,7 @@ impl<'d> ContextMenuRenderer<'d> {
         );
 
         // recrease rt resources
+        #[cfg(not(windows))]
         self.composite_renderer.recreate_rt_resources(
             self.vk_device,
             self.surface.format(),
@@ -895,26 +1201,38 @@ impl<'d> ContextMenuRenderer<'d> {
             self.swapchain.size(),
             descriptor_writes,
         );
+        #[cfg(windows)]
+        todo!("revalidate composition swapchain");
 
         // event_bus.push(SyncEvent::WindowPostResizeRenderBuffer { window: self.w });
         self.swapchain_invalidated = false;
     }
 
     pub fn acquire_backbuffer_with_wait(&mut self) -> br::Result<u32> {
-        let backbuffer_index = self.swapchain.acquire_next(
-            None,
-            br::CompletionHandlerMut::Queue(
-                self.backbuffer_ready_semaphore.as_transparent_ref_mut(),
-            ),
-        )?;
-        /*self.backbuffer_ready_fence
-            .wait()
-            .expect("last render completion fence wait");
-        self.backbuffer_ready_fence
-            .reset()
-            .expect("last render completion fence reset");*/
+        #[cfg(windows)]
+        {
+            // let index = self.next_backbuffer_index;
+            // self.next_backbuffer_index = (index + 1) % self.presentation_buffers.len();
+            Ok(unsafe { self.swapchain.GetCurrentBackBufferIndex() })
+        }
 
-        Ok(backbuffer_index)
+        #[cfg(not(windows))]
+        {
+            let backbuffer_index = self.swapchain.acquire_next(
+                None,
+                br::CompletionHandlerMut::Queue(
+                    self.backbuffer_ready_semaphore.as_transparent_ref_mut(),
+                ),
+            )?;
+            /*self.backbuffer_ready_fence
+                .wait()
+                .expect("last render completion fence wait");
+            self.backbuffer_ready_fence
+                .reset()
+                .expect("last render completion fence reset");*/
+
+            Ok(backbuffer_index)
+        }
     }
 
     pub fn invalidate_render_commands(&mut self) {
@@ -947,7 +1265,13 @@ impl<'d> ContextMenuRenderer<'d> {
                     r,
                     self.vk_device,
                     &self.last_composite_render_data,
+                    #[cfg(windows)]
+                    self.presentation_size,
+                    #[cfg(not(windows))]
                     self.swapchain.size(),
+                    #[cfg(windows)]
+                    br::VkHandleRef::from_raw_ref(&self.presentation_buffers[n].vk_image),
+                    #[cfg(not(windows))]
                     &self.swapchain.image_ref(n),
                     n,
                     |_, r| r,
@@ -1012,9 +1336,9 @@ impl<'d> ContextMenuRenderer<'d> {
         self.updating = true;
     }
 
-    pub fn swapchain_ref<'x>(&'x self) -> br::VkHandleRef<'x, br::vk::VkSwapchainKHR> {
+    /*pub fn swapchain_ref<'x>(&'x self) -> br::VkHandleRef<'x, br::vk::VkSwapchainKHR> {
         self.swapchain.as_transparent_ref()
-    }
+    }*/
 
     pub fn update_completion_semaphore_ref<'x>(
         &'x self,
