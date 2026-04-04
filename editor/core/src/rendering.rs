@@ -15,7 +15,6 @@ use crate::{
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
         VulkanSurface, VulkanSwapchain,
     },
-    platform::windows::ContextMenuHandle,
     rendering::{
         atlas::{AtlasRect, TextureAtlas},
         composite::{
@@ -37,14 +36,6 @@ pub struct NewWindowVulkanSurface(pub UnboundVulkanSurface);
 unsafe impl Sync for NewWindowVulkanSurface {}
 unsafe impl Send for NewWindowVulkanSurface {}
 
-#[cfg(windows)]
-#[repr(transparent)]
-pub struct SendableCompositionSurfaceHandle(pub windows::Win32::Foundation::HANDLE);
-#[cfg(windows)]
-unsafe impl Sync for SendableCompositionSurfaceHandle {}
-#[cfg(windows)]
-unsafe impl Send for SendableCompositionSurfaceHandle {}
-
 pub struct NewWindowData {
     pub key: WindowHandle,
     pub vk_surface: NewWindowVulkanSurface,
@@ -55,11 +46,9 @@ pub struct NewWindowData {
 }
 
 pub struct NewContextMenuData {
-    pub w: crate::platform::windows::ContextMenuHandle,
+    pub w: crate::platform::windows::context_menu::Handle,
     #[cfg(not(windows))]
     pub vk_surface: NewWindowVulkanSurface,
-    // #[cfg(windows)]
-    // pub composition_surface_handle: SendableCompositionSurfaceHandle,
     #[cfg(windows)]
     pub swapchain: windows::Win32::Graphics::Dxgi::IDXGISwapChain3,
     pub composite_root: CompositeTreeRef,
@@ -70,7 +59,7 @@ pub enum RenderMessage {
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
     NewContextMenu(NewContextMenuData),
     DestroyContextMenu(
-        crate::platform::windows::ContextMenuHandle,
+        crate::platform::windows::context_menu::Handle,
         std::sync::mpsc::Sender<()>,
     ),
     RegisterNormalized2DStaticMeshTexture {
@@ -147,7 +136,7 @@ impl<'main> RenderThread<'main> {
         };
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
         let mut context_menus: HashMap<
-            crate::platform::windows::ContextMenuHandle,
+            crate::platform::windows::context_menu::Handle,
             ContextMenuRenderer,
         > = HashMap::new();
         let mut normalized_2d_static_mesh_textures: HashMap<
@@ -424,7 +413,7 @@ impl<'main> RenderThread<'main> {
             }
             enum PresentKey {
                 Window(WindowHandle),
-                ContextMenu(ContextMenuHandle),
+                ContextMenu(crate::platform::windows::context_menu::Handle),
             }
             struct VkPresentParameters<'x> {
                 key: PresentKey,
@@ -780,24 +769,24 @@ impl<'main> RenderThread<'main> {
                 self.d3d12_present_counter += 1;
                 let wait_for_counter = self.d3d12_present_counter;
                 unsafe {
-                    crate::platform::windows::ContextMenuSharedState::get()
+                    crate::platform::windows::context_menu::SharedState::get()
                         .d3d12_present_fence
                         .SetEventOnCompletion(
                             wait_for_counter,
-                            crate::platform::windows::ContextMenuSharedState::get()
+                            crate::platform::windows::context_menu::SharedState::get()
                                 .d3d12_present_fence_event,
                         )
                         .expect("d3d12_present_fence.SetEventOnCompletion");
-                    crate::platform::windows::ContextMenuSharedState::get()
+                    crate::platform::windows::context_menu::SharedState::get()
                         .d3d12_cq
                         .Signal(
-                            &crate::platform::windows::ContextMenuSharedState::get()
+                            &crate::platform::windows::context_menu::SharedState::get()
                                 .d3d12_present_fence,
                             wait_for_counter,
                         )
                         .expect("d3d12_cq.Wait");
                     windows::Win32::System::Threading::WaitForSingleObject(
-                        crate::platform::windows::ContextMenuSharedState::get()
+                        crate::platform::windows::context_menu::SharedState::get()
                             .d3d12_present_fence_event,
                         windows::Win32::System::Threading::INFINITE,
                     );
@@ -821,7 +810,6 @@ struct CompositionSwapchainBuffer<'d> {
     vk_device: &'d VulkanDevice<'d>,
     d3d12_resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
     shared_handle: windows::Win32::Foundation::HANDLE,
-    // presentation_buffer: windows::Win32::Graphics::CompositionSwapchain::IPresentationBuffer,
     vk_device_memory: br::vk::VkDeviceMemory,
     vk_image: br::vk::VkImage,
     vk_image_view: br::vk::VkImageView,
@@ -842,7 +830,7 @@ impl<'d> Drop for CompositionSwapchainBuffer<'d> {
 }
 struct ContextMenuRenderer<'d> {
     #[cfg(windows)]
-    w: crate::platform::windows::ContextMenuHandle,
+    w: crate::platform::windows::context_menu::Handle,
     active_scale: SafeF32,
     vk_device: &'d VulkanDevice<'d>,
     composite_root: CompositeTreeRef,
@@ -863,16 +851,12 @@ struct ContextMenuRenderer<'d> {
     swapchain: VulkanSwapchain<'d, 'd>,
     #[cfg(not(windows))]
     surface: VulkanSurface<'d, 'd>,
-    // #[cfg(windows)]
-    // presentation_surface: windows::Win32::Graphics::CompositionSwapchain::IPresentationSurface,
     #[cfg(windows)]
     swapchain: windows::Win32::Graphics::Dxgi::IDXGISwapChain3,
     #[cfg(windows)]
     presentation_buffers: Vec<CompositionSwapchainBuffer<'d>>,
     #[cfg(windows)]
     presentation_size: br::Extent2D,
-    #[cfg(windows)]
-    next_backbuffer_index: usize,
     font_set: PerWindowFontSet<'d>,
 }
 impl<'d> ContextMenuRenderer<'d> {
@@ -927,7 +911,7 @@ impl<'d> ContextMenuRenderer<'d> {
                     .expect("swapchain.GetBuffer")
             };
             let shared_handle = unsafe {
-                crate::platform::windows::ContextMenuSharedState::get()
+                crate::platform::windows::context_menu::SharedState::get()
                     .d3d12_device
                     .CreateSharedHandle(
                         &d3d12_resource,
@@ -937,12 +921,6 @@ impl<'d> ContextMenuRenderer<'d> {
                     )
                     .expect("d3d12_device.CreateSharedHandle")
             };
-            // let presentation_buffer = unsafe {
-            //     crate::platform::windows::ContextMenuSharedState::get()
-            //         .presentation_manager
-            //         .AddBufferFromResource(&d3d12_resource)
-            //         .expect("presentation_manager.AddBufferFromResource")
-            // };
 
             let mut vk_image = br::ImageObject::new(
                 device,
@@ -1155,8 +1133,6 @@ impl<'d> ContextMenuRenderer<'d> {
             presentation_buffers,
             #[cfg(windows)]
             presentation_size,
-            #[cfg(windows)]
-            next_backbuffer_index: 0,
             swapchain_invalidated: false,
         }
     }
@@ -1267,8 +1243,6 @@ impl<'d> ContextMenuRenderer<'d> {
     pub fn acquire_backbuffer_with_wait(&mut self) -> br::Result<u32> {
         #[cfg(windows)]
         {
-            // let index = self.next_backbuffer_index;
-            // self.next_backbuffer_index = (index + 1) % self.presentation_buffers.len();
             Ok(unsafe { self.swapchain.GetCurrentBackBufferIndex() })
         }
 

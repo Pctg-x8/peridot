@@ -110,7 +110,7 @@ pub fn launch() {
     #[cfg(windows)]
     let app_context = platform::windows::ApplicationContext::new();
     #[cfg(windows)]
-    platform::windows::initialize_context_menu(&app_context, rt_sender.clone());
+    platform::windows::context_menu::initialize(&app_context, rt_sender.clone());
 
     let global_time_base = std::time::Instant::now();
     main_wrapper(
@@ -130,7 +130,7 @@ pub fn launch() {
     );
 
     #[cfg(windows)]
-    platform::windows::finalize_context_menu();
+    platform::windows::context_menu::finalize();
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
@@ -156,7 +156,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     };
 
     #[cfg(windows)]
-    platform::windows::initialize_context_menu_composite_resources(&mut composite_tree);
+    platform::windows::context_menu::initialize_composite_resources(&mut composite_tree);
 
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
@@ -465,7 +465,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         },
     );
     #[cfg(windows)]
-    platform::windows::post_initialize_context_menu(LogicFiberEventDispatcher {
+    platform::windows::context_menu::post_initialize(LogicFiberEventDispatcher {
         event_store,
         polling: &mut polling,
         poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
@@ -2977,14 +2977,14 @@ async fn run<'sys>(
             }
             Event::ContextMenuPop { screen_pos } => {
                 #[cfg(windows)]
-                platform::windows::pop_context_menu(&system_link, &mut composite_tree, screen_pos);
+                platform::windows::context_menu::pop(&system_link, &mut composite_tree, screen_pos);
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::ContextMenuCloseAll => {
                 #[cfg(windows)]
-                platform::windows::close_all_context_menus(&mut composite_tree);
+                platform::windows::context_menu::close_all(&mut composite_tree);
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
