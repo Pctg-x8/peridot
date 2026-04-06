@@ -171,6 +171,7 @@ impl View {
 }
 
 struct SystemCommandButtonActionHandler {
+    ht_root: HitTestTreeRef,
     ct_hover: CompositeTreeRef,
     cmd: core::cell::Cell<SystemCommand>,
     hovering: core::cell::Cell<bool>,
@@ -229,11 +230,16 @@ impl HitTestTreeActionHandler for SystemCommandButtonActionHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
+
         match self.cmd.get() {
-            SystemCommand::Close => context.sender_window.on_click_sys_close_button(),
-            SystemCommand::Minimize => context.sender_window.on_click_sys_minimize_button(),
-            SystemCommand::Maximize => context.sender_window.on_click_sys_maximize_button(),
-            SystemCommand::Restore => context.sender_window.on_click_sys_restore_button(),
+            SystemCommand::Close => mounted_window.on_click_sys_close_button(),
+            SystemCommand::Minimize => mounted_window.on_click_sys_minimize_button(),
+            SystemCommand::Maximize => mounted_window.on_click_sys_maximize_button(),
+            SystemCommand::Restore => mounted_window.on_click_sys_restore_button(),
         }
 
         EventContinueControl::STOP_PROPAGATION
@@ -271,7 +277,6 @@ struct SystemCommandButtonView {
     ct_root: CompositeTreeRef,
     ct_icon: CompositeTreeRef,
     ct_hover: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
     action_handler: Rc<SystemCommandButtonActionHandler>,
 }
 impl SystemCommandButtonView {
@@ -393,6 +398,7 @@ impl SystemCommandButtonView {
         });
 
         let action_handler = Rc::new(SystemCommandButtonActionHandler {
+            ht_root,
             cmd: core::cell::Cell::new(init_cmd),
             ct_hover,
             hovering: core::cell::Cell::new(false),
@@ -407,7 +413,6 @@ impl SystemCommandButtonView {
             ct_root,
             ct_icon,
             ct_hover,
-            ht_root,
             action_handler,
         }
     }
@@ -419,7 +424,8 @@ impl SystemCommandButtonView {
         ht_parent: HitTestTreeRef,
     ) {
         ctx.composite_tree.add_child(ct_parent, self.ct_root);
-        ctx.ht_manager.add_child(ht_parent, self.ht_root);
+        ctx.ht_manager
+            .add_child(ht_parent, self.action_handler.ht_root);
     }
 
     fn rescale(
@@ -451,7 +457,7 @@ impl SystemCommandButtonView {
         composite_tree.get_mut(self.ct_icon).texatlas_rect_id = Some(texture_id_set.select(cmd));
         composite_tree.mark_dirty(self.ct_icon);
         composite_tree.mark_dirty(self.ct_hover);
-        ht_manager.get_data_mut(self.ht_root).role = cmd.role();
+        ht_manager.get_data_mut(self.action_handler.ht_root).role = cmd.role();
     }
 }
 

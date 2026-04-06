@@ -7,7 +7,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    DragPreviewPopoverHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
+    ContextMenuHandle, DragPreviewPopoverHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, HitTestTreeManager, HitTestTreeManagerCreateOnlyAccess, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role,
@@ -24,7 +24,6 @@ const DOUBLE_CLICK_DETECTION_MAX_DISTANCE: f32 = 4.0;
 const DOUBLE_CLICK_DETECTION_MAX_TIME: Duration = Duration::from_millis(500);
 
 pub struct InputEventContext<'env, 'h> {
-    pub sender_window: WindowHandle,
     pub current_sec: f32,
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub drag_preview: &'env DragPreviewPopoverHandle,
@@ -88,15 +87,59 @@ pub trait ShellPointerActions {
 
 struct LastClickState {
     count: usize,
-    window: WindowHandle,
+    surface: NativeDesktopSurface,
     button: PointerButton,
     pos: Point<PointerInputUnit>,
     time: Instant,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum NativeDesktopSurface {
+    Window(WindowHandle),
+    ContextMenu(ContextMenuHandle),
+}
+impl ShellPointerActions for NativeDesktopSurface {
+    #[inline(always)]
+    fn capture_pointer(&self) {
+        match self {
+            NativeDesktopSurface::Window(w) => w.capture_pointer(),
+            NativeDesktopSurface::ContextMenu(_) => {
+                unimplemented!("not implemented for context menu")
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn release_pointer(&self) {
+        match self {
+            NativeDesktopSurface::Window(w) => w.release_pointer(),
+            NativeDesktopSurface::ContextMenu(_) => {
+                unimplemented!("not implemented for context menu")
+            }
+        }
+    }
+}
+impl NativeDesktopSurface {
+    #[inline(always)]
+    fn size(&self) -> Size<PointerInputUnit> {
+        match self {
+            NativeDesktopSurface::Window(w) => w.client_size(),
+            NativeDesktopSurface::ContextMenu(w) => w.logical_size(),
+        }
+    }
+
+    #[inline(always)]
+    fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
+        match self {
+            NativeDesktopSurface::Window(w) => w.keyboard_focus_state_mut(),
+            NativeDesktopSurface::ContextMenu(w) => w.keyboard_focus_state_mut(),
+        }
+    }
+}
+
 // TODO: マルチタッチ対応（PointerIDごとにジェスチャー管理を分ける必要があるはず）
 pub struct PointerInputManager {
-    last_client_pointer_pos: HashMap<PointerID, (WindowHandle, Point<PointerInputUnit>)>,
+    last_client_pointer_pos: HashMap<PointerID, (NativeDesktopSurface, Point<PointerInputUnit>)>,
     pointer_focus: PointerFocusState,
     down_gesture: PointerDownGestureState,
     last_click: Option<LastClickState>,
@@ -148,7 +191,7 @@ impl PointerInputManager {
     }
 
     fn dispatch_pointer_down(
-        sh: &(impl ShellPointerActions + ?Sized),
+        surface: &mut NativeDesktopSurface,
         action_args: &PointerButtonActionArgs,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
@@ -167,6 +210,7 @@ impl PointerInputManager {
                 });
 
             Self::update_keyboard_focus(
+                surface,
                 ht.get_data(ht_ref).keyboard_focus,
                 action_context,
                 kf_registry,
@@ -177,7 +221,7 @@ impl PointerInputManager {
             }
             if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
                 new_captured = Some(ht_ref);
-                sh.capture_pointer();
+                surface.capture_pointer();
             }
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
@@ -445,7 +489,7 @@ impl PointerInputManager {
                     pointer_id,
                     // TODO: leaveにclient_posいるか？
                     client_pos,
-                    client_size: entering_window.client_size(),
+                    client_size: entering_window.size(),
                 },
                 ht,
                 action_context,
@@ -459,7 +503,7 @@ impl PointerInputManager {
 
     pub fn handle_mouse_move(
         &mut self,
-        window: WindowHandle,
+        surface: NativeDesktopSurface,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         ht: &HitTestTreeManager,
@@ -467,8 +511,8 @@ impl PointerInputManager {
         ht_root: HitTestTreeRef,
     ) {
         self.last_client_pointer_pos
-            .insert(pointer_id, (window, client_pos));
-        let ws = window.client_size();
+            .insert(pointer_id, (surface, client_pos));
+        let ws = surface.size();
 
         if let PointerDownGestureState::Click {
             base_client_pos,
@@ -486,7 +530,7 @@ impl PointerInputManager {
                     client_pos,
                     client_size: ws,
                 },
-                &window,
+                &surface,
             );
         }
 
@@ -553,12 +597,13 @@ impl PointerInputManager {
         ht_root: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
     ) {
-        let Some(&(entering_window, client_pos)) = self.last_client_pointer_pos.get(&pointer_id)
+        let Some(&(mut entering_surface, client_pos)) =
+            self.last_client_pointer_pos.get(&pointer_id)
         else {
             // no pointer on the surface
             return;
         };
-        let ws = entering_window.client_size();
+        let ws = entering_surface.size();
 
         self.down_gesture = PointerDownGestureState::Click {
             base_client_pos: client_pos,
@@ -580,13 +625,14 @@ impl PointerInputManager {
                         h.on_pointer_down(ht_ref, action_context, &args)
                     });
                 Self::update_keyboard_focus(
+                    &mut entering_surface,
                     ht.get_data(ht_ref).keyboard_focus,
                     action_context,
                     kf_registry,
                 );
 
                 if flags.releasing_capture() {
-                    entering_window.release_pointer();
+                    entering_surface.release_pointer();
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if flags.needs_recompute_pointer_enter() {
@@ -602,7 +648,7 @@ impl PointerInputManager {
             }
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, new_captured) = Self::dispatch_pointer_down(
-                    &entering_window,
+                    &mut entering_surface,
                     &args,
                     ht,
                     action_context,
@@ -636,17 +682,17 @@ impl PointerInputManager {
         button: PointerButton,
         ht_root: HitTestTreeRef,
     ) {
-        let Some(&(entering_window, client_pos)) = self.last_client_pointer_pos.get(&pointer_id)
+        let Some(&(entering_surface, client_pos)) = self.last_client_pointer_pos.get(&pointer_id)
         else {
             // no pointer on the surface
             return;
         };
-        let ws = entering_window.client_size();
+        let ws = entering_surface.size();
 
         if self.down_gesture.is_dragging() {
             // ドラッグ状態だった
             self.end_drag(
-                &entering_window,
+                &entering_surface,
                 ht,
                 ht_root,
                 action_context,
@@ -673,7 +719,7 @@ impl PointerInputManager {
                     });
 
                 if flags.releasing_capture() {
-                    entering_window.release_pointer();
+                    entering_surface.release_pointer();
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if flags.needs_recompute_pointer_enter() {
@@ -689,7 +735,7 @@ impl PointerInputManager {
             }
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, capture_released) =
-                    Self::dispatch_pointer_up(&entering_window, &args, ht, action_context, ht_ref);
+                    Self::dispatch_pointer_up(&entering_surface, &args, ht, action_context, ht_ref);
 
                 if capture_released {
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
@@ -717,13 +763,13 @@ impl PointerInputManager {
                 Some(ref last_click)
                     if last_click.count == 1
                         && last_click.time.elapsed() <= DOUBLE_CLICK_DETECTION_MAX_TIME
-                        && last_click.window == entering_window
+                        && last_click.surface == entering_surface
                         && last_click.button == button
                         && last_click.pos.distance_sq(&client_pos)
                             <= DOUBLE_CLICK_DETECTION_MAX_DISTANCE.powi(2) =>
                 {
                     self.perform_double_click(
-                        entering_window,
+                        entering_surface,
                         ws,
                         pointer_id,
                         button,
@@ -734,7 +780,7 @@ impl PointerInputManager {
                     )
                 }
                 _ => self.perform_single_click(
-                    entering_window,
+                    entering_surface,
                     ws,
                     pointer_id,
                     button,
@@ -751,8 +797,8 @@ impl PointerInputManager {
 
     fn perform_single_click(
         &mut self,
-        window: WindowHandle,
-        window_size: Size<PointerInputUnit>,
+        surface: NativeDesktopSurface,
+        surface_size: Size<PointerInputUnit>,
         pointer_id: PointerID,
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
@@ -762,7 +808,7 @@ impl PointerInputManager {
     ) {
         self.last_click = Some(LastClickState {
             count: 1,
-            window,
+            surface,
             button,
             pos: client_pos,
             time: Instant::now(),
@@ -772,7 +818,7 @@ impl PointerInputManager {
             button,
             pointer_id,
             client_pos,
-            client_size: window_size,
+            client_size: surface_size,
         };
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref) => {
@@ -784,12 +830,12 @@ impl PointerInputManager {
                     });
 
                 if flags.releasing_capture() {
-                    window.release_pointer();
+                    surface.release_pointer();
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if flags.needs_recompute_pointer_enter() {
                     self.update_pointer_enter(
-                        &window_size,
+                        &surface_size,
                         pointer_id,
                         client_pos,
                         ht,
@@ -813,7 +859,7 @@ impl PointerInputManager {
                     }
                     if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
                         new_captured = Some(ht_ref);
-                        window.capture_pointer();
+                        surface.capture_pointer();
                     }
                     if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                         break;
@@ -825,7 +871,7 @@ impl PointerInputManager {
                 }
                 if needs_recompute_pointer_enter {
                     self.update_pointer_enter(
-                        &window_size,
+                        &surface_size,
                         pointer_id,
                         client_pos,
                         ht,
@@ -840,8 +886,8 @@ impl PointerInputManager {
 
     fn perform_double_click(
         &mut self,
-        window: WindowHandle,
-        window_size: Size<PointerInputUnit>,
+        surface: NativeDesktopSurface,
+        surface_size: Size<PointerInputUnit>,
         pointer_id: PointerID,
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
@@ -851,7 +897,7 @@ impl PointerInputManager {
     ) {
         self.last_click = Some(LastClickState {
             count: 2,
-            window,
+            surface,
             button,
             pos: client_pos,
             time: Instant::now(),
@@ -861,7 +907,7 @@ impl PointerInputManager {
             button,
             pointer_id,
             client_pos,
-            client_size: window_size,
+            client_size: surface_size,
         };
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref) => {
@@ -873,12 +919,12 @@ impl PointerInputManager {
                     });
 
                 if flags.releasing_capture() {
-                    window.release_pointer();
+                    surface.release_pointer();
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if flags.needs_recompute_pointer_enter() {
                     self.update_pointer_enter(
-                        &window_size,
+                        &surface_size,
                         pointer_id,
                         client_pos,
                         ht,
@@ -902,7 +948,7 @@ impl PointerInputManager {
                     }
                     if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
                         new_captured = Some(ht_ref);
-                        window.capture_pointer();
+                        surface.capture_pointer();
                     }
                     if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                         break;
@@ -914,7 +960,7 @@ impl PointerInputManager {
                 }
                 if needs_recompute_pointer_enter {
                     self.update_pointer_enter(
-                        &window_size,
+                        &surface_size,
                         pointer_id,
                         client_pos,
                         ht,
@@ -975,22 +1021,14 @@ impl PointerInputManager {
     }
 
     fn update_keyboard_focus(
+        surface: &mut NativeDesktopSurface,
         new_focus: Option<FocusTargetToken>,
         action_context: &mut InputEventContext,
         kf_registry: &KeyboardFocusTokenRegistry,
     ) {
         let (released, taken) = match new_focus {
-            Some(x) => action_context
-                .sender_window
-                .keyboard_focus_state_mut()
-                .set_focus(x),
-            None => (
-                action_context
-                    .sender_window
-                    .keyboard_focus_state_mut()
-                    .clear_focus(),
-                None,
-            ),
+            Some(x) => surface.keyboard_focus_state_mut().set_focus(x),
+            None => (surface.keyboard_focus_state_mut().clear_focus(), None),
         };
 
         if let Some(eh) = released.and_then(|x| kf_registry.event_handler(x)) {

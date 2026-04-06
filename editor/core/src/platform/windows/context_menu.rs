@@ -11,6 +11,10 @@ use windows::{
                 D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_FENCE_FLAG_NONE, D3D12CreateDevice,
                 D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug, ID3D12Device, ID3D12Fence,
             },
+            Dwm::{
+                DWMNCRENDERINGPOLICY, DWMNCRP_ENABLED, DWMWA_NCRENDERING_ENABLED,
+                DWMWA_NCRENDERING_POLICY, DwmSetWindowAttribute,
+            },
             Dxgi::{
                 Common::{
                     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -19,20 +23,27 @@ use windows::{
                 DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISwapChain3,
             },
-            Gdi::PtInRect,
+            Gdi::{MapWindowPoints, PtInRect},
         },
         System::{
             Threading::{CreateEventW, GetCurrentThreadId},
             WinRT::Composition::{ICompositorDesktopInterop, ICompositorInterop},
         },
         UI::{
+            Controls::WM_MOUSELEAVE,
             HiDpi::GetDpiForWindow,
+            Input::KeyboardAndMouse::{TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetCursorPos, GetWindowLongPtrW, GetWindowRect, HHOOK, SW_SHOWNOACTIVATE,
-                SetWindowLongPtrW, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_MOUSE,
-                WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_MBUTTONDBLCLK, WNDCLASSEXW,
-                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
+                GetCursorPos, GetWindowLongPtrW, GetWindowRect, HHOOK, HTBOTTOM, HTBOTTOMLEFT,
+                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
+                HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, NCCALCSIZE_PARAMS,
+                SW_SHOWNOACTIVATE, SetWindowLongPtrW, SetWindowsHookExW, ShowWindow,
+                UnhookWindowsHookEx, WH_MOUSE, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+                WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_TOPMOST, WS_POPUP, WindowFromPoint,
             },
         },
     },
@@ -43,8 +54,12 @@ use windows_numerics::{Vector2, Vector3};
 use crate::{
     Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
-    input::hittest::{
-        CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+    input::{
+        PerWindowKeyboardFocusState,
+        hittest::{
+            CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+            PointerButton,
+        },
     },
     rendering::{
         NewContextMenuData, RenderMessage,
@@ -102,6 +117,21 @@ impl Handle {
     pub fn render_scale(&self) -> f32 {
         unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
     }
+
+    #[inline(always)]
+    pub fn ht_root(&self) -> HitTestTreeRef {
+        state(self.0).ht_root
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &state(self.0).keyboard_focus_state
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
+        &mut state_mut(self.0).keyboard_focus_state
+    }
 }
 
 pub struct InstanceState {
@@ -109,6 +139,7 @@ pub struct InstanceState {
     ht_root: HitTestTreeRef,
     cv_root: SpriteVisual,
     c_target: DesktopWindowTarget,
+    keyboard_focus_state: PerWindowKeyboardFocusState,
 }
 impl InstanceState {
     fn done(
@@ -168,6 +199,16 @@ fn take_state(hwnd: HWND) -> Box<InstanceState> {
 }
 
 #[inline(always)]
+fn state_maybe<'a>(hwnd: HWND) -> Option<&'a InstanceState> {
+    unsafe {
+        core::ptr::with_exposed_provenance::<InstanceState>(
+            GetWindowLongPtrW(hwnd, WINDOW_PTR_STATE).cast_unsigned(),
+        )
+        .as_ref()
+    }
+}
+
+#[inline(always)]
 fn state<'a>(hwnd: HWND) -> &'a InstanceState {
     unsafe {
         &*core::ptr::with_exposed_provenance(
@@ -186,6 +227,298 @@ fn state_mut<'a>(hwnd: HWND) -> &'a mut InstanceState {
 }
 
 extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    #[inline(always)]
+    const fn is_application_handled_hittest(ht: u32) -> bool {
+        ht == HTCLOSE || ht == HTMAXBUTTON || ht == HTMINBUTTON
+    }
+
+    if msg == WM_NCHITTEST {
+        let Some(state) = state_maybe(hwnd) else {
+            // 初期化完了前にきた
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        };
+
+        let mut p = [Point::new_pixels(
+            (lparam.0 & 0xffff) as i16 as _,
+            ((lparam.0 >> 16) & 0xffff) as i16 as _,
+        )
+        .to_win32()];
+        unsafe {
+            MapWindowPoints(None, Some(hwnd), &mut p);
+        }
+        let client_pos = Point::from_win32(p[0]);
+
+        let mut client_size = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(hwnd, client_size.as_mut_ptr()).expect("getclientsize");
+        }
+        let client_size = unsafe { client_size.assume_init() };
+
+        if 0 > client_pos.x
+            || client_pos.x > client_size.right
+            || 0 > client_pos.y
+            || client_pos.y > client_size.bottom
+        {
+            // ウィンドウ範囲外
+            return LRESULT(HTNOWHERE as _);
+        }
+
+        if SHADOW_SIZE.ceil() as i32 > client_pos.x
+            || client_pos.x > client_size.right - SHADOW_SIZE.ceil() as i32
+            || SHADOW_SIZE.ceil() as i32 > client_pos.y
+            || client_pos.y > client_size.bottom - SHADOW_SIZE.ceil() as i32
+        {
+            // 影エリア
+            return LRESULT(HTTRANSPARENT as _);
+        }
+
+        // TODO: 一旦全部クライアントエリアとして判定する
+        // あとでHitTestTreeのroleの対応が必要になったときに変える
+        return LRESULT(HTCLIENT as _);
+        /*let Some(result) = state.non_client_hittest(
+            hwnd,
+            Point::new_pixels(
+                (lparam.0 & 0xffff) as i16 as _,
+                ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            ),
+        ) else {
+            // よくわからん(アプリウィンドウ範囲外)のでデフォルトに任せる
+            return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+        };
+
+        return LRESULT(result as _);*/
+    }
+
+    if (msg == WM_NCMOUSEMOVE || msg == WM_NCLBUTTONDOWN || msg == WM_NCLBUTTONUP)
+        && (wparam.0 == HTTOP as _
+            || wparam.0 == HTBOTTOM as _
+            || wparam.0 == HTLEFT as _
+            || wparam.0 == HTRIGHT as _
+            || wparam.0 == HTTOPLEFT as _
+            || wparam.0 == HTTOPRIGHT as _
+            || wparam.0 == HTBOTTOMLEFT as _
+            || wparam.0 == HTBOTTOMRIGHT as _)
+    {
+        // リサイズ境界上の処理はシステムにおまかせ
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    }
+
+    if (msg == WM_NCLBUTTONDOWN || msg == WM_NCLBUTTONUP) && wparam.0 == HTCAPTION as _ {
+        // TitleBarの挙動はシステムにおまかせ
+        return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    }
+
+    if msg == WM_LBUTTONDOWN {
+        // move then down
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerMove {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                client_pos: Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                )
+                .to_logical(Handle(hwnd).render_scale()),
+            });
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerDown {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                button: PointerButton::Primary,
+            });
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_NCLBUTTONDOWN && is_application_handled_hittest(wparam.0 as _) {
+        // アプリケーションでハンドリングするNonClientエリア
+        // NonClientイベントはスクリーン座標で来る
+        let mut p = [POINT {
+            x: (lparam.0 & 0xffff) as i16 as _,
+            y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+        }];
+        unsafe {
+            MapWindowPoints(None, Some(hwnd), &mut p);
+        }
+
+        // move then down
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerMove {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                client_pos: Point::new_pixels(p[0].x, p[0].y)
+                    .to_logical(Handle(hwnd).render_scale()),
+            });
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerDown {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                button: PointerButton::Primary,
+            });
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_LBUTTONUP
+        || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
+    {
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerUp {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                button: PointerButton::Primary,
+            });
+        return LRESULT(0);
+    }
+
+    if msg == WM_RBUTTONDOWN {
+        // move then down
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerMove {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                client_pos: Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                )
+                .to_logical(Handle(hwnd).render_scale()),
+            });
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerDown {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                button: PointerButton::Secondary,
+            });
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_NCRBUTTONDOWN && is_application_handled_hittest(wparam.0 as _) {
+        // アプリケーションでハンドリングするNonClientエリア
+        // NonClientイベントはスクリーン座標で来る
+        let mut p = [POINT {
+            x: (lparam.0 & 0xffff) as i16 as _,
+            y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+        }];
+        unsafe {
+            MapWindowPoints(None, Some(hwnd), &mut p);
+        }
+
+        // move then down
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerMove {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                client_pos: Point::new_pixels(p[0].x, p[0].y)
+                    .to_logical(Handle(hwnd).render_scale()),
+            });
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerDown {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                button: PointerButton::Secondary,
+            });
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_RBUTTONUP
+        || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
+    {
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerUp {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                button: PointerButton::Secondary,
+            });
+        return LRESULT(0);
+    }
+
+    if msg == WM_MOUSEMOVE {
+        unsafe {
+            TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            })
+            .expect("TrackMouseEvent");
+        }
+
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerMove {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                client_pos: Point::new_pixels(
+                    (lparam.0 & 0xffff) as i16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
+                )
+                .to_logical(Handle(hwnd).render_scale()),
+            });
+
+        return LRESULT(0);
+    }
+
+    if msg == WM_NCMOUSEMOVE {
+        unsafe {
+            TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
+                dwFlags: TME_LEAVE | TME_NONCLIENT,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            })
+            .expect("TrackMouseEvent");
+        }
+
+        // NonClientイベントはスクリーン座標で来る
+        let mut p = [POINT {
+            x: (lparam.0 & 0xffff) as i16 as _,
+            y: ((lparam.0 >> 16) & 0xffff) as i16 as _,
+        }];
+        unsafe {
+            MapWindowPoints(None, Some(hwnd), &mut p);
+        }
+
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerMove {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+                client_pos: Point::new_pixels(p[0].x, p[0].y)
+                    .to_logical(Handle(hwnd).render_scale()),
+            });
+        // Note: NCMOUSEMOVEはデフォルト動作もさせる
+    }
+
+    if msg == WM_MOUSELEAVE || msg == WM_NCMOUSELEAVE {
+        // let st = state(hwnd);
+
+        // if st.destroying {
+        //     // closing
+        //     return LRESULT(0);
+        // }
+
+        SharedState::get()
+            .event_dispatcher
+            .dispatch(Event::ContextMenuPointerLeave {
+                target: Handle(hwnd),
+                pointer_id: super::PointerID(),
+            });
+
+        return LRESULT(0);
+    }
+
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
@@ -230,16 +563,9 @@ impl SharedState {
             }
             let p = unsafe { p.assume_init() };
 
+            let w_pointing = unsafe { WindowFromPoint(p) };
             let has_pointing_menu = WindowByClassIter::new(PCWSTR(Self::get().window_class as _))
-                .any(|x| {
-                    let mut w = core::mem::MaybeUninit::uninit();
-                    if let Err(e) = unsafe { GetWindowRect(x, w.as_mut_ptr()) } {
-                        tracing::error!(reason = %e, "GetWindowRect");
-                        return false;
-                    }
-
-                    unsafe { PtInRect(w.as_ptr(), p).as_bool() }
-                });
+                .any(|x| x == w_pointing);
 
             if !has_pointing_menu {
                 Self::get()
@@ -401,6 +727,12 @@ pub fn pop(
     let ht_root = ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
         height_adjustment_factor: 1.0,
+        // shadowの分を開ける
+        // TODO: RenderScaleが変わる場合は追従する必要がある
+        left: SHADOW_SIZE / Handle(h).render_scale(),
+        top: SHADOW_SIZE / Handle(h).render_scale(),
+        width: -SHADOW_SIZE * 2.0 / Handle(h).render_scale(),
+        height: -SHADOW_SIZE * 2.0 / Handle(h).render_scale(),
         ..Default::default()
     });
     let c_target = unsafe {
@@ -527,6 +859,7 @@ pub fn pop(
             ht_root,
             cv_root,
             c_target,
+            keyboard_focus_state: PerWindowKeyboardFocusState::new(),
         }),
     );
     syslink

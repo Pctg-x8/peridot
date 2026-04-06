@@ -21,7 +21,7 @@ use crate::{
     graphics::VulkanDevice,
     input::{
         FocusTargetToken, InputEventContext, KeyInputCode, KeyInputEventHandler,
-        KeyboardFocusTokenRegistry, PointerInputManager, PointerInputUnit,
+        KeyboardFocusTokenRegistry, NativeDesktopSurface, PointerInputManager, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
             HitTestTreeManager, HitTestTreeRef, HitTestTreeScreenRepositionHandler,
@@ -877,6 +877,27 @@ pub enum Event {
         screen_pos: Point<PixelsUnit>,
     },
     ContextMenuCloseAll,
+    ContextMenuPointerDown {
+        pointer_id: PointerID,
+        target: ContextMenuHandle,
+        button: PointerButton,
+        #[cfg(feature = "wayland")]
+        event_id: platform::unix::wayland::PointerEventID,
+    },
+    ContextMenuPointerMove {
+        pointer_id: PointerID,
+        target: ContextMenuHandle,
+        client_pos: Point<PointerInputUnit>,
+    },
+    ContextMenuPointerUp {
+        pointer_id: PointerID,
+        target: ContextMenuHandle,
+        button: PointerButton,
+    },
+    ContextMenuPointerLeave {
+        pointer_id: PointerID,
+        target: ContextMenuHandle,
+    },
     #[cfg(windows)]
     CoreTextLayoutRequested {
         ht: HitTestTreeRef,
@@ -1083,12 +1104,22 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 
         // clear selection
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-        self.update_selection(context.composite_tree, context.sender_window);
+        self.update_selection(
+            context.composite_tree,
+            context
+                .ht_manager
+                .query_root_window(self.ht_root)
+                .expect("not mounted"),
+        );
         self.sync_selection_native();
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {
         tracing::debug!(?code, "keydown");
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
 
         match code {
             KeyInputCode::LeftArrow => {
@@ -1104,12 +1135,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
-                    context.sender_window,
+                    mounted_window,
                     context.system_link,
                     context.ht_manager,
-                    context.sender_window.client_size(),
+                    mounted_window.client_size(),
                 );
-                self.update_selection(context.composite_tree, context.sender_window);
+                self.update_selection(context.composite_tree, mounted_window);
                 self.sync_selection_native();
             }
             KeyInputCode::RightArrow => {
@@ -1129,12 +1160,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
-                    context.sender_window,
+                    mounted_window,
                     context.system_link,
                     context.ht_manager,
-                    context.sender_window.client_size(),
+                    mounted_window.client_size(),
                 );
-                self.update_selection(context.composite_tree, context.sender_window);
+                self.update_selection(context.composite_tree, mounted_window);
                 self.sync_selection_native();
             }
             KeyInputCode::Home => {
@@ -1142,12 +1173,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 self.selection_begin_bytes.set(0); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
-                    context.sender_window,
+                    mounted_window,
                     context.system_link,
                     context.ht_manager,
-                    context.sender_window.client_size(),
+                    mounted_window.client_size(),
                 );
-                self.update_selection(context.composite_tree, context.sender_window);
+                self.update_selection(context.composite_tree, mounted_window);
                 self.sync_selection_native();
             }
             KeyInputCode::End => {
@@ -1155,12 +1186,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 self.selection_begin_bytes.set(self.content.borrow().len()); // 選択を解除
                 self.update_cursor_position(
                     context.composite_tree,
-                    context.sender_window,
+                    mounted_window,
                     context.system_link,
                     context.ht_manager,
-                    context.sender_window.client_size(),
+                    mounted_window.client_size(),
                 );
-                self.update_selection(context.composite_tree, context.sender_window);
+                self.update_selection(context.composite_tree, mounted_window);
                 self.sync_selection_native();
             }
             KeyInputCode::Insert => {
@@ -1191,10 +1222,10 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                         self.update_text(context.composite_tree);
                         self.update_cursor_position(
                             context.composite_tree,
-                            context.sender_window,
+                            mounted_window,
                             context.system_link,
                             context.ht_manager,
-                            context.sender_window.client_size(),
+                            mounted_window.client_size(),
                         );
                         self.sync_selection_native();
                     }
@@ -1209,12 +1240,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     self.update_text(context.composite_tree);
                     self.update_cursor_position(
                         context.composite_tree,
-                        context.sender_window,
+                        mounted_window,
                         context.system_link,
                         context.ht_manager,
-                        context.sender_window.client_size(),
+                        mounted_window.client_size(),
                     );
-                    self.update_selection(context.composite_tree, context.sender_window);
+                    self.update_selection(context.composite_tree, mounted_window);
                     self.sync_selection_native();
                 }
             }
@@ -1249,12 +1280,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     self.selection_begin_bytes.set(selection_range.start);
                     self.update_cursor_position(
                         context.composite_tree,
-                        context.sender_window,
+                        mounted_window,
                         context.system_link,
                         context.ht_manager,
-                        context.sender_window.client_size(),
+                        mounted_window.client_size(),
                     );
-                    self.update_selection(context.composite_tree, context.sender_window);
+                    self.update_selection(context.composite_tree, mounted_window);
                     self.sync_selection_native();
                 }
             }
@@ -1280,12 +1311,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 self.update_text(context.composite_tree);
                 self.update_cursor_position(
                     context.composite_tree,
-                    context.sender_window,
+                    mounted_window,
                     context.system_link,
                     context.ht_manager,
-                    context.sender_window.client_size(),
+                    mounted_window.client_size(),
                 );
-                self.update_selection(context.composite_tree, context.sender_window);
+                self.update_selection(context.composite_tree, mounted_window);
                 self.sync_selection_native();
             }
             _ => (),
@@ -1366,16 +1397,20 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         // no selection in editing
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
 
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
         self.update_text(context.composite_tree);
-        self.update_preedit_underline(context.composite_tree, context.sender_window);
+        self.update_preedit_underline(context.composite_tree, mounted_window);
         self.update_cursor_position(
             context.composite_tree,
-            context.sender_window,
+            mounted_window,
             context.system_link,
             context.ht_manager,
-            context.sender_window.client_size(),
+            mounted_window.client_size(),
         );
-        self.update_selection(context.composite_tree, context.sender_window);
+        self.update_selection(context.composite_tree, mounted_window);
         self.sync_selection_native();
     }
 }
@@ -1393,6 +1428,10 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size.width,
             args.client_size.height,
         );
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
@@ -1400,24 +1439,19 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe {
-                &context
-                    .sender_window
-                    .extra_data_ref::<PerWindowData>()
-                    .font_set
-            },
-            context.sender_window.ui_scale_factor(),
+            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            mounted_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
         self.selection_begin_bytes.set(bytes); // 最初は同じところ(=範囲選択なし)
         self.update_cursor_position(
             context.composite_tree,
-            context.sender_window,
+            mounted_window,
             context.system_link,
             context.ht_manager,
             args.client_size,
         );
-        self.update_selection(context.composite_tree, context.sender_window);
+        self.update_selection(context.composite_tree, mounted_window);
         self.sync_selection_native();
         self.dragging.set(true);
 
@@ -1442,6 +1476,10 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size.width,
             args.client_size.height,
         );
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
@@ -1449,23 +1487,18 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe {
-                &context
-                    .sender_window
-                    .extra_data_ref::<PerWindowData>()
-                    .font_set
-            },
-            context.sender_window.ui_scale_factor(),
+            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            mounted_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
         self.update_cursor_position(
             context.composite_tree,
-            context.sender_window,
+            mounted_window,
             context.system_link,
             context.ht_manager,
             args.client_size,
         );
-        self.update_selection(context.composite_tree, context.sender_window);
+        self.update_selection(context.composite_tree, mounted_window);
         self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION
@@ -1484,6 +1517,10 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size.width,
             args.client_size.height,
         );
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
@@ -1491,23 +1528,18 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe {
-                &context
-                    .sender_window
-                    .extra_data_ref::<PerWindowData>()
-                    .font_set
-            },
-            context.sender_window.ui_scale_factor(),
+            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            mounted_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
         self.update_cursor_position(
             context.composite_tree,
-            context.sender_window,
+            mounted_window,
             context.system_link,
             context.ht_manager,
             args.client_size,
         );
-        self.update_selection(context.composite_tree, context.sender_window);
+        self.update_selection(context.composite_tree, mounted_window);
         self.sync_selection_native();
         self.dragging.set(false);
 
@@ -1687,14 +1719,19 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         #[cfg(not(windows))]
         self.selection_begin_bytes.set(select_range.start);
 
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
+
         self.update_cursor_position(
             context.composite_tree,
-            context.sender_window,
+            mounted_window,
             context.system_link,
             context.ht_manager,
             args.client_size,
         );
-        self.update_selection(context.composite_tree, context.sender_window);
+        self.update_selection(context.composite_tree, mounted_window);
         self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION
@@ -1715,11 +1752,12 @@ impl HitTestTreeScreenRepositionHandler for TextInputViewEventHandler {
 }
 impl TextInputViewEventHandler {
     fn update(&self, context: &mut InputEventContext) {
-        if context
-            .sender_window
-            .keyboard_focus_state()
-            .has_focus(&self.token)
-        {
+        let mounted_window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
+
+        if mounted_window.keyboard_focus_state().has_focus(&self.token) {
             context.composite_tree.get_mut(self.ct_root).border = Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Animated {
@@ -2665,7 +2703,6 @@ async fn run<'sys>(
                 let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 let mut input_context = InputEventContext {
-                    sender_window: window,
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     drag_preview: system_link.drag_preview_popover(),
@@ -2729,7 +2766,6 @@ async fn run<'sys>(
             } => {
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 let mut input_context = InputEventContext {
-                    sender_window: window,
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     drag_preview: system_link.drag_preview_popover(),
@@ -2779,7 +2815,6 @@ async fn run<'sys>(
                     pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
-                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2801,12 +2836,11 @@ async fn run<'sys>(
             } => {
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_move(
-                    window,
+                    NativeDesktopSurface::Window(window),
                     pointer_id,
                     client_pos,
                     &ht_manager,
                     &mut InputEventContext {
-                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2832,7 +2866,6 @@ async fn run<'sys>(
                     pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
-                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2852,7 +2885,6 @@ async fn run<'sys>(
                     pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
-                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2870,7 +2902,6 @@ async fn run<'sys>(
                 window.keyboard_focus_state().handle_keydown(
                     code,
                     &mut InputEventContext {
-                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2888,7 +2919,6 @@ async fn run<'sys>(
                 window.keyboard_focus_state().handle_keyup(
                     code,
                     &mut InputEventContext {
-                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2911,7 +2941,6 @@ async fn run<'sys>(
                     &committed_string,
                     &preedit_string,
                     &mut InputEventContext {
-                        sender_window: window,
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         drag_preview: system_link.drag_preview_popover(),
@@ -2990,6 +3019,109 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
+            Event::ContextMenuPointerDown {
+                pointer_id,
+                target,
+                button,
+                #[cfg(feature = "wayland")]
+                event_id,
+            } => {
+                // waylandの場合はここでTitleBarロールの判定をする
+                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
+                #[cfg(feature = "wayland")]
+                if pointer_input_manager.role_focus(&ht_manager)
+                    == Some(input::hittest::Role::TitleBar)
+                {
+                    window.begin_drag(event_id);
+                }
+
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                pointer_input_manager.handle_mouse_down(
+                    pointer_id,
+                    &ht_manager,
+                    &mut InputEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                    button,
+                    target.ht_root(),
+                    &mut keyboard_focus_registry,
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::ContextMenuPointerMove {
+                pointer_id,
+                target,
+                client_pos,
+            } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                pointer_input_manager.handle_mouse_move(
+                    NativeDesktopSurface::ContextMenu(target),
+                    pointer_id,
+                    client_pos,
+                    &ht_manager,
+                    &mut InputEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                    target.ht_root(),
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+
+                let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
+                system_link.set_cursor(&pointer_id, cursor_shape);
+            }
+            Event::ContextMenuPointerUp {
+                pointer_id,
+                target,
+                button,
+            } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                pointer_input_manager.handle_mouse_up(
+                    pointer_id,
+                    &ht_manager,
+                    &mut InputEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                    button,
+                    target.ht_root(),
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::ContextMenuPointerLeave { pointer_id, target } => {
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                pointer_input_manager.handle_mouse_leave(
+                    pointer_id,
+                    &ht_manager,
+                    &mut InputEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        drag_preview: system_link.drag_preview_popover(),
+                        system_link: &system_link,
+                        ht_create_only_access: &mut ht_create_only_access,
+                        ht_manager: &ht_manager,
+                    },
+                );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
                 ht,
@@ -3009,7 +3141,6 @@ async fn run<'sys>(
                         let mut ht_create_only_access = ht_manager.derive_create_only_access();
                         if let Err(e) = w.layout(
                             &mut InputEventContext {
-                                sender_window: main_window,
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 drag_preview: system_link.drag_preview_popover(),
@@ -3049,7 +3180,6 @@ async fn run<'sys>(
                         let mut ht_create_only_access = ht_manager.derive_create_only_access();
                         if let Err(e) = w.text_updating(
                             &mut InputEventContext {
-                                sender_window: main_window,
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 drag_preview: system_link.drag_preview_popover(),
@@ -3089,7 +3219,6 @@ async fn run<'sys>(
                         let mut ht_create_only_access = ht_manager.derive_create_only_access();
                         if let Err(e) = w.format_updating(
                             &mut InputEventContext {
-                                sender_window: main_window,
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 drag_preview: system_link.drag_preview_popover(),
