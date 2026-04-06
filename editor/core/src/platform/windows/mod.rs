@@ -323,7 +323,7 @@ impl ShellPointerActions for WindowHandle {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PointerID();
 
 pub struct WindowClassSet {

@@ -2358,7 +2358,6 @@ async fn run<'sys>(
     };
     let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
     let mut pointer_input_manager = PointerInputManager::new();
-    pointer_input_manager.set_client_size(main_window, main_window.client_size());
 
     // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
     #[cfg(windows)]
@@ -2656,7 +2655,7 @@ async fn run<'sys>(
                 system_link.close_window(window, &mut composite_tree, &mut ht_manager);
             }
             Event::WindowResize { window, size } => {
-                pointer_input_manager.set_client_size(window, size);
+                // pointer_input_manager.set_client_size(window, size);
             }
             Event::Sync(SyncEvent::WindowPostResizeRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
@@ -2777,7 +2776,6 @@ async fn run<'sys>(
 
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_down(
-                    &window,
                     pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
@@ -2806,7 +2804,6 @@ async fn run<'sys>(
                     window,
                     pointer_id,
                     client_pos,
-                    &window,
                     &ht_manager,
                     &mut InputEventContext {
                         sender_window: window,
@@ -2832,7 +2829,6 @@ async fn run<'sys>(
             } => {
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_up(
-                    &window,
                     pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
@@ -2853,7 +2849,6 @@ async fn run<'sys>(
             Event::PointerLeaveWindow { window, pointer_id } => {
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_leave(
-                    window,
                     pointer_id,
                     &ht_manager,
                     &mut InputEventContext {
