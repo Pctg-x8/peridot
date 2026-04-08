@@ -57,8 +57,8 @@ use crate::{
     input::{
         PerWindowKeyboardFocusState,
         hittest::{
-            CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
-            PointerButton,
+            CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
+            HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
     },
     rendering::{
@@ -731,8 +731,7 @@ pub fn pop(
         // TODO: RenderScaleが変わる場合は追従する必要がある
         left: SHADOW_SIZE / Handle(h).render_scale(),
         top: SHADOW_SIZE / Handle(h).render_scale(),
-        width: -SHADOW_SIZE * 2.0 / Handle(h).render_scale(),
-        height: -SHADOW_SIZE * 2.0 / Handle(h).render_scale(),
+        // width, heightはいじらなくていい（渡される基本サイズがすでに影を抜いた分になっている）
         ..Default::default()
     });
     let c_target = unsafe {
@@ -874,6 +873,51 @@ pub fn pop(
 
     let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
 
+    pub struct MenuItemEventHandler {
+        ct_entry_light: CompositeTreeRef,
+    }
+    impl HitTestTreeActionHandler for MenuItemEventHandler {
+        fn on_pointer_enter(
+            &self,
+            sender: HitTestTreeRef,
+            context: &mut crate::input::InputEventContext,
+            args: &crate::input::hittest::PointerActionArgs,
+        ) -> crate::input::EventContinueControl {
+            context.composite_tree.get_mut(self.ct_entry_light).opacity =
+                AnimatableFloat::Animated {
+                    from_value: 0.0,
+                    to_value: 1.0,
+                    start_sec: context.current_sec,
+                    end_sec: context.current_sec + 0.1,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                };
+            context.composite_tree.mark_dirty(self.ct_entry_light);
+
+            crate::input::EventContinueControl::STOP_PROPAGATION
+        }
+
+        fn on_pointer_leave(
+            &self,
+            sender: HitTestTreeRef,
+            context: &mut crate::input::InputEventContext,
+            args: &crate::input::hittest::PointerActionArgs,
+        ) -> crate::input::EventContinueControl {
+            context.composite_tree.get_mut(self.ct_entry_light).opacity =
+                AnimatableFloat::Animated {
+                    from_value: 1.0,
+                    to_value: 0.0,
+                    start_sec: context.current_sec,
+                    end_sec: context.current_sec + 0.1,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                };
+            context.composite_tree.mark_dirty(self.ct_entry_light);
+
+            crate::input::EventContinueControl::STOP_PROPAGATION
+        }
+    }
+
     let ht_entry = ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
         height: 20.0,
@@ -926,12 +970,17 @@ pub fn pop(
         relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
         composite_mode: CompositeMode::FillRadialGradient(shared_state.entry_light_grad),
+        opacity: AnimatableFloat::Value(0.0),
         ..Default::default()
     });
     composite_tree.add_child(ct_entry, ct_entry_light);
     composite_tree.add_child(ct_entry, ct_entry_label);
     composite_tree.add_child(composite_root, ct_entry);
     ht_manager.add_child(ht_root, ht_entry);
+    let eh = std::rc::Rc::new(MenuItemEventHandler { ct_entry_light });
+    ht_manager.set_action_handler(ht_entry, &eh);
+    #[allow(unused_must_use)]
+    std::rc::Rc::into_raw(eh); // leak TODO: 保持方法は後で考える
 }
 
 pub fn close_all(
