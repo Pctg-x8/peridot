@@ -627,4 +627,15 @@ impl HitTestTreeActionHandler for SubMenuViewEventHandler {
 
         crate::input::EventContinueControl::STOP_PROPAGATION
     }
+
+    fn on_pointer_hover(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        args: &crate::input::hittest::PointerActionArgs,
+    ) -> crate::input::EventContinueControl {
+        tracing::debug!("submenu item hovering");
+
+        crate::input::EventContinueControl::STOP_PROPAGATION
+    }
 }

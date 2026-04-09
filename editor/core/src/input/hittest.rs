@@ -576,6 +576,16 @@ pub trait HitTestTreeActionHandler {
     }
 
     #[allow(unused_variables)]
+    fn on_pointer_hover(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::empty()
+    }
+
+    #[allow(unused_variables)]
     fn on_pointer_move(
         &self,
         sender: HitTestTreeRef,

@@ -22,12 +22,12 @@ pub type PointerInputUnit = LogicalUnit;
 const CLICK_DETECTION_MAX_DISTANCE: f32 = 4.0;
 const DOUBLE_CLICK_DETECTION_MAX_DISTANCE: f32 = 4.0;
 const DOUBLE_CLICK_DETECTION_MAX_TIME: Duration = Duration::from_millis(500);
+pub const POINTER_HOVER_TIMEOUT_MS: u32 = 400;
 
-pub struct InputEventContext<'env, 'h> {
+pub struct InputEventContext<'env, 'sys, 'h> {
     pub current_sec: f32,
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
-    pub drag_preview: &'env DragPreviewPopoverHandle,
-    pub system_link: &'env SystemLink<'env>,
+    pub system_link: &'env mut SystemLink<'sys>,
     pub ht_create_only_access: &'env mut HitTestTreeManagerCreateOnlyAccess<'h>,
     pub ht_manager: &'env HitTestTreeManager<'h>,
 }
@@ -400,13 +400,13 @@ impl PointerInputManager {
         }
     }
 
-    fn update_pointer_enter(
+    fn update_pointer_enter<'env, 'sys, 'h>(
         &mut self,
         window_size: &Size<PointerInputUnit>,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
         ht_root: HitTestTreeRef,
     ) {
         let new_hit = ht.test(
@@ -443,6 +443,7 @@ impl PointerInputManager {
             self.pointer_focus = PointerFocusState::None;
             // leaveしたときはジェスチャもなかったことにする
             self.down_gesture = PointerDownGestureState::None;
+            action_context.system_link.kill_pointer_hovering_timeout();
         }
 
         if let Some(ht_ref) = new_enter {
@@ -457,14 +458,15 @@ impl PointerInputManager {
                 action_context,
                 ht_ref,
             );
+            action_context.system_link.set_pointer_hovering_timeout();
         }
     }
 
-    pub fn handle_mouse_leave(
+    pub fn handle_mouse_leave<'env, 'sys, 'h>(
         &mut self,
         pointer_id: PointerID,
         ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
     ) {
         let Some((entering_window, client_pos)) = self.last_client_pointer_pos.remove(&pointer_id)
         else {
@@ -498,16 +500,17 @@ impl PointerInputManager {
             self.pointer_focus = PointerFocusState::None;
             // leaveしたときはジェスチャもなかったことにする
             self.down_gesture = PointerDownGestureState::None;
+            action_context.system_link.kill_pointer_hovering_timeout();
         }
     }
 
-    pub fn handle_mouse_move(
+    pub fn handle_mouse_move<'env, 'sys, 'h>(
         &mut self,
         surface: NativeDesktopSurface,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
         ht_root: HitTestTreeRef,
     ) {
         self.last_client_pointer_pos
@@ -588,11 +591,66 @@ impl PointerInputManager {
         }
     }
 
-    pub fn handle_mouse_down(
+    pub fn handle_pointer_hover(&mut self, action_context: &mut InputEventContext) {
+        match self.pointer_focus {
+            PointerFocusState::None => (),
+            PointerFocusState::Entering(e) => {
+                for ht_ref in action_context.ht_manager.iter_ascending_from(e) {
+                    let flags = action_context
+                        .ht_manager
+                        .get_data(ht_ref)
+                        .action_handler()
+                        .map_or(EventContinueControl::empty(), |h| {
+                            h.on_pointer_hover(
+                                ht_ref,
+                                action_context,
+                                // TODO: Pointer IDでホバー分けて管理したほうがいいかも
+                                &PointerActionArgs {
+                                    #[allow(invalid_value)]
+                                    pointer_id: unsafe {
+                                        core::mem::MaybeUninit::uninit().assume_init()
+                                    },
+                                    client_pos: Point::new_logical(0.0, 0.0),
+                                    client_size: Size::new_logical(0.0, 0.0),
+                                },
+                            )
+                        });
+
+                    if flags.contains(EventContinueControl::STOP_PROPAGATION) {
+                        break;
+                    }
+                }
+            }
+            PointerFocusState::Capturing(ht_ref) => {
+                // キャプチャ対象にだけ通知
+                action_context
+                    .ht_manager
+                    .get_data(ht_ref)
+                    .action_handler()
+                    .map_or(EventContinueControl::empty(), |h| {
+                        h.on_pointer_hover(
+                            ht_ref,
+                            action_context,
+                            // TODO: Pointer IDでホバー分けて管理したほうがいいかも
+                            &PointerActionArgs {
+                                #[allow(invalid_value)]
+                                pointer_id: unsafe {
+                                    core::mem::MaybeUninit::uninit().assume_init()
+                                },
+                                client_pos: Point::new_logical(0.0, 0.0),
+                                client_size: Size::new_logical(0.0, 0.0),
+                            },
+                        )
+                    });
+            }
+        }
+    }
+
+    pub fn handle_mouse_down<'env, 'sys, 'h>(
         &mut self,
         pointer_id: PointerID,
         ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
         button: PointerButton,
         ht_root: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
@@ -674,11 +732,11 @@ impl PointerInputManager {
         }
     }
 
-    pub fn handle_mouse_up(
+    pub fn handle_mouse_up<'env, 'sys, 'h>(
         &mut self,
         pointer_id: PointerID,
         ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
         button: PointerButton,
         ht_root: HitTestTreeRef,
     ) {
@@ -795,14 +853,14 @@ impl PointerInputManager {
         self.down_gesture = PointerDownGestureState::None;
     }
 
-    fn perform_single_click(
+    fn perform_single_click<'env, 'sys, 'h>(
         &mut self,
         surface: NativeDesktopSurface,
         surface_size: Size<PointerInputUnit>,
         pointer_id: PointerID,
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
-        action_context: &mut InputEventContext,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
         ht: &HitTestTreeManager,
         ht_root: HitTestTreeRef,
     ) {
@@ -884,14 +942,14 @@ impl PointerInputManager {
         }
     }
 
-    fn perform_double_click(
+    fn perform_double_click<'env, 'sys, 'h>(
         &mut self,
         surface: NativeDesktopSurface,
         surface_size: Size<PointerInputUnit>,
         pointer_id: PointerID,
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
-        action_context: &mut InputEventContext,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
         ht: &HitTestTreeManager,
         ht_root: HitTestTreeRef,
     ) {

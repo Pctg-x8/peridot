@@ -115,7 +115,7 @@ pub fn launch() {
 
     let global_time_base = std::time::Instant::now();
     main_wrapper(
-        move |args| run(args),
+        move |args, system_link| run(args, system_link),
         &mut event_store,
         &global_time_base,
         &Mutex::new(RendererSync {
@@ -135,7 +135,7 @@ pub fn launch() {
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-    run_app: impl FnOnce(LaunchArgs<'sys>) -> AppFuture,
+    run_app: impl FnOnce(LaunchArgs<'sys>, SystemLink<'sys>) -> AppFuture,
     event_store: &mut VecDeque<Event>,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
@@ -146,19 +146,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
 ) {
-    let mut composite_tree = CompositeTree::new();
-    let mut ht_manager = HitTestTreeManager::new();
-    let mut polling = false;
-    let empty_dispatcher = LogicFiberEventDispatcher {
-        event_store,
-        polling: &mut polling,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
-        future_ptr: core::ptr::null_mut(),
-    };
-
-    #[cfg(windows)]
-    platform::windows::context_menu::initialize_composite_resources(&mut composite_tree);
-
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
@@ -291,16 +278,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         position_base_window_link: core::cell::Cell::new(core::ptr::null_mut()),
     };
 
-    #[cfg(windows)]
-    let main_window_handle = SystemLink::init_main_window(
-        vk_device,
-        empty_dispatcher.clone(),
-        &mut composite_tree,
-        &mut ht_manager,
-        &rt_sender,
-        app_context,
-    );
-
     #[cfg(feature = "wayland")]
     let main_window_handle = SystemLink::init_main_window(
         &wl_display,
@@ -388,25 +365,34 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         _pinned: core::marker::PhantomPinned,
     });
 
+    let mut polling = false;
+    let empty_dispatcher = LogicFiberEventDispatcher {
+        event_store,
+        polling: &mut polling,
+        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
+        future_ptr: core::ptr::null_mut(),
+    };
     let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
-    let mut app = core::pin::pin!(run_app(LaunchArgs {
-        event_queue: EventQueue { event_store },
-        global_time_base,
-        renderer_sync,
-        composite_tree,
-        ht_manager,
-        main_window: main_window_handle,
+    #[cfg(windows)]
+    let mut pointer_hovering_timer_id = 0;
+    let mut app = core::pin::pin!(run_app(
+        LaunchArgs {
+            event_queue: EventQueue { event_store },
+            global_time_base,
+            renderer_sync,
+        },
         #[cfg(windows)]
-        system_link: SystemLink {
+        SystemLink {
             drag_preview_popover,
             root_font_set: &root_font_set,
             rt_sender: rt_sender.clone(),
             vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context_ptr: app_context,
+            pointer_hovering_timer_id: &mut pointer_hovering_timer_id,
         },
         #[cfg(not(windows))]
-        system_link: SystemLink {
+        SystemLink {
             drag_preview_popover,
             rt_sender: rt_sender.clone(),
             vk_device,
@@ -429,8 +415,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     .map_or_else(core::ptr::null, |x| x as *const _),
                 global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
             }
-        }
-    }));
+        },
+    ));
 
     app_event_dispatcher.future_ptr = unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ };
     #[cfg(feature = "wayland")]
@@ -453,25 +439,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             },
             future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
         });
-    #[cfg(windows)]
-    SystemLink::postinit_main_window(
-        main_window_handle,
-        LogicFiberEventDispatcher {
-            event_store,
-            polling: &mut polling,
-            poll_fn_ptr: unsafe {
-                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
-            },
-            future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
-        },
-    );
-    #[cfg(windows)]
-    platform::windows::context_menu::post_initialize(LogicFiberEventDispatcher {
-        event_store,
-        polling: &mut polling,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
-        future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
-    });
     #[cfg(target_os = "macos")]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store,
@@ -494,13 +461,18 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         .expect("seat set_listener");
 
     // initial poll
+    unsafe {
+        core::ptr::write_volatile(&mut polling, true);
+    }
     let _ = app
         .as_mut()
         .poll(&mut core::task::Context::from_waker(&unsafe {
             core::task::Waker::new(&(), &APP_WAKER_VTABLE)
         }));
+    unsafe {
+        core::ptr::write_volatile(&mut polling, false);
+    }
 
-    SystemLink::prelaunch(main_window_handle);
     #[cfg(feature = "wayland")]
     wl_display.roundtrip().expect("roundtrip");
 
@@ -764,6 +736,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
                         break 'app;
                     }
+                    if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_TIMER
+                        && msg.wParam.0 == pointer_hovering_timer_id
+                    {
+                        app_event_dispatcher.dispatch(Event::PointerHover);
+                        continue;
+                    }
 
                     unsafe {
                         let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(msg);
@@ -830,6 +808,7 @@ pub enum Event {
         window: WindowHandle,
         pointer_id: PointerID,
     },
+    PointerHover,
     KeyDown {
         window: WindowHandle,
         code: KeyInputCode,
@@ -2371,10 +2350,6 @@ struct LaunchArgs<'sys> {
     pub event_queue: EventQueue,
     pub global_time_base: &'sys std::time::Instant,
     pub renderer_sync: &'sys Mutex<RendererSync>,
-    pub composite_tree: CompositeTree<SyncEvent>,
-    pub ht_manager: HitTestTreeManager<'sys>,
-    pub main_window: WindowHandle,
-    pub system_link: SystemLink<'sys>,
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
@@ -2383,13 +2358,13 @@ async fn run<'sys>(
         event_queue,
         global_time_base,
         renderer_sync,
-        mut composite_tree,
-        mut ht_manager,
-        mut main_window,
-        system_link,
     }: LaunchArgs<'sys>,
+    mut system_link: SystemLink<'sys>,
 ) {
     tracing::info!("app start");
+
+    let mut composite_tree = CompositeTree::new();
+    let mut ht_manager = HitTestTreeManager::new();
 
     let typing_context = ThreadLocalTypingContext {
         #[cfg(feature = "freetype")]
@@ -2405,7 +2380,6 @@ async fn run<'sys>(
     }
 
     let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
-    let init_scale = main_window.ui_scale_factor();
     let texture_id_set = ui::window_header::SystemCommandTextureIDSet::new(
         &mut texture_id_issuer,
         system_link.rt_sender(),
@@ -2416,6 +2390,16 @@ async fn run<'sys>(
         &mut texture_id_issuer,
         system_link.rt_sender(),
     );
+
+    #[cfg(windows)]
+    platform::windows::context_menu::initialize_composite_resources(&mut composite_tree);
+    // TODO: post_initializeはあとでなくす
+    #[cfg(windows)]
+    platform::windows::context_menu::post_initialize(
+        unsafe { &*system_link.event_dispatcher }.clone(),
+    );
+
+    let mut main_window = system_link.create_main_window(&mut composite_tree, &mut ht_manager);
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -2432,7 +2416,7 @@ async fn run<'sys>(
             current_sec: global_time_base.elapsed().as_secs_f32(),
         },
         keyboard_focus_registry: &mut keyboard_focus_registry,
-        ui_scale_factor: init_scale,
+        ui_scale_factor: main_window.ui_scale_factor(),
         system_link: &system_link,
     };
     let window_header_view = ui::window_header::View::new(
@@ -2456,7 +2440,7 @@ async fn run<'sys>(
     // tab view
     let tab_main = view_init_ctx.composite_tree.create(CompositeRect {
         has_bitmap: true,
-        base_scale_factor: init_scale,
+        base_scale_factor: main_window.ui_scale_factor(),
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
         size: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(36.0)],
         offset: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(100.0)],
@@ -2482,7 +2466,7 @@ async fn run<'sys>(
             radius: [0.5, 0.1],
         });
     let tab_bg = view_init_ctx.composite_tree.create(CompositeRect {
-        base_scale_factor: init_scale,
+        base_scale_factor: main_window.ui_scale_factor(),
         relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
         composite_mode: CompositeMode::FillRadialGradient(tab_bg_grad),
@@ -2559,7 +2543,8 @@ async fn run<'sys>(
             }
 
             context
-                .drag_preview
+                .system_link
+                .drag_preview_popover()
                 .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
 
             input::EventContinueControl::CAPTURE_ELEMENT
@@ -2572,7 +2557,10 @@ async fn run<'sys>(
             context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
-            context.drag_preview.r#move(&args.client_pos);
+            context
+                .system_link
+                .drag_preview_popover()
+                .r#move(&args.client_pos);
 
             input::EventContinueControl::STOP_PROPAGATION
         }
@@ -2587,7 +2575,7 @@ async fn run<'sys>(
                 return input::EventContinueControl::empty();
             }
 
-            context.drag_preview.hide();
+            context.system_link.drag_preview_popover().hide();
 
             input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
                 | input::EventContinueControl::STOP_PROPAGATION
@@ -2644,6 +2632,7 @@ async fn run<'sys>(
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
+    SystemLink::prelaunch(main_window);
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
@@ -2651,7 +2640,7 @@ async fn run<'sys>(
                 system_link.open_window(
                     &mut composite_tree,
                     &mut ht_manager,
-                    |mut w, composite_tree, ht_manager| {
+                    |mut w, composite_tree, ht_manager, system_link| {
                         ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
 
                         composite_tree.get_mut(w.composite_root()).has_bitmap = true;
@@ -2666,8 +2655,8 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                             },
                             keyboard_focus_registry: &mut keyboard_focus_registry,
-                            ui_scale_factor: init_scale,
-                            system_link: &system_link,
+                            ui_scale_factor: w.ui_scale_factor(),
+                            system_link,
                         };
                         let window_header_view = ui::window_header::View::new(
                             &mut view_init_ctx,
@@ -2711,8 +2700,7 @@ async fn run<'sys>(
                 let mut input_context = InputEventContext {
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
-                    drag_preview: system_link.drag_preview_popover(),
-                    system_link: &system_link,
+                    system_link: &mut system_link,
                     ht_create_only_access: &mut ht_create_only_access,
                     ht_manager: &ht_manager,
                 };
@@ -2774,8 +2762,7 @@ async fn run<'sys>(
                 let mut input_context = InputEventContext {
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
-                    drag_preview: system_link.drag_preview_popover(),
-                    system_link: &system_link,
+                    system_link: &mut system_link,
                     ht_create_only_access: &mut ht_create_only_access,
                     ht_manager: &ht_manager,
                 };
@@ -2823,8 +2810,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -2849,8 +2835,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -2874,8 +2859,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -2893,12 +2877,25 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                 );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::PointerHover => {
+                system_link.kill_pointer_hovering_timeout();
+                let mut ht_create_only_access = ht_manager.derive_create_only_access();
+                pointer_input_manager.handle_pointer_hover(&mut InputEventContext {
+                    composite_tree: &mut composite_tree,
+                    current_sec: global_time_base.elapsed().as_secs_f32(),
+                    system_link: &mut system_link,
+                    ht_create_only_access: &mut ht_create_only_access,
+                    ht_manager: &ht_manager,
+                });
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -2910,8 +2907,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -2927,8 +2923,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -2949,8 +2944,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -3057,7 +3051,7 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                             },
                             keyboard_focus_registry: &mut keyboard_focus_registry,
-                            ui_scale_factor: init_scale,
+                            ui_scale_factor: h.render_scale(),
                             system_link: &system_link,
                         };
                         let views = crate::uikit::MenuItemLayout::instantiate(
@@ -3106,8 +3100,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -3132,8 +3125,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -3157,8 +3149,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -3176,8 +3167,7 @@ async fn run<'sys>(
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
-                        drag_preview: system_link.drag_preview_popover(),
-                        system_link: &system_link,
+                        system_link: &mut system_link,
                         ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
@@ -3207,8 +3197,7 @@ async fn run<'sys>(
                             &mut InputEventContext {
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
-                                drag_preview: system_link.drag_preview_popover(),
-                                system_link: &system_link,
+                                system_link: &mut system_link,
                                 ht_create_only_access: &mut ht_create_only_access,
                                 ht_manager: &ht_manager,
                             },
@@ -3246,8 +3235,7 @@ async fn run<'sys>(
                             &mut InputEventContext {
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
-                                drag_preview: system_link.drag_preview_popover(),
-                                system_link: &system_link,
+                                system_link: &mut system_link,
                                 ht_create_only_access: &mut ht_create_only_access,
                                 ht_manager: &ht_manager,
                             },
@@ -3285,8 +3273,7 @@ async fn run<'sys>(
                             &mut InputEventContext {
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
-                                drag_preview: system_link.drag_preview_popover(),
-                                system_link: &system_link,
+                                system_link: &mut system_link,
                                 ht_create_only_access: &mut ht_create_only_access,
                                 ht_manager: &ht_manager,
                             },

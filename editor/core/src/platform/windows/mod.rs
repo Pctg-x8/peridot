@@ -42,18 +42,19 @@ use windows::{
                 GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM,
                 HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON,
                 HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM,
-                IDC_SIZEWE, IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS,
-                PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
-                SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW,
-                SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
-                WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEMOVE, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-                WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN,
-                WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
-                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                IDC_SIZEWE, IDI_APPLICATION, IsZoomed, KillTimer, LoadCursorW, LoadIconW,
+                NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE,
+                SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
+                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
+                SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_LONG_PTR_INDEX,
+                WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN,
+                WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOVE,
+                WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
+                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
+                WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
+                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
+                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -1348,58 +1349,9 @@ pub struct SystemLink<'sys> {
     pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
     pub app_context_ptr: *const ApplicationContext,
+    pub pointer_hovering_timer_id: *mut usize,
 }
 impl SystemLink<'_> {
-    pub fn init_main_window(
-        vk_device: &VulkanDevice,
-        dispatcher: LogicFiberEventDispatcher,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
-        app: &ApplicationContext,
-    ) -> WindowHandle {
-        let ht = ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
-        let w = NativeWindow::new(
-            &app.wc_set,
-            WindowType::Main {},
-            composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-            ht,
-            dispatcher,
-        );
-        let main_window_handle = w.make_handle();
-        ht_manager.get_data_mut(ht).root_of_window = Some(main_window_handle);
-
-        let vk_surface = w.create_vk_surface(vk_device);
-        rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                key: main_window_handle,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            }))
-            .expect("rt_sender.send");
-
-        main_window_handle
-    }
-
-    pub fn postinit_main_window(
-        handle: WindowHandle,
-        canonical_dispatcher: LogicFiberEventDispatcher,
-    ) {
-        WindowEventHandler::get_for_window(handle.0).event_dispatcher = canonical_dispatcher;
-    }
-
-    pub fn prelaunch(handle: WindowHandle) {
-        unsafe {
-            let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
-        }
-    }
-
     #[inline(always)]
     pub fn dispatch_event(&self, event: Event) {
         unsafe { &*self.event_dispatcher }.dispatch(event);
@@ -1420,11 +1372,51 @@ impl SystemLink<'_> {
         &self.drag_preview_popover
     }
 
-    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
+    pub fn create_main_window(
         &self,
         composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) -> WindowHandle {
+        let ht = ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
+        let w = NativeWindow::new(
+            unsafe { &(*self.app_context_ptr).wc_set },
+            WindowType::Main {},
+            composite_tree.create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                ..Default::default()
+            }),
+            ht,
+            unsafe { &*self.event_dispatcher }.clone(),
+        );
+        let h = w.make_handle();
+        ht_manager.get_data_mut(ht).root_of_window = Some(h);
+
+        let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
+        self.rt_sender
+            .send(RenderMessage::NewWindow(NewWindowData {
+                key: h,
+                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            }))
+            .expect("rt_sender.send");
+
+        h
+    }
+
+    pub fn prelaunch(handle: WindowHandle) {
+        unsafe {
+            let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
+        }
+    }
+
+    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
+        &mut self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HT,
-        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<SyncEvent>, &mut HT),
+        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<SyncEvent>, &mut HT, &mut Self),
     ) -> WindowHandle {
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },
@@ -1450,7 +1442,7 @@ impl SystemLink<'_> {
             }))
             .expect("rt_sender.send");
 
-        setup_contents(h, composite_tree, hit_tree);
+        setup_contents(h, composite_tree, hit_tree, self);
         unsafe {
             let _ = ShowWindow(w.hwnd, SW_SHOW);
         }
@@ -1507,6 +1499,26 @@ impl SystemLink<'_> {
             .lock()
             .expect("poisoned") = Some(new_scale);
     }
+
+    pub fn set_pointer_hovering_timeout(&mut self) {
+        unsafe {
+            self.pointer_hovering_timer_id.write(SetTimer(
+                None,
+                *self.pointer_hovering_timer_id,
+                crate::input::POINTER_HOVER_TIMEOUT_MS,
+                None,
+            ));
+        }
+    }
+
+    pub fn kill_pointer_hovering_timeout(&mut self) {
+        let active_timer_id = unsafe { self.pointer_hovering_timer_id.replace(0) };
+        if active_timer_id != 0 {
+            unsafe {
+                KillTimer(None, active_timer_id).expect("killtimer");
+            }
+        }
+    }
 }
 
 pub fn pointer_pos(_p: PointerID) -> Point<PixelsUnit> {
@@ -1535,8 +1547,8 @@ pub trait CoreTextDeferrableEventHandler {
         ctx: &mut InputEventContext,
         e: &CoreTextTextUpdatingEventArgs,
     ) -> windows_core::Result<()>;
-    fn format_updating(
-        &self,
+    fn format_updating<'x>(
+        &'x self,
         ctx: &mut InputEventContext,
         e: &CoreTextFormatUpdatingEventArgs,
     ) -> windows_core::Result<()>;
