@@ -11,10 +11,6 @@ use windows::{
                 D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_FENCE_FLAG_NONE, D3D12CreateDevice,
                 D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug, ID3D12Device, ID3D12Fence,
             },
-            Dwm::{
-                DWMNCRENDERINGPOLICY, DWMNCRP_ENABLED, DWMWA_NCRENDERING_ENABLED,
-                DWMWA_NCRENDERING_POLICY, DwmSetWindowAttribute,
-            },
             Dxgi::{
                 Common::{
                     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -23,7 +19,7 @@ use windows::{
                 DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISwapChain3,
             },
-            Gdi::{MapWindowPoints, PtInRect},
+            Gdi::{MONITOR_DEFAULTTONEAREST, MapWindowPoints, MonitorFromPoint},
         },
         System::{
             Threading::{CreateEventW, GetCurrentThreadId},
@@ -31,19 +27,19 @@ use windows::{
         },
         UI::{
             Controls::WM_MOUSELEAVE,
-            HiDpi::GetDpiForWindow,
+            HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetCursorPos, GetWindowLongPtrW, GetWindowRect, HHOOK, HTBOTTOM, HTBOTTOMLEFT,
-                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
-                HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, NCCALCSIZE_PARAMS,
-                SW_SHOWNOACTIVATE, SetWindowLongPtrW, SetWindowsHookExW, ShowWindow,
-                UnhookWindowsHookEx, WH_MOUSE, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
-                WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN,
-                WM_RBUTTONUP, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-                WS_EX_TOPMOST, WS_POPUP, WindowFromPoint,
+                GetCursorPos, GetWindowLongPtrW, HHOOK, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
+                HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT,
+                HTTOP, HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, SW_SHOWNOACTIVATE, SetWindowLongPtrW,
+                SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_MOUSE,
+                WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK,
+                WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
+                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW,
+                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
+                WindowFromPoint,
             },
         },
     },
@@ -52,25 +48,22 @@ use windows_core::{Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
+    ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
         PerWindowKeyboardFocusState,
         hittest::{
-            CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
-            HitTestTreeManager, HitTestTreeRef, PointerButton,
+            HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
     },
     rendering::{
         NewContextMenuData, RenderMessage,
         composite::{
-            AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
-            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, Gradient,
-            GradientRef,
+            AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
+            Gradient, GradientRef,
         },
-        text::FontID,
     },
+    uikit::{MenuItemLayout, MenuItemView, MountTarget},
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
         platform::windows::{WindowByClassIter, current_instance_handle},
@@ -88,6 +81,17 @@ impl core::hash::Hash for Handle {
 }
 unsafe impl Sync for Handle {}
 unsafe impl Send for Handle {}
+impl MountTarget for Handle {
+    #[inline(always)]
+    fn ct_root(&self) -> CompositeTreeRef {
+        state(self.0).composite_root
+    }
+
+    #[inline(always)]
+    fn ht_root(&self) -> HitTestTreeRef {
+        state(self.0).ht_root
+    }
+}
 impl Handle {
     #[deprecated]
     pub const fn internal(&self) -> HWND {
@@ -140,6 +144,7 @@ pub struct InstanceState {
     cv_root: SpriteVisual,
     c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
+    views: Vec<MenuItemView>,
 }
 impl InstanceState {
     fn done(
@@ -697,8 +702,32 @@ pub fn pop(
     ht_manager: &mut HitTestTreeManager,
     current_sec: f32,
     screen_pos: Point<PixelsUnit>,
+    layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+    setup_contents: impl FnOnce(
+        Vec<MenuItemLayout>,
+        ContextMenuHandle,
+        &mut CompositeTree<SyncEvent>,
+        &mut HitTestTreeManager,
+    ) -> Vec<MenuItemView>,
 ) {
     let shared_state = SharedState::get();
+    let mut dest_dpi_x = core::mem::MaybeUninit::uninit();
+    let mut dest_dpi_y = core::mem::MaybeUninit::uninit();
+    unsafe {
+        GetDpiForMonitor(
+            MonitorFromPoint(screen_pos.to_win32(), MONITOR_DEFAULTTONEAREST),
+            MDT_EFFECTIVE_DPI,
+            dest_dpi_x.as_mut_ptr(),
+            dest_dpi_y.as_mut_ptr(),
+        )
+        .expect("GetDpiForMonitor");
+    }
+    let dest_render_scale = unsafe { dest_dpi_x.assume_init() as f32 / 96.0 };
+    let layouted_items = layouted_items(dest_render_scale);
+    let width = MenuItemLayout::min_width(layouted_items.iter());
+    let height = MenuItemLayout::height(layouted_items.iter());
+    let pixels_size =
+        Size::new_logical(width.value(), height.value()).to_pixels_ceil(dest_render_scale);
 
     let hinstance = current_instance_handle();
     let h = unsafe {
@@ -709,8 +738,8 @@ pub fn pop(
             WS_POPUP,
             screen_pos.x - SHADOW_SIZE.ceil() as i32,
             screen_pos.y - SHADOW_SIZE.ceil() as i32,
-            100 + (SHADOW_SIZE * 2.0).ceil() as i32,
-            100 + (SHADOW_SIZE * 2.0).ceil() as i32,
+            pixels_size.width as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
+            pixels_size.height as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
             None,
             None,
             Some(hinstance),
@@ -752,8 +781,8 @@ pub fn pop(
             .CreateSwapChainForComposition(
                 &shared_state.d3d12_cq,
                 &DXGI_SWAP_CHAIN_DESC1 {
-                    Width: 100,
-                    Height: 100,
+                    Width: pixels_size.width as _,
+                    Height: pixels_size.height as _,
                     Format: DXGI_FORMAT_B8G8R8A8_UNORM,
                     SampleDesc: DXGI_SAMPLE_DESC {
                         Count: 1,
@@ -794,7 +823,10 @@ pub fn pop(
         .SetSourceParameter(h!("Source"), &backdrop_brush)
         .expect("drag.fx.set_blur_source");
     cv_root
-        .SetSize(Vector2 { X: 100.0, Y: 100.0 })
+        .SetSize(Vector2 {
+            X: pixels_size.width as _,
+            Y: pixels_size.height as _,
+        })
         .expect("cv_root.SetSize");
     cv_root
         .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
@@ -859,6 +891,7 @@ pub fn pop(
             cv_root,
             c_target,
             keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+            views: Vec::new(),
         }),
     );
     syslink
@@ -871,8 +904,12 @@ pub fn pop(
         }))
         .expect("rt_sender.send");
 
+    let views = setup_contents(layouted_items, Handle(h), composite_tree, ht_manager);
+    state_mut(h).views = views;
+
     let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
 
+    /*
     pub struct MenuItemEventHandler {
         ct_entry_light: CompositeTreeRef,
     }
@@ -981,6 +1018,7 @@ pub fn pop(
     ht_manager.set_action_handler(ht_entry, &eh);
     #[allow(unused_must_use)]
     std::rc::Rc::into_raw(eh); // leak TODO: 保持方法は後で考える
+    */
 }
 
 pub fn close_all(

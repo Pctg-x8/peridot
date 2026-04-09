@@ -27,6 +27,13 @@ impl core::fmt::Display for SafeF32 {
         self.0.fmt(f)
     }
 }
+impl core::ops::Add for SafeF32 {
+    type Output = Self;
+    #[inline(always)]
+    fn add(self, rhs: Self) -> Self {
+        Self(self.0 + rhs.0)
+    }
+}
 impl SafeF32 {
     pub const fn new(v: f32) -> Option<Self> {
         if v.is_nan() { None } else { Some(Self(v)) }
@@ -38,6 +45,10 @@ impl SafeF32 {
 
     pub const fn value(&self) -> f32 {
         self.0
+    }
+
+    pub const fn max(self, other: Self) -> Self {
+        Self(self.0.max(other.0))
     }
 }
 

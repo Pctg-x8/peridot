@@ -39,8 +39,9 @@ use crate::{
         text::{FontID, PerWindowFontSet, RootFontSet, TextLayout, ThreadLocalTypingContext},
     },
     uikit::{
-        MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
-        PopupID, PopupManager, Positioning, RawMountTarget, SimpleButtonView, ViewInitContext,
+        MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
+        OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
+        SimpleButtonView, ViewInitContext,
     },
     utils::{Color32, LogicalUnit, PixelsUnit, Point, Rect, SafeF32, Size},
 };
@@ -2410,6 +2411,11 @@ async fn run<'sys>(
         system_link.rt_sender(),
     );
     let mut popup_manager = PopupManager::new();
+    let context_menu_common_resources = MenuItemCommonResources::new(
+        &mut composite_tree,
+        &mut texture_id_issuer,
+        system_link.rt_sender(),
+    );
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -3007,6 +3013,64 @@ async fn run<'sys>(
                     &mut ht_manager,
                     global_time_base.elapsed().as_secs_f32(),
                     screen_pos,
+                    |render_scale| {
+                        crate::uikit::MenuItemLayout::build(
+                            [
+                                crate::uikit::MenuItem::Command {
+                                    label: "Entry1".into(),
+                                    command_id: 0,
+                                },
+                                crate::uikit::MenuItem::Command {
+                                    label: "Entry2".into(),
+                                    command_id: 1,
+                                },
+                                crate::uikit::MenuItem::Separator,
+                                crate::uikit::MenuItem::Command {
+                                    label: "Entry3".into(),
+                                    command_id: 2,
+                                },
+                                crate::uikit::MenuItem::Heading {
+                                    label: "Head".into(),
+                                },
+                                crate::uikit::MenuItem::SubMenu {
+                                    label: "Sub".into(),
+                                    items: vec![crate::uikit::MenuItem::Command {
+                                        label: "SubEntry1".into(),
+                                        command_id: 4,
+                                    }],
+                                },
+                                crate::uikit::MenuItem::Command {
+                                    label: "Entry4".into(),
+                                    command_id: 3,
+                                },
+                            ]
+                            .into_iter(),
+                            &PerWindowFontSet::new(system_link.root_font_set(), &typing_context),
+                            render_scale,
+                        )
+                    },
+                    |layout, h, composite_tree, ht_manager| {
+                        let mut view_init_ctx = ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree,
+                                ht_manager,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                            },
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            ui_scale_factor: init_scale,
+                            system_link: &system_link,
+                        };
+                        let views = crate::uikit::MenuItemLayout::instantiate(
+                            layout.into_iter(),
+                            &mut view_init_ctx,
+                            &context_menu_common_resources,
+                        );
+                        for x in views.iter() {
+                            x.mount(&mut view_init_ctx, &h);
+                        }
+
+                        views
+                    },
                 );
 
                 composite_tree
