@@ -39,7 +39,7 @@ use crate::{
         text::{FontID, PerWindowFontSet, RootFontSet, TextLayout, ThreadLocalTypingContext},
     },
     uikit::{
-        MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
+        MenuItem, MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
         SimpleButtonView, ViewInitContext,
     },
@@ -742,6 +742,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         app_event_dispatcher.dispatch(Event::PointerHover);
                         continue;
                     }
+                    if platform::windows::context_menu::is_delayed_action_timer_event(&msg) {
+                        app_event_dispatcher.dispatch(Event::ContextMenuPerformDelayedAction);
+                        continue;
+                    }
 
                     unsafe {
                         let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(msg);
@@ -853,10 +857,23 @@ pub enum Event {
     PopupClose {
         id: PopupID,
     },
-    ContextMenuPop {
+    ContextMenuOpen {
+        items: Vec<MenuItem>,
         screen_pos: Point<PixelsUnit>,
     },
     ContextMenuCloseAll,
+    ContextMenuSelectItem {
+        depth: usize,
+        index: usize,
+    },
+    ContextMenuDeselectItem {
+        depth: usize,
+    },
+    ContextMenuOpenSubmenu {
+        depth: usize,
+        index: usize,
+    },
+    ContextMenuPerformDelayedAction,
     ContextMenuPointerDown {
         pointer_id: PointerID,
         target: ContextMenuHandle,
@@ -2390,6 +2407,7 @@ async fn run<'sys>(
         &mut texture_id_issuer,
         system_link.rt_sender(),
     );
+    let mut current_active_context_menu_session = None::<ContextMenuSession>;
 
     #[cfg(windows)]
     platform::windows::context_menu::initialize_composite_resources(&mut composite_tree);
@@ -2593,7 +2611,36 @@ async fn run<'sys>(
                 input::EventContinueControl::STOP_PROPAGATION
             } else {
                 // tracing::debug!("right click!");
-                context.system_link.dispatch_event(Event::ContextMenuPop {
+                context.system_link.dispatch_event(Event::ContextMenuOpen {
+                    items: vec![
+                        crate::uikit::MenuItem::Command {
+                            label: "Entry1".into(),
+                            command_id: 0,
+                        },
+                        crate::uikit::MenuItem::Command {
+                            label: "Entry2".into(),
+                            command_id: 1,
+                        },
+                        crate::uikit::MenuItem::Separator,
+                        crate::uikit::MenuItem::Command {
+                            label: "Entry3".into(),
+                            command_id: 2,
+                        },
+                        crate::uikit::MenuItem::Heading {
+                            label: "Head".into(),
+                        },
+                        crate::uikit::MenuItem::SubMenu {
+                            label: "Sub".into(),
+                            items: vec![crate::uikit::MenuItem::Command {
+                                label: "SubEntry1".into(),
+                                command_id: 4,
+                            }],
+                        },
+                        crate::uikit::MenuItem::Command {
+                            label: "Entry4".into(),
+                            command_id: 3,
+                        },
+                    ],
                     screen_pos: platform::windows::pointer_pos(args.pointer_id),
                 });
 
@@ -2999,83 +3046,113 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::ContextMenuPop { screen_pos } => {
-                #[cfg(windows)]
-                platform::windows::context_menu::pop(
+            Event::ContextMenuOpen { items, screen_pos } => {
+                current_active_context_menu_session = Some(ContextMenuSession::new(
+                    items,
                     &system_link,
-                    &mut composite_tree,
-                    &mut ht_manager,
-                    global_time_base.elapsed().as_secs_f32(),
                     screen_pos,
-                    |render_scale| {
-                        crate::uikit::MenuItemLayout::build(
-                            [
-                                crate::uikit::MenuItem::Command {
-                                    label: "Entry1".into(),
-                                    command_id: 0,
-                                },
-                                crate::uikit::MenuItem::Command {
-                                    label: "Entry2".into(),
-                                    command_id: 1,
-                                },
-                                crate::uikit::MenuItem::Separator,
-                                crate::uikit::MenuItem::Command {
-                                    label: "Entry3".into(),
-                                    command_id: 2,
-                                },
-                                crate::uikit::MenuItem::Heading {
-                                    label: "Head".into(),
-                                },
-                                crate::uikit::MenuItem::SubMenu {
-                                    label: "Sub".into(),
-                                    items: vec![crate::uikit::MenuItem::Command {
-                                        label: "SubEntry1".into(),
-                                        command_id: 4,
-                                    }],
-                                },
-                                crate::uikit::MenuItem::Command {
-                                    label: "Entry4".into(),
-                                    command_id: 3,
-                                },
-                            ]
-                            .into_iter(),
-                            &PerWindowFontSet::new(system_link.root_font_set(), &typing_context),
-                            render_scale,
-                        )
+                    &mut ViewInitContext {
+                        mount_context: MountContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                        },
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        ui_scale_factor: 1.0, // updated later
+                        system_link: &system_link,
                     },
-                    |layout, h, composite_tree, ht_manager| {
-                        let mut view_init_ctx = ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree,
-                                ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                            },
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            ui_scale_factor: h.render_scale(),
-                            system_link: &system_link,
-                        };
-                        let views = crate::uikit::MenuItemLayout::instantiate(
-                            layout.into_iter(),
-                            &mut view_init_ctx,
-                            &context_menu_common_resources,
-                        );
-                        for x in views.iter() {
-                            x.mount(&mut view_init_ctx, &h);
-                        }
-
-                        views
-                    },
-                );
+                    &context_menu_common_resources,
+                    &typing_context,
+                ));
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::ContextMenuCloseAll => {
-                #[cfg(windows)]
-                platform::windows::context_menu::close_all(&mut composite_tree, &mut ht_manager);
+                if let Some(c) = current_active_context_menu_session.take() {
+                    c.terminate(&mut composite_tree, &mut ht_manager);
 
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
+            }
+            Event::ContextMenuSelectItem { depth, index } => {
+                if let Some(c) = current_active_context_menu_session.as_mut() {
+                    c.select_item(
+                        depth,
+                        index,
+                        &mut composite_tree,
+                        global_time_base.elapsed().as_secs_f32(),
+                    );
+
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    #[cfg(windows)]
+                    crate::platform::windows::context_menu::reserve_delayed_action();
+                }
+            }
+            Event::ContextMenuDeselectItem { depth } => {
+                if let Some(c) = current_active_context_menu_session.as_mut() {
+                    c.deselect_item(
+                        depth,
+                        &mut composite_tree,
+                        global_time_base.elapsed().as_secs_f32(),
+                    );
+
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    #[cfg(windows)]
+                    crate::platform::windows::context_menu::reserve_delayed_action();
+                }
+            }
+            Event::ContextMenuOpenSubmenu { depth, index } => {
+                /* if let Some(c) = current_active_context_menu_session.as_mut() {
+                    c.open_submenu(
+                        depth,
+                        index,
+                        &system_link,
+                        &mut ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                            },
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            ui_scale_factor: 1.0, // updated later
+                            system_link: &system_link,
+                        },
+                        &context_menu_common_resources,
+                        &typing_context,
+                    );
+
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }*/
+            }
+            Event::ContextMenuPerformDelayedAction => {
+                #[cfg(windows)]
+                crate::platform::windows::context_menu::unreserve_delayed_action();
+
+                if let Some(c) = current_active_context_menu_session.as_mut() {
+                    c.perform_delayed_action(
+                        &system_link,
+                        &mut ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                            },
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            ui_scale_factor: 1.0, // updated later
+                            system_link: &system_link,
+                        },
+                        &context_menu_common_resources,
+                        &typing_context,
+                    );
+
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
             }
             Event::ContextMenuPointerDown {
                 pointer_id,
@@ -3302,6 +3379,300 @@ async fn run<'sys>(
     #[cfg(windows)]
     unsafe {
         platform::windows::unlocate_non_client_hittest_managers();
+    }
+}
+
+pub struct ContextMenuSurface {
+    handle: ContextMenuHandle,
+    parent_path: Vec<usize>,
+    current_selecting: Option<usize>,
+}
+impl ContextMenuSurface {
+    pub fn set_current_selecting(
+        &mut self,
+        new_index: usize,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
+        if self.current_selecting == Some(new_index) {
+            // no changes
+            return;
+        }
+
+        if let Some(x) = self.current_selecting {
+            self.handle
+                .view(x)
+                .expect("out of range")
+                .unlit(composite_tree, current_sec);
+        }
+
+        self.current_selecting = Some(new_index);
+        self.handle
+            .view(new_index)
+            .expect("out of range")
+            .lit(composite_tree, current_sec);
+    }
+
+    pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
+        if let Some(x) = self.current_selecting {
+            self.handle
+                .view(x)
+                .expect("out of range")
+                .unlit(composite_tree, current_sec);
+        }
+
+        self.current_selecting = None;
+    }
+}
+
+pub struct ContextMenuSession {
+    items: Vec<MenuItem>,
+    base_pos: Point<PixelsUnit>,
+    opening_surfaces: Vec<ContextMenuSurface>,
+    active_selection: Option<(usize, usize)>,
+}
+impl ContextMenuSession {
+    pub fn new(
+        items: Vec<MenuItem>,
+        system_link: &SystemLink,
+        screen_pos: Point<PixelsUnit>,
+        view_init_context: &mut ViewInitContext,
+        common_res: &MenuItemCommonResources,
+        typing_context: &ThreadLocalTypingContext,
+    ) -> Self {
+        #[cfg(windows)]
+        let root_surface = platform::windows::context_menu::pop(
+            &system_link,
+            view_init_context,
+            0,
+            screen_pos,
+            |render_scale| {
+                crate::uikit::MenuItemLayout::build(
+                    items.clone().into_iter(),
+                    &PerWindowFontSet::new(system_link.root_font_set(), typing_context),
+                    render_scale,
+                )
+            },
+            |layout, h, view_init_ctx| {
+                view_init_ctx.ui_scale_factor = h.render_scale();
+                let views = crate::uikit::MenuItemLayout::instantiate(
+                    layout.into_iter(),
+                    0,
+                    view_init_ctx,
+                    common_res,
+                );
+                for x in views.iter() {
+                    x.mount(view_init_ctx, &h);
+                }
+
+                views
+            },
+        );
+
+        Self {
+            items,
+            base_pos: screen_pos,
+            opening_surfaces: vec![ContextMenuSurface {
+                handle: root_surface,
+                parent_path: Vec::new(),
+                current_selecting: None,
+            }],
+            active_selection: None,
+        }
+    }
+
+    pub fn perform_delayed_action(
+        &mut self,
+        system_link: &SystemLink,
+        view_init_context: &mut ViewInitContext,
+        common_res: &MenuItemCommonResources,
+        typing_context: &ThreadLocalTypingContext,
+    ) {
+        match self.active_selection {
+            Some((depth, index)) => {
+                while self.opening_surfaces.len() > depth + 1 {
+                    crate::platform::windows::context_menu::close(
+                        self.opening_surfaces.pop().expect("empty?").handle,
+                        view_init_context.mount_context.composite_tree,
+                        view_init_context.mount_context.ht_manager,
+                    );
+                }
+
+                if let Some(display_pos) = self
+                    .opening_surfaces
+                    .last()
+                    .expect("root?")
+                    .handle
+                    .submenu_pop_position(index)
+                {
+                    let parent_path = self
+                        .opening_surfaces
+                        .last()
+                        .expect("root?")
+                        .parent_path
+                        .iter()
+                        .copied()
+                        .chain(core::iter::once(index))
+                        .collect::<Vec<_>>();
+                    let items = parent_path.iter().fold(&self.items[..], |haystack, &x| {
+                        match haystack[x] {
+                            MenuItem::SubMenu { ref items, .. } => items,
+                            _ => unreachable!("invalid nesting"),
+                        }
+                    });
+
+                    #[cfg(windows)]
+                    let surface = platform::windows::context_menu::pop(
+                        &system_link,
+                        view_init_context,
+                        depth + 1,
+                        display_pos,
+                        |render_scale| {
+                            crate::uikit::MenuItemLayout::build(
+                                items.into_iter().cloned(),
+                                &PerWindowFontSet::new(system_link.root_font_set(), typing_context),
+                                render_scale,
+                            )
+                        },
+                        |layout, h, view_init_ctx| {
+                            view_init_ctx.ui_scale_factor = h.render_scale();
+                            let views = crate::uikit::MenuItemLayout::instantiate(
+                                layout.into_iter(),
+                                depth + 1,
+                                view_init_ctx,
+                                common_res,
+                            );
+                            for x in views.iter() {
+                                x.mount(view_init_ctx, &h);
+                            }
+
+                            views
+                        },
+                    );
+
+                    self.opening_surfaces.push(ContextMenuSurface {
+                        handle: surface,
+                        parent_path,
+                        current_selecting: None,
+                    });
+                }
+            }
+            None => {
+                while self.opening_surfaces.len() > 1 {
+                    crate::platform::windows::context_menu::close(
+                        self.opening_surfaces.pop().expect("empty?").handle,
+                        view_init_context.mount_context.composite_tree,
+                        view_init_context.mount_context.ht_manager,
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn open_submenu(
+        &mut self,
+        depth: usize,
+        index: usize,
+        system_link: &SystemLink,
+        view_init_context: &mut ViewInitContext,
+        common_res: &MenuItemCommonResources,
+        typing_context: &ThreadLocalTypingContext,
+    ) {
+        while self.opening_surfaces.len() > depth + 1 {
+            crate::platform::windows::context_menu::close(
+                self.opening_surfaces.pop().expect("empty?").handle,
+                view_init_context.mount_context.composite_tree,
+                view_init_context.mount_context.ht_manager,
+            );
+        }
+
+        let display_pos = self
+            .opening_surfaces
+            .last()
+            .expect("root?")
+            .handle
+            .submenu_pop_position(index)
+            .expect("not a submenu or out of range");
+        let parent_path = self
+            .opening_surfaces
+            .last()
+            .expect("root?")
+            .parent_path
+            .iter()
+            .copied()
+            .chain(core::iter::once(index))
+            .collect();
+
+        #[cfg(windows)]
+        let surface = platform::windows::context_menu::pop(
+            &system_link,
+            view_init_context,
+            depth + 1,
+            display_pos,
+            |render_scale| {
+                crate::uikit::MenuItemLayout::build(
+                    self.items.clone().into_iter(),
+                    &PerWindowFontSet::new(system_link.root_font_set(), typing_context),
+                    render_scale,
+                )
+            },
+            |layout, h, view_init_ctx| {
+                view_init_ctx.ui_scale_factor = h.render_scale();
+                let views = crate::uikit::MenuItemLayout::instantiate(
+                    layout.into_iter(),
+                    depth + 1,
+                    view_init_ctx,
+                    common_res,
+                );
+                for x in views.iter() {
+                    x.mount(view_init_ctx, &h);
+                }
+
+                views
+            },
+        );
+
+        self.opening_surfaces.push(ContextMenuSurface {
+            handle: surface,
+            parent_path,
+            current_selecting: None,
+        });
+    }
+
+    pub fn terminate(
+        self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        #[cfg(windows)]
+        platform::windows::context_menu::close_all(composite_tree, ht_manager);
+    }
+
+    pub fn select_item(
+        &mut self,
+        depth: usize,
+        index: usize,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
+        if let Some(surface) = self.opening_surfaces.get_mut(depth) {
+            surface.set_current_selecting(index, composite_tree, current_sec);
+        }
+
+        self.active_selection = Some((depth, index));
+    }
+
+    pub fn deselect_item(
+        &mut self,
+        depth: usize,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
+        if let Some(surface) = self.opening_surfaces.get_mut(depth) {
+            surface.deselect(composite_tree, current_sec);
+        }
+
+        self.active_selection = None;
     }
 }
 

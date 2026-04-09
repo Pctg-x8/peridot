@@ -107,7 +107,8 @@ pub use self::button::SimpleButtonView;
 
 mod menu;
 pub use self::menu::{
-    CommandView as MenuItemCommandView, CommonResources as MenuItemCommonResources,
-    HeadingView as MenuItemHeadingView, MenuItem, MenuItemLayout, MenuItemView,
-    SeparatorView as MenuItemSeparatorView, SubMenuView as MenuItemSubMenuView,
+    BaseSurfaceEventHandler as MenuBaseSurfaceEventHandler, CommandView as MenuItemCommandView,
+    CommonResources as MenuItemCommonResources, HeadingView as MenuItemHeadingView, MenuItem,
+    MenuItemLayout, MenuItemView, SeparatorView as MenuItemSeparatorView,
+    SubMenuView as MenuItemSubMenuView,
 };

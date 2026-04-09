@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use windows::{
     UI::Composition::{
         CompositionEffectSourceParameter, Compositor, Desktop::DesktopWindowTarget, SpriteVisual,
@@ -31,15 +33,15 @@ use windows::{
             Input::KeyboardAndMouse::{TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetCursorPos, GetWindowLongPtrW, HHOOK, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
-                HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT,
-                HTTOP, HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, SW_SHOWNOACTIVATE, SetWindowLongPtrW,
-                SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx, WH_MOUSE,
-                WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK,
-                WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
-                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW,
-                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
-                WindowFromPoint,
+                GetCursorPos, GetWindowLongPtrW, GetWindowRect, HHOOK, HTBOTTOM, HTBOTTOMLEFT,
+                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
+                HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, KillTimer, MSG,
+                SW_SHOWNOACTIVATE, SetTimer, SetWindowLongPtrW, SetWindowsHookExW, ShowWindow,
+                UnhookWindowsHookEx, WH_MOUSE, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
+                WS_POPUP, WindowFromPoint,
             },
         },
     },
@@ -63,7 +65,9 @@ use crate::{
             Gradient, GradientRef,
         },
     },
-    uikit::{MenuItemLayout, MenuItemView, MountTarget},
+    uikit::{
+        MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView, MountTarget, ViewInitContext,
+    },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
         platform::windows::{WindowByClassIter, current_instance_handle},
@@ -136,6 +140,30 @@ impl Handle {
     pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
         &mut state_mut(self.0).keyboard_focus_state
     }
+
+    #[inline(always)]
+    pub fn view(&self, index: usize) -> Option<&MenuItemView> {
+        state(self.0).views.get(index)
+    }
+
+    #[inline(always)]
+    pub fn submenu_pop_position(&self, index: usize) -> Option<Point<PixelsUnit>> {
+        match state(self.0).views.get(index)? {
+            MenuItemView::SubMenu(x) => {
+                let mut window_rect = core::mem::MaybeUninit::uninit();
+                unsafe {
+                    GetWindowRect(self.0, window_rect.as_mut_ptr());
+                }
+                let window_rect = unsafe { window_rect.assume_init() };
+
+                Some(Point::new_pixels(
+                    window_rect.right,
+                    window_rect.top + (x.placement_y * self.render_scale()).round() as i32,
+                ))
+            }
+            _ => None,
+        }
+    }
 }
 
 pub struct InstanceState {
@@ -144,7 +172,10 @@ pub struct InstanceState {
     cv_root: SpriteVisual,
     c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
+    depth: usize,
+    pointer_focus: bool,
     views: Vec<MenuItemView>,
+    base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
 }
 impl InstanceState {
     fn done(
@@ -460,6 +491,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             .expect("TrackMouseEvent");
         }
 
+        if !state(hwnd).pointer_focus {
+            state_mut(hwnd).pointer_focus = true;
+            tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus");
+        }
+
         SharedState::get()
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerMove {
@@ -484,6 +520,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 dwHoverTime: 0,
             })
             .expect("TrackMouseEvent");
+        }
+
+        if !state(hwnd).pointer_focus {
+            state_mut(hwnd).pointer_focus = true;
+            tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus");
         }
 
         // NonClientイベントはスクリーン座標で来る
@@ -514,6 +555,17 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         //     return LRESULT(0);
         // }
 
+        if state(hwnd).pointer_focus {
+            state_mut(hwnd).pointer_focus = false;
+            tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus lost");
+            // leaveしたのでdeselectも発行
+            SharedState::get()
+                .event_dispatcher
+                .dispatch(Event::ContextMenuDeselectItem {
+                    depth: state(hwnd).depth,
+                });
+        }
+
         SharedState::get()
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerLeave {
@@ -541,6 +593,7 @@ pub struct SharedState {
     compositor_desktop_interop: ICompositorDesktopInterop,
     compositor_interop: ICompositorInterop,
     entry_light_grad: GradientRef,
+    pub delayed_action_timer_id: usize,
 }
 impl Drop for SharedState {
     fn drop(&mut self) {
@@ -674,6 +727,7 @@ pub fn initialize(
             event_dispatcher: core::mem::MaybeUninit::uninit().assume_init(),
             #[allow(invalid_value)]
             entry_light_grad: core::mem::MaybeUninit::uninit().assume_init(),
+            delayed_action_timer_id: 0,
         }));
     }
 }
@@ -696,20 +750,43 @@ pub fn post_initialize(event_dispatcher: LogicFiberEventDispatcher) {
     }
 }
 
+pub fn reserve_delayed_action() {
+    unsafe {
+        (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id = SetTimer(
+            None,
+            (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id,
+            400,
+            None,
+        );
+    }
+}
+
+pub fn unreserve_delayed_action() {
+    let active_timer_id =
+        unsafe { core::mem::replace(&mut (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id, 0) };
+    if active_timer_id != 0 {
+        unsafe { KillTimer(None, active_timer_id) };
+    }
+}
+
+pub fn is_delayed_action_timer_event(msg: &MSG) -> bool {
+    msg.message == WM_TIMER
+        && msg.hwnd.0.is_null()
+        && unsafe { (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id == msg.wParam.0 }
+}
+
 pub fn pop(
     syslink: &SystemLink,
-    composite_tree: &mut CompositeTree<SyncEvent>,
-    ht_manager: &mut HitTestTreeManager,
-    current_sec: f32,
+    view_init_context: &mut ViewInitContext,
+    depth: usize,
     screen_pos: Point<PixelsUnit>,
     layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
     setup_contents: impl FnOnce(
         Vec<MenuItemLayout>,
         ContextMenuHandle,
-        &mut CompositeTree<SyncEvent>,
-        &mut HitTestTreeManager,
+        &mut ViewInitContext,
     ) -> Vec<MenuItemView>,
-) {
+) -> ContextMenuHandle {
     let shared_state = SharedState::get();
     let mut dest_dpi_x = core::mem::MaybeUninit::uninit();
     let mut dest_dpi_y = core::mem::MaybeUninit::uninit();
@@ -747,13 +824,13 @@ pub fn pop(
         )
         .expect("context_menu.create_window")
     };
-    let composite_root = composite_tree.create(CompositeRect {
+    let composite_root = view_init_context.composite_tree.create(CompositeRect {
         relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.375])),
         ..Default::default()
     });
-    let ht_root = ht_manager.create(HitTestTreeData {
+    let ht_root = view_init_context.ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
         height_adjustment_factor: 1.0,
         // shadowの分を開ける
@@ -763,6 +840,10 @@ pub fn pop(
         // width, heightはいじらなくていい（渡される基本サイズがすでに影を抜いた分になっている）
         ..Default::default()
     });
+    let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
+    view_init_context
+        .ht_manager
+        .set_action_handler(ht_root, &base_surface_event_handler);
     let c_target = unsafe {
         shared_state
             .compositor_desktop_interop
@@ -891,7 +972,10 @@ pub fn pop(
             cv_root,
             c_target,
             keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+            depth,
+            pointer_focus: false,
             views: Vec::new(),
+            base_surface_event_handler,
         }),
     );
     syslink
@@ -904,121 +988,30 @@ pub fn pop(
         }))
         .expect("rt_sender.send");
 
-    let views = setup_contents(layouted_items, Handle(h), composite_tree, ht_manager);
+    let views = setup_contents(layouted_items, Handle(h), view_init_context);
     state_mut(h).views = views;
 
     let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
+    Handle(h)
+}
 
-    /*
-    pub struct MenuItemEventHandler {
-        ct_entry_light: CompositeTreeRef,
+pub fn close(
+    handle: Handle,
+    composite_tree: &mut CompositeTree<SyncEvent>,
+    ht_manager: &mut HitTestTreeManager,
+) {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    SharedState::get()
+        .rt_sender
+        .send(RenderMessage::DestroyContextMenu(handle, tx))
+        .expect("rt_sender.send");
+    rx.recv().expect("rx.recv");
+
+    take_state(handle.0).done(composite_tree, ht_manager);
+
+    if let Err(e) = unsafe { DestroyWindow(handle.0) } {
+        tracing::error!(reason = %e, "DestroyWindow");
     }
-    impl HitTestTreeActionHandler for MenuItemEventHandler {
-        fn on_pointer_enter(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut crate::input::InputEventContext,
-            args: &crate::input::hittest::PointerActionArgs,
-        ) -> crate::input::EventContinueControl {
-            context.composite_tree.get_mut(self.ct_entry_light).opacity =
-                AnimatableFloat::Animated {
-                    from_value: 0.0,
-                    to_value: 1.0,
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                };
-            context.composite_tree.mark_dirty(self.ct_entry_light);
-
-            crate::input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_pointer_leave(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut crate::input::InputEventContext,
-            args: &crate::input::hittest::PointerActionArgs,
-        ) -> crate::input::EventContinueControl {
-            context.composite_tree.get_mut(self.ct_entry_light).opacity =
-                AnimatableFloat::Animated {
-                    from_value: 1.0,
-                    to_value: 0.0,
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                };
-            context.composite_tree.mark_dirty(self.ct_entry_light);
-
-            crate::input::EventContinueControl::STOP_PROPAGATION
-        }
-    }
-
-    let ht_entry = ht_manager.create(HitTestTreeData {
-        width_adjustment_factor: 1.0,
-        height: 20.0,
-        cursor_shape: CursorShape::Pointer,
-        ..Default::default()
-    });
-    let ct_entry = composite_tree.create(CompositeRect {
-        base_scale_factor: Handle(h).render_scale(),
-        relative_size_adjustment: [1.0, 0.0],
-        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
-        offset: [
-            AnimatableFloat::Animated {
-                from_value: 4.0,
-                to_value: 0.0,
-                start_sec: current_sec,
-                end_sec: current_sec + 0.25,
-                curve: AnimationCurve::EASE_OUT,
-                event_on_complete: None,
-            },
-            AnimatableFloat::Value(0.0),
-        ],
-        opacity: AnimatableFloat::Animated {
-            from_value: 0.0,
-            to_value: 1.0,
-            start_sec: current_sec,
-            end_sec: current_sec + 0.25,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        },
-        ..Default::default()
-    });
-    let ct_entry_label = composite_tree.create(CompositeRect {
-        base_scale_factor: Handle(h).render_scale(),
-        relative_size_adjustment: [1.0, 1.0],
-        text: Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                font_id: FontID::UIDefault,
-                content: "Entry1".into(),
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-    let ct_entry_light = composite_tree.create(CompositeRect {
-        base_scale_factor: Handle(h).render_scale(),
-        relative_size_adjustment: [1.0, 1.0],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillRadialGradient(shared_state.entry_light_grad),
-        opacity: AnimatableFloat::Value(0.0),
-        ..Default::default()
-    });
-    composite_tree.add_child(ct_entry, ct_entry_light);
-    composite_tree.add_child(ct_entry, ct_entry_label);
-    composite_tree.add_child(composite_root, ct_entry);
-    ht_manager.add_child(ht_root, ht_entry);
-    let eh = std::rc::Rc::new(MenuItemEventHandler { ct_entry_light });
-    ht_manager.set_action_handler(ht_entry, &eh);
-    #[allow(unused_must_use)]
-    std::rc::Rc::into_raw(eh); // leak TODO: 保持方法は後で考える
-    */
 }
 
 pub fn close_all(

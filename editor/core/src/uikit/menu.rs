@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
+    Event, SyncEvent,
     input::hittest::{
         CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData, HitTestTreeRef,
     },
@@ -18,6 +19,7 @@ use crate::{
     utils::{LogicalUnit, SafeF32, Size},
 };
 
+#[derive(Clone)]
 pub enum MenuItem {
     Heading { label: String },
     Command { label: String, command_id: u64 },
@@ -38,6 +40,22 @@ impl MenuItemView {
             MenuItemView::Command(command) => command.mount(ctx, target),
             MenuItemView::SubMenu(submenu) => submenu.mount(ctx, target),
             MenuItemView::Separator(separator) => separator.mount(ctx, target),
+        }
+    }
+
+    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        match self {
+            MenuItemView::Command(x) => x.event_handler.lit(composite_tree, current_sec),
+            MenuItemView::SubMenu(x) => x.event_handler.lit(composite_tree, current_sec),
+            _ => (),
+        }
+    }
+
+    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        match self {
+            MenuItemView::Command(x) => x.event_handler.unlit(composite_tree, current_sec),
+            MenuItemView::SubMenu(x) => x.event_handler.unlit(composite_tree, current_sec),
+            _ => (),
         }
     }
 }
@@ -143,11 +161,13 @@ impl MenuItemLayout {
 
     pub fn instantiate(
         layout: impl Iterator<Item = Self>,
+        depth: usize,
         ctx: &mut ViewInitContext,
         common_res: &CommonResources,
     ) -> Vec<MenuItemView> {
         layout
-            .scan(0.0, |ad_accum, x| match x.item {
+            .enumerate()
+            .scan(0.0, |ad_accum, (index, x)| match x.item {
                 MenuItem::Heading { label } => Some(MenuItemView::Heading(HeadingView::new(
                     ctx,
                     common_res,
@@ -163,6 +183,8 @@ impl MenuItemLayout {
                         common_res,
                         label,
                         command_id,
+                        depth,
+                        index,
                         ad,
                         x.placement_y,
                     )))
@@ -176,6 +198,8 @@ impl MenuItemLayout {
                         common_res,
                         label,
                         items,
+                        depth,
+                        index,
                         ad,
                         x.placement_y,
                     )))
@@ -283,7 +307,7 @@ impl HeadingView {
 }
 
 pub struct CommandView {
-    _event_handler: Rc<CommandViewEventHandler>,
+    event_handler: Rc<CommandViewEventHandler>,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
 }
@@ -293,6 +317,8 @@ impl CommandView {
         common_res: &CommonResources,
         label: String,
         command_id: u64,
+        depth: usize,
+        index: usize,
         animation_delay: f32,
         placement_y: f32,
     ) -> Self {
@@ -370,11 +396,13 @@ impl CommandView {
         let eh = std::rc::Rc::new(CommandViewEventHandler {
             ct_light,
             command_id,
+            depth,
+            index,
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
         Self {
-            _event_handler: eh,
+            event_handler: eh,
             ht_root,
             ct_root,
         }
@@ -387,9 +415,10 @@ impl CommandView {
 }
 
 pub struct SubMenuView {
-    _event_handler: Rc<SubMenuViewEventHandler>,
+    event_handler: Rc<SubMenuViewEventHandler>,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
+    pub placement_y: f32,
 }
 impl SubMenuView {
     const ICON_SIZE: Size<LogicalUnit> = Size::new_logical(6.0, 8.0);
@@ -408,6 +437,8 @@ impl SubMenuView {
         common_res: &CommonResources,
         label: String,
         items: Vec<MenuItem>,
+        depth: usize,
+        index: usize,
         animation_delay: f32,
         placement_y: f32,
     ) -> Self {
@@ -499,13 +530,18 @@ impl SubMenuView {
         ctx.composite_tree.add_child(ct_root, ct_light);
         ctx.composite_tree.add_child(ct_root, ct_label);
         ctx.composite_tree.add_child(ct_root, ct_arrow);
-        let eh = std::rc::Rc::new(SubMenuViewEventHandler { ct_light });
+        let eh = std::rc::Rc::new(SubMenuViewEventHandler {
+            ct_light,
+            depth,
+            index,
+        });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
         Self {
-            _event_handler: eh,
+            event_handler: eh,
             ht_root,
             ct_root,
+            placement_y,
         }
     }
 
@@ -542,8 +578,33 @@ impl SeparatorView {
     }
 }
 
+pub struct BaseSurfaceEventHandler {
+    depth: usize,
+}
+impl BaseSurfaceEventHandler {
+    pub fn new(depth: usize) -> Self {
+        Self { depth }
+    }
+}
+impl HitTestTreeActionHandler for BaseSurfaceEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        args: &crate::input::hittest::PointerActionArgs,
+    ) -> crate::input::EventContinueControl {
+        context
+            .system_link
+            .dispatch_event(Event::ContextMenuDeselectItem { depth: self.depth });
+
+        crate::input::EventContinueControl::STOP_PROPAGATION
+    }
+}
+
 struct CommandViewEventHandler {
     ct_light: CompositeTreeRef,
+    depth: usize,
+    index: usize,
     command_id: u64,
 }
 impl HitTestTreeActionHandler for CommandViewEventHandler {
@@ -553,41 +614,46 @@ impl HitTestTreeActionHandler for CommandViewEventHandler {
         context: &mut crate::input::InputEventContext,
         args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
-        context.composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 0.0,
-            to_value: 1.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_light);
+        context
+            .system_link
+            .dispatch_event(Event::ContextMenuSelectItem {
+                depth: self.depth,
+                index: self.index,
+            });
 
         crate::input::EventContinueControl::STOP_PROPAGATION
     }
-
-    fn on_pointer_leave(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
-    ) -> crate::input::EventContinueControl {
-        context.composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 1.0,
-            to_value: 0.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
+}
+impl CommandViewEventHandler {
+    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
+            from_value: 0.0,
+            to_value: 1.0,
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
             curve: AnimationCurve::Linear,
             event_on_complete: None,
         };
-        context.composite_tree.mark_dirty(self.ct_light);
+        composite_tree.mark_dirty(self.ct_light);
+    }
 
-        crate::input::EventContinueControl::STOP_PROPAGATION
+    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
+            from_value: 1.0,
+            to_value: 0.0,
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.mark_dirty(self.ct_light);
     }
 }
 
 struct SubMenuViewEventHandler {
     ct_light: CompositeTreeRef,
+    depth: usize,
+    index: usize,
 }
 impl HitTestTreeActionHandler for SubMenuViewEventHandler {
     fn on_pointer_enter(
@@ -596,34 +662,12 @@ impl HitTestTreeActionHandler for SubMenuViewEventHandler {
         context: &mut crate::input::InputEventContext,
         args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
-        context.composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 0.0,
-            to_value: 1.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_light);
-
-        crate::input::EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_leave(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
-    ) -> crate::input::EventContinueControl {
-        context.composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 1.0,
-            to_value: 0.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_light);
+        context
+            .system_link
+            .dispatch_event(Event::ContextMenuSelectItem {
+                depth: self.depth,
+                index: self.index,
+            });
 
         crate::input::EventContinueControl::STOP_PROPAGATION
     }
@@ -634,8 +678,38 @@ impl HitTestTreeActionHandler for SubMenuViewEventHandler {
         context: &mut crate::input::InputEventContext,
         args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
-        tracing::debug!("submenu item hovering");
+        context
+            .system_link
+            .dispatch_event(Event::ContextMenuOpenSubmenu {
+                depth: self.depth,
+                index: self.index,
+            });
 
         crate::input::EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl SubMenuViewEventHandler {
+    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
+            from_value: 0.0,
+            to_value: 1.0,
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.mark_dirty(self.ct_light);
+    }
+
+    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
+            from_value: 1.0,
+            to_value: 0.0,
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.mark_dirty(self.ct_light);
     }
 }
