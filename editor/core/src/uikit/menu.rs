@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Event, SyncEvent,
+    Event,
     input::hittest::{
         CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData, HitTestTreeRef,
     },
@@ -665,22 +665,6 @@ impl HitTestTreeActionHandler for SubMenuViewEventHandler {
         context
             .system_link
             .dispatch_event(Event::ContextMenuSelectItem {
-                depth: self.depth,
-                index: self.index,
-            });
-
-        crate::input::EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_hover(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
-    ) -> crate::input::EventContinueControl {
-        context
-            .system_link
-            .dispatch_event(Event::ContextMenuOpenSubmenu {
                 depth: self.depth,
                 index: self.index,
             });

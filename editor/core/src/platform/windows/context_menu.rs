@@ -1,9 +1,7 @@
 use std::rc::Rc;
 
 use windows::{
-    UI::Composition::{
-        CompositionEffectSourceParameter, Compositor, Desktop::DesktopWindowTarget, SpriteVisual,
-    },
+    UI::Composition::{CompositionEffectSourceParameter, Compositor, Desktop::DesktopWindowTarget},
     Win32::{
         Foundation::{CloseHandle, FALSE, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
@@ -171,13 +169,12 @@ impl Handle {
 pub struct InstanceState {
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    cv_root: SpriteVisual,
-    c_target: DesktopWindowTarget,
+    _c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
     depth: usize,
     pointer_focus: bool,
     views: Vec<MenuItemView>,
-    base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
+    _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
 }
 impl InstanceState {
     fn done(
@@ -237,16 +234,6 @@ fn take_state(hwnd: HWND) -> Box<InstanceState> {
 }
 
 #[inline(always)]
-fn state_maybe<'a>(hwnd: HWND) -> Option<&'a InstanceState> {
-    unsafe {
-        core::ptr::with_exposed_provenance::<InstanceState>(
-            GetWindowLongPtrW(hwnd, WINDOW_PTR_STATE).cast_unsigned(),
-        )
-        .as_ref()
-    }
-}
-
-#[inline(always)]
 fn state<'a>(hwnd: HWND) -> &'a InstanceState {
     unsafe {
         &*core::ptr::with_exposed_provenance(
@@ -271,10 +258,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     if msg == WM_NCHITTEST {
-        let Some(state) = state_maybe(hwnd) else {
+        /*let Some(state) = state_maybe(hwnd) else {
             // 初期化完了前にきた
             return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-        };
+        };*/
 
         let mut p = [Point::new_pixels(
             (lparam.0 & 0xffff) as i16 as _,
@@ -764,10 +751,14 @@ pub fn reserve_delayed_action() {
 }
 
 pub fn unreserve_delayed_action() {
-    let active_timer_id =
-        unsafe { core::mem::replace(&mut (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id, 0) };
+    let active_timer_id = unsafe {
+        core::ptr::replace(
+            core::ptr::addr_of_mut!((*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id),
+            0,
+        )
+    };
     if active_timer_id != 0 {
-        unsafe { KillTimer(None, active_timer_id) };
+        unsafe { KillTimer(None, active_timer_id).expect("KillTimer") };
     }
 }
 
@@ -971,13 +962,12 @@ pub fn pop(
         Box::new(InstanceState {
             composite_root,
             ht_root,
-            cv_root,
-            c_target,
+            _c_target: c_target,
             keyboard_focus_state: PerWindowKeyboardFocusState::new(),
             depth,
             pointer_focus: false,
             views: Vec::new(),
-            base_surface_event_handler,
+            _base_surface_event_handler: base_surface_event_handler,
         }),
     );
     syslink

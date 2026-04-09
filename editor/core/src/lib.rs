@@ -3427,7 +3427,6 @@ impl ContextMenuSurface {
 
 pub struct ContextMenuSession {
     items: Vec<MenuItem>,
-    base_pos: Point<PixelsUnit>,
     opening_surfaces: Vec<ContextMenuSurface>,
     active_selection: Option<(usize, usize)>,
 }
@@ -3471,7 +3470,6 @@ impl ContextMenuSession {
 
         Self {
             items,
-            base_pos: screen_pos,
             opening_surfaces: vec![ContextMenuSurface {
                 handle: root_surface,
                 parent_path: Vec::new(),
@@ -3558,6 +3556,7 @@ impl ContextMenuSession {
                 }
             }
             None => {
+                // 最初のやつだけ表示する
                 while self.opening_surfaces.len() > 1 {
                     crate::platform::windows::context_menu::close(
                         self.opening_surfaces.pop().expect("empty?").handle,
@@ -3601,7 +3600,13 @@ impl ContextMenuSession {
             .iter()
             .copied()
             .chain(core::iter::once(index))
-            .collect();
+            .collect::<Vec<_>>();
+        let items = parent_path
+            .iter()
+            .fold(&self.items[..], |haystack, &x| match haystack[x] {
+                MenuItem::SubMenu { ref items, .. } => items,
+                _ => unreachable!("invalid nesting"),
+            });
 
         #[cfg(windows)]
         let surface = platform::windows::context_menu::pop(
@@ -3611,7 +3616,7 @@ impl ContextMenuSession {
             display_pos,
             |render_scale| {
                 crate::uikit::MenuItemLayout::build(
-                    self.items.clone().into_iter(),
+                    items.into_iter().cloned(),
                     &PerWindowFontSet::new(system_link.root_font_set(), typing_context),
                     render_scale,
                 )
@@ -3655,8 +3660,16 @@ impl ContextMenuSession {
         composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
-        if let Some(surface) = self.opening_surfaces.get_mut(depth) {
+        let parent_path = if let Some(surface) = self.opening_surfaces.get_mut(depth) {
             surface.set_current_selecting(index, composite_tree, current_sec);
+            surface.parent_path.clone()
+        } else {
+            vec![]
+        };
+
+        // 親（発生元）も選択表示にする
+        for (depth, &index) in parent_path.iter().enumerate() {
+            self.opening_surfaces[depth].set_current_selecting(index, composite_tree, current_sec);
         }
 
         self.active_selection = Some((depth, index));
