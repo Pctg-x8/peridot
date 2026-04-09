@@ -152,13 +152,15 @@ impl Handle {
             MenuItemView::SubMenu(x) => {
                 let mut window_rect = core::mem::MaybeUninit::uninit();
                 unsafe {
-                    GetWindowRect(self.0, window_rect.as_mut_ptr());
+                    GetWindowRect(self.0, window_rect.as_mut_ptr()).expect("GetWindowRect");
                 }
                 let window_rect = unsafe { window_rect.assume_init() };
 
                 Some(Point::new_pixels(
-                    window_rect.right,
-                    window_rect.top + (x.placement_y * self.render_scale()).round() as i32,
+                    window_rect.right - SHADOW_SIZE.ceil() as i32,
+                    window_rect.top
+                        + (x.placement_y * self.render_scale()).round() as i32
+                        + SHADOW_SIZE.ceil() as i32,
                 ))
             }
             _ => None,
