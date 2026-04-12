@@ -42,6 +42,7 @@ impl Drop for EventDevice {
     }
 }
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct InputEvent {
     pub time: libc::timeval,
@@ -138,4 +139,5 @@ pub enum Key {
     MouseForward = 0x115,
     MouseBack = 0x116,
     MouseTask = 0x117,
+    Joystick = 0x120,
 }

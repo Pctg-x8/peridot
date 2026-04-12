@@ -43,6 +43,15 @@ impl MenuItemView {
         }
     }
 
+    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        match self {
+            MenuItemView::Heading(heading) => heading.rescale(scale, composite_tree),
+            MenuItemView::Command(command) => command.rescale(scale, composite_tree),
+            MenuItemView::SubMenu(submenu) => submenu.rescale(scale, composite_tree),
+            MenuItemView::Separator(separator) => separator.rescale(scale, composite_tree),
+        }
+    }
+
     pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
         match self {
             MenuItemView::Command(x) => x.event_handler.lit(composite_tree, current_sec),
@@ -304,12 +313,18 @@ impl HeadingView {
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
     }
+
+    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
+        composite_tree.mark_dirty(self.ct_root);
+    }
 }
 
 pub struct CommandView {
     event_handler: Rc<CommandViewEventHandler>,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
+    ct_label: CompositeTreeRef,
 }
 impl CommandView {
     pub fn new(
@@ -405,6 +420,7 @@ impl CommandView {
             event_handler: eh,
             ht_root,
             ct_root,
+            ct_label,
         }
     }
 
@@ -412,12 +428,25 @@ impl CommandView {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
+
+    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
+        composite_tree.mark_dirty(self.ct_root);
+        composite_tree.get_mut(self.ct_label).base_scale_factor = scale;
+        composite_tree.mark_dirty(self.ct_label);
+        composite_tree
+            .get_mut(self.event_handler.ct_light)
+            .base_scale_factor = scale;
+        composite_tree.mark_dirty(self.event_handler.ct_light);
+    }
 }
 
 pub struct SubMenuView {
     event_handler: Rc<SubMenuViewEventHandler>,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
+    ct_label: CompositeTreeRef,
+    ct_arrow: CompositeTreeRef,
     pub placement_y: f32,
 }
 impl SubMenuView {
@@ -541,6 +570,8 @@ impl SubMenuView {
             event_handler: eh,
             ht_root,
             ct_root,
+            ct_label,
+            ct_arrow,
             placement_y,
         }
     }
@@ -548,6 +579,19 @@ impl SubMenuView {
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
+    }
+
+    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
+        composite_tree.mark_dirty(self.ct_root);
+        composite_tree.get_mut(self.ct_label).base_scale_factor = scale;
+        composite_tree.mark_dirty(self.ct_label);
+        composite_tree.get_mut(self.ct_arrow).base_scale_factor = scale;
+        composite_tree.mark_dirty(self.ct_arrow);
+        composite_tree
+            .get_mut(self.event_handler.ct_light)
+            .base_scale_factor = scale;
+        composite_tree.mark_dirty(self.event_handler.ct_light);
     }
 }
 
@@ -575,6 +619,11 @@ impl SeparatorView {
 
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
+    }
+
+    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
+        composite_tree.mark_dirty(self.ct_root);
     }
 }
 

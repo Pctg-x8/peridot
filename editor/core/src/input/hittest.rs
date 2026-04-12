@@ -393,6 +393,7 @@ impl<'h> HitTestTreeManager<'h> {
         }
     }
 
+    #[cfg(windows)]
     pub fn compute_screen_rect_pixels_with_insets(
         &self,
         r: HitTestTreeRef,

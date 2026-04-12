@@ -10,6 +10,9 @@ use peridot_tp_wayland as wl;
 use peridot_tp_xkbcommon as xkbcommon;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
+#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+use std::sync::Arc;
 use std::{
     collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
@@ -113,6 +116,23 @@ pub fn launch() {
     #[cfg(windows)]
     platform::windows::context_menu::initialize(&app_context, rt_sender.clone());
 
+    #[cfg(feature = "wayland")]
+    let mut wl_display = core::pin::pin!(wl::Display::connect().expect("wl_display connect"));
+    #[cfg(feature = "wayland")]
+    assert!(
+        vk_device.presentation_support(&wl_display),
+        "wayland presentation not supported on graphics queue"
+    );
+    #[cfg(feature = "wayland")]
+    let mut wl_interfaces = core::pin::pin!(
+        platform::unix::wayland::GlobalInterfaces::collect_sync(&wl_display)
+            .expect("wl_interfaces.collect_sync")
+    );
+    #[cfg(feature = "wayland")]
+    let window_registry = platform::unix::wayland::WindowRegistry::new();
+    #[cfg(feature = "wayland")]
+    platform::unix::wayland::context_menu::initialize();
+
     let global_time_base = std::time::Instant::now();
     main_wrapper(
         move |args, system_link| run(args, system_link),
@@ -128,6 +148,12 @@ pub fn launch() {
         rt_receiver,
         #[cfg(windows)]
         &app_context,
+        #[cfg(feature = "wayland")]
+        wl_display.as_mut(),
+        #[cfg(feature = "wayland")]
+        wl_interfaces.as_mut(),
+        #[cfg(feature = "wayland")]
+        window_registry,
     );
 
     #[cfg(windows)]
@@ -145,6 +171,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
+    #[cfg(feature = "wayland")] mut wl_display: core::pin::Pin<&mut wl::Display>,
+    #[cfg(feature = "wayland")] mut wl_interfaces: core::pin::Pin<
+        &mut platform::unix::wayland::GlobalInterfaces,
+    >,
+    #[cfg(feature = "wayland")] mut window_registry: platform::unix::wayland::WindowRegistry,
 ) {
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
@@ -153,19 +184,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let terminate_event = std::sync::Arc::new(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
     );
-
-    #[cfg(feature = "wayland")]
-    let mut wl_display = wl::Display::connect().expect("wl_display connect");
-    #[cfg(feature = "wayland")]
-    assert!(
-        vk_device.presentation_support(&wl_display),
-        "wayland presentation not supported on graphics queue"
-    );
-    #[cfg(feature = "wayland")]
-    let mut wl_interfaces = platform::unix::wayland::GlobalInterfaces::collect_sync(&wl_display)
-        .expect("wl_interfaces.collect_sync");
-    #[cfg(feature = "wayland")]
-    let mut window_registry = platform::unix::wayland::WindowRegistry::new();
 
     #[cfg(windows)]
     let drag_preview_popover = DragPreviewPopoverHandle::new(app_context);
@@ -266,8 +284,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(feature = "wayland")]
     let drag_preview_popover = DragPreviewPopoverHandle {
-        display: &mut wl_display,
-        wl_interfaces: &wl_interfaces as *const _ as _,
+        display: wl_display.as_mut().get_mut(),
+        wl_interfaces: wl_interfaces.as_ref().get_ref(),
         root_window: core::cell::Cell::new(core::ptr::null_mut()),
         buf: popover_buf,
         popup: core::cell::UnsafeCell::new(None),
@@ -277,21 +295,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let drag_preview_popover = DragPreviewPopoverHandle {
         position_base_window_link: core::cell::Cell::new(core::ptr::null_mut()),
     };
-
-    #[cfg(feature = "wayland")]
-    let main_window_handle = SystemLink::init_main_window(
-        &wl_display,
-        &wl_interfaces,
-        &mut window_registry,
-        window_decoration_pixbuf.as_ref().get_ref().as_ref(),
-        &dbus,
-        &mut composite_tree,
-        &mut ht_manager,
-        empty_dispatcher.clone(),
-        &terminate_event,
-        &vk_device,
-        &rt_sender,
-    );
 
     #[cfg(target_os = "macos")]
     let mut w = MacWindow::new(
@@ -346,6 +349,15 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     let root_font_set = RootFontSet::new();
 
+    let mut polling = false;
+    let empty_dispatcher = LogicFiberEventDispatcher {
+        event_store,
+        polling: &mut polling,
+        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
+        future_ptr: core::ptr::null_mut(),
+    };
+    let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
+
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging {
         text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
@@ -365,16 +377,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         _pinned: core::marker::PhantomPinned,
     });
 
-    let mut polling = false;
-    let empty_dispatcher = LogicFiberEventDispatcher {
-        event_store,
-        polling: &mut polling,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
-        future_ptr: core::ptr::null_mut(),
-    };
-    let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
     #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
+    #[cfg(target_os = "linux")]
+    let pointer_hovering_timer = utils::platform::linux::TimerFD::new().expect("timerfd.new");
     let mut app = core::pin::pin!(run_app(
         LaunchArgs {
             event_queue: EventQueue { event_store },
@@ -402,8 +408,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             dbus: &dbus,
             #[cfg(feature = "wayland")]
             display_server: platform::unix::DisplayServerLink {
-                wl_display: &mut wl_display,
-                wl_global_interfaces: &wl_interfaces,
+                wl_display: wl_display.as_mut().get_mut(),
+                wl_global_interfaces: wl_interfaces.as_ref().get_ref(),
                 pointer_state_ref: unsafe {
                     &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
                 },
@@ -414,7 +420,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     .as_ref()
                     .map_or_else(core::ptr::null, |x| x as *const _),
                 global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
-            }
+            },
+            #[cfg(target_os = "linux")]
+            terminate_event: terminate_event.clone(),
+            #[cfg(target_os = "linux")]
+            pointer_hovering_timer: &pointer_hovering_timer,
         },
     ));
 
@@ -427,18 +437,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .event_dispatcher
             .future_ptr = app.as_mut().get_unchecked_mut() as *mut _ as _;
     }
-    #[cfg(feature = "wayland")]
-    window_registry
-        .get_mut(main_window_handle)
-        .expect("no window")
-        .rebind_event_dispatcher(LogicFiberEventDispatcher {
-            event_store,
-            polling: &mut polling,
-            poll_fn_ptr: unsafe {
-                core::mem::transmute(AppFuture::poll as *const core::ffi::c_void)
-            },
-            future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
-        });
     #[cfg(target_os = "macos")]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store,
@@ -473,9 +471,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         core::ptr::write_volatile(&mut polling, false);
     }
 
-    #[cfg(feature = "wayland")]
-    wl_display.roundtrip().expect("roundtrip");
-
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
@@ -498,16 +493,43 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         let epoll = Epoll::new(0).expect("epoll.new");
         #[cfg(feature = "wayland")]
         epoll
-            .add(&wl_display, EpollEventBits::IN, 0)
-            .expect("epoll.add.wl_display");
+            .add(wl_display.as_ref().get_ref(), EpollEventBits::IN, 0)
+            .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
             .add(&terminate_event, EpollEventBits::IN, 1)
-            .expect("epoll.add.terminate_event");
+            .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
-            .add(&events.efd, EpollEventBits::IN, 2)
-            .expect("epoll.add.events_efd");
+            .add(&sync_event_bus.efd, EpollEventBits::IN, 2)
+            .expect("epoll.add");
+        #[cfg(target_os = "linux")]
+        epoll
+            .add(&pointer_hovering_timer, EpollEventBits::IN, 3)
+            .expect("epoll.add");
+        #[cfg(feature = "wayland")]
+        epoll
+            .add(
+                crate::platform::unix::wayland::context_menu::delayed_action_timer(),
+                EpollEventBits::IN,
+                4,
+            )
+            .expect("epoll.add");
+        #[cfg(target_os = "linux")]
+        let evdevs = (0..32)
+            .filter_map(|x| {
+                linux_input::EventDevice::open(
+                    &std::ffi::CString::new(format!("/dev/input/event{}", x)).expect("invalid str"),
+                )
+                .ok()
+            })
+            .collect::<Vec<_>>();
+        #[cfg(target_os = "linux")]
+        for (n, e) in evdevs.iter().enumerate() {
+            epoll
+                .add(e, EpollEventBits::IN, (10 + n) as _)
+                .expect("epoll.add");
+        }
         #[cfg(target_os = "linux")]
         let poll_id_to_watch_ref = core::cell::UnsafeCell::new(std::collections::HashMap::new());
         #[cfg(target_os = "linux")]
@@ -531,6 +553,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             let mut terminate_signal = false;
             let mut dbus_signal = false;
             let mut events_signal = false;
+            let mut pointer_hovering_timer_signal = false;
+            let mut delayed_action_timer_signal = false;
             for n in 0..active_events {
                 let e = unsafe { eventbuf[n as usize].assume_init_ref() };
                 if e.value() == 0 {
@@ -539,6 +563,23 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     terminate_signal = true;
                 } else if e.value() == 2 {
                     events_signal = true;
+                } else if e.value() == 3 {
+                    pointer_hovering_timer_signal = true;
+                } else if e.value() == 4 {
+                    delayed_action_timer_signal = true;
+                } else if e.value() >= 10 && e.value() < 10 + 32 {
+                    let ed = evdevs[(e.value() - 10) as usize]
+                        .read()
+                        .expect("evdev.read");
+                    if ed.type_ == linux_input::EventType::Key as u16
+                        && ed.value == 1
+                        && ed.code >= linux_input::Key::MouseLeft as u16
+                        && ed.code < linux_input::Key::Joystick as u16
+                    {
+                        // tracing::debug!("mouse button input");
+                        app_event_dispatcher.dispatch(Event::ContextMenuCloseAll);
+                    }
+                    // tracing::debug!(n = e.value() - 10, ?ed, "evdev");
                 } else if let Some(&wr) = unsafe { (*poll_id_to_watch_ref.get()).get(&e.value()) } {
                     let mut flags = dbus::WatchFlags::empty();
                     if e.events().contains(EpollEventBits::IN) {
@@ -575,7 +616,15 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             }
 
             if events_signal {
-                events.redispatch(&app_event_dispatcher);
+                sync_event_bus.redispatch(&app_event_dispatcher);
+            }
+
+            if pointer_hovering_timer_signal {
+                app_event_dispatcher.dispatch(Event::PointerHover);
+            }
+
+            if delayed_action_timer_signal {
+                app_event_dispatcher.dispatch(Event::ContextMenuPerformDelayedAction);
             }
 
             if dbus_signal {
@@ -784,6 +833,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 #[derive(Clone)]
 pub enum SyncEvent {
     WindowPostResizeRenderBuffer { window: WindowHandle },
+    ContextMenuPostResizeRenderBuffer { target: ContextMenuHandle },
     PopupUnmount { id: PopupID },
 }
 
@@ -858,10 +908,17 @@ pub enum Event {
         id: PopupID,
     },
     ContextMenuOpen {
+        parent: WindowHandle,
         items: Vec<MenuItem>,
+        #[cfg(windows)]
         screen_pos: Point<PixelsUnit>,
+        #[cfg(feature = "wayland")]
+        surface_pos: Point<LogicalUnit>,
     },
     ContextMenuCloseAll,
+    ContextMenuRescale {
+        scale: f32,
+    },
     ContextMenuSelectItem {
         depth: usize,
         index: usize,
@@ -1676,6 +1733,11 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
         // TODO: LTR前提 最適化はあとで
         #[cfg(not(windows))]
+        let window = context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
+        #[cfg(not(windows))]
         let (sx, _, _, _) = context.ht_manager.translate_client_to_tree_local(
             sender,
             args.client_pos.x - 2.0 - self.content_h_offset.get(),
@@ -1696,13 +1758,8 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             let tw = TextLayout::measure_total_advances(
                 &content[measure_range.clone()],
                 FontID::UIDefault,
-                unsafe {
-                    &context
-                        .sender_window
-                        .extra_data_ref::<PerWindowData>()
-                        .font_set
-                },
-                context.sender_window.ui_scale_factor(),
+                unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+                window.ui_scale_factor(),
             );
 
             if target_x_pixels <= tw {
@@ -2320,6 +2377,7 @@ impl TextInputView {
             .add_child(parent.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
 
+        #[cfg(windows)]
         unsafe {
             ctx.ht_manager
                 .query_root_window(parent.ht_root())
@@ -2417,6 +2475,7 @@ async fn run<'sys>(
         unsafe { &*system_link.event_dispatcher }.clone(),
     );
 
+    #[cfg(any(windows, feature = "wayland"))]
     let mut main_window = system_link.create_main_window(&mut composite_tree, &mut ht_manager);
 
     composite_tree
@@ -2508,6 +2567,7 @@ async fn run<'sys>(
 
     struct TabHitAction {
         ct: CompositeTreeRef,
+        ht: HitTestTreeRef,
     }
     impl HitTestTreeActionHandler for TabHitAction {
         fn on_pointer_enter(
@@ -2612,6 +2672,10 @@ async fn run<'sys>(
             } else {
                 // tracing::debug!("right click!");
                 context.system_link.dispatch_event(Event::ContextMenuOpen {
+                    parent: context
+                        .ht_manager
+                        .query_root_window(self.ht)
+                        .expect("not mounted"),
                     items: vec![
                         crate::uikit::MenuItem::Command {
                             label: "Entry1".into(),
@@ -2641,14 +2705,20 @@ async fn run<'sys>(
                             command_id: 3,
                         },
                     ],
+                    #[cfg(windows)]
                     screen_pos: platform::windows::pointer_pos(args.pointer_id),
+                    #[cfg(feature = "wayland")]
+                    surface_pos: args.pointer_id.surface_pos(),
                 });
 
                 input::EventContinueControl::STOP_PROPAGATION
             }
         }
     }
-    let ht_action_handler = std::rc::Rc::new(TabHitAction { ct: tab_main });
+    let ht_action_handler = std::rc::Rc::new(TabHitAction {
+        ct: tab_main,
+        ht: ht_tab_main,
+    });
     view_init_ctx
         .ht_manager
         .set_action_handler(ht_tab_main, &ht_action_handler);
@@ -2679,7 +2749,7 @@ async fn run<'sys>(
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
-    SystemLink::prelaunch(main_window);
+    system_link.prelaunch(main_window);
     loop {
         match event_queue.next_event().await {
             Event::Quit => break,
@@ -2741,7 +2811,11 @@ async fn run<'sys>(
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
             }
-            Event::WindowMove { window, pos } => {
+            Event::Sync(SyncEvent::ContextMenuPostResizeRenderBuffer { target }) => {
+                #[cfg(feature = "wayland")]
+                target.update_manual_scaling();
+            }
+            Event::WindowMove { mut window, pos } => {
                 let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 let mut input_context = InputEventContext {
@@ -3046,11 +3120,22 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::ContextMenuOpen { items, screen_pos } => {
+            Event::ContextMenuOpen {
+                parent,
+                items,
+                #[cfg(windows)]
+                screen_pos,
+                #[cfg(feature = "wayland")]
+                surface_pos,
+            } => {
                 current_active_context_menu_session = Some(ContextMenuSession::new(
+                    parent,
                     items,
                     &system_link,
+                    #[cfg(windows)]
                     screen_pos,
+                    #[cfg(feature = "wayland")]
+                    surface_pos,
                     &mut ViewInitContext {
                         mount_context: MountContext {
                             composite_tree: &mut composite_tree,
@@ -3070,8 +3155,15 @@ async fn run<'sys>(
             }
             Event::ContextMenuCloseAll => {
                 if let Some(c) = current_active_context_menu_session.take() {
-                    c.terminate(&mut composite_tree, &mut ht_manager);
+                    c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
 
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
+            }
+            Event::ContextMenuRescale { scale } => {
+                if let Some(ref c) = current_active_context_menu_session {
+                    c.rescale(scale, &mut composite_tree);
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
@@ -3089,6 +3181,8 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     #[cfg(windows)]
                     crate::platform::windows::context_menu::reserve_delayed_action();
+                    #[cfg(feature = "wayland")]
+                    crate::platform::unix::wayland::context_menu::reserve_delayed_action();
                 }
             }
             Event::ContextMenuDeselectItem { depth } => {
@@ -3103,6 +3197,8 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     #[cfg(windows)]
                     crate::platform::windows::context_menu::reserve_delayed_action();
+                    #[cfg(feature = "wayland")]
+                    crate::platform::unix::wayland::context_menu::reserve_delayed_action();
                 }
             }
             Event::ContextMenuOpenSubmenu { depth, index } => {
@@ -3132,6 +3228,8 @@ async fn run<'sys>(
             Event::ContextMenuPerformDelayedAction => {
                 #[cfg(windows)]
                 crate::platform::windows::context_menu::unreserve_delayed_action();
+                #[cfg(feature = "wayland")]
+                crate::platform::unix::wayland::context_menu::unreserve_delayed_action();
 
                 if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.perform_delayed_action(
@@ -3163,12 +3261,13 @@ async fn run<'sys>(
             } => {
                 // waylandの場合はここでTitleBarロールの判定をする
                 // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
-                #[cfg(feature = "wayland")]
+                // TODO: Flyoutの要素としてTitleBarが必要になったときに対応
+                /*#[cfg(feature = "wayland")]
                 if pointer_input_manager.role_focus(&ht_manager)
                     == Some(input::hittest::Role::TitleBar)
                 {
-                    window.begin_drag(event_id);
-                }
+                    target.begin_drag(event_id);
+                }*/
 
                 let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_down(
@@ -3426,15 +3525,18 @@ impl ContextMenuSurface {
 }
 
 pub struct ContextMenuSession {
+    parent: WindowHandle,
     items: Vec<MenuItem>,
     opening_surfaces: Vec<ContextMenuSurface>,
     active_selection: Option<(usize, usize)>,
 }
 impl ContextMenuSession {
     pub fn new(
+        parent: WindowHandle,
         items: Vec<MenuItem>,
         system_link: &SystemLink,
-        screen_pos: Point<PixelsUnit>,
+        #[cfg(windows)] screen_pos: Point<PixelsUnit>,
+        #[cfg(feature = "wayland")] surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
         typing_context: &ThreadLocalTypingContext,
@@ -3467,8 +3569,36 @@ impl ContextMenuSession {
                 views
             },
         );
+        #[cfg(feature = "wayland")]
+        let root_surface = platform::unix::wayland::context_menu::pop(
+            parent,
+            &system_link,
+            view_init_context,
+            0,
+            surface_pos,
+            |render_scale| {
+                let mut fs = PerWindowFontSet::new(system_link.root_font_set(), typing_context);
+                fs.rescale((render_scale * 72.0) as _);
+                crate::uikit::MenuItemLayout::build(items.clone().into_iter(), &fs, render_scale)
+            },
+            |layout, h, view_init_ctx| {
+                view_init_ctx.ui_scale_factor = h.render_scale();
+                let views = crate::uikit::MenuItemLayout::instantiate(
+                    layout.into_iter(),
+                    0,
+                    view_init_ctx,
+                    common_res,
+                );
+                for x in views.iter() {
+                    x.mount(view_init_ctx, &h);
+                }
+
+                views
+            },
+        );
 
         Self {
+            parent,
             items,
             opening_surfaces: vec![ContextMenuSurface {
                 handle: root_surface,
@@ -3476,6 +3606,12 @@ impl ContextMenuSession {
                 current_selecting: None,
             }],
             active_selection: None,
+        }
+    }
+
+    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        for s in self.opening_surfaces.iter() {
+            s.handle.rescale(scale, composite_tree);
         }
     }
 
@@ -3489,8 +3625,16 @@ impl ContextMenuSession {
         match self.active_selection {
             Some((depth, index)) => {
                 while self.opening_surfaces.len() > depth + 1 {
+                    #[cfg(windows)]
                     crate::platform::windows::context_menu::close(
                         self.opening_surfaces.pop().expect("empty?").handle,
+                        view_init_context.mount_context.composite_tree,
+                        view_init_context.mount_context.ht_manager,
+                    );
+                    #[cfg(feature = "wayland")]
+                    crate::platform::unix::wayland::context_menu::close(
+                        self.opening_surfaces.pop().expect("empty?").handle,
+                        system_link,
                         view_init_context.mount_context.composite_tree,
                         view_init_context.mount_context.ht_manager,
                     );
@@ -3547,6 +3691,38 @@ impl ContextMenuSession {
                             views
                         },
                     );
+                    #[cfg(feature = "wayland")]
+                    let surface = platform::unix::wayland::context_menu::pop(
+                        self.parent,
+                        &system_link,
+                        view_init_context,
+                        depth + 1,
+                        display_pos,
+                        |render_scale| {
+                            let mut fs =
+                                PerWindowFontSet::new(system_link.root_font_set(), typing_context);
+                            fs.rescale((render_scale * 72.0) as _);
+                            crate::uikit::MenuItemLayout::build(
+                                items.into_iter().cloned(),
+                                &fs,
+                                render_scale,
+                            )
+                        },
+                        |layout, h, view_init_ctx| {
+                            view_init_ctx.ui_scale_factor = h.render_scale();
+                            let views = crate::uikit::MenuItemLayout::instantiate(
+                                layout.into_iter(),
+                                depth + 1,
+                                view_init_ctx,
+                                common_res,
+                            );
+                            for x in views.iter() {
+                                x.mount(view_init_ctx, &h);
+                            }
+
+                            views
+                        },
+                    );
 
                     self.opening_surfaces.push(ContextMenuSurface {
                         handle: surface,
@@ -3558,8 +3734,16 @@ impl ContextMenuSession {
             None => {
                 // 最初のやつだけ表示する
                 while self.opening_surfaces.len() > 1 {
+                    #[cfg(windows)]
                     crate::platform::windows::context_menu::close(
                         self.opening_surfaces.pop().expect("empty?").handle,
+                        view_init_context.mount_context.composite_tree,
+                        view_init_context.mount_context.ht_manager,
+                    );
+                    #[cfg(feature = "wayland")]
+                    crate::platform::unix::wayland::context_menu::close(
+                        self.opening_surfaces.pop().expect("empty?").handle,
+                        system_link,
                         view_init_context.mount_context.composite_tree,
                         view_init_context.mount_context.ht_manager,
                     );
@@ -3578,8 +3762,16 @@ impl ContextMenuSession {
         typing_context: &ThreadLocalTypingContext,
     ) {
         while self.opening_surfaces.len() > depth + 1 {
+            #[cfg(windows)]
             crate::platform::windows::context_menu::close(
                 self.opening_surfaces.pop().expect("empty?").handle,
+                view_init_context.mount_context.composite_tree,
+                view_init_context.mount_context.ht_manager,
+            );
+            #[cfg(feature = "wayland")]
+            crate::platform::unix::wayland::context_menu::close(
+                self.opening_surfaces.pop().expect("empty?").handle,
+                system_link,
                 view_init_context.mount_context.composite_tree,
                 view_init_context.mount_context.ht_manager,
             );
@@ -3636,6 +3828,35 @@ impl ContextMenuSession {
                 views
             },
         );
+        #[cfg(feature = "wayland")]
+        let surface = platform::unix::wayland::context_menu::pop(
+            self.parent,
+            &system_link,
+            view_init_context,
+            depth + 1,
+            display_pos,
+            |render_scale| {
+                crate::uikit::MenuItemLayout::build(
+                    items.into_iter().cloned(),
+                    &PerWindowFontSet::new(system_link.root_font_set(), typing_context),
+                    render_scale,
+                )
+            },
+            |layout, h, view_init_ctx| {
+                view_init_ctx.ui_scale_factor = h.render_scale();
+                let views = crate::uikit::MenuItemLayout::instantiate(
+                    layout.into_iter(),
+                    depth + 1,
+                    view_init_ctx,
+                    common_res,
+                );
+                for x in views.iter() {
+                    x.mount(view_init_ctx, &h);
+                }
+
+                views
+            },
+        );
 
         self.opening_surfaces.push(ContextMenuSurface {
             handle: surface,
@@ -3645,12 +3866,22 @@ impl ContextMenuSession {
     }
 
     pub fn terminate(
-        self,
+        mut self,
+        system_link: &SystemLink,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         #[cfg(windows)]
         platform::windows::context_menu::close_all(composite_tree, ht_manager);
+        #[cfg(feature = "wayland")]
+        while let Some(c) = self.opening_surfaces.pop() {
+            crate::platform::unix::wayland::context_menu::close(
+                c.handle,
+                system_link,
+                composite_tree,
+                ht_manager,
+            );
+        }
     }
 
     pub fn select_item(
@@ -3703,6 +3934,10 @@ pub struct SystemLink<'sys> {
     display_server: platform::unix::DisplayServerLink,
     #[cfg(target_os = "linux")]
     dbus: *const dbus::Connection,
+    #[cfg(target_os = "linux")]
+    terminate_event: Arc<linux_eventfd::EventFD>,
+    #[cfg(target_os = "linux")]
+    pointer_hovering_timer: *const utils::platform::linux::TimerFD,
 }
 #[cfg(not(windows))]
 impl SystemLink<'_> {
@@ -3863,6 +4098,8 @@ pub type WindowHandle = platform::unix::wayland::WindowHandle;
 
 #[cfg(windows)]
 pub type ContextMenuHandle = platform::windows::context_menu::Handle;
+#[cfg(feature = "wayland")]
+pub type ContextMenuHandle = platform::unix::wayland::context_menu::Handle;
 
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

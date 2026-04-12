@@ -11,12 +11,13 @@ use peridot_tp_wayland::{self as wl, ProxyObject};
 use peridot_tp_xkbcommon as xkbcommon;
 
 use crate::{
-    Event, LogicFiberEventDispatcher, WindowType,
+    Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
     input::{
         KeyInputCode, PerWindowKeyboardFocusState, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+            PointerButton,
         },
     },
     rendering::{
@@ -25,6 +26,8 @@ use crate::{
     },
     utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
+
+pub mod context_menu;
 
 pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 
@@ -291,6 +294,7 @@ impl DragPreviewPopoverHandle {
         };
 
         wl_popup_surface.commit().expect("wl_popup_surface.commit");
+        tracing::debug!("popup commit");
 
         unsafe {
             (*self.popup.get()) = Some((
@@ -336,42 +340,44 @@ pub struct DisplayServerLink {
 }
 
 impl crate::SystemLink<'_> {
-    pub fn init_main_window(
-        dp: &wl::Display,
-        wl_interfaces: &GlobalInterfaces,
-        window_registry: &mut WindowRegistry,
-        decoration_pixbuf: Option<&WindowDecorationPixbuf>,
-        dbus: &dbus::Connection,
-        composite_tree: &mut CompositeTree<Event>,
+    pub fn prelaunch(&self, main_window: WindowHandle) {
+        unsafe { &mut *self.display_server.wl_display }
+            .roundtrip()
+            .expect("roundtrip");
+    }
+
+    pub fn create_main_window(
+        &self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
-        dispatcher: LogicFiberEventDispatcher,
-        #[cfg(target_os = "linux")] terminate_event: &Arc<linux_eventfd::EventFD>,
-        vk_device: &VulkanDevice,
-        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
     ) -> WindowHandle {
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
         let w = Window::new(
             WindowType::Main {
                 #[cfg(target_os = "linux")]
-                termination_event: terminate_event.clone(),
+                termination_event: self.terminate_event.clone(),
             },
-            &wl_interfaces,
-            &dbus,
-            dispatcher,
+            unsafe { &*self.display_server.wl_global_interfaces },
+            unsafe { &*self.dbus },
+            unsafe { &*self.event_dispatcher }.clone(),
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
             }),
-            ht_manager.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            }),
-            decoration_pixbuf,
+            ht_root,
+            unsafe { self.display_server.decoration_pixbuf.as_ref() },
         );
         let main_window_handle = w.make_handle();
+        ht_manager.get_data_mut(ht_root).root_of_window = Some(main_window_handle);
 
-        let vk_surface = w.create_vk_surface(dp, vk_device);
-        rt_sender
+        let vk_surface = w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+            &*self.vk_device
+        });
+        self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: main_window_handle,
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
@@ -379,16 +385,28 @@ impl crate::SystemLink<'_> {
             .expect("rt_sender.send");
         w.commit();
 
-        window_registry.objects.insert(main_window_handle, w);
+        unsafe { &mut *self.display_server.window_registry }
+            .objects
+            .insert(main_window_handle, w);
         main_window_handle
     }
 
-    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
+    pub fn open_window<'h>(
         &self,
-        composite_tree: &mut CompositeTree<Event>,
-        hit_tree: &mut HT,
-        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<Event>, &mut HT),
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        hit_tree: &mut HitTestTreeManager,
+        setup_contents: impl FnOnce(
+            WindowHandle,
+            &mut CompositeTree<SyncEvent>,
+            &mut HitTestTreeManager,
+            &Self,
+        ),
     ) -> WindowHandle {
+        let ht_root = hit_tree.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
         let w = Window::new(
             WindowType::Sub,
             unsafe { &*self.display_server.wl_global_interfaces },
@@ -398,14 +416,11 @@ impl crate::SystemLink<'_> {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
             }),
-            hit_tree.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            }),
+            ht_root,
             unsafe { self.display_server.decoration_pixbuf.as_ref() },
         );
         let window_handle = w.make_handle();
+        hit_tree.get_data_mut(ht_root).root_of_window = Some(window_handle);
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
             &*self.vk_device
@@ -416,7 +431,7 @@ impl crate::SystemLink<'_> {
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
             }))
             .expect("rt_sender.send");
-        setup_contents(window_handle, composite_tree, hit_tree);
+        setup_contents(window_handle, composite_tree, hit_tree, self);
         w.commit();
 
         unsafe {
@@ -430,7 +445,7 @@ impl crate::SystemLink<'_> {
     pub fn close_window(
         &self,
         window_handle: WindowHandle,
-        composite_tree: &mut CompositeTree<Event>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
@@ -510,6 +525,21 @@ impl crate::SystemLink<'_> {
             ti.commit().expect("text_input.commit");
         }
     }
+
+    pub fn set_pointer_hovering_timeout(&self) {
+        unsafe { &*self.pointer_hovering_timer }
+            .set(
+                0,
+                crate::input::POINTER_HOVER_TIMEOUT_MS as i64 * 1000 * 1000,
+            )
+            .expect("timer.set");
+    }
+
+    pub fn kill_pointer_hovering_timeout(&self) {
+        unsafe { &*self.pointer_hovering_timer }
+            .unset()
+            .expect("timer.unset");
+    }
 }
 
 pub fn dp_prepare_read(dp: &mut wl::Display) -> Result<(), ()> {
@@ -540,11 +570,12 @@ pub struct WindowCommittedState {
 enum SurfaceStateTag {
     ToplevelWindow,
     ResizeEdge,
+    ContextMenu,
 }
 
 pub struct WindowState {
     surface_ptr: *mut wl::Surface,
-    xdg_surface: wl::Owned<wl::XdgSurface>,
+    pub(self) xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
@@ -704,6 +735,7 @@ impl Window {
             decoration,
             pending_configure_size: (None, None),
             pending_configure_buffer_scale: None,
+            pending_activated_changes: None,
             event_dispatcher,
         });
         surface
@@ -782,6 +814,10 @@ impl Window {
         }
         self.surface.commit().expect("wl_surface.commit");
     }
+
+    pub(self) fn event_listener(&self) -> &WindowEventListener {
+        unsafe { &*self.surface.user_data().cast::<WindowEventListener>() }
+    }
 }
 
 enum WindowScaling {
@@ -806,6 +842,7 @@ pub struct WindowEventListener {
     needs_system_command_buttons: bool,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
+    pending_activated_changes: Option<bool>,
     event_dispatcher: LogicFiberEventDispatcher,
 }
 impl wl::SurfaceEventListener for WindowEventListener {
@@ -900,6 +937,8 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
                 }
             }
         }
+
+        self.pending_activated_changes = Some(states.contains(&wl::XdgToplevelState::Activated));
     }
 
     fn configure_bounds(&mut self, _sender: &mut wl::XdgToplevel, _width: i32, _height: i32) {}
@@ -936,7 +975,7 @@ impl wl::WpFractionalScaleV1EventListener for WindowEventListener {
 }
 impl WindowEventListener {
     fn commit(&mut self) {
-        let mut delayed_event_queue = Vec::with_capacity(2);
+        let mut delayed_event_queue = Vec::with_capacity(8);
 
         {
             let mut committed_state_ref = self.state.data.committed_state.lock().expect("poisoned");
@@ -1010,6 +1049,11 @@ impl WindowEventListener {
 
         if let Some(ref d) = self.decoration {
             d.commit_all();
+        }
+
+        if self.pending_activated_changes.take() == Some(false) {
+            // window deactivated
+            delayed_event_queue.push(Event::ContextMenuCloseAll);
         }
 
         for x in delayed_event_queue {
@@ -1778,8 +1822,23 @@ impl WindowDecoration {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct PointerID();
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PointerID(*mut wl::Pointer);
+impl PointerID {
+    #[inline(always)]
+    fn global_messaging(&self) -> &GlobalMessaging {
+        unsafe { &*(*self.0).user_data().cast() }
+    }
+
+    #[inline(always)]
+    pub fn surface_pos(&self) -> Point<LogicalUnit> {
+        self.global_messaging()
+            .pointer
+            .as_ref()
+            .expect("pointer.none")
+            .pos
+    }
+}
 
 #[derive(Clone)]
 pub struct PointerEventID {
@@ -1899,10 +1958,10 @@ impl wl::SeatEventListener for GlobalMessaging {
     }
 }
 impl wl::PointerEventListener for GlobalMessaging {
-    #[tracing::instrument(skip(self, _pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
+    #[tracing::instrument(skip(self, pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn enter(
         &mut self,
-        _pointer: &mut wl::Pointer,
+        pointer: &mut wl::Pointer,
         serial: u32,
         surface: Option<&mut wl::Surface>,
         surface_x: wl::Fixed,
@@ -1953,10 +2012,18 @@ impl wl::PointerEventListener for GlobalMessaging {
             }
             SurfaceStateTag::ToplevelWindow => {
                 self.event_dispatcher.dispatch(Event::PointerMove {
-                    pointer_id: PointerID(),
+                    pointer_id: PointerID(pointer),
                     window: WindowHandle(surface as *mut _),
                     client_pos: state.pos,
                 });
+            }
+            SurfaceStateTag::ContextMenu => {
+                self.event_dispatcher
+                    .dispatch(Event::ContextMenuPointerMove {
+                        pointer_id: PointerID(pointer),
+                        target: context_menu::Handle(surface),
+                        client_pos: state.pos,
+                    });
             }
         }
     }
@@ -1972,10 +2039,10 @@ impl wl::PointerEventListener for GlobalMessaging {
         state.enter_state = None;
     }
 
-    #[tracing::instrument(skip(self, _pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
+    #[tracing::instrument(skip(self, pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn motion(
         &mut self,
-        _pointer: &mut wl::Pointer,
+        pointer: &mut wl::Pointer,
         time: u32,
         surface_x: wl::Fixed,
         surface_y: wl::Fixed,
@@ -1995,18 +2062,26 @@ impl wl::PointerEventListener for GlobalMessaging {
             SurfaceStateTag::ResizeEdge => {}
             SurfaceStateTag::ToplevelWindow => {
                 self.event_dispatcher.dispatch(Event::PointerMove {
-                    pointer_id: PointerID(),
+                    pointer_id: PointerID(pointer),
                     window: WindowHandle(enter_state.surface),
                     client_pos: state.pos,
                 });
             }
+            SurfaceStateTag::ContextMenu => {
+                self.event_dispatcher
+                    .dispatch(Event::ContextMenuPointerMove {
+                        pointer_id: PointerID(pointer),
+                        target: context_menu::Handle(enter_state.surface),
+                        client_pos: state.pos,
+                    });
+            }
         }
     }
 
-    #[tracing::instrument(skip(self, _pointer), fields(state = state as u32))]
+    #[tracing::instrument(skip(self, pointer), fields(state = state as u32))]
     fn button(
         &mut self,
-        _pointer: &mut wl::Pointer,
+        pointer: &mut wl::Pointer,
         serial: u32,
         time: u32,
         button: u32,
@@ -2039,17 +2114,66 @@ impl wl::PointerEventListener for GlobalMessaging {
                 SurfaceStateTag::ToplevelWindow => {
                     self.event_dispatcher.dispatch(Event::PointerDown {
                         window: WindowHandle(enter_state.surface),
+                        pointer_id: PointerID(pointer),
+                        button: if button == linux_input::Key::MouseLeft as u32 {
+                            PointerButton::Primary
+                        } else {
+                            PointerButton::Secondary
+                        },
                         event_id: PointerEventID {
                             serial,
                             seat_ptr: pointer_state.seat_ptr,
                         },
                     });
                 }
+                SurfaceStateTag::ContextMenu => {
+                    self.event_dispatcher
+                        .dispatch(Event::ContextMenuPointerDown {
+                            pointer_id: PointerID(pointer),
+                            target: context_menu::Handle(enter_state.surface),
+                            button: if button == linux_input::Key::MouseLeft as u32 {
+                                PointerButton::Primary
+                            } else {
+                                PointerButton::Secondary
+                            },
+                            event_id: PointerEventID {
+                                serial,
+                                seat_ptr: pointer_state.seat_ptr,
+                            },
+                        });
+                }
             }
         } else if state == wl::PointerButtonState::Released {
-            self.event_dispatcher.dispatch(Event::PointerUp {
-                window: WindowHandle(enter_state.surface),
-            });
+            let surface_state = unsafe {
+                &*(*enter_state.surface)
+                    .user_data()
+                    .cast::<SurfaceStateUntyped>()
+            };
+            match surface_state.tag {
+                SurfaceStateTag::ResizeEdge => (/* no pointer up event for resize edge */),
+                SurfaceStateTag::ToplevelWindow => {
+                    self.event_dispatcher.dispatch(Event::PointerUp {
+                        window: WindowHandle(enter_state.surface),
+                        pointer_id: PointerID(pointer),
+                        button: if button == linux_input::Key::MouseLeft as u32 {
+                            PointerButton::Primary
+                        } else {
+                            PointerButton::Secondary
+                        },
+                    });
+                }
+                SurfaceStateTag::ContextMenu => {
+                    self.event_dispatcher.dispatch(Event::ContextMenuPointerUp {
+                        target: context_menu::Handle(enter_state.surface),
+                        pointer_id: PointerID(pointer),
+                        button: if button == linux_input::Key::MouseLeft as u32 {
+                            PointerButton::Primary
+                        } else {
+                            PointerButton::Secondary
+                        },
+                    });
+                }
+            }
         }
     }
 

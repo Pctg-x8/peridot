@@ -2,7 +2,7 @@
   description = "Peridot devenv";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "nixpkgs";
   };
   outputs =
     { nixpkgs, ... }:

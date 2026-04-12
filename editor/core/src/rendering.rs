@@ -9,7 +9,7 @@ use bedrock::{
 };
 
 use crate::{
-    SyncEvent, SyncEventBus, WindowHandle,
+    ContextMenuHandle, SyncEvent, SyncEventBus, WindowHandle,
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP,
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
@@ -46,7 +46,7 @@ pub struct NewWindowData {
 }
 
 pub struct NewContextMenuData {
-    pub w: crate::platform::windows::context_menu::Handle,
+    pub w: ContextMenuHandle,
     #[cfg(not(windows))]
     pub vk_surface: NewWindowVulkanSurface,
     #[cfg(windows)]
@@ -58,10 +58,7 @@ pub enum RenderMessage {
     NewWindow(NewWindowData),
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
     NewContextMenu(NewContextMenuData),
-    DestroyContextMenu(
-        crate::platform::windows::context_menu::Handle,
-        std::sync::mpsc::Sender<()>,
-    ),
+    DestroyContextMenu(ContextMenuHandle, std::sync::mpsc::Sender<()>),
     RegisterNormalized2DStaticMeshTexture {
         id: usize,
         vertices: &'static [[f32; 2]],
@@ -135,10 +132,7 @@ impl<'main> RenderThread<'main> {
             ft_lib: self::text::FreeType::init().expect("freetype.init"),
         };
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
-        let mut context_menus: HashMap<
-            crate::platform::windows::context_menu::Handle,
-            ContextMenuRenderer,
-        > = HashMap::new();
+        let mut context_menus: HashMap<ContextMenuHandle, ContextMenuRenderer> = HashMap::new();
         let mut normalized_2d_static_mesh_textures: HashMap<
             usize,
             Normalized2DStaticMeshTextureEntry,
@@ -241,17 +235,7 @@ impl<'main> RenderThread<'main> {
                         };
                     }
                     Ok(RenderMessage::NewContextMenu(create_data)) => {
-                        #[cfg(feature = "wayland")]
-                        let init_scale = SafeF32::new(
-                            wd.key
-                                .state()
-                                .committed_state
-                                .lock()
-                                .expect("poisoned")
-                                .active_buffer_scale,
-                        )
-                        .expect("invalid scale");
-                        #[cfg(windows)]
+                        #[cfg(any(windows, feature = "wayland"))]
                         let init_scale =
                             SafeF32::new(create_data.w.render_scale()).expect("invalid scale");
                         #[cfg(not(any(feature = "wayland", windows)))]
@@ -367,6 +351,12 @@ impl<'main> RenderThread<'main> {
                     any_swapchain_invalidated = true;
                 }
             }
+            for x in context_menus.values_mut() {
+                if x.take_swapchain_externally_invalidation_signal() {
+                    x.invalidate_swapchain();
+                    any_swapchain_invalidated = true;
+                }
+            }
 
             if any_swapchain_invalidated {
                 let x = std::time::Instant::now();
@@ -383,6 +373,9 @@ impl<'main> RenderThread<'main> {
 
                 let mut descriptor_writes = Vec::new();
                 for x in windows.values_mut() {
+                    x.validate_swapchain(&mut descriptor_writes, self.event_bus);
+                }
+                for x in context_menus.values_mut() {
                     x.validate_swapchain(&mut descriptor_writes, self.event_bus);
                 }
                 self.vk_device
@@ -413,7 +406,7 @@ impl<'main> RenderThread<'main> {
             }
             enum PresentKey {
                 Window(WindowHandle),
-                ContextMenu(crate::platform::windows::context_menu::Handle),
+                ContextMenu(ContextMenuHandle),
             }
             struct VkPresentParameters<'x> {
                 key: PresentKey,
@@ -580,6 +573,58 @@ impl<'main> RenderThread<'main> {
                     Err(e) => Err(e).expect("acquire next"),
                 };
 
+                let new_ui_scale = x.take_latest_ui_scale_changes();
+                if let Some(scale) = new_ui_scale {
+                    let scale = SafeF32::new(scale).expect("scale.invalid");
+
+                    let current = glyph_atlas_per_scale
+                        .get_mut(&x.active_scale)
+                        .expect("invalid state");
+                    current.ref_count -= 1;
+                    let removed = if current.ref_count == 0 {
+                        // no references
+                        glyph_atlas_per_scale.remove(&x.active_scale)
+                    } else {
+                        None
+                    };
+
+                    let new_atlas_mgr = match glyph_atlas_per_scale.entry(scale) {
+                        // reuse existing
+                        std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(v) => match removed {
+                            // reuse existing with clear
+                            Some(mut data) => {
+                                data.manager.clear();
+                                data.atlas_rects.clear();
+                                data.ref_count = 0;
+                                v.insert(data)
+                            }
+                            // new one
+                            None => v.insert(GlyphAtlasDataPerDpi {
+                                manager: MaskTextureAtlasManager::new(
+                                    &glyph_atlas_manager_common_resources,
+                                    &mut render_queue,
+                                    self.vk_device.present_queue_family_index(),
+                                ),
+                                atlas_rects: Vec::new(),
+                                vector_raster_state: VectorRasterizationState::new(),
+                                ref_count: 0,
+                            }),
+                        },
+                    };
+                    new_atlas_mgr.ref_count += 1;
+
+                    x.rescale(scale);
+                    x.invalidate_render_commands(); // DescriptorSetをかえるときは再度つくりなおす必要がある
+                    let mut descriptor_writes = Vec::with_capacity(1);
+                    x.composite_renderer.rebind_glyph_atlas(
+                        new_atlas_mgr.manager.atlas().as_image_view(),
+                        &mut descriptor_writes,
+                    );
+                    self.vk_device
+                        .update_descriptor_sets(&descriptor_writes, &[]);
+                }
+
                 let glyph_atlas_mgr = glyph_atlas_per_scale
                     .get_mut(&x.active_scale)
                     .expect("invalid state");
@@ -661,7 +706,7 @@ impl<'main> RenderThread<'main> {
                 #[cfg(not(windows))]
                 present_parameters.push(VkPresentParameters {
                     key: PresentKey::ContextMenu(*k),
-                    swapchain_ref: x.swapchain_ref(),
+                    swapchain_ref: x.swapchain.as_transparent_ref(),
                     render_signal_semaphores: vec![x.present_ready_semaphore_ref(backbuffer_index)],
                     backbuffer_index,
                 });
@@ -828,9 +873,9 @@ impl<'d> Drop for CompositionSwapchainBuffer<'d> {
         }
     }
 }
+
 struct ContextMenuRenderer<'d> {
-    #[cfg(windows)]
-    w: crate::platform::windows::context_menu::Handle,
+    w: ContextMenuHandle,
     active_scale: SafeF32,
     vk_device: &'d VulkanDevice<'d>,
     composite_root: CompositeTreeRef,
@@ -879,10 +924,8 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(not(windows))]
         let vk_swapchain = VulkanSwapchain::new(
             &surface,
-            #[cfg(windows)]
+            #[cfg(any(windows, feature = "wayland"))]
             || create_data.w.pixels_size(),
-            #[cfg(feature = "wayland")]
-            || create_data.w.pixels_client_size(),
             #[cfg(target_os = "macos")]
             || {
                 *create_data
@@ -1137,6 +1180,24 @@ impl<'d> ContextMenuRenderer<'d> {
         }
     }
 
+    #[cfg(not(windows))]
+    pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
+        self.w.take_swapchain_externally_invalidation_signal()
+    }
+
+    #[cfg(not(windows))]
+    pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
+        self.w.take_latest_ui_scale_change()
+    }
+
+    #[cfg(not(windows))]
+    pub fn rescale(&mut self, scale: SafeF32) {
+        self.active_scale = scale;
+
+        #[cfg(feature = "freetype")]
+        self.font_set.rescale((scale.value() * 72.0) as _);
+    }
+
     pub fn update(
         &mut self,
         current_sec: f32,
@@ -1236,7 +1297,7 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(windows)]
         todo!("revalidate composition swapchain");
 
-        // event_bus.push(SyncEvent::WindowPostResizeRenderBuffer { window: self.w });
+        event_bus.push(SyncEvent::ContextMenuPostResizeRenderBuffer { target: self.w });
         self.swapchain_invalidated = false;
     }
 

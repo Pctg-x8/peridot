@@ -10,7 +10,6 @@ use bedrock::{
     QueueMut, RenderPass, ShaderModule, TypedVulkanStructure, VkHandle,
 };
 use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
-use windows::Win32::UI::Input::KeyboardAndMouse::NLSKBD_OEM_DEC;
 
 use crate::{
     graphics::{
