@@ -465,9 +465,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             pointer_hovering_timer_id: &mut pointer_hovering_timer_id,
             context_menu: platform::windows::context_menu::SharedState::new(
                 dxgi_factory.clone(),
-                d3d12_device.clone(),
                 d3d12_cq.clone(),
-                rt_sender.clone(),
                 context_menu_delayed_action_timer_id.as_mut(),
             )
         },
@@ -3262,12 +3260,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    #[cfg(windows)]
-                    crate::platform::windows::context_menu::reserve_delayed_action(&system_link);
-                    #[cfg(feature = "wayland")]
-                    crate::platform::unix::wayland::context_menu::reserve_delayed_action(
-                        &system_link,
-                    );
+                    system_link.context_menu.reserve_delayed_action();
                 }
             }
             Event::ContextMenuDeselectItem { depth } => {
@@ -3280,12 +3273,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    #[cfg(windows)]
-                    crate::platform::windows::context_menu::reserve_delayed_action(&system_link);
-                    #[cfg(feature = "wayland")]
-                    crate::platform::unix::wayland::context_menu::reserve_delayed_action(
-                        &system_link,
-                    );
+                    system_link.context_menu.reserve_delayed_action();
                 }
             }
             Event::ContextMenuOpenSubmenu { depth, index } => {
@@ -3313,12 +3301,7 @@ async fn run<'sys>(
                 }*/
             }
             Event::ContextMenuPerformDelayedAction => {
-                #[cfg(windows)]
-                crate::platform::windows::context_menu::unreserve_delayed_action(&system_link);
-                #[cfg(feature = "wayland")]
-                crate::platform::unix::wayland::context_menu::unreserve_delayed_action(
-                    &system_link,
-                );
+                system_link.context_menu.unreserve_delayed_action();
 
                 if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.perform_delayed_action(
@@ -3650,6 +3633,7 @@ impl ContextMenuSession {
             #[cfg(feature = "wayland")]
             surface_pos,
             |render_scale| {
+                #[allow(unused_mut)]
                 let mut fs = PerWindowFontSet::new(system_link.root_font_set(), typing_context);
                 #[cfg(feature = "wayland")]
                 fs.rescale((render_scale * 72.0) as _);
@@ -3728,6 +3712,7 @@ impl ContextMenuSession {
                         depth + 1,
                         display_pos,
                         |render_scale| {
+                            #[allow(unused_mut)]
                             let mut fs =
                                 PerWindowFontSet::new(system_link.root_font_set(), typing_context);
                             #[cfg(feature = "wayland")]
@@ -3821,6 +3806,7 @@ impl ContextMenuSession {
             depth + 1,
             display_pos,
             |render_scale| {
+                #[allow(unused_mut)]
                 let mut fs = PerWindowFontSet::new(system_link.root_font_set(), typing_context);
                 #[cfg(feature = "wayland")]
                 fs.rescale((render_scale * 72.0) as _);

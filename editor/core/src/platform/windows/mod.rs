@@ -55,7 +55,7 @@ use windows::{
                 WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
                 WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
                 WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP, WindowFromPoint,
+                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
             },
         },
     },
@@ -66,7 +66,7 @@ use windows_numerics::{Vector2, Vector3};
 use std::{rc::Rc, sync::Mutex};
 
 use crate::{
-    ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
+    Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
     input::{
@@ -82,10 +82,9 @@ use crate::{
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
         text::RootFontSet,
     },
-    uikit::{MenuItemLayout, MenuItemView, ViewInitContext},
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
-        platform::windows::{WindowByClassIter, current_instance_handle, register_class},
+        platform::windows::{current_instance_handle, register_class},
     },
 };
 
@@ -1527,42 +1526,6 @@ impl SystemLink<'_> {
                 KillTimer(None, active_timer_id).expect("killtimer");
             }
         }
-    }
-
-    pub fn pop_context_menu(
-        &self,
-        view_init_context: &mut ViewInitContext,
-        depth: usize,
-        screen_pos: Point<PixelsUnit>,
-        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
-        setup_contents: impl FnOnce(
-            Vec<MenuItemLayout>,
-            ContextMenuHandle,
-            &mut ViewInitContext,
-        ) -> Vec<MenuItemView>,
-    ) -> ContextMenuHandle {
-        context_menu::pop(
-            self,
-            view_init_context,
-            depth,
-            screen_pos,
-            layouted_items,
-            setup_contents,
-        )
-    }
-
-    pub fn any_pointer_on_context_menu(&self) -> bool {
-        let mut p = core::mem::MaybeUninit::<POINT>::uninit();
-        unsafe {
-            GetCursorPos(p.as_mut_ptr()).expect("Failed to get cursor pos");
-        }
-        let p = unsafe { p.assume_init() };
-
-        let w_pointing = unsafe { WindowFromPoint(p) };
-        let has_pointing_menu = WindowByClassIter::new(PCWSTR(self.context_menu.window_class as _))
-            .any(|x| x == w_pointing);
-
-        has_pointing_menu
     }
 }
 

@@ -5,7 +5,7 @@ use windows::{
     Win32::{
         Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
-            Direct3D12::{ID3D12CommandQueue, ID3D12Device},
+            Direct3D12::ID3D12CommandQueue,
             Dxgi::{
                 Common::{
                     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
@@ -20,14 +20,15 @@ use windows::{
             HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
-                CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
-                GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE,
-                HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-                HTTRANSPARENT, KillTimer, SW_SHOWNOACTIVATE, SetTimer, SetWindowLongPtrW,
-                ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-                WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
-                WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_NOACTIVATE,
-                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
+                GetWindowLongPtrW, GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
+                HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP,
+                HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, KillTimer, SW_SHOWNOACTIVATE, SetTimer,
+                SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
+                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW,
+                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
+                WindowFromPoint,
             },
         },
     },
@@ -53,7 +54,10 @@ use crate::{
     uikit::{
         MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView, MountTarget, ViewInitContext,
     },
-    utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::current_instance_handle},
+    utils::{
+        LogicalUnit, PixelsUnit, Point, Size,
+        platform::windows::{WindowByClassIter, current_instance_handle},
+    },
 };
 
 #[repr(transparent)]
@@ -580,268 +584,274 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 }
 
 pub struct SharedState {
-    pub window_class: u16,
-    pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
-    pub dxgi_factory: IDXGIFactory2,
-    pub d3d12_device: ID3D12Device,
-    pub d3d12_cq: ID3D12CommandQueue,
-    pub delayed_action_timer_id: *mut usize,
+    window_class: u16,
+    dxgi_factory: IDXGIFactory2,
+    d3d12_cq: ID3D12CommandQueue,
+    delayed_action_timer_id: *mut usize,
 }
 impl SharedState {
     pub fn new(
         dxgi_factory: IDXGIFactory2,
-        d3d12_device: ID3D12Device,
         d3d12_cq: ID3D12CommandQueue,
-        rt_sender: std::sync::mpsc::Sender<RenderMessage>,
         delayed_action_timer_id: core::pin::Pin<&mut usize>,
     ) -> Self {
         let window_class = register_class(current_instance_handle());
 
         Self {
             window_class,
-            rt_sender,
             dxgi_factory,
-            d3d12_device,
             d3d12_cq,
             delayed_action_timer_id: delayed_action_timer_id.get_mut(),
         }
     }
-}
 
-pub fn reserve_delayed_action(syslink: &SystemLink) {
-    unsafe {
-        *syslink.context_menu.delayed_action_timer_id = SetTimer(
-            None,
-            *syslink.context_menu.delayed_action_timer_id,
-            400,
-            None,
-        );
+    pub fn reserve_delayed_action(&self) {
+        unsafe {
+            *self.delayed_action_timer_id =
+                SetTimer(None, *self.delayed_action_timer_id, 400, None);
+        }
+    }
+
+    pub fn unreserve_delayed_action(&self) {
+        let active_timer_id = unsafe { self.delayed_action_timer_id.replace(0) };
+        if active_timer_id != 0 {
+            unsafe { KillTimer(None, active_timer_id).expect("KillTimer") };
+        }
     }
 }
 
-pub fn unreserve_delayed_action(syslink: &SystemLink) {
-    let active_timer_id = unsafe { syslink.context_menu.delayed_action_timer_id.replace(0) };
-    if active_timer_id != 0 {
-        unsafe { KillTimer(None, active_timer_id).expect("KillTimer") };
-    }
-}
+impl super::SystemLink<'_> {
+    pub fn pop_context_menu(
+        &self,
+        view_init_context: &mut ViewInitContext,
+        depth: usize,
+        screen_pos: Point<PixelsUnit>,
+        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        setup_contents: impl FnOnce(
+            Vec<MenuItemLayout>,
+            ContextMenuHandle,
+            &mut ViewInitContext,
+        ) -> Vec<MenuItemView>,
+    ) -> ContextMenuHandle {
+        let mut dest_dpi_x = core::mem::MaybeUninit::uninit();
+        let mut dest_dpi_y = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetDpiForMonitor(
+                MonitorFromPoint(screen_pos.to_win32(), MONITOR_DEFAULTTONEAREST),
+                MDT_EFFECTIVE_DPI,
+                dest_dpi_x.as_mut_ptr(),
+                dest_dpi_y.as_mut_ptr(),
+            )
+            .expect("GetDpiForMonitor");
+        }
+        let dest_render_scale = unsafe { dest_dpi_x.assume_init() as f32 / 96.0 };
+        let layouted_items = layouted_items(dest_render_scale);
+        let width = MenuItemLayout::min_width(layouted_items.iter());
+        let height = MenuItemLayout::height(layouted_items.iter());
+        let pixels_size =
+            Size::new_logical(width.value(), height.value()).to_pixels_ceil(dest_render_scale);
 
-pub fn pop(
-    syslink: &SystemLink,
-    view_init_context: &mut ViewInitContext,
-    depth: usize,
-    screen_pos: Point<PixelsUnit>,
-    layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
-    setup_contents: impl FnOnce(
-        Vec<MenuItemLayout>,
-        ContextMenuHandle,
-        &mut ViewInitContext,
-    ) -> Vec<MenuItemView>,
-) -> ContextMenuHandle {
-    let mut dest_dpi_x = core::mem::MaybeUninit::uninit();
-    let mut dest_dpi_y = core::mem::MaybeUninit::uninit();
-    unsafe {
-        GetDpiForMonitor(
-            MonitorFromPoint(screen_pos.to_win32(), MONITOR_DEFAULTTONEAREST),
-            MDT_EFFECTIVE_DPI,
-            dest_dpi_x.as_mut_ptr(),
-            dest_dpi_y.as_mut_ptr(),
-        )
-        .expect("GetDpiForMonitor");
-    }
-    let dest_render_scale = unsafe { dest_dpi_x.assume_init() as f32 / 96.0 };
-    let layouted_items = layouted_items(dest_render_scale);
-    let width = MenuItemLayout::min_width(layouted_items.iter());
-    let height = MenuItemLayout::height(layouted_items.iter());
-    let pixels_size =
-        Size::new_logical(width.value(), height.value()).to_pixels_ceil(dest_render_scale);
-
-    let hinstance = current_instance_handle();
-    let h = unsafe {
-        CreateWindowExW(
-            WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
-            PCWSTR(syslink.context_menu.window_class as _),
-            w!(""),
-            WS_POPUP,
-            screen_pos.x - SHADOW_SIZE.ceil() as i32,
-            screen_pos.y - SHADOW_SIZE.ceil() as i32,
-            pixels_size.width as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
-            pixels_size.height as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
-            None,
-            None,
-            Some(hinstance),
-            None,
-        )
-        .expect("context_menu.create_window")
-    };
-    let composite_root = view_init_context.composite_tree.create(CompositeRect {
-        relative_size_adjustment: [1.0, 1.0],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.375])),
-        ..Default::default()
-    });
-    let ht_root = view_init_context.ht_manager.create(HitTestTreeData {
-        width_adjustment_factor: 1.0,
-        height_adjustment_factor: 1.0,
-        // shadowの分を開ける
-        // TODO: RenderScaleが変わる場合は追従する必要がある
-        left: SHADOW_SIZE / Handle(h).render_scale(),
-        top: SHADOW_SIZE / Handle(h).render_scale(),
-        // width, heightはいじらなくていい（渡される基本サイズがすでに影を抜いた分になっている）
-        ..Default::default()
-    });
-    let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
-    view_init_context
-        .ht_manager
-        .set_action_handler(ht_root, &base_surface_event_handler);
-    let c_target = unsafe {
-        (*syslink.app_context_ptr)
-            .native_compositor_desktop_interop
-            .CreateDesktopWindowTarget(h, true)
-            .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
-    };
-    let cv_root = unsafe { &*syslink.app_context_ptr }
-        .native_compositor
-        .CreateSpriteVisual()
-        .expect("compositor.CreateSpriteVisual");
-    c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
-
-    let swapchain = unsafe {
-        syslink
-            .context_menu
-            .dxgi_factory
-            .CreateSwapChainForComposition(
-                &syslink.context_menu.d3d12_cq,
-                &DXGI_SWAP_CHAIN_DESC1 {
-                    Width: pixels_size.width as _,
-                    Height: pixels_size.height as _,
-                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    SampleDesc: DXGI_SAMPLE_DESC {
-                        Count: 1,
-                        Quality: 0,
-                    },
-                    BufferCount: 2,
-                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                    Stereo: FALSE,
-                    Scaling: DXGI_SCALING_STRETCH,
-                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-                    AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
-                    Flags: 0,
-                },
+        let hinstance = current_instance_handle();
+        let h = unsafe {
+            CreateWindowExW(
+                WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
+                PCWSTR(self.context_menu.window_class as _),
+                w!(""),
+                WS_POPUP,
+                screen_pos.x - SHADOW_SIZE.ceil() as i32,
+                screen_pos.y - SHADOW_SIZE.ceil() as i32,
+                pixels_size.width as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
+                pixels_size.height as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
+                None,
+                None,
+                Some(hinstance),
                 None,
             )
-            .expect("dxgi_factory.CreateSwapChainForComposition")
-    };
-    let swapchain: IDXGISwapChain3 = swapchain.cast().expect("swapchain.cast");
-    let fx = GaussianBlurEffect::new().expect("drag.fx.create");
-    fx.SetSource(
-        &CompositionEffectSourceParameter::Create(h!("source"))
-            .expect("compositioneffectsourceparameter.create"),
-    )
-    .expect("drag.fx.set_source");
-    fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
-    fx.SetOptimization(EffectOptimization::Speed)
-        .expect("drag.fx.set_optimization");
-    let effect_factory = unsafe { &*syslink.app_context_ptr }
-        .native_compositor
-        .CreateEffectFactory(&fx)
-        .expect("drag.fx.create_factory");
-    let backdrop_brush = unsafe { &*syslink.app_context_ptr }
-        .native_compositor
-        .CreateBackdropBrush()
-        .expect("drag.backdrop_brush.create");
-    let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
-    blur_brush
-        .SetSourceParameter(h!("Source"), &backdrop_brush)
-        .expect("drag.fx.set_blur_source");
-    cv_root
-        .SetSize(Vector2 {
-            X: pixels_size.width as _,
-            Y: pixels_size.height as _,
-        })
-        .expect("cv_root.SetSize");
-    cv_root
-        .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
-        .expect("drag.visual.blur.set_center_point");
-    cv_root
-        .SetAnchorPoint(Vector2::new(0.5, 0.5))
-        .expect("drag.visual.blur.set_anchor_point");
-    cv_root
-        .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
-        .expect("drag.visual.blur.set_relative_offset_adjustment");
-    cv_root
-        .SetBrush(&blur_brush)
-        .expect("drag.visual.blur.set_brush");
-    cv_root
-        .SetShadow(&{
-            let x = unsafe { &*syslink.app_context_ptr }
-                .native_compositor
-                .CreateDropShadow()
-                .expect("drag.visual.shadow.create");
-            x.SetBlurRadius(SHADOW_SIZE)
-                .expect("context_menu.shadow.set_blur_radius");
-            x.SetOffset(SHADOW_OFFSET)
-                .expect("context_menu.shadow.set_offset");
-            x.SetOpacity(0.3).expect("context_menu.shadow.set_opacity");
-            x
-        })
-        .expect("drag.visual.set_shadow");
-    let cv_composited = unsafe { &*syslink.app_context_ptr }
-        .native_compositor
-        .CreateSpriteVisual()
-        .expect("drag.visual.color_tint.create");
-    cv_composited
-        .SetBrush(
-            &unsafe { &*syslink.app_context_ptr }
-                .native_compositor
-                .CreateSurfaceBrushWithSurface(&unsafe {
-                    (*syslink.app_context_ptr)
-                        .native_compositor_interop
-                        .CreateCompositionSurfaceForSwapChain(&swapchain)
-                        .expect("compositor_interop.CreateCompositionSurfaceForSwapChain")
-                })
-                .expect("compositor.CreateSurfaceBrushWithSurface"),
+            .expect("context_menu.create_window")
+        };
+        let composite_root = view_init_context.composite_tree.create(CompositeRect {
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                0.0, 0.0, 0.0, 0.375,
+            ])),
+            ..Default::default()
+        });
+        let ht_root = view_init_context.ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            // shadowの分を開ける
+            // TODO: RenderScaleが変わる場合は追従する必要がある
+            left: SHADOW_SIZE / Handle(h).render_scale(),
+            top: SHADOW_SIZE / Handle(h).render_scale(),
+            // width, heightはいじらなくていい（渡される基本サイズがすでに影を抜いた分になっている）
+            ..Default::default()
+        });
+        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
+        view_init_context
+            .ht_manager
+            .set_action_handler(ht_root, &base_surface_event_handler);
+        let c_target = unsafe {
+            (*self.app_context_ptr)
+                .native_compositor_desktop_interop
+                .CreateDesktopWindowTarget(h, true)
+                .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
+        };
+        let cv_root = unsafe { &*self.app_context_ptr }
+            .native_compositor
+            .CreateSpriteVisual()
+            .expect("compositor.CreateSpriteVisual");
+        c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
+
+        let swapchain = unsafe {
+            self.context_menu
+                .dxgi_factory
+                .CreateSwapChainForComposition(
+                    &self.context_menu.d3d12_cq,
+                    &DXGI_SWAP_CHAIN_DESC1 {
+                        Width: pixels_size.width as _,
+                        Height: pixels_size.height as _,
+                        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                        SampleDesc: DXGI_SAMPLE_DESC {
+                            Count: 1,
+                            Quality: 0,
+                        },
+                        BufferCount: 2,
+                        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                        Stereo: FALSE,
+                        Scaling: DXGI_SCALING_STRETCH,
+                        SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                        AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+                        Flags: 0,
+                    },
+                    None,
+                )
+                .expect("dxgi_factory.CreateSwapChainForComposition")
+        };
+        let swapchain: IDXGISwapChain3 = swapchain.cast().expect("swapchain.cast");
+        let fx = GaussianBlurEffect::new().expect("drag.fx.create");
+        fx.SetSource(
+            &CompositionEffectSourceParameter::Create(h!("source"))
+                .expect("compositioneffectsourceparameter.create"),
         )
-        .expect("cv_root.SetBrush");
-    cv_composited
-        .SetRelativeOffsetAdjustment(Vector3::zero())
-        .expect("drag.visual.color_tint.set_relative_offset_adjustment");
-    cv_composited
-        .SetRelativeSizeAdjustment(Vector2::one())
-        .expect("drag.visual.color_tint.set_relative_size_adjustment");
-    cv_root
-        .Children()
-        .expect("drag.visual.get_children")
-        .InsertAtTop(&cv_composited)
-        .expect("drag.visual.add_child");
+        .expect("drag.fx.set_source");
+        fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
+        fx.SetOptimization(EffectOptimization::Speed)
+            .expect("drag.fx.set_optimization");
+        let effect_factory = unsafe { &*self.app_context_ptr }
+            .native_compositor
+            .CreateEffectFactory(&fx)
+            .expect("drag.fx.create_factory");
+        let backdrop_brush = unsafe { &*self.app_context_ptr }
+            .native_compositor
+            .CreateBackdropBrush()
+            .expect("drag.backdrop_brush.create");
+        let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
+        blur_brush
+            .SetSourceParameter(h!("Source"), &backdrop_brush)
+            .expect("drag.fx.set_blur_source");
+        cv_root
+            .SetSize(Vector2 {
+                X: pixels_size.width as _,
+                Y: pixels_size.height as _,
+            })
+            .expect("cv_root.SetSize");
+        cv_root
+            .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
+            .expect("drag.visual.blur.set_center_point");
+        cv_root
+            .SetAnchorPoint(Vector2::new(0.5, 0.5))
+            .expect("drag.visual.blur.set_anchor_point");
+        cv_root
+            .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
+            .expect("drag.visual.blur.set_relative_offset_adjustment");
+        cv_root
+            .SetBrush(&blur_brush)
+            .expect("drag.visual.blur.set_brush");
+        cv_root
+            .SetShadow(&{
+                let x = unsafe { &*self.app_context_ptr }
+                    .native_compositor
+                    .CreateDropShadow()
+                    .expect("drag.visual.shadow.create");
+                x.SetBlurRadius(SHADOW_SIZE)
+                    .expect("context_menu.shadow.set_blur_radius");
+                x.SetOffset(SHADOW_OFFSET)
+                    .expect("context_menu.shadow.set_offset");
+                x.SetOpacity(0.3).expect("context_menu.shadow.set_opacity");
+                x
+            })
+            .expect("drag.visual.set_shadow");
+        let cv_composited = unsafe { &*self.app_context_ptr }
+            .native_compositor
+            .CreateSpriteVisual()
+            .expect("drag.visual.color_tint.create");
+        cv_composited
+            .SetBrush(
+                &unsafe { &*self.app_context_ptr }
+                    .native_compositor
+                    .CreateSurfaceBrushWithSurface(&unsafe {
+                        (*self.app_context_ptr)
+                            .native_compositor_interop
+                            .CreateCompositionSurfaceForSwapChain(&swapchain)
+                            .expect("compositor_interop.CreateCompositionSurfaceForSwapChain")
+                    })
+                    .expect("compositor.CreateSurfaceBrushWithSurface"),
+            )
+            .expect("cv_root.SetBrush");
+        cv_composited
+            .SetRelativeOffsetAdjustment(Vector3::zero())
+            .expect("drag.visual.color_tint.set_relative_offset_adjustment");
+        cv_composited
+            .SetRelativeSizeAdjustment(Vector2::one())
+            .expect("drag.visual.color_tint.set_relative_size_adjustment");
+        cv_root
+            .Children()
+            .expect("drag.visual.get_children")
+            .InsertAtTop(&cv_composited)
+            .expect("drag.visual.add_child");
 
-    set_state(
-        h,
-        Box::new(InstanceState {
-            composite_root,
-            ht_root,
-            event_dispatcher: unsafe { &*syslink.event_dispatcher }.clone(),
-            _c_target: c_target,
-            keyboard_focus_state: PerWindowKeyboardFocusState::new(),
-            depth,
-            pointer_focus: false,
-            views: Vec::new(),
-            _base_surface_event_handler: base_surface_event_handler,
-        }),
-    );
-    syslink
-        .rt_sender
-        .send(RenderMessage::NewContextMenu(NewContextMenuData {
-            w: Handle(h),
-            // composition_surface_handle: SendableCompositionSurfaceHandle(dcomp_surface_handle),
-            swapchain,
-            composite_root,
-        }))
-        .expect("rt_sender.send");
+        set_state(
+            h,
+            Box::new(InstanceState {
+                composite_root,
+                ht_root,
+                event_dispatcher: unsafe { &*self.event_dispatcher }.clone(),
+                _c_target: c_target,
+                keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+                depth,
+                pointer_focus: false,
+                views: Vec::new(),
+                _base_surface_event_handler: base_surface_event_handler,
+            }),
+        );
+        self.rt_sender
+            .send(RenderMessage::NewContextMenu(NewContextMenuData {
+                w: Handle(h),
+                // composition_surface_handle: SendableCompositionSurfaceHandle(dcomp_surface_handle),
+                swapchain,
+                composite_root,
+            }))
+            .expect("rt_sender.send");
 
-    let views = setup_contents(layouted_items, Handle(h), view_init_context);
-    state_mut(h).views = views;
+        let views = setup_contents(layouted_items, Handle(h), view_init_context);
+        state_mut(h).views = views;
 
-    let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
-    Handle(h)
+        let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
+        Handle(h)
+    }
+
+    pub fn any_pointer_on_context_menu(&self) -> bool {
+        let mut p = core::mem::MaybeUninit::<POINT>::uninit();
+        unsafe {
+            GetCursorPos(p.as_mut_ptr()).expect("Failed to get cursor pos");
+        }
+        let p = unsafe { p.assume_init() };
+
+        let w_pointing = unsafe { WindowFromPoint(p) };
+        let has_pointing_menu = WindowByClassIter::new(PCWSTR(self.context_menu.window_class as _))
+            .any(|x| x == w_pointing);
+
+        has_pointing_menu
+    }
 }
