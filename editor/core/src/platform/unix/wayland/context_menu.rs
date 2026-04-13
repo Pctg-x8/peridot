@@ -47,7 +47,6 @@ impl Handle {
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        tracing::debug!("close context menu surface");
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         syslink
             .rt_sender
@@ -63,10 +62,7 @@ impl Handle {
         ht_manager.free_all(eh.0.data.ht_root);
         drop(eh);
 
-        tracing::debug!("event handler freed");
-
         drop(unsafe { wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(self.0)) });
-        tracing::debug!("surface done");
     }
 
     #[inline(always)]

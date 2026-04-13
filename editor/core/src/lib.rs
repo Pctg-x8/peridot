@@ -3606,7 +3606,7 @@ impl ContextMenuSession {
             |render_scale| {
                 let mut fs = PerWindowFontSet::new(system_link.root_font_set(), typing_context);
                 fs.rescale((render_scale * 72.0) as _);
-                crate::uikit::MenuItemLayout::build(items.clone().into_iter(), &fs, render_scale)
+                crate::uikit::MenuItemLayout::build(items.iter().cloned(), &fs, render_scale)
             },
             |layout, h, view_init_ctx| {
                 view_init_ctx.ui_scale_factor = h.render_scale();
