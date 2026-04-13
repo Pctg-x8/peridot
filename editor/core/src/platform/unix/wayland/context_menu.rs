@@ -317,32 +317,21 @@ impl wl::WpFractionalScaleV1EventListener for EventHandler {
     }
 }
 
-struct SharedState {
-    delayed_action_timer: TimerFD,
-}
-static mut SHARED_STATE: *mut SharedState = core::ptr::null_mut();
-
-pub fn initialize() {
-    unsafe {
-        SHARED_STATE = Box::into_raw(Box::new(SharedState {
-            delayed_action_timer: TimerFD::new().expect("timerfd.create"),
-        }));
-    }
+pub struct SharedState {
+    pub delayed_action_timer: TimerFD,
 }
 
-pub fn delayed_action_timer<'a>() -> &'a TimerFD {
-    &unsafe { &*SHARED_STATE }.delayed_action_timer
-}
-
-pub fn reserve_delayed_action() {
-    unsafe { &*SHARED_STATE }
+pub fn reserve_delayed_action(syslink: &SystemLink) {
+    syslink
+        .context_menu
         .delayed_action_timer
         .set(0, 400 * 1000 * 1000)
         .expect("timerfd.set");
 }
 
-pub fn unreserve_delayed_action() {
-    unsafe { &*SHARED_STATE }
+pub fn unreserve_delayed_action(syslink: &SystemLink) {
+    syslink
+        .context_menu
         .delayed_action_timer
         .unset()
         .expect("timerfd.unset");
@@ -361,8 +350,6 @@ pub fn pop(
         &mut ViewInitContext,
     ) -> Vec<MenuItemView>,
 ) -> Handle {
-    let shared_state = unsafe { &*SHARED_STATE };
-
     let layouted_items = layouted_items(view_init_context.ui_scale_factor);
     let width = MenuItemLayout::min_width(layouted_items.iter());
     let height = MenuItemLayout::height(layouted_items.iter());

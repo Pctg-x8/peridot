@@ -130,8 +130,6 @@ pub fn launch() {
     );
     #[cfg(feature = "wayland")]
     let window_registry = platform::unix::wayland::WindowRegistry::new();
-    #[cfg(feature = "wayland")]
-    platform::unix::wayland::context_menu::initialize();
 
     let global_time_base = std::time::Instant::now();
     main_wrapper(
@@ -381,6 +379,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let mut pointer_hovering_timer_id = 0;
     #[cfg(target_os = "linux")]
     let pointer_hovering_timer = utils::platform::linux::TimerFD::new().expect("timerfd.new");
+    #[cfg(feature = "wayland")]
+    let delayed_action_timer = utils::platform::linux::TimerFD::new().expect("timerfd.create");
+    #[cfg(feature = "wayland")]
+    let delayed_action_timer_fd = std::os::unix::prelude::AsRawFd::as_raw_fd(&delayed_action_timer);
     let mut app = core::pin::pin!(run_app(
         LaunchArgs {
             event_queue: EventQueue { event_store },
@@ -425,6 +427,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             terminate_event: terminate_event.clone(),
             #[cfg(target_os = "linux")]
             pointer_hovering_timer: &pointer_hovering_timer,
+            #[cfg(feature = "wayland")]
+            context_menu: platform::unix::wayland::context_menu::SharedState {
+                delayed_action_timer,
+            }
         },
     ));
 
@@ -509,11 +515,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
-            .add(
-                crate::platform::unix::wayland::context_menu::delayed_action_timer(),
-                EpollEventBits::IN,
-                4,
-            )
+            .add(&delayed_action_timer_fd, EpollEventBits::IN, 4)
             .expect("epoll.add");
         #[cfg(target_os = "linux")]
         let evdevs = (0..32)
@@ -3182,7 +3184,9 @@ async fn run<'sys>(
                     #[cfg(windows)]
                     crate::platform::windows::context_menu::reserve_delayed_action();
                     #[cfg(feature = "wayland")]
-                    crate::platform::unix::wayland::context_menu::reserve_delayed_action();
+                    crate::platform::unix::wayland::context_menu::reserve_delayed_action(
+                        &system_link,
+                    );
                 }
             }
             Event::ContextMenuDeselectItem { depth } => {
@@ -3198,7 +3202,9 @@ async fn run<'sys>(
                     #[cfg(windows)]
                     crate::platform::windows::context_menu::reserve_delayed_action();
                     #[cfg(feature = "wayland")]
-                    crate::platform::unix::wayland::context_menu::reserve_delayed_action();
+                    crate::platform::unix::wayland::context_menu::reserve_delayed_action(
+                        &system_link,
+                    );
                 }
             }
             Event::ContextMenuOpenSubmenu { depth, index } => {
@@ -3229,7 +3235,9 @@ async fn run<'sys>(
                 #[cfg(windows)]
                 crate::platform::windows::context_menu::unreserve_delayed_action();
                 #[cfg(feature = "wayland")]
-                crate::platform::unix::wayland::context_menu::unreserve_delayed_action();
+                crate::platform::unix::wayland::context_menu::unreserve_delayed_action(
+                    &system_link,
+                );
 
                 if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.perform_delayed_action(
@@ -3938,6 +3946,8 @@ pub struct SystemLink<'sys> {
     terminate_event: Arc<linux_eventfd::EventFD>,
     #[cfg(target_os = "linux")]
     pointer_hovering_timer: *const utils::platform::linux::TimerFD,
+    #[cfg(feature = "wayland")]
+    pub context_menu: platform::unix::wayland::context_menu::SharedState,
 }
 #[cfg(not(windows))]
 impl SystemLink<'_> {
