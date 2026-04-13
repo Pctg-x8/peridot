@@ -103,6 +103,10 @@ pub struct RenderThread<'main> {
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     pub root_font_set: &'main RootFontSet,
     #[cfg(windows)]
+    pub d3d12_device: &'main windows::Win32::Graphics::Direct3D12::ID3D12Device,
+    #[cfg(windows)]
+    pub d3d12_cq: &'main windows::Win32::Graphics::Direct3D12::ID3D12CommandQueue,
+    #[cfg(windows)]
     pub d3d12_present_counter: u64,
 }
 impl<'main> RenderThread<'main> {
@@ -111,6 +115,21 @@ impl<'main> RenderThread<'main> {
         let mut render_queue = self
             .vk_device
             .queue(self.vk_device.present_queue_family_index(), 0);
+
+        #[cfg(windows)]
+        let d3d12_present_fence: windows::Win32::Graphics::Direct3D12::ID3D12Fence = unsafe {
+            self.d3d12_device
+                .CreateFence(
+                    0,
+                    windows::Win32::Graphics::Direct3D12::D3D12_FENCE_FLAG_NONE,
+                )
+                .expect("d3d12_device.CreateFence")
+        };
+        #[cfg(windows)]
+        let d3d12_present_fence_event = unsafe {
+            windows::Win32::System::Threading::CreateEventW(None, false, false, None)
+                .expect("CreateEvent")
+        };
 
         let mut composite_tree = CompositeTreeRender::new();
         let composite_shared_buffers = CompositeSharedBuffers::new(self.vk_device);
@@ -269,6 +288,8 @@ impl<'main> RenderThread<'main> {
                                 window_glyph_atlas.manager.atlas(),
                                 self.root_font_set,
                                 &typing_context,
+                                #[cfg(windows)]
+                                self.d3d12_device,
                             ),
                         );
                     }
@@ -351,6 +372,7 @@ impl<'main> RenderThread<'main> {
                     any_swapchain_invalidated = true;
                 }
             }
+            #[cfg(not(windows))]
             for x in context_menus.values_mut() {
                 if x.take_swapchain_externally_invalidation_signal() {
                     x.invalidate_swapchain();
@@ -573,7 +595,9 @@ impl<'main> RenderThread<'main> {
                     Err(e) => Err(e).expect("acquire next"),
                 };
 
+                #[cfg(not(windows))]
                 let new_ui_scale = x.take_latest_ui_scale_changes();
+                #[cfg(not(windows))]
                 if let Some(scale) = new_ui_scale {
                     let scale = SafeF32::new(scale).expect("scale.invalid");
 
@@ -814,25 +838,14 @@ impl<'main> RenderThread<'main> {
                 self.d3d12_present_counter += 1;
                 let wait_for_counter = self.d3d12_present_counter;
                 unsafe {
-                    crate::platform::windows::context_menu::SharedState::get()
-                        .d3d12_present_fence
-                        .SetEventOnCompletion(
-                            wait_for_counter,
-                            crate::platform::windows::context_menu::SharedState::get()
-                                .d3d12_present_fence_event,
-                        )
+                    d3d12_present_fence
+                        .SetEventOnCompletion(wait_for_counter, d3d12_present_fence_event)
                         .expect("d3d12_present_fence.SetEventOnCompletion");
-                    crate::platform::windows::context_menu::SharedState::get()
-                        .d3d12_cq
-                        .Signal(
-                            &crate::platform::windows::context_menu::SharedState::get()
-                                .d3d12_present_fence,
-                            wait_for_counter,
-                        )
+                    self.d3d12_cq
+                        .Signal(&d3d12_present_fence, wait_for_counter)
                         .expect("d3d12_cq.Wait");
                     windows::Win32::System::Threading::WaitForSingleObject(
-                        crate::platform::windows::context_menu::SharedState::get()
-                            .d3d12_present_fence_event,
+                        d3d12_present_fence_event,
                         windows::Win32::System::Threading::INFINITE,
                     );
                 }
@@ -845,6 +858,12 @@ impl<'main> RenderThread<'main> {
 
         unsafe {
             self.vk_device.wait().expect("device wait");
+        }
+        #[cfg(windows)]
+        if let Err(e) =
+            unsafe { windows::Win32::Foundation::CloseHandle(d3d12_present_fence_event) }
+        {
+            tracing::error!(reason = %e, "CloseHandle");
         }
         tracing::info!("RenderThread terminated");
     }
@@ -913,6 +932,7 @@ impl<'d> ContextMenuRenderer<'d> {
         glyph_atlas: &TextureAtlas,
         root_font_set: &'d RootFontSet,
         typing_context: &ThreadLocalTypingContext,
+        #[cfg(windows)] d3d12_device: &windows::Win32::Graphics::Direct3D12::ID3D12Device,
     ) -> Self {
         #[allow(unused_mut)]
         let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
@@ -954,8 +974,7 @@ impl<'d> ContextMenuRenderer<'d> {
                     .expect("swapchain.GetBuffer")
             };
             let shared_handle = unsafe {
-                crate::platform::windows::context_menu::SharedState::get()
-                    .d3d12_device
+                d3d12_device
                     .CreateSharedHandle(
                         &d3d12_resource,
                         None,

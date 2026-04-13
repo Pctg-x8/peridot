@@ -1,45 +1,33 @@
 use std::rc::Rc;
 
 use windows::{
-    UI::Composition::{CompositionEffectSourceParameter, Compositor, Desktop::DesktopWindowTarget},
+    UI::Composition::{CompositionEffectSourceParameter, Desktop::DesktopWindowTarget},
     Win32::{
-        Foundation::{CloseHandle, FALSE, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
-            Direct3D::D3D_FEATURE_LEVEL_12_0,
-            Direct3D12::{
-                D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
-                D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_FENCE_FLAG_NONE, D3D12CreateDevice,
-                D3D12GetDebugInterface, ID3D12CommandQueue, ID3D12Debug, ID3D12Device, ID3D12Fence,
-            },
+            Direct3D12::{ID3D12CommandQueue, ID3D12Device},
             Dxgi::{
                 Common::{
                     DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
                 },
-                CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, DXGI_SCALING_STRETCH,
-                DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISwapChain3,
             },
             Gdi::{MONITOR_DEFAULTTONEAREST, MapWindowPoints, MonitorFromPoint},
-        },
-        System::{
-            Threading::{CreateEventW, GetCurrentThreadId},
-            WinRT::Composition::{ICompositorDesktopInterop, ICompositorInterop},
         },
         UI::{
             Controls::WM_MOUSELEAVE,
             HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
-                CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetCursorPos, GetWindowLongPtrW, GetWindowRect, HHOOK, HTBOTTOM, HTBOTTOMLEFT,
-                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
-                HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, KillTimer, MSG,
-                SW_SHOWNOACTIVATE, SetTimer, SetWindowLongPtrW, SetWindowsHookExW, ShowWindow,
-                UnhookWindowsHookEx, WH_MOUSE, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MBUTTONDBLCLK, WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
-                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_POPUP, WindowFromPoint,
+                CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindowLongPtrW,
+                GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE,
+                HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+                HTTRANSPARENT, KillTimer, SW_SHOWNOACTIVATE, SetTimer, SetWindowLongPtrW,
+                ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+                WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_NOACTIVATE,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
             },
         },
     },
@@ -60,16 +48,12 @@ use crate::{
         NewContextMenuData, RenderMessage,
         composite::{
             AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
-            Gradient, GradientRef,
         },
     },
     uikit::{
         MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView, MountTarget, ViewInitContext,
     },
-    utils::{
-        LogicalUnit, PixelsUnit, Point, Size,
-        platform::windows::{WindowByClassIter, current_instance_handle},
-    },
+    utils::{LogicalUnit, PixelsUnit, Point, Size, platform::windows::current_instance_handle},
 };
 
 #[repr(transparent)]
@@ -100,6 +84,26 @@ impl Handle {
         self.0
     }
 
+    pub fn close(
+        self,
+        syslink: &SystemLink,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        syslink
+            .rt_sender
+            .send(RenderMessage::DestroyContextMenu(self, tx))
+            .expect("rt_sender.send");
+        rx.recv().expect("rx.recv");
+
+        take_state(self.0).done(composite_tree, ht_manager);
+
+        if let Err(e) = unsafe { DestroyWindow(self.0) } {
+            tracing::error!(reason = %e, "DestroyWindow");
+        }
+    }
+
     #[inline(always)]
     pub fn pixels_size(&self) -> Size<PixelsUnit> {
         let mut r = core::mem::MaybeUninit::uninit();
@@ -122,6 +126,12 @@ impl Handle {
     #[inline(always)]
     pub fn render_scale(&self) -> f32 {
         unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
+    }
+
+    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        for v in state(self.0).views.iter() {
+            v.rescale(scale, composite_tree);
+        }
     }
 
     #[inline(always)]
@@ -169,6 +179,7 @@ impl Handle {
 pub struct InstanceState {
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    event_dispatcher: LogicFiberEventDispatcher,
     _c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
     depth: usize,
@@ -335,7 +346,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
     if msg == WM_LBUTTONDOWN {
         // move then down
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerMove {
                 target: Handle(hwnd),
@@ -346,7 +357,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 )
                 .to_logical(Handle(hwnd).render_scale()),
             });
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerDown {
                 target: Handle(hwnd),
@@ -369,7 +380,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerMove {
                 target: Handle(hwnd),
@@ -377,7 +388,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 client_pos: Point::new_pixels(p[0].x, p[0].y)
                     .to_logical(Handle(hwnd).render_scale()),
             });
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerDown {
                 target: Handle(hwnd),
@@ -391,7 +402,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_LBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerUp {
                 target: Handle(hwnd),
@@ -403,7 +414,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
     if msg == WM_RBUTTONDOWN {
         // move then down
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerMove {
                 target: Handle(hwnd),
@@ -414,7 +425,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 )
                 .to_logical(Handle(hwnd).render_scale()),
             });
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerDown {
                 target: Handle(hwnd),
@@ -437,7 +448,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerMove {
                 target: Handle(hwnd),
@@ -445,7 +456,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 client_pos: Point::new_pixels(p[0].x, p[0].y)
                     .to_logical(Handle(hwnd).render_scale()),
             });
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerDown {
                 target: Handle(hwnd),
@@ -459,7 +470,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_RBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerUp {
                 target: Handle(hwnd),
@@ -485,7 +496,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus");
         }
 
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerMove {
                 target: Handle(hwnd),
@@ -525,7 +536,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             MapWindowPoints(None, Some(hwnd), &mut p);
         }
 
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerMove {
                 target: Handle(hwnd),
@@ -548,14 +559,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             state_mut(hwnd).pointer_focus = false;
             tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus lost");
             // leaveしたのでdeselectも発行
-            SharedState::get()
+            state(hwnd)
                 .event_dispatcher
                 .dispatch(Event::ContextMenuDeselectItem {
                     depth: state(hwnd).depth,
                 });
         }
 
-        SharedState::get()
+        state(hwnd)
             .event_dispatcher
             .dispatch(Event::ContextMenuPointerLeave {
                 target: Handle(hwnd),
@@ -569,203 +580,50 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 }
 
 pub struct SharedState {
-    window_class: u16,
-    installed_hook: HHOOK,
-    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
-    event_dispatcher: LogicFiberEventDispatcher,
+    pub window_class: u16,
+    pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     pub dxgi_factory: IDXGIFactory2,
     pub d3d12_device: ID3D12Device,
     pub d3d12_cq: ID3D12CommandQueue,
-    pub d3d12_present_fence: ID3D12Fence,
-    pub d3d12_present_fence_event: HANDLE,
-    compositor: Compositor,
-    compositor_desktop_interop: ICompositorDesktopInterop,
-    compositor_interop: ICompositorInterop,
-    entry_light_grad: GradientRef,
-    pub delayed_action_timer_id: usize,
-}
-impl Drop for SharedState {
-    fn drop(&mut self) {
-        if let Err(e) = unsafe { CloseHandle(self.d3d12_present_fence_event) } {
-            tracing::error!(reason = %e, "CloseHandle");
-        }
-
-        if let Err(e) = unsafe { UnhookWindowsHookEx(self.installed_hook) } {
-            tracing::error!(reason = %e, "UnhookWindowsHookEx");
-        }
-    }
+    pub delayed_action_timer_id: *mut usize,
 }
 impl SharedState {
-    #[inline(always)]
-    pub const fn get() -> &'static Self {
-        unsafe { &*CONTEXT_MENU_SHARED_STATE }
-    }
+    pub fn new(
+        dxgi_factory: IDXGIFactory2,
+        d3d12_device: ID3D12Device,
+        d3d12_cq: ID3D12CommandQueue,
+        rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+        delayed_action_timer_id: core::pin::Pin<&mut usize>,
+    ) -> Self {
+        let window_class = register_class(current_instance_handle());
 
-    // hiding by mouse hook: https://www.codeproject.com/Tips/751520/Custom-Context-Menu
-    extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-        if WM_LBUTTONDOWN as usize <= wparam.0 && wparam.0 <= WM_MBUTTONDBLCLK as usize {
-            let mut p = core::mem::MaybeUninit::<POINT>::uninit();
-            unsafe {
-                GetCursorPos(p.as_mut_ptr()).expect("Failed to get cursor pos");
-            }
-            let p = unsafe { p.assume_init() };
-
-            let w_pointing = unsafe { WindowFromPoint(p) };
-            let has_pointing_menu = WindowByClassIter::new(PCWSTR(Self::get().window_class as _))
-                .any(|x| x == w_pointing);
-
-            if !has_pointing_menu {
-                Self::get()
-                    .event_dispatcher
-                    .dispatch(Event::ContextMenuCloseAll);
-            }
-        }
-
-        unsafe { CallNextHookEx(None, code, wparam, lparam) }
-    }
-}
-
-static mut CONTEXT_MENU_SHARED_STATE: *mut SharedState = core::ptr::null_mut();
-
-pub fn initialize(
-    app_context: &super::ApplicationContext,
-    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
-) {
-    let window_class = register_class(current_instance_handle());
-    let installed_hook = unsafe {
-        SetWindowsHookExW(
-            WH_MOUSE,
-            Some(SharedState::mouse_hook),
-            None,
-            GetCurrentThreadId(),
-        )
-        .expect("SetWindowsHookExW")
-    };
-
-    let mut d3d12_debug = core::mem::MaybeUninit::uninit();
-    unsafe {
-        D3D12GetDebugInterface(d3d12_debug.as_mut_ptr()).expect("D3D12GetDebugInterface");
-    }
-    let d3d12_debug: ID3D12Debug = unsafe {
-        d3d12_debug
-            .assume_init()
-            .expect("D3D12GetDebugInterface.null")
-    };
-    unsafe {
-        d3d12_debug.EnableDebugLayer();
-    }
-
-    let dxgi_factory: IDXGIFactory2 =
-        unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG).expect("CreateDXGIFactory2") };
-    let adapter = unsafe {
-        dxgi_factory
-            .EnumAdapters1(0)
-            .expect("dxgi_factory.EnumAdapters1")
-    };
-    let mut d3d12_device = core::mem::MaybeUninit::uninit();
-    unsafe {
-        D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, d3d12_device.as_mut_ptr())
-            .expect("D3D12CreateDevice")
-    };
-    let d3d12_device: ID3D12Device =
-        unsafe { d3d12_device.assume_init().expect("D3D12CreateDevice.null") };
-    let d3d12_cq: ID3D12CommandQueue = unsafe {
-        d3d12_device
-            .CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
-                Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
-                Priority: 0,
-                Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
-                NodeMask: 0,
-            })
-            .expect("d3d12_device.CreateCommandQueue")
-    };
-    unsafe {
-        d3d12_cq
-            .SetName(w!("D3D12 Main Command Queue"))
-            .expect("d3d12_cq.SetName");
-    }
-    let d3d12_present_fence: ID3D12Fence = unsafe {
-        d3d12_device
-            .CreateFence(0, D3D12_FENCE_FLAG_NONE)
-            .expect("d3d12_device.CreateFence")
-    };
-    let d3d12_present_fence_event =
-        unsafe { CreateEventW(None, false, false, None).expect("CreateEvent") };
-
-    unsafe {
-        CONTEXT_MENU_SHARED_STATE = Box::into_raw(Box::new(SharedState {
+        Self {
             window_class,
-            installed_hook,
             rt_sender,
             dxgi_factory,
             d3d12_device,
             d3d12_cq,
-            d3d12_present_fence,
-            d3d12_present_fence_event,
-            compositor: app_context.native_compositor.clone(),
-            compositor_desktop_interop: app_context
-                .native_compositor
-                .cast()
-                .expect("native_compositor.cast"),
-            compositor_interop: app_context
-                .native_compositor
-                .cast()
-                .expect("native_compositor.cast"),
-            // あとで初期化するので一旦適当に埋める
-            #[allow(invalid_value)]
-            event_dispatcher: core::mem::MaybeUninit::uninit().assume_init(),
-            #[allow(invalid_value)]
-            entry_light_grad: core::mem::MaybeUninit::uninit().assume_init(),
-            delayed_action_timer_id: 0,
-        }));
+            delayed_action_timer_id: delayed_action_timer_id.get_mut(),
+        }
     }
 }
 
-pub fn initialize_composite_resources(composite_tree: &mut CompositeTree<SyncEvent>) {
+pub fn reserve_delayed_action(syslink: &SystemLink) {
     unsafe {
-        (*CONTEXT_MENU_SHARED_STATE).entry_light_grad =
-            composite_tree.create_gradient(Gradient::Radial {
-                start_color: [0.75, 1.0, 1.5, 1.0],
-                end_color: [0.25, 0.5, 1.0, 0.0],
-                center_relative: [0.5, 0.9],
-                radius: [0.5, 0.1],
-            });
-    }
-}
-
-pub fn post_initialize(event_dispatcher: LogicFiberEventDispatcher) {
-    unsafe {
-        (*CONTEXT_MENU_SHARED_STATE).event_dispatcher = event_dispatcher;
-    }
-}
-
-pub fn reserve_delayed_action() {
-    unsafe {
-        (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id = SetTimer(
+        *syslink.context_menu.delayed_action_timer_id = SetTimer(
             None,
-            (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id,
+            *syslink.context_menu.delayed_action_timer_id,
             400,
             None,
         );
     }
 }
 
-pub fn unreserve_delayed_action() {
-    let active_timer_id = unsafe {
-        core::ptr::replace(
-            core::ptr::addr_of_mut!((*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id),
-            0,
-        )
-    };
+pub fn unreserve_delayed_action(syslink: &SystemLink) {
+    let active_timer_id = unsafe { syslink.context_menu.delayed_action_timer_id.replace(0) };
     if active_timer_id != 0 {
         unsafe { KillTimer(None, active_timer_id).expect("KillTimer") };
     }
-}
-
-pub fn is_delayed_action_timer_event(msg: &MSG) -> bool {
-    msg.message == WM_TIMER
-        && msg.hwnd.0.is_null()
-        && unsafe { (*CONTEXT_MENU_SHARED_STATE).delayed_action_timer_id == msg.wParam.0 }
 }
 
 pub fn pop(
@@ -780,7 +638,6 @@ pub fn pop(
         &mut ViewInitContext,
     ) -> Vec<MenuItemView>,
 ) -> ContextMenuHandle {
-    let shared_state = SharedState::get();
     let mut dest_dpi_x = core::mem::MaybeUninit::uninit();
     let mut dest_dpi_y = core::mem::MaybeUninit::uninit();
     unsafe {
@@ -803,7 +660,7 @@ pub fn pop(
     let h = unsafe {
         CreateWindowExW(
             WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
-            PCWSTR(shared_state.window_class as _),
+            PCWSTR(syslink.context_menu.window_class as _),
             w!(""),
             WS_POPUP,
             screen_pos.x - SHADOW_SIZE.ceil() as i32,
@@ -838,22 +695,23 @@ pub fn pop(
         .ht_manager
         .set_action_handler(ht_root, &base_surface_event_handler);
     let c_target = unsafe {
-        shared_state
-            .compositor_desktop_interop
+        (*syslink.app_context_ptr)
+            .native_compositor_desktop_interop
             .CreateDesktopWindowTarget(h, true)
             .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
     };
-    let cv_root = shared_state
-        .compositor
+    let cv_root = unsafe { &*syslink.app_context_ptr }
+        .native_compositor
         .CreateSpriteVisual()
         .expect("compositor.CreateSpriteVisual");
     c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
 
     let swapchain = unsafe {
-        shared_state
+        syslink
+            .context_menu
             .dxgi_factory
             .CreateSwapChainForComposition(
-                &shared_state.d3d12_cq,
+                &syslink.context_menu.d3d12_cq,
                 &DXGI_SWAP_CHAIN_DESC1 {
                     Width: pixels_size.width as _,
                     Height: pixels_size.height as _,
@@ -884,12 +742,12 @@ pub fn pop(
     fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
     fx.SetOptimization(EffectOptimization::Speed)
         .expect("drag.fx.set_optimization");
-    let effect_factory = shared_state
-        .compositor
+    let effect_factory = unsafe { &*syslink.app_context_ptr }
+        .native_compositor
         .CreateEffectFactory(&fx)
         .expect("drag.fx.create_factory");
-    let backdrop_brush = shared_state
-        .compositor
+    let backdrop_brush = unsafe { &*syslink.app_context_ptr }
+        .native_compositor
         .CreateBackdropBrush()
         .expect("drag.backdrop_brush.create");
     let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
@@ -916,8 +774,8 @@ pub fn pop(
         .expect("drag.visual.blur.set_brush");
     cv_root
         .SetShadow(&{
-            let x = shared_state
-                .compositor
+            let x = unsafe { &*syslink.app_context_ptr }
+                .native_compositor
                 .CreateDropShadow()
                 .expect("drag.visual.shadow.create");
             x.SetBlurRadius(SHADOW_SIZE)
@@ -928,17 +786,17 @@ pub fn pop(
             x
         })
         .expect("drag.visual.set_shadow");
-    let cv_composited = shared_state
-        .compositor
+    let cv_composited = unsafe { &*syslink.app_context_ptr }
+        .native_compositor
         .CreateSpriteVisual()
         .expect("drag.visual.color_tint.create");
     cv_composited
         .SetBrush(
-            &shared_state
-                .compositor
+            &unsafe { &*syslink.app_context_ptr }
+                .native_compositor
                 .CreateSurfaceBrushWithSurface(&unsafe {
-                    shared_state
-                        .compositor_interop
+                    (*syslink.app_context_ptr)
+                        .native_compositor_interop
                         .CreateCompositionSurfaceForSwapChain(&swapchain)
                         .expect("compositor_interop.CreateCompositionSurfaceForSwapChain")
                 })
@@ -962,6 +820,7 @@ pub fn pop(
         Box::new(InstanceState {
             composite_root,
             ht_root,
+            event_dispatcher: unsafe { &*syslink.event_dispatcher }.clone(),
             _c_target: c_target,
             keyboard_focus_state: PerWindowKeyboardFocusState::new(),
             depth,
@@ -985,54 +844,4 @@ pub fn pop(
 
     let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
     Handle(h)
-}
-
-pub fn close(
-    handle: Handle,
-    composite_tree: &mut CompositeTree<SyncEvent>,
-    ht_manager: &mut HitTestTreeManager,
-) {
-    let (tx, rx) = std::sync::mpsc::channel::<()>();
-    SharedState::get()
-        .rt_sender
-        .send(RenderMessage::DestroyContextMenu(handle, tx))
-        .expect("rt_sender.send");
-    rx.recv().expect("rx.recv");
-
-    take_state(handle.0).done(composite_tree, ht_manager);
-
-    if let Err(e) = unsafe { DestroyWindow(handle.0) } {
-        tracing::error!(reason = %e, "DestroyWindow");
-    }
-}
-
-pub fn close_all(
-    composite_tree: &mut CompositeTree<SyncEvent>,
-    ht_manager: &mut HitTestTreeManager,
-) {
-    let window_handles =
-        WindowByClassIter::new(PCWSTR(SharedState::get().window_class as _)).collect::<Vec<_>>();
-    for window_handle in window_handles {
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
-        SharedState::get()
-            .rt_sender
-            .send(RenderMessage::DestroyContextMenu(Handle(window_handle), tx))
-            .expect("rt_sender.send");
-        rx.recv().expect("rx.recv");
-
-        take_state(window_handle).done(composite_tree, ht_manager);
-
-        if let Err(e) = unsafe { DestroyWindow(window_handle) } {
-            tracing::error!(reason = %e, "DestroyWindow");
-        }
-    }
-}
-
-pub fn finalize() {
-    unsafe {
-        drop(Box::from_raw(core::ptr::replace(
-            core::ptr::addr_of_mut!(CONTEXT_MENU_SHARED_STATE),
-            core::ptr::null_mut(),
-        )));
-    }
 }
