@@ -181,9 +181,9 @@ impl<'fs> VulkanDevice<'fs> {
         #[cfg(windows)]
         extern "system" fn cb_win(
             severity: br::vk::VkDebugUtilsMessageSeverityFlagBitsEXT,
-            r#type: br::vk::VkDebugUtilsMessageTypeFlagsEXT,
+            _type: br::vk::VkDebugUtilsMessageTypeFlagsEXT,
             data: *const br::vk::VkDebugUtilsMessengerCallbackDataEXT,
-            user_data: *mut core::ffi::c_void,
+            _user_data: *mut core::ffi::c_void,
         ) -> br::vk::VkBool32 {
             let sev_str = match severity {
                 v if v == br::vk::VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT => {
@@ -214,7 +214,7 @@ impl<'fs> VulkanDevice<'fs> {
             false as _
         }
         #[cfg(windows)]
-        let eh = br::DebugUtilsMessengerObject::new(
+        br::DebugUtilsMessengerObject::new(
             &vk_instance,
             &br::DebugUtilsMessengerCreateInfo::new(
                 br::DebugUtilsMessageSeverityFlags::ERROR

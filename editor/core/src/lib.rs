@@ -29,9 +29,9 @@ use crate::{
         FocusTargetToken, InputEventContext, KeyInputCode, KeyInputEventHandler,
         KeyboardFocusTokenRegistry, NativeDesktopSurface, PointerInputManager, PointerInputUnit,
         hittest::{
-            CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData,
-            HitTestTreeManager, HitTestTreeRef, HitTestTreeScreenRepositionHandler,
-            PointerActionArgs, PointerButton, PointerButtonActionArgs,
+            CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
+            HitTestTreeRef, HitTestTreeScreenRepositionHandler, PointerActionArgs, PointerButton,
+            PointerButtonActionArgs,
         },
     },
     rendering::{
@@ -2898,12 +2898,10 @@ async fn run<'sys>(
             }
             Event::WindowMove { mut window, pos } => {
                 let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 let mut input_context = InputEventContext {
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
-                    ht_create_only_access: &mut ht_create_only_access,
                     ht_manager: &ht_manager,
                 };
 
@@ -2960,12 +2958,10 @@ async fn run<'sys>(
                 mut window,
                 focused,
             } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 let mut input_context = InputEventContext {
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
-                    ht_create_only_access: &mut ht_create_only_access,
                     ht_manager: &ht_manager,
                 };
                 let mgr = window.keyboard_focus_state_mut();
@@ -3005,7 +3001,6 @@ async fn run<'sys>(
                     window.begin_drag(event_id);
                 }
 
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_down(
                     pointer_id,
                     &ht_manager,
@@ -3013,7 +3008,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3028,7 +3022,6 @@ async fn run<'sys>(
                 window,
                 client_pos,
             } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_move(
                     NativeDesktopSurface::Window(window),
                     pointer_id,
@@ -3038,7 +3031,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     window.ht_root(),
@@ -3054,7 +3046,6 @@ async fn run<'sys>(
                 pointer_id,
                 button,
             } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_up(
                     pointer_id,
                     &ht_manager,
@@ -3062,7 +3053,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3072,7 +3062,6 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::PointerLeaveWindow { window, pointer_id } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_leave(
                     pointer_id,
                     &ht_manager,
@@ -3080,7 +3069,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -3090,12 +3078,10 @@ async fn run<'sys>(
             }
             Event::PointerHover => {
                 system_link.kill_pointer_hovering_timeout();
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_pointer_hover(&mut InputEventContext {
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
-                    ht_create_only_access: &mut ht_create_only_access,
                     ht_manager: &ht_manager,
                 });
 
@@ -3103,14 +3089,12 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::KeyDown { window, code } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 window.keyboard_focus_state().handle_keydown(
                     code,
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3119,14 +3103,12 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::KeyUp { window, code } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 window.keyboard_focus_state().handle_keyup(
                     code,
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3139,7 +3121,6 @@ async fn run<'sys>(
                 committed_string,
                 preedit_string,
             } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 window.keyboard_focus_state().handle_ime_state_changes(
                     &committed_string,
                     &preedit_string,
@@ -3147,7 +3128,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3341,7 +3321,6 @@ async fn run<'sys>(
                     target.begin_drag(event_id);
                 }*/
 
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_down(
                     pointer_id,
                     &ht_manager,
@@ -3349,7 +3328,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3364,7 +3342,6 @@ async fn run<'sys>(
                 target,
                 client_pos,
             } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_move(
                     NativeDesktopSurface::ContextMenu(target),
                     pointer_id,
@@ -3374,7 +3351,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     target.ht_root(),
@@ -3390,7 +3366,6 @@ async fn run<'sys>(
                 target,
                 button,
             } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_up(
                     pointer_id,
                     &ht_manager,
@@ -3398,7 +3373,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3408,7 +3382,6 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::ContextMenuPointerLeave { pointer_id, target } => {
-                let mut ht_create_only_access = ht_manager.derive_create_only_access();
                 pointer_input_manager.handle_mouse_leave(
                     pointer_id,
                     &ht_manager,
@@ -3416,7 +3389,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        ht_create_only_access: &mut ht_create_only_access,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -3450,13 +3422,11 @@ async fn run<'sys>(
                         .get_data(ht)
                         .native_text_deferrable_event_handler()
                     {
-                        let mut ht_create_only_access = ht_manager.derive_create_only_access();
                         if let Err(e) = w.layout(
                             &mut InputEventContext {
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
-                                ht_create_only_access: &mut ht_create_only_access,
                                 ht_manager: &ht_manager,
                             },
                             &request,
@@ -3488,13 +3458,11 @@ async fn run<'sys>(
                         .get_data(ht)
                         .native_text_deferrable_event_handler()
                     {
-                        let mut ht_create_only_access = ht_manager.derive_create_only_access();
                         if let Err(e) = w.text_updating(
                             &mut InputEventContext {
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
-                                ht_create_only_access: &mut ht_create_only_access,
                                 ht_manager: &ht_manager,
                             },
                             &e,
@@ -3526,13 +3494,11 @@ async fn run<'sys>(
                         .get_data(ht)
                         .native_text_deferrable_event_handler()
                     {
-                        let mut ht_create_only_access = ht_manager.derive_create_only_access();
                         if let Err(e) = w.format_updating(
                             &mut InputEventContext {
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
-                                ht_create_only_access: &mut ht_create_only_access,
                                 ht_manager: &ht_manager,
                             },
                             &e,

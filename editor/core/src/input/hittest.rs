@@ -91,27 +91,21 @@ struct HitTestTreeRelationData {
     children: Vec<usize>,
 }
 
-pub trait HitTestTreeCreate<'h> {
-    fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef;
-}
-
-pub struct HitTestTreeManagerCreateOnlyAccess<'h> {
-    ptr: *mut HitTestTreeManager<'h>,
-}
-impl<'h> HitTestTreeCreate<'h> for HitTestTreeManagerCreateOnlyAccess<'h> {
-    #[inline(always)]
-    fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
-        unsafe { (*self.ptr).create(data) }
-    }
-}
-
 pub struct HitTestTreeManager<'h> {
     data: Vec<HitTestTreeData<'h>>,
     relations: Vec<HitTestTreeRelationData>,
     free_index: BTreeSet<usize>,
 }
-impl<'h> HitTestTreeCreate<'h> for HitTestTreeManager<'h> {
-    fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
+impl<'h> HitTestTreeManager<'h> {
+    pub fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            relations: Vec::new(),
+            free_index: BTreeSet::new(),
+        }
+    }
+
+    pub fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
         if let Some(x) = self.free_index.pop_first() {
             self.data[x] = data;
             self.relations[x].parent = None;
@@ -127,19 +121,6 @@ impl<'h> HitTestTreeCreate<'h> for HitTestTreeManager<'h> {
         });
 
         HitTestTreeRef(self.data.len() - 1)
-    }
-}
-impl<'h> HitTestTreeManager<'h> {
-    pub fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            relations: Vec::new(),
-            free_index: BTreeSet::new(),
-        }
-    }
-
-    pub const fn derive_create_only_access(&mut self) -> HitTestTreeManagerCreateOnlyAccess<'h> {
-        HitTestTreeManagerCreateOnlyAccess { ptr: self }
     }
 
     #[inline]

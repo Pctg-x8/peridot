@@ -9,8 +9,8 @@ use bitflags::bitflags;
 use crate::{
     ContextMenuHandle, DragPreviewPopoverHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
-        CursorShape, HitTestTreeManager, HitTestTreeManagerCreateOnlyAccess, HitTestTreeRef,
-        PointerActionArgs, PointerButton, PointerButtonActionArgs, Role,
+        CursorShape, HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButton,
+        PointerButtonActionArgs, Role,
     },
     rendering::composite::CompositeTree,
     utils::{LogicalUnit, Point, Rect, Size},
@@ -28,7 +28,6 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub current_sec: f32,
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub system_link: &'env mut SystemLink<'sys>,
-    pub ht_create_only_access: &'env mut HitTestTreeManagerCreateOnlyAccess<'h>,
     pub ht_manager: &'env HitTestTreeManager<'h>,
 }
 

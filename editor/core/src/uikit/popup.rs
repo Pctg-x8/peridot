@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     SyncEvent, WindowHandle,
-    input::hittest::{HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
+    input::hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
         CompositeTree, CompositeTreeRef, CornerRadius,

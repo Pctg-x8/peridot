@@ -73,8 +73,7 @@ use crate::{
         InputEventContext, KeyInputCode, PerWindowKeyboardFocusState, PointerInputManager,
         PointerInputUnit, ShellPointerActions,
         hittest::{
-            CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
-            PointerButton,
+            CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
     },
     rendering::{
@@ -1420,11 +1419,16 @@ impl SystemLink<'_> {
         }
     }
 
-    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
+    pub fn open_window<'h>(
         &mut self,
         composite_tree: &mut CompositeTree<SyncEvent>,
-        hit_tree: &mut HT,
-        setup_contents: impl FnOnce(WindowHandle, &mut CompositeTree<SyncEvent>, &mut HT, &mut Self),
+        hit_tree: &mut HitTestTreeManager<'h>,
+        setup_contents: impl FnOnce(
+            WindowHandle,
+            &mut CompositeTree<SyncEvent>,
+            &mut HitTestTreeManager<'h>,
+            &mut Self,
+        ),
     ) -> WindowHandle {
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },

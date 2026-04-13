@@ -41,9 +41,7 @@ use crate::{
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
         PerWindowKeyboardFocusState,
-        hittest::{
-            HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
-        },
+        hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
     rendering::{
         NewContextMenuData, RenderMessage,

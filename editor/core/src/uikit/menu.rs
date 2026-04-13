@@ -2,9 +2,7 @@ use std::rc::Rc;
 
 use crate::{
     Event,
-    input::hittest::{
-        CursorShape, HitTestTreeActionHandler, HitTestTreeCreate, HitTestTreeData, HitTestTreeRef,
-    },
+    input::hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage,
         composite::{
