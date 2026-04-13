@@ -20,6 +20,9 @@ use std::{
     sync::Mutex,
 };
 
+#[cfg(not(windows))]
+#[cfg(feature = "wayland")]
+use crate::uikit::{MenuItemLayout, MenuItemView};
 use crate::{
     graphics::VulkanDevice,
     input::{
@@ -557,6 +560,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             let mut events_signal = false;
             let mut pointer_hovering_timer_signal = false;
             let mut delayed_action_timer_signal = false;
+            let mut global_mouse_clicked = false;
             for n in 0..active_events {
                 let e = unsafe { eventbuf[n as usize].assume_init_ref() };
                 if e.value() == 0 {
@@ -579,7 +583,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         && ed.code < linux_input::Key::Joystick as u16
                     {
                         // tracing::debug!("mouse button input");
-                        app_event_dispatcher.dispatch(Event::ContextMenuCloseAll);
+                        global_mouse_clicked = true;
                     }
                     // tracing::debug!(n = e.value() - 10, ?ed, "evdev");
                 } else if let Some(&wr) = unsafe { (*poll_id_to_watch_ref.get()).get(&e.value()) } {
@@ -627,6 +631,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
             if delayed_action_timer_signal {
                 app_event_dispatcher.dispatch(Event::ContextMenuPerformDelayedAction);
+            }
+
+            if global_mouse_clicked {
+                app_event_dispatcher.dispatch(Event::GlobalMouseClicked);
             }
 
             if dbus_signal {
@@ -954,6 +962,7 @@ pub enum Event {
         pointer_id: PointerID,
         target: ContextMenuHandle,
     },
+    GlobalMouseClicked,
     #[cfg(windows)]
     CoreTextLayoutRequested {
         ht: HitTestTreeRef,
@@ -3360,6 +3369,16 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
+            Event::GlobalMouseClicked => {
+                if !system_link.any_pointer_on_context_menu() {
+                    if let Some(c) = current_active_context_menu_session.take() {
+                        c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
+
+                        composite_tree
+                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    }
+                }
+            }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
                 ht,
@@ -3633,32 +3652,17 @@ impl ContextMenuSession {
         match self.active_selection {
             Some((depth, index)) => {
                 while self.opening_surfaces.len() > depth + 1 {
-                    #[cfg(windows)]
-                    crate::platform::windows::context_menu::close(
-                        self.opening_surfaces.pop().expect("empty?").handle,
-                        view_init_context.mount_context.composite_tree,
-                        view_init_context.mount_context.ht_manager,
-                    );
-                    #[cfg(feature = "wayland")]
-                    crate::platform::unix::wayland::context_menu::close(
-                        self.opening_surfaces.pop().expect("empty?").handle,
+                    self.opening_surfaces.pop().expect("empty?").handle.close(
+                        #[cfg(feature = "wayland")]
                         system_link,
                         view_init_context.mount_context.composite_tree,
                         view_init_context.mount_context.ht_manager,
                     );
                 }
+                let latest_surface = self.opening_surfaces.last().expect("root?");
 
-                if let Some(display_pos) = self
-                    .opening_surfaces
-                    .last()
-                    .expect("root?")
-                    .handle
-                    .submenu_pop_position(index)
-                {
-                    let parent_path = self
-                        .opening_surfaces
-                        .last()
-                        .expect("root?")
+                if let Some(display_pos) = latest_surface.handle.submenu_pop_position(index) {
+                    let parent_path = latest_surface
                         .parent_path
                         .iter()
                         .copied()
@@ -3700,9 +3704,8 @@ impl ContextMenuSession {
                         },
                     );
                     #[cfg(feature = "wayland")]
-                    let surface = platform::unix::wayland::context_menu::pop(
+                    let surface = system_link.pop_context_menu(
                         self.parent,
-                        &system_link,
                         view_init_context,
                         depth + 1,
                         display_pos,
@@ -3742,15 +3745,8 @@ impl ContextMenuSession {
             None => {
                 // 最初のやつだけ表示する
                 while self.opening_surfaces.len() > 1 {
-                    #[cfg(windows)]
-                    crate::platform::windows::context_menu::close(
-                        self.opening_surfaces.pop().expect("empty?").handle,
-                        view_init_context.mount_context.composite_tree,
-                        view_init_context.mount_context.ht_manager,
-                    );
-                    #[cfg(feature = "wayland")]
-                    crate::platform::unix::wayland::context_menu::close(
-                        self.opening_surfaces.pop().expect("empty?").handle,
+                    self.opening_surfaces.pop().expect("empty?").handle.close(
+                        #[cfg(feature = "wayland")]
                         system_link,
                         view_init_context.mount_context.composite_tree,
                         view_init_context.mount_context.ht_manager,
@@ -3770,15 +3766,8 @@ impl ContextMenuSession {
         typing_context: &ThreadLocalTypingContext,
     ) {
         while self.opening_surfaces.len() > depth + 1 {
-            #[cfg(windows)]
-            crate::platform::windows::context_menu::close(
-                self.opening_surfaces.pop().expect("empty?").handle,
-                view_init_context.mount_context.composite_tree,
-                view_init_context.mount_context.ht_manager,
-            );
-            #[cfg(feature = "wayland")]
-            crate::platform::unix::wayland::context_menu::close(
-                self.opening_surfaces.pop().expect("empty?").handle,
+            self.opening_surfaces.pop().expect("empty?").handle.close(
+                #[cfg(feature = "wayland")]
                 system_link,
                 view_init_context.mount_context.composite_tree,
                 view_init_context.mount_context.ht_manager,
@@ -3837,18 +3826,15 @@ impl ContextMenuSession {
             },
         );
         #[cfg(feature = "wayland")]
-        let surface = platform::unix::wayland::context_menu::pop(
+        let surface = system_link.pop_context_menu(
             self.parent,
-            &system_link,
             view_init_context,
             depth + 1,
             display_pos,
             |render_scale| {
-                crate::uikit::MenuItemLayout::build(
-                    items.into_iter().cloned(),
-                    &PerWindowFontSet::new(system_link.root_font_set(), typing_context),
-                    render_scale,
-                )
+                let mut fs = PerWindowFontSet::new(system_link.root_font_set(), typing_context);
+                fs.rescale((render_scale * 72.0) as _);
+                crate::uikit::MenuItemLayout::build(items.into_iter().cloned(), &fs, render_scale)
             },
             |layout, h, view_init_ctx| {
                 view_init_ctx.ui_scale_factor = h.render_scale();
@@ -3883,12 +3869,7 @@ impl ContextMenuSession {
         platform::windows::context_menu::close_all(composite_tree, ht_manager);
         #[cfg(feature = "wayland")]
         while let Some(c) = self.opening_surfaces.pop() {
-            crate::platform::unix::wayland::context_menu::close(
-                c.handle,
-                system_link,
-                composite_tree,
-                ht_manager,
-            );
+            c.handle.close(system_link, composite_tree, ht_manager);
         }
     }
 
@@ -3903,7 +3884,8 @@ impl ContextMenuSession {
             surface.set_current_selecting(index, composite_tree, current_sec);
             surface.parent_path.clone()
         } else {
-            vec![]
+            tracing::warn!(depth, "selecting non-displaying depth");
+            return;
         };
 
         // 親（発生元）も選択表示にする
@@ -4080,6 +4062,31 @@ impl SystemLink<'_> {
     #[cfg(target_os = "macos")]
     pub fn notify_ui_scale_changes_to_render(&self, _window: WindowHandle, _new_scale: f32) {
         // TODO: これmacでやることあるのか？（起こらない気がする）
+    }
+
+    #[cfg(feature = "wayland")]
+    pub fn pop_context_menu(
+        &self,
+        parent: WindowHandle,
+        view_init_context: &mut ViewInitContext,
+        depth: usize,
+        surface_pos: Point<LogicalUnit>,
+        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        setup_contents: impl FnOnce(
+            Vec<MenuItemLayout>,
+            ContextMenuHandle,
+            &mut ViewInitContext,
+        ) -> Vec<MenuItemView>,
+    ) -> ContextMenuHandle {
+        platform::unix::wayland::context_menu::pop(
+            parent,
+            self,
+            view_init_context,
+            depth,
+            surface_pos,
+            layouted_items,
+            setup_contents,
+        )
     }
 }
 

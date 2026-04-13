@@ -540,6 +540,17 @@ impl crate::SystemLink<'_> {
             .unset()
             .expect("timer.unset");
     }
+
+    pub fn any_pointer_on_context_menu(&self) -> bool {
+        if let Some(p) = unsafe { &*self.display_server.pointer_state_ref }
+            && let Some(ref p) = p.enter_state
+        {
+            unsafe { &*(*p.surface).user_data().cast::<SurfaceStateUntyped>() }.tag
+                == SurfaceStateTag::ContextMenu
+        } else {
+            false
+        }
+    }
 }
 
 pub fn dp_prepare_read(dp: &mut wl::Display) -> Result<(), ()> {
@@ -566,7 +577,7 @@ pub struct WindowCommittedState {
     pub active_size_logical: Size<LogicalUnit>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum SurfaceStateTag {
     ToplevelWindow,
     ResizeEdge,

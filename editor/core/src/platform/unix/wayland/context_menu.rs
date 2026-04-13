@@ -41,6 +41,34 @@ impl Handle {
         &mut unsafe { &mut *(*self.0).user_data().cast::<SurfaceState<InstanceData>>() }.data
     }
 
+    pub fn close(
+        self,
+        syslink: &SystemLink,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        tracing::debug!("close context menu surface");
+        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+        syslink
+            .rt_sender
+            .send(RenderMessage::DestroyContextMenu(self, done_event_sender))
+            .expect("rt_sender.send");
+        done_event_receiver
+            .recv_timeout(std::time::Duration::from_millis(1000))
+            .expect("done_event_receiver.recv");
+        tracing::debug!("render surface done");
+
+        let eh = unsafe { Box::from_raw((&*self.0).user_data().cast::<EventHandler>()) };
+        composite_tree.free_all(eh.0.data.ct_root);
+        ht_manager.free_all(eh.0.data.ht_root);
+        drop(eh);
+
+        tracing::debug!("event handler freed");
+
+        drop(unsafe { wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(self.0)) });
+        tracing::debug!("surface done");
+    }
+
     #[inline(always)]
     pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
         &mut self.data_mut().keyboard_focus_state
@@ -489,27 +517,4 @@ pub fn pop(
         .data
         .views = views;
     Handle(surface.unwrap().as_ptr())
-}
-
-pub fn close(
-    handle: Handle,
-    syslink: &SystemLink,
-    composite_tree: &mut CompositeTree<SyncEvent>,
-    ht_manager: &mut HitTestTreeManager,
-) {
-    let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-    syslink
-        .rt_sender
-        .send(RenderMessage::DestroyContextMenu(handle, done_event_sender))
-        .expect("rt_sender.send");
-    done_event_receiver
-        .recv()
-        .expect("done_event_receiver.recv");
-
-    let eh = unsafe { Box::from_raw((&*handle.0).user_data().cast::<EventHandler>()) };
-    composite_tree.free_all(eh.0.data.ct_root);
-    ht_manager.free_all(eh.0.data.ht_root);
-    drop(eh);
-
-    drop(unsafe { wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(handle.0)) });
 }

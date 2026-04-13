@@ -273,6 +273,7 @@ impl<'main> RenderThread<'main> {
                         );
                     }
                     Ok(RenderMessage::DestroyContextMenu(handle, done_event_bus)) => {
+                        tracing::debug!("do destroy context menu (render)");
                         if let Some(x) = context_menus.remove(&handle) {
                             let current = glyph_atlas_per_scale
                                 .get_mut(&x.active_scale)
@@ -283,10 +284,11 @@ impl<'main> RenderThread<'main> {
                                 glyph_atlas_per_scale.remove(&x.active_scale);
                             }
                         }
+                        tracing::debug!("reply ready");
 
                         if let Err(e) = done_event_bus.send(()) {
                             tracing::error!(reason = %e, "done_event_bus.send");
-                        };
+                        }
                     }
                     Ok(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                         id,
