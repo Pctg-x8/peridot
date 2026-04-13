@@ -116,6 +116,8 @@ pub fn launch() {
 
     #[cfg(windows)]
     let app_context = platform::windows::ApplicationContext::new();
+    #[cfg(windows)]
+    let dx_context = platform::windows::DxContext::new();
 
     #[cfg(feature = "wayland")]
     let mut wl_display = core::pin::pin!(wl::Display::connect().expect("wl_display connect"));
@@ -132,6 +134,8 @@ pub fn launch() {
     #[cfg(feature = "wayland")]
     let window_registry = platform::unix::wayland::WindowRegistry::new();
 
+    let root_font_set = RootFontSet::new();
+
     let global_time_base = std::time::Instant::now();
     main_wrapper(
         move |args, system_link| run(args, system_link),
@@ -145,8 +149,11 @@ pub fn launch() {
         &events,
         rt_sender,
         rt_receiver,
+        root_font_set,
         #[cfg(windows)]
         &app_context,
+        #[cfg(windows)]
+        &dx_context,
         #[cfg(feature = "wayland")]
         wl_display.as_mut(),
         #[cfg(feature = "wayland")]
@@ -166,7 +173,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     sync_event_bus: &'sys SyncEventBus,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
+    root_font_set: RootFontSet,
     #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
+    #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
     #[cfg(feature = "wayland")] mut wl_display: core::pin::Pin<&mut wl::Display>,
     #[cfg(feature = "wayland")] mut wl_interfaces: core::pin::Pin<
         &mut platform::unix::wayland::GlobalInterfaces,
@@ -343,8 +352,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }))
         .expect("rt_sender.send");
 
-    let root_font_set = RootFontSet::new();
-
     let mut polling = false;
     let empty_dispatcher = LogicFiberEventDispatcher {
         event_store,
@@ -374,71 +381,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     });
 
     #[cfg(windows)]
-    let mut d3d12_debug = core::mem::MaybeUninit::uninit();
-    #[cfg(windows)]
-    unsafe {
-        windows::Win32::Graphics::Direct3D12::D3D12GetDebugInterface(d3d12_debug.as_mut_ptr())
-            .expect("D3D12GetDebugInterface");
-    }
-    #[cfg(windows)]
-    let d3d12_debug: windows::Win32::Graphics::Direct3D12::ID3D12Debug = unsafe {
-        d3d12_debug
-            .assume_init()
-            .expect("D3D12GetDebugInterface.null")
-    };
-    #[cfg(windows)]
-    unsafe {
-        d3d12_debug.EnableDebugLayer();
-    }
-
-    #[cfg(windows)]
-    let dxgi_factory: windows::Win32::Graphics::Dxgi::IDXGIFactory2 = unsafe {
-        windows::Win32::Graphics::Dxgi::CreateDXGIFactory2(
-            windows::Win32::Graphics::Dxgi::DXGI_CREATE_FACTORY_DEBUG,
-        )
-        .expect("CreateDXGIFactory2")
-    };
-    #[cfg(windows)]
-    let adapter = unsafe {
-        dxgi_factory
-            .EnumAdapters1(0)
-            .expect("dxgi_factory.EnumAdapters1")
-    };
-    #[cfg(windows)]
-    let mut d3d12_device = core::mem::MaybeUninit::uninit();
-    #[cfg(windows)]
-    unsafe {
-        windows::Win32::Graphics::Direct3D12::D3D12CreateDevice(
-            &adapter,
-            windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_12_0,
-            d3d12_device.as_mut_ptr(),
-        )
-        .expect("D3D12CreateDevice")
-    };
-    #[cfg(windows)]
-    let d3d12_device: windows::Win32::Graphics::Direct3D12::ID3D12Device =
-        unsafe { d3d12_device.assume_init().expect("D3D12CreateDevice.null") };
-    #[cfg(windows)]
-    let d3d12_cq: windows::Win32::Graphics::Direct3D12::ID3D12CommandQueue = unsafe {
-        d3d12_device
-            .CreateCommandQueue(
-                &windows::Win32::Graphics::Direct3D12::D3D12_COMMAND_QUEUE_DESC {
-                    Type: windows::Win32::Graphics::Direct3D12::D3D12_COMMAND_LIST_TYPE_DIRECT,
-                    Priority: 0,
-                    Flags: windows::Win32::Graphics::Direct3D12::D3D12_COMMAND_QUEUE_FLAG_NONE,
-                    NodeMask: 0,
-                },
-            )
-            .expect("d3d12_device.CreateCommandQueue")
-    };
-    #[cfg(windows)]
-    unsafe {
-        d3d12_cq
-            .SetName(windows_core::w!("D3D12 Main Command Queue"))
-            .expect("d3d12_cq.SetName");
-    }
-
-    #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
     #[cfg(windows)]
     let mut context_menu_delayed_action_timer_id = core::pin::pin!(0);
@@ -453,10 +395,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_queue: EventQueue { event_store },
             global_time_base,
             renderer_sync,
+            drag_preview_popover,
         },
         #[cfg(windows)]
         SystemLink {
-            drag_preview_popover,
             root_font_set: &root_font_set,
             rt_sender: rt_sender.clone(),
             vk_device,
@@ -464,14 +406,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             app_context_ptr: app_context,
             pointer_hovering_timer_id: &mut pointer_hovering_timer_id,
             context_menu: platform::windows::context_menu::SharedState::new(
-                dxgi_factory.clone(),
-                d3d12_cq.clone(),
+                &dx_context,
                 context_menu_delayed_action_timer_id.as_mut(),
             )
         },
         #[cfg(not(windows))]
         SystemLink {
-            drag_preview_popover,
             rt_sender: rt_sender.clone(),
             vk_device,
             root_font_set: &root_font_set,
@@ -558,9 +498,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             message_receiver: rt_receiver,
             root_font_set: &root_font_set,
             #[cfg(windows)]
-            d3d12_device: &d3d12_device,
-            #[cfg(windows)]
-            d3d12_cq: &d3d12_cq,
+            dx_context,
             #[cfg(windows)]
             d3d12_present_counter: 0,
         };
@@ -2514,6 +2452,7 @@ struct LaunchArgs<'sys> {
     pub event_queue: EventQueue,
     pub global_time_base: &'sys std::time::Instant,
     pub renderer_sync: &'sys Mutex<RendererSync>,
+    pub drag_preview_popover: DragPreviewPopoverHandle,
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
@@ -2522,6 +2461,7 @@ async fn run<'sys>(
         event_queue,
         global_time_base,
         renderer_sync,
+        drag_preview_popover,
     }: LaunchArgs<'sys>,
     mut system_link: SystemLink<'sys>,
 ) {
@@ -2702,8 +2642,7 @@ async fn run<'sys>(
             }
 
             context
-                .system_link
-                .drag_preview_popover()
+                .drag_preview_popover
                 .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
 
             input::EventContinueControl::CAPTURE_ELEMENT
@@ -2716,10 +2655,7 @@ async fn run<'sys>(
             context: &mut InputEventContext,
             args: &PointerActionArgs,
         ) -> input::EventContinueControl {
-            context
-                .system_link
-                .drag_preview_popover()
-                .r#move(&args.client_pos);
+            context.drag_preview_popover.r#move(&args.client_pos);
 
             input::EventContinueControl::STOP_PROPAGATION
         }
@@ -2734,7 +2670,7 @@ async fn run<'sys>(
                 return input::EventContinueControl::empty();
             }
 
-            context.system_link.drag_preview_popover().hide();
+            context.drag_preview_popover.hide();
 
             input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
                 | input::EventContinueControl::STOP_PROPAGATION
@@ -2902,6 +2838,7 @@ async fn run<'sys>(
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
+                    drag_preview_popover: &drag_preview_popover,
                     ht_manager: &ht_manager,
                 };
 
@@ -2962,6 +2899,7 @@ async fn run<'sys>(
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
+                    drag_preview_popover: &drag_preview_popover,
                     ht_manager: &ht_manager,
                 };
                 let mgr = window.keyboard_focus_state_mut();
@@ -2980,17 +2918,11 @@ async fn run<'sys>(
                 event_id,
             } => {
                 #[cfg(feature = "wayland")]
-                system_link
-                    .drag_preview_popover()
-                    .bind_parent_window(window);
+                drag_preview_popover.bind_parent_window(window);
                 #[cfg(windows)]
-                system_link
-                    .drag_preview_popover()
-                    .bind_position_base_window(window);
+                drag_preview_popover.bind_position_base_window(window);
                 #[cfg(target_os = "macos")]
-                system_link
-                    .drag_preview_popover()
-                    .bind_position_base_window_link(window);
+                drag_preview_popover.bind_position_base_window_link(window);
 
                 // waylandの場合はここでTitleBarロールの判定をする
                 // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
@@ -3008,6 +2940,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3031,6 +2964,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     window.ht_root(),
@@ -3053,6 +2987,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3069,6 +3004,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -3082,6 +3018,7 @@ async fn run<'sys>(
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
+                    drag_preview_popover: &drag_preview_popover,
                     ht_manager: &ht_manager,
                 });
 
@@ -3095,6 +3032,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3109,6 +3047,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3128,6 +3067,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3328,6 +3268,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3351,6 +3292,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     target.ht_root(),
@@ -3373,6 +3315,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3389,6 +3332,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -3427,6 +3371,7 @@ async fn run<'sys>(
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
+                                drag_preview_popover: &drag_preview_popover,
                                 ht_manager: &ht_manager,
                             },
                             &request,
@@ -3463,6 +3408,7 @@ async fn run<'sys>(
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
+                                drag_preview_popover: &drag_preview_popover,
                                 ht_manager: &ht_manager,
                             },
                             &e,
@@ -3499,6 +3445,7 @@ async fn run<'sys>(
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
+                                drag_preview_popover: &drag_preview_popover,
                                 ht_manager: &ht_manager,
                             },
                             &e,

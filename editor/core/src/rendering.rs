@@ -103,9 +103,7 @@ pub struct RenderThread<'main> {
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     pub root_font_set: &'main RootFontSet,
     #[cfg(windows)]
-    pub d3d12_device: &'main windows::Win32::Graphics::Direct3D12::ID3D12Device,
-    #[cfg(windows)]
-    pub d3d12_cq: &'main windows::Win32::Graphics::Direct3D12::ID3D12CommandQueue,
+    pub dx_context: &'main crate::platform::windows::DxContext,
     #[cfg(windows)]
     pub d3d12_present_counter: u64,
 }
@@ -118,7 +116,8 @@ impl<'main> RenderThread<'main> {
 
         #[cfg(windows)]
         let d3d12_present_fence: windows::Win32::Graphics::Direct3D12::ID3D12Fence = unsafe {
-            self.d3d12_device
+            self.dx_context
+                .d3d12_device
                 .CreateFence(
                     0,
                     windows::Win32::Graphics::Direct3D12::D3D12_FENCE_FLAG_NONE,
@@ -289,7 +288,7 @@ impl<'main> RenderThread<'main> {
                                 self.root_font_set,
                                 &typing_context,
                                 #[cfg(windows)]
-                                self.d3d12_device,
+                                self.dx_context,
                             ),
                         );
                     }
@@ -841,7 +840,8 @@ impl<'main> RenderThread<'main> {
                     d3d12_present_fence
                         .SetEventOnCompletion(wait_for_counter, d3d12_present_fence_event)
                         .expect("d3d12_present_fence.SetEventOnCompletion");
-                    self.d3d12_cq
+                    self.dx_context
+                        .d3d12_cq
                         .Signal(&d3d12_present_fence, wait_for_counter)
                         .expect("d3d12_cq.Wait");
                     windows::Win32::System::Threading::WaitForSingleObject(
@@ -932,7 +932,7 @@ impl<'d> ContextMenuRenderer<'d> {
         glyph_atlas: &TextureAtlas,
         root_font_set: &'d RootFontSet,
         typing_context: &ThreadLocalTypingContext,
-        #[cfg(windows)] d3d12_device: &windows::Win32::Graphics::Direct3D12::ID3D12Device,
+        #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
     ) -> Self {
         #[allow(unused_mut)]
         let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
@@ -974,7 +974,8 @@ impl<'d> ContextMenuRenderer<'d> {
                     .expect("swapchain.GetBuffer")
             };
             let shared_handle = unsafe {
-                d3d12_device
+                dx_context
+                    .d3d12_device
                     .CreateSharedHandle(
                         &d3d12_resource,
                         None,

@@ -196,7 +196,7 @@ impl MenuItemLayout {
                         x.placement_y,
                     )))
                 }
-                MenuItem::SubMenu { label, items } => {
+                MenuItem::SubMenu { label, .. } => {
                     let ad = *ad_accum;
                     *ad_accum += ANIMATION_DELAY_PER_ELEMENT;
 
@@ -204,7 +204,6 @@ impl MenuItemLayout {
                         ctx,
                         common_res,
                         label,
-                        items,
                         depth,
                         index,
                         ad,
@@ -463,7 +462,6 @@ impl SubMenuView {
         ctx: &mut ViewInitContext,
         common_res: &CommonResources,
         label: String,
-        items: Vec<MenuItem>,
         depth: usize,
         index: usize,
         animation_delay: f32,

@@ -18,9 +18,16 @@ use windows::{
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
+            Direct3D::D3D_FEATURE_LEVEL_12_0,
+            Direct3D12::{
+                D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+                D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12CreateDevice, D3D12GetDebugInterface,
+                ID3D12CommandQueue, ID3D12Debug, ID3D12Device,
+            },
             Dwm::{
                 DWMWA_EXTENDED_FRAME_BOUNDS, DwmExtendFrameIntoClientArea, DwmGetWindowAttribute,
             },
+            Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, IDXGIFactory2},
             Gdi::{
                 GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
                 MonitorFromWindow,
@@ -1348,8 +1355,65 @@ impl ApplicationContext {
     }
 }
 
+pub struct DxContext {
+    pub dxgi_factory: IDXGIFactory2,
+    pub d3d12_device: ID3D12Device,
+    pub d3d12_cq: ID3D12CommandQueue,
+}
+impl DxContext {
+    pub fn new() -> Self {
+        let mut d3d12_debug = core::mem::MaybeUninit::uninit();
+        unsafe {
+            D3D12GetDebugInterface(d3d12_debug.as_mut_ptr()).expect("D3D12GetDebugInterface");
+        }
+        let d3d12_debug: ID3D12Debug = unsafe {
+            d3d12_debug
+                .assume_init()
+                .expect("D3D12GetDebugInterface.null")
+        };
+        unsafe {
+            d3d12_debug.EnableDebugLayer();
+        }
+
+        let dxgi_factory: IDXGIFactory2 =
+            unsafe { CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG).expect("CreateDXGIFactory2") };
+        let adapter = unsafe {
+            dxgi_factory
+                .EnumAdapters1(0)
+                .expect("dxgi_factory.EnumAdapters1")
+        };
+        let mut d3d12_device = core::mem::MaybeUninit::uninit();
+        unsafe {
+            D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, d3d12_device.as_mut_ptr())
+                .expect("D3D12CreateDevice")
+        };
+        let d3d12_device: ID3D12Device =
+            unsafe { d3d12_device.assume_init().expect("D3D12CreateDevice.null") };
+        let d3d12_cq: ID3D12CommandQueue = unsafe {
+            d3d12_device
+                .CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC {
+                    Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+                    Priority: 0,
+                    Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+                    NodeMask: 0,
+                })
+                .expect("d3d12_device.CreateCommandQueue")
+        };
+        unsafe {
+            d3d12_cq
+                .SetName(w!("D3D12 Main Command Queue"))
+                .expect("d3d12_cq.SetName");
+        }
+
+        Self {
+            dxgi_factory,
+            d3d12_device,
+            d3d12_cq,
+        }
+    }
+}
+
 pub struct SystemLink<'sys> {
-    pub drag_preview_popover: DragPreviewPopoverHandle,
     pub root_font_set: *const RootFontSet,
     pub vk_device: *const VulkanDevice<'sys>,
     pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
@@ -1372,11 +1436,6 @@ impl SystemLink<'_> {
     #[inline(always)]
     pub fn root_font_set(&self) -> &RootFontSet {
         unsafe { &*self.root_font_set }
-    }
-
-    #[inline(always)]
-    pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
-        &self.drag_preview_popover
     }
 
     pub fn create_main_window(

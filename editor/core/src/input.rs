@@ -28,6 +28,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub current_sec: f32,
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub system_link: &'env mut SystemLink<'sys>,
+    pub drag_preview_popover: &'env DragPreviewPopoverHandle,
     pub ht_manager: &'env HitTestTreeManager<'h>,
 }
 

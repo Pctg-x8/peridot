@@ -589,16 +589,15 @@ pub struct SharedState {
 }
 impl SharedState {
     pub fn new(
-        dxgi_factory: IDXGIFactory2,
-        d3d12_cq: ID3D12CommandQueue,
+        dx_context: &super::DxContext,
         delayed_action_timer_id: core::pin::Pin<&mut usize>,
     ) -> Self {
         let window_class = register_class(current_instance_handle());
 
         Self {
             window_class,
-            dxgi_factory,
-            d3d12_cq,
+            dxgi_factory: dx_context.dxgi_factory.clone(),
+            d3d12_cq: dx_context.d3d12_cq.clone(),
             delayed_action_timer_id: delayed_action_timer_id.get_mut(),
         }
     }
