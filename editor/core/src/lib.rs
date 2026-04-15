@@ -3182,7 +3182,7 @@ async fn run<'sys>(
                 target_window,
                 message,
             } => {
-                popup_manager.open(
+                let opened_id = popup_manager.open(
                     &mut ViewInitContext {
                         mount_context: MountContext {
                             composite_tree: &mut composite_tree,
@@ -3195,6 +3195,17 @@ async fn run<'sys>(
                     },
                     target_window,
                     |id, ctx| AlertDialogPresenter::new(ctx, id, message),
+                );
+                popup_manager.post_open_action(
+                    opened_id,
+                    &mut InputEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
+                        ht_manager: &ht_manager,
+                    },
+                    &keyboard_focus_registry,
                 );
 
                 composite_tree

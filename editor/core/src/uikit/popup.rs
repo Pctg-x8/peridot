@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::{
     SyncEvent, WindowHandle,
     input::{
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
+        InputEventContext, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     },
     rendering::composite::{
@@ -56,7 +56,7 @@ impl PopupManager {
     pub fn open<P: Popup + 'static>(
         &mut self,
         ctx: &mut ViewInitContext,
-        mut window: WindowHandle,
+        window: WindowHandle,
         ctor: impl FnOnce(PopupID, &mut ViewInitContext) -> P,
     ) -> PopupID {
         let id = PopupID::new();
@@ -64,13 +64,22 @@ impl PopupManager {
         let instance = ctor(id, ctx);
         instance.mount(ctx, &RawMountTarget::from_typed(&window));
         instance.set_keyboard_focus_group(popup_focus_group, ctx.keyboard_focus_registry);
-        window
-            .keyboard_focus_state_mut()
-            .push_tab_stop_group(popup_focus_group);
         self.instance_by_id
             .insert(id, (Box::new(instance), window, popup_focus_group));
 
         id
+    }
+
+    pub fn post_open_action(
+        &mut self,
+        target_popup_id: PopupID,
+        action_context: &mut InputEventContext,
+        kf_registry: &KeyboardFocusTokenRegistry,
+    ) {
+        if let Some((_, w, g)) = self.instance_by_id.get_mut(&target_popup_id) {
+            w.keyboard_focus_state_mut()
+                .push_tab_stop_group(*g, action_context, kf_registry);
+        }
     }
 
     #[inline(always)]

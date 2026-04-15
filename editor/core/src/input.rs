@@ -1170,8 +1170,14 @@ impl PerWindowKeyboardFocusState {
         }
     }
 
-    pub fn push_tab_stop_group(&mut self, group: KeyboardFocusGroupRef) {
+    pub fn push_tab_stop_group(
+        &mut self,
+        group: KeyboardFocusGroupRef,
+        action_context: &mut InputEventContext,
+        kf_registry: &KeyboardFocusTokenRegistry,
+    ) {
         self.active_group_stack.push(group);
+        self.clear_focus_with_event(action_context, kf_registry);
     }
 
     pub fn pop_tab_stop_group(&mut self) {
@@ -1219,7 +1225,7 @@ impl PerWindowKeyboardFocusState {
         eh.focus_released(context);
     }
 
-    pub fn set_focus(
+    fn set_focus(
         &mut self,
         tok: FocusTargetToken,
     ) -> (Option<FocusTargetToken>, Option<FocusTargetToken>) {
@@ -1232,8 +1238,27 @@ impl PerWindowKeyboardFocusState {
         (released_focus.map(FocusTargetToken), Some(tok))
     }
 
-    pub fn clear_focus(&mut self) -> Option<FocusTargetToken> {
+    fn clear_focus(&mut self) -> Option<FocusTargetToken> {
         self.current_focus.take().map(FocusTargetToken)
+    }
+
+    fn clear_focus_with_event(
+        &mut self,
+        action_context: &mut InputEventContext,
+        kf_registry: &KeyboardFocusTokenRegistry,
+    ) {
+        if self.current_focus.is_none() {
+            // already cleared
+            return;
+        }
+
+        if let Some(eh) = self
+            .current_focus
+            .take()
+            .and_then(|x| kf_registry.event_handler(FocusTargetToken(x)))
+        {
+            eh.focus_released(action_context);
+        }
     }
 
     pub fn update_focus_with_event(
