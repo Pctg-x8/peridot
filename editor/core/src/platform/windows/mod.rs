@@ -895,23 +895,17 @@ impl WindowEventHandler {
         }
 
         if msg == WM_KEYDOWN {
-            tracing::trace!(keycode = wparam.0, "keydown");
             Self::get_for_window(hwnd).keydown(hwnd, wparam.0);
-
             return LRESULT(0);
         }
 
         if msg == WM_KEYUP {
-            tracing::trace!(keycode = wparam.0, "keyup");
             Self::get_for_window(hwnd).keyup(hwnd, wparam.0);
-
             return LRESULT(0);
         }
 
         if msg == WM_CHAR {
-            tracing::trace!(keycode = wparam.0, "char input");
             Self::get_for_window(hwnd).char_key(hwnd, wparam.0);
-
             return LRESULT(0);
         }
 
