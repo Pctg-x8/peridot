@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Event, SyncEvent,
+    Event, SyncEvent, SystemLink,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputEventHandler,
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
@@ -182,6 +182,13 @@ impl KeyInputEventHandler for SimpleButtonActionHandler {
         context.composite_tree.get_mut(self.ct_focus).opacity = AnimatableFloat::Value(0.0);
         context.composite_tree.mark_dirty(self.ct_focus);
     }
+
+    fn keydown(&self, context: &mut InputEventContext, code: crate::input::KeyInputCode) {
+        if code == crate::input::KeyInputCode::Character('\x0d') {
+            // hit enter
+            self.perform_click_action(context.system_link);
+        }
+    }
 }
 impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_pointer_enter(
@@ -250,9 +257,7 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        if let Some(ref c) = self.click_event {
-            context.system_link.dispatch_event(c.clone());
-        }
+        self.perform_click_action(context.system_link);
 
         EventContinueControl::empty()
     }
@@ -290,6 +295,12 @@ impl SimpleButtonActionHandler {
         }
 
         self.state.set(new_state);
+    }
+
+    fn perform_click_action(&self, syslink: &SystemLink) {
+        if let Some(ref c) = self.click_event {
+            syslink.dispatch_event(c.clone());
+        }
     }
 }
 
