@@ -922,6 +922,10 @@ pub enum Event {
         window: WindowHandle,
         focused: bool,
     },
+    WindowActivatingStateChanged {
+        window: WindowHandle,
+        activated: bool,
+    },
     SubWindowOpen,
     SubWindowClose {
         window: WindowHandle,
@@ -2908,6 +2912,18 @@ async fn run<'sys>(
                     mgr.notify_window_focus(&mut input_context, &keyboard_focus_registry);
                 } else {
                     mgr.notify_window_lost_focus(&mut input_context, &keyboard_focus_registry);
+                }
+            }
+            Event::WindowActivatingStateChanged { window, activated } => {
+                if !activated {
+                    if let Some(c) =
+                        current_active_context_menu_session.take_if(|x| x.parent == window)
+                    {
+                        c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
+
+                        composite_tree
+                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    }
                 }
             }
             Event::PointerDown {

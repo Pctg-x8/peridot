@@ -42,7 +42,7 @@ use windows::{
             Controls::{MARGINS, WM_MOUSELEAVE},
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
-                ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+                ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
                 TrackMouseEvent,
             },
             WindowsAndMessaging::{
@@ -55,14 +55,15 @@ use windows::{
                 SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
                 SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
-                SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOW_LONG_PTR_INDEX,
-                WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN,
-                WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOVE,
-                WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
-                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
-                WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
-                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
+                WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MOUSEMOVE, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN,
+                WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP,
+                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES,
+                WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+                WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW,
+                WS_POPUP,
             },
         },
     },
@@ -503,6 +504,18 @@ impl WindowEventHandler {
         }
     }
 
+    #[inline(always)]
+    fn dispatch_event(w: HWND, e: Event) {
+        Self::get_for_window(w).event_dispatcher.dispatch(e);
+    }
+
+    #[inline(always)]
+    fn try_dispatch_event(w: HWND, e: Event) {
+        if let Some(st) = Self::try_get_for_window(w) {
+            st.event_dispatcher.dispatch(e);
+        }
+    }
+
     fn compute_client_rect(w: HWND, params: &mut NCCALCSIZE_PARAMS) {
         if unsafe { IsZoomed(w).as_bool() } {
             // 最大化状態
@@ -754,6 +767,14 @@ impl WindowEventHandler {
                 tracing::error!(reason = %e, "DwmExtendFrameIntoClientArea");
             }
 
+            Self::try_dispatch_event(
+                hwnd,
+                Event::WindowActivatingStateChanged {
+                    window: WindowHandle(hwnd),
+                    activated: wparam.0 != WA_INACTIVE as _,
+                },
+            );
+
             return LRESULT(0);
         }
 
@@ -799,9 +820,9 @@ impl WindowEventHandler {
 
         if msg == WM_KEYDOWN {
             tracing::trace!(keycode = wparam.0, "keydown");
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::KeyDown {
+            Self::dispatch_event(
+                hwnd,
+                Event::KeyDown {
                     code: match wparam.0 {
                         v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_LEFT.0 as _ => {
                             KeyInputCode::LeftArrow
@@ -818,16 +839,17 @@ impl WindowEventHandler {
                         _ => KeyInputCode::UnknownNativeCode(wparam.0 as _),
                     },
                     window: WindowHandle(hwnd),
-                });
+                },
+            );
 
             return LRESULT(0);
         }
 
         if msg == WM_KEYUP {
             tracing::trace!(keycode = wparam.0, "keyup");
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::KeyUp {
+            Self::dispatch_event(
+                hwnd,
+                Event::KeyUp {
                     code: match wparam.0 {
                         v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_LEFT.0 as _ => {
                             KeyInputCode::LeftArrow
@@ -844,21 +866,23 @@ impl WindowEventHandler {
                         _ => KeyInputCode::UnknownNativeCode(wparam.0 as _),
                     },
                     window: WindowHandle(hwnd),
-                });
+                },
+            );
 
             return LRESULT(0);
         }
 
         if msg == WM_CHAR {
             tracing::trace!(keycode = wparam.0, "char input");
-            Self::get_for_window(hwnd)
-                .event_dispatcher
-                .dispatch(Event::KeyDown {
+            Self::dispatch_event(
+                hwnd,
+                Event::KeyDown {
                     code: KeyInputCode::Character(unsafe {
                         char::from_u32_unchecked(wparam.0 as _)
                     }),
                     window: WindowHandle(hwnd),
-                });
+                },
+            );
 
             return LRESULT(0);
         }
@@ -882,31 +906,34 @@ impl WindowEventHandler {
         }
 
         if msg == WM_SIZE {
-            if let Some(state) = Self::try_get_for_window(hwnd) {
-                state.resize(
-                    hwnd,
-                    Size::new_pixels(
-                        (lparam.0 & 0xffff) as u16 as _,
-                        ((lparam.0 >> 16) & 0xffff) as u16 as _,
-                    ),
-                );
+            let Some(state) = Self::try_get_for_window(hwnd) else {
+                // preinitialized
+                return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+            };
 
-                if wparam.0 == SIZE_MAXIMIZED as _ {
-                    state
-                        .event_dispatcher
-                        .dispatch(Event::WindowMaximizeStateChanged {
-                            window: WindowHandle(hwnd),
-                            is_maximized: true,
-                        });
-                }
-                if wparam.0 == SIZE_RESTORED as _ {
-                    state
-                        .event_dispatcher
-                        .dispatch(Event::WindowMaximizeStateChanged {
-                            window: WindowHandle(hwnd),
-                            is_maximized: false,
-                        });
-                }
+            state.resize(
+                hwnd,
+                Size::new_pixels(
+                    (lparam.0 & 0xffff) as u16 as _,
+                    ((lparam.0 >> 16) & 0xffff) as u16 as _,
+                ),
+            );
+
+            if wparam.0 == SIZE_MAXIMIZED as _ {
+                state
+                    .event_dispatcher
+                    .dispatch(Event::WindowMaximizeStateChanged {
+                        window: WindowHandle(hwnd),
+                        is_maximized: true,
+                    });
+            }
+            if wparam.0 == SIZE_RESTORED as _ {
+                state
+                    .event_dispatcher
+                    .dispatch(Event::WindowMaximizeStateChanged {
+                        window: WindowHandle(hwnd),
+                        is_maximized: false,
+                    });
             }
 
             return LRESULT(0);
@@ -927,6 +954,7 @@ impl WindowEventHandler {
                 // 初期化完了前にきた
                 return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
             };
+
             let Some(result) = state.non_client_hittest(
                 hwnd,
                 Point::new_pixels(
@@ -1022,7 +1050,7 @@ impl WindowEventHandler {
         }
 
         if msg == WM_RBUTTONUP
-            || (msg == WM_NCLBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
+            || (msg == WM_NCRBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
         {
             Self::get_for_window(hwnd).right_button_up(hwnd);
             return LRESULT(0);
@@ -1054,7 +1082,7 @@ impl WindowEventHandler {
             unsafe {
                 TrackMouseEvent(&mut TRACKMOUSEEVENT {
                     cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
-                    dwFlags: TME_LEAVE | TME_NONCLIENT,
+                    dwFlags: TME_LEAVE | TME_HOVER | TME_NONCLIENT,
                     hwndTrack: hwnd,
                     dwHoverTime: 0,
                 })
