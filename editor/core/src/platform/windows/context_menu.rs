@@ -40,7 +40,7 @@ use crate::{
     ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
-        PerWindowKeyboardFocusState,
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
     rendering::{
@@ -91,6 +91,7 @@ impl Handle {
         syslink: &SystemLink,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         syslink
@@ -99,7 +100,7 @@ impl Handle {
             .expect("rt_sender.send");
         rx.recv().expect("rx.recv");
 
-        take_state(self.0).done(composite_tree, ht_manager);
+        take_state(self.0).done(composite_tree, ht_manager, keyboard_focus_registry);
 
         if let Err(e) = unsafe { DestroyWindow(self.0) } {
             tracing::error!(reason = %e, "DestroyWindow");
@@ -184,6 +185,7 @@ pub struct InstanceState {
     event_dispatcher: LogicFiberEventDispatcher,
     _c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
+    kf_root_group: KeyboardFocusGroupRef,
     depth: usize,
     pointer_focus: bool,
     views: Vec<MenuItemView>,
@@ -194,9 +196,11 @@ impl InstanceState {
         self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         composite_tree.free_all(self.composite_root);
         ht_manager.free_all(self.ht_root);
+        keyboard_focus_registry.release_group(self.kf_root_group);
     }
 }
 
@@ -817,6 +821,7 @@ impl super::SystemLink<'_> {
                 event_dispatcher: unsafe { &*self.event_dispatcher }.clone(),
                 _c_target: c_target,
                 keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
+                kf_root_group: root_kf_group,
                 depth,
                 pointer_focus: false,
                 views: Vec::new(),

@@ -42,10 +42,7 @@ use windows::{
             Controls::{MARGINS, WM_MOUSELEAVE},
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
-                ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-                TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
-                VK_LWIN, VK_MENU, VK_RCONTROL, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
-                VK_UP,
+                ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP
             },
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
@@ -732,6 +729,7 @@ impl WindowEventHandler {
                 v if v == VK_RIGHT.0 as _ => KeyInputCode::RightArrow,
                 v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
                 v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
+                v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
                 _ => KeyInputCode::UnknownNativeCode(code as _),
             },
             modifier: self.modifier_key_state,
@@ -759,6 +757,7 @@ impl WindowEventHandler {
                 v if v == VK_RIGHT.0 as _ => KeyInputCode::RightArrow,
                 v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
                 v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
+                v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
                 _ => KeyInputCode::UnknownNativeCode(code as _),
             },
             modifier: self.modifier_key_state,
@@ -1580,6 +1579,7 @@ impl SystemLink<'_> {
         mut window_handle: WindowHandle,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         self.rt_sender
@@ -1594,6 +1594,7 @@ impl SystemLink<'_> {
 
         composite_tree.free_all(window_handle.composite_root());
         hit_tree.free_all(window_handle.ht_root());
+        keyboard_focus_registry.release_group(window_handle.state().root_focus_group);
         window_handle.destroy();
     }
 
