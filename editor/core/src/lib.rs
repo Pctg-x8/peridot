@@ -2872,7 +2872,12 @@ async fn run<'sys>(
                 unsafe {
                     drop(window.take_extra_data::<PerWindowData>());
                 }
-                system_link.close_window(window, &mut composite_tree, &mut ht_manager);
+                system_link.close_window(
+                    window,
+                    &mut composite_tree,
+                    &mut ht_manager,
+                    &mut keyboard_focus_registry,
+                );
             }
             Event::WindowResize { window, size } => {
                 // pointer_input_manager.set_client_size(window, size);
@@ -2904,7 +2909,12 @@ async fn run<'sys>(
                 // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
                 if let Some(c) = current_active_context_menu_session.take_if(|x| x.parent == window)
                 {
-                    c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
+                    c.terminate(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -2977,7 +2987,12 @@ async fn run<'sys>(
                     if let Some(c) =
                         current_active_context_menu_session.take_if(|x| x.parent == window)
                     {
-                        c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
+                        c.terminate(
+                            &system_link,
+                            &mut composite_tree,
+                            &mut ht_manager,
+                            &mut keyboard_focus_registry,
+                        );
 
                         composite_tree
                             .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -3103,7 +3118,7 @@ async fn run<'sys>(
                 mut window,
                 code,
                 modifier,
-            } if code == KeyInputCode::Character('\t') => {
+            } if code == KeyInputCode::Character('\t') || code == KeyInputCode::Tab => {
                 if let Some(next_focus) = if modifier.contains(ModifierKey::SHIFT) {
                     window
                         .keyboard_focus_state()
@@ -3271,7 +3286,12 @@ async fn run<'sys>(
             }
             Event::ContextMenuCloseAll => {
                 if let Some(c) = current_active_context_menu_session.take() {
-                    c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
+                    c.terminate(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -3458,7 +3478,12 @@ async fn run<'sys>(
             Event::GlobalMouseClicked => {
                 if !system_link.any_pointer_on_context_menu() {
                     if let Some(c) = current_active_context_menu_session.take() {
-                        c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
+                        c.terminate(
+                            &system_link,
+                            &mut composite_tree,
+                            &mut ht_manager,
+                            &mut keyboard_focus_registry,
+                        );
 
                         composite_tree
                             .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -3715,6 +3740,7 @@ impl ContextMenuSession {
                         system_link,
                         view_init_context.mount_context.composite_tree,
                         view_init_context.mount_context.ht_manager,
+                        view_init_context.mount_context.keyboard_focus_registry,
                     );
                 }
                 let latest_surface = self.opening_surfaces.last().expect("root?");
@@ -3781,6 +3807,7 @@ impl ContextMenuSession {
                         system_link,
                         view_init_context.mount_context.composite_tree,
                         view_init_context.mount_context.ht_manager,
+                        view_init_context.mount_context.keyboard_focus_registry,
                     );
                 }
             }
@@ -3801,6 +3828,7 @@ impl ContextMenuSession {
                 system_link,
                 view_init_context.mount_context.composite_tree,
                 view_init_context.mount_context.ht_manager,
+                view_init_context.mount_context.keyboard_focus_registry,
             );
         }
 
@@ -3868,9 +3896,15 @@ impl ContextMenuSession {
         system_link: &SystemLink,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         while let Some(c) = self.opening_surfaces.pop() {
-            c.handle.close(system_link, composite_tree, ht_manager);
+            c.handle.close(
+                system_link,
+                composite_tree,
+                ht_manager,
+                keyboard_focus_registry,
+            );
         }
     }
 
@@ -3916,7 +3950,6 @@ pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
 
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {
-    drag_preview_popover: DragPreviewPopoverHandle,
     vk_device: *const VulkanDevice<'sys>,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     root_font_set: *const RootFontSet,
@@ -3937,11 +3970,6 @@ impl SystemLink<'_> {
     #[inline(always)]
     pub const fn rt_sender(&self) -> &std::sync::mpsc::Sender<RenderMessage> {
         &self.rt_sender
-    }
-
-    #[inline(always)]
-    pub fn drag_preview_popover(&self) -> &DragPreviewPopoverHandle {
-        &self.drag_preview_popover
     }
 
     #[inline(always)]

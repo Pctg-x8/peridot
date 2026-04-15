@@ -1122,6 +1122,8 @@ pub enum KeyInputCode {
     PageUp,
     PageDown,
     Insert,
+    Tab,
+    Enter,
     UnknownNativeCode(u32),
 }
 

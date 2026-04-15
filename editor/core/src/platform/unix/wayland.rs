@@ -14,10 +14,10 @@ use crate::{
     Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
     input::{
-        KeyInputCode, PerWindowKeyboardFocusState, PointerInputUnit,
+        KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
+        PerWindowKeyboardFocusState, PointerInputUnit,
         hittest::{
-            CursorShape, HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
-            PointerButton,
+            CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
     },
     rendering::{
@@ -129,6 +129,11 @@ impl WindowHandle {
     #[inline(always)]
     pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
         &mut self.state_mut().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
+        self.state().kf_root_group
     }
 
     // TODO: impl them
@@ -350,6 +355,7 @@ impl crate::SystemLink<'_> {
         &self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> WindowHandle {
         let ht_root = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
@@ -369,6 +375,7 @@ impl crate::SystemLink<'_> {
                 ..Default::default()
             }),
             ht_root,
+            keyboard_focus_registry.acquire_group(),
             unsafe { self.display_server.decoration_pixbuf.as_ref() },
         );
         let main_window_handle = w.make_handle();
@@ -395,10 +402,12 @@ impl crate::SystemLink<'_> {
         &self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         setup_contents: impl FnOnce(
             WindowHandle,
             &mut CompositeTree<SyncEvent>,
             &mut HitTestTreeManager,
+            &mut KeyboardFocusTokenRegistry,
             &Self,
         ),
     ) -> WindowHandle {
@@ -417,6 +426,7 @@ impl crate::SystemLink<'_> {
                 ..Default::default()
             }),
             ht_root,
+            keyboard_focus_registry.acquire_group(),
             unsafe { self.display_server.decoration_pixbuf.as_ref() },
         );
         let window_handle = w.make_handle();
@@ -431,7 +441,13 @@ impl crate::SystemLink<'_> {
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
             }))
             .expect("rt_sender.send");
-        setup_contents(window_handle, composite_tree, hit_tree, self);
+        setup_contents(
+            window_handle,
+            composite_tree,
+            hit_tree,
+            keyboard_focus_registry,
+            self,
+        );
         w.commit();
 
         unsafe {
@@ -447,6 +463,7 @@ impl crate::SystemLink<'_> {
         window_handle: WindowHandle,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         self.rt_sender
@@ -461,6 +478,7 @@ impl crate::SystemLink<'_> {
 
         composite_tree.free_all(window_handle.composite_root());
         ht_manager.free_all(window_handle.ht_root());
+        keyboard_focus_registry.release_group(window_handle.state().kf_root_group);
 
         unsafe {
             (*self.display_server.window_registry)
@@ -595,6 +613,7 @@ pub struct WindowState {
     pub swapchain_externally_invalidation_signal: AtomicBool,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     pub keyboard_focus_state: PerWindowKeyboardFocusState,
+    kf_root_group: KeyboardFocusGroupRef,
 }
 unsafe impl Sync for WindowState {}
 unsafe impl Send for WindowState {}
@@ -639,6 +658,7 @@ impl Window {
         event_dispatcher: LogicFiberEventDispatcher,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
+        kf_root_group: KeyboardFocusGroupRef,
         deco_pixbuf: Option<&WindowDecorationPixbuf>,
     ) -> Self {
         let mut surface = wl_interfaces
@@ -737,7 +757,8 @@ impl Window {
                         false,
                     ),
                     latest_ui_scale_changes: Mutex::new(None),
-                    keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+                    keyboard_focus_state: PerWindowKeyboardFocusState::new(kf_root_group),
+                    kf_root_group,
                 },
             },
             window_type: r#type,
@@ -1880,6 +1901,11 @@ pub struct KeyboardState {
     _wl_object: wl::Owned<wl::Keyboard>,
     xkb_keymap: Option<xkbcommon::Keymap>,
     xkb_state: Option<xkbcommon::State>,
+    xkb_shift_mod_index: Option<u32>,
+    xkb_alt_mod_index: Option<u32>,
+    xkb_ctrl_mod_index: Option<u32>,
+    xkb_super_mod_index: Option<u32>,
+    modifier_key_state: ModifierKey,
     text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
     enter_state: Option<KeyboardEnterState>,
 }
@@ -1955,6 +1981,11 @@ impl wl::SeatEventListener for GlobalMessaging {
                 _wl_object: k,
                 xkb_keymap: None,
                 xkb_state: None,
+                xkb_shift_mod_index: None,
+                xkb_alt_mod_index: None,
+                xkb_ctrl_mod_index: None,
+                xkb_super_mod_index: None,
+                modifier_key_state: ModifierKey::empty(),
                 text_input: Some(ti),
                 enter_state: None,
             });
@@ -2264,6 +2295,10 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         .expect("xkb_keymap.create");
         let xkb_state = xkbcommon::State::new(&keymap).expect("xkb_state.create");
 
+        state.xkb_shift_mod_index = keymap.mod_index(xkbcommon::ffi::XKB_MOD_NAME_SHIFT);
+        state.xkb_alt_mod_index = keymap.mod_index(xkbcommon::ffi::XKB_MOD_NAME_ALT);
+        state.xkb_ctrl_mod_index = keymap.mod_index(xkbcommon::ffi::XKB_MOD_NAME_CTRL);
+        state.xkb_super_mod_index = keymap.mod_index(xkbcommon::ffi::XKB_VMOD_NAME_SUPER);
         state.xkb_keymap = Some(keymap);
         state.xkb_state = Some(xkb_state);
     }
@@ -2324,6 +2359,28 @@ impl wl::KeyboardEventListener for GlobalMessaging {
             let text = unsafe { core::str::from_utf8_unchecked(&buf) };
             tracing::trace!(alen, text, "keyboard translated");
 
+            let mut modifier = ModifierKey::empty();
+            if k_state.xkb_shift_mod_index.is_some_and(|n| {
+                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::SHIFT;
+            }
+            if k_state.xkb_alt_mod_index.is_some_and(|n| {
+                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::ALT;
+            }
+            if k_state.xkb_ctrl_mod_index.is_some_and(|n| {
+                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::CONTROL;
+            }
+            if k_state.xkb_super_mod_index.is_some_and(|n| {
+                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::SUPER;
+            }
+
             let code = if text.is_empty() {
                 match key {
                     k if k == Key::LeftControl as u32 => KeyInputCode::LeftControl,
@@ -2343,8 +2400,12 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                     k if k == Key::PageUp as u32 => KeyInputCode::PageUp,
                     k if k == Key::PageDown as u32 => KeyInputCode::PageDown,
                     k if k == Key::Insert as u32 => KeyInputCode::Insert,
+                    k if k == Key::Tab as u32 => KeyInputCode::Tab,
                     _ => KeyInputCode::UnknownNativeCode(key),
                 }
+            } else if text == "\r" {
+                // これできちゃうのでEnterに強制する
+                KeyInputCode::Enter
             } else {
                 KeyInputCode::Character(text.chars().next().expect("empty"))
             };
@@ -2352,12 +2413,14 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                 wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
                     self.event_dispatcher.dispatch(Event::KeyDown {
                         window: WindowHandle(enter_state.surface),
+                        modifier,
                         code,
                     });
                 }
                 wl::KeyboardKeyState::Released => {
                     self.event_dispatcher.dispatch(Event::KeyUp {
                         window: WindowHandle(enter_state.surface),
+                        modifier,
                         code,
                     });
                 }

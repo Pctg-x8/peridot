@@ -184,7 +184,7 @@ impl KeyInputEventHandler for SimpleButtonActionHandler {
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: crate::input::KeyInputCode) {
-        if code == crate::input::KeyInputCode::Character('\x0d') {
+        if code == crate::input::KeyInputCode::Enter {
             // hit enter
             self.perform_click_action(context.system_link);
         }

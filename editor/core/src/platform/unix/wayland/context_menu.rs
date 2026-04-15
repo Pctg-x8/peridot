@@ -10,8 +10,8 @@ use crate::{
     ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
     graphics::VulkanSurface,
     input::{
-        PerWindowKeyboardFocusState,
-        hittest::{HitTestTreeCreate, HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
+        hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     },
     platform::unix::wayland::{SurfaceState, SurfaceStateTag, WindowScaling},
     rendering::{
@@ -46,6 +46,7 @@ impl Handle {
         syslink: &SystemLink,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         syslink
@@ -60,6 +61,7 @@ impl Handle {
         let eh = unsafe { Box::from_raw((&*self.0).user_data().cast::<EventHandler>()) };
         composite_tree.free_all(eh.0.data.ct_root);
         ht_manager.free_all(eh.0.data.ht_root);
+        keyboard_focus_registry.release_group(eh.0.data.kf_root_group);
         drop(eh);
 
         drop(unsafe { wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(self.0)) });
@@ -187,6 +189,7 @@ struct InstanceData {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     keyboard_focus_state: PerWindowKeyboardFocusState,
+    kf_root_group: KeyboardFocusGroupRef,
     spawned_position: Point<LogicalUnit>,
     committed_state: Mutex<CommittedState>,
     pub swapchain_externally_invalidation_signal: AtomicBool,
@@ -344,21 +347,16 @@ impl wl::WpFractionalScaleV1EventListener for EventHandler {
 pub struct SharedState {
     pub delayed_action_timer: TimerFD,
 }
+impl SharedState {
+    pub fn reserve_delayed_action(&self) {
+        self.delayed_action_timer
+            .set(0, 400 * 1000 * 1000)
+            .expect("timerfd.set");
+    }
 
-pub fn reserve_delayed_action(syslink: &SystemLink) {
-    syslink
-        .context_menu
-        .delayed_action_timer
-        .set(0, 400 * 1000 * 1000)
-        .expect("timerfd.set");
-}
-
-pub fn unreserve_delayed_action(syslink: &SystemLink) {
-    syslink
-        .context_menu
-        .delayed_action_timer
-        .unset()
-        .expect("timerfd.unset");
+    pub fn unreserve_delayed_action(&self) {
+        self.delayed_action_timer.unset().expect("timerfd.unset");
+    }
 }
 
 pub fn pop(
@@ -437,6 +435,7 @@ pub fn pop(
     view_init_context
         .ht_manager
         .set_action_handler(ht_root, &base_surface_event_handler);
+    let kf_root_group = view_init_context.keyboard_focus_registry.acquire_group();
     let mut eh = Box::new(EventHandler(SurfaceState {
         tag: SurfaceStateTag::ContextMenu,
         data: InstanceData {
@@ -446,7 +445,8 @@ pub fn pop(
             xdg_popup,
             ct_root,
             ht_root,
-            keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+            keyboard_focus_state: PerWindowKeyboardFocusState::new(kf_root_group),
+            kf_root_group,
             spawned_position: surface_pos,
             committed_state: Mutex::new(CommittedState {
                 size: Size::new_logical(width.value(), height.value()),

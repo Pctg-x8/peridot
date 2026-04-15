@@ -109,6 +109,14 @@ impl Keymap {
         })
         .map(Self)
     }
+
+    #[inline(always)]
+    pub fn mod_index(&self, name: &core::ffi::CStr) -> Option<u32> {
+        match unsafe { ffi::xkb_keymap_mod_get_index(self.0.as_ptr(), name.as_ptr()) } {
+            r if r == ffi::XKB_MOD_INVALID => None,
+            r => Some(r),
+        }
+    }
 }
 
 #[repr(transparent)]
@@ -165,5 +173,10 @@ impl State {
             ffi::xkb_state_key_get_utf8(self.0.as_ptr(), key, buf.as_mut_ptr().cast(), buf.len())
                 as _
         }
+    }
+
+    #[inline(always)]
+    pub fn mod_index_is_active(&self, mod_index: u32, state: StateComponent) -> bool {
+        unsafe { ffi::xkb_state_mod_index_is_active(self.0.as_ptr(), mod_index, state.bits()) == 1 }
     }
 }
