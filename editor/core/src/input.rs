@@ -1144,9 +1144,9 @@ pub trait KeyInputEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {}
 
     #[allow(unused_variables)]
-    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {}
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {}
     #[allow(unused_variables)]
-    fn keyup(&self, context: &mut InputEventContext, code: KeyInputCode) {}
+    fn keyup(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {}
 
     #[allow(unused_variables)]
     fn ime_state_changes(
@@ -1362,6 +1362,7 @@ impl PerWindowKeyboardFocusState {
     pub fn handle_keydown(
         &self,
         code: KeyInputCode,
+        modifier: ModifierKey,
         context: &mut InputEventContext,
         registry: &KeyboardFocusTokenRegistry,
     ) {
@@ -1372,12 +1373,13 @@ impl PerWindowKeyboardFocusState {
             return;
         };
 
-        eh.keydown(context, code);
+        eh.keydown(context, code, modifier);
     }
 
     pub fn handle_keyup(
         &self,
         code: KeyInputCode,
+        modifier: ModifierKey,
         context: &mut InputEventContext,
         registry: &KeyboardFocusTokenRegistry,
     ) {
@@ -1388,7 +1390,7 @@ impl PerWindowKeyboardFocusState {
             return;
         };
 
-        eh.keyup(context, code);
+        eh.keyup(context, code, modifier);
     }
 
     pub fn handle_ime_state_changes(

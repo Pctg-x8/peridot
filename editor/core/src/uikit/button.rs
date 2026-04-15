@@ -183,7 +183,12 @@ impl KeyInputEventHandler for SimpleButtonActionHandler {
         context.composite_tree.mark_dirty(self.ct_focus);
     }
 
-    fn keydown(&self, context: &mut InputEventContext, code: crate::input::KeyInputCode) {
+    fn keydown(
+        &self,
+        context: &mut InputEventContext,
+        code: crate::input::KeyInputCode,
+        modifier: crate::input::ModifierKey,
+    ) {
         if code == crate::input::KeyInputCode::Enter {
             // hit enter
             self.perform_click_action(context.system_link);

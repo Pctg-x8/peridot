@@ -1219,7 +1219,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         self.sync_selection_native();
     }
 
-    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode) {
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         tracing::debug!(?code, "keydown");
         let mounted_window = context
             .ht_manager
@@ -1228,6 +1228,13 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 
         match code {
             KeyInputCode::LeftArrow => {
+                let selection_mode = modifier.contains(ModifierKey::SHIFT);
+                if selection_mode && self.selection_begin_bytes.get() == self.cursor_pos_bytes.get()
+                {
+                    // Shiftがおされており、選択範囲がない
+                    self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+                }
+
                 let mut new_cursor_pos = self.cursor_pos_bytes.get().saturating_sub(1);
                 while new_cursor_pos > 0 {
                     if self.content.borrow().is_char_boundary(new_cursor_pos) {
@@ -1237,7 +1244,9 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     new_cursor_pos -= 1;
                 }
                 self.cursor_pos_bytes.set(new_cursor_pos);
-                self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
+                if !selection_mode {
+                    self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
+                }
                 self.update_cursor_position(
                     context.composite_tree,
                     mounted_window,
@@ -1249,6 +1258,13 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                 self.sync_selection_native();
             }
             KeyInputCode::RightArrow => {
+                let selection_mode = modifier.contains(ModifierKey::SHIFT);
+                if selection_mode && self.selection_begin_bytes.get() == self.cursor_pos_bytes.get()
+                {
+                    // Shiftがおされており、選択範囲がない
+                    self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+                }
+
                 let mut new_cursor_pos = self
                     .cursor_pos_bytes
                     .get()
@@ -1262,7 +1278,9 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
                     new_cursor_pos += 1;
                 }
                 self.cursor_pos_bytes.set(new_cursor_pos);
-                self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
+                if !selection_mode {
+                    self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
+                }
                 self.update_cursor_position(
                     context.composite_tree,
                     mounted_window,
@@ -3143,9 +3161,14 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::KeyDown { window, code, .. } => {
+            Event::KeyDown {
+                window,
+                code,
+                modifier,
+            } => {
                 window.keyboard_focus_state().handle_keydown(
                     code,
+                    modifier,
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
@@ -3158,9 +3181,14 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::KeyUp { window, code, .. } => {
+            Event::KeyUp {
+                window,
+                code,
+                modifier,
+            } => {
                 window.keyboard_focus_state().handle_keyup(
                     code,
+                    modifier,
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
