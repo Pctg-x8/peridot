@@ -27,7 +27,7 @@ use crate::{
     graphics::VulkanDevice,
     input::{
         FocusTargetToken, InputEventContext, KeyInputCode, KeyInputEventHandler,
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, NativeDesktopSurface,
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey, NativeDesktopSurface,
         PointerInputManager, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
@@ -893,10 +893,12 @@ pub enum Event {
     KeyDown {
         window: WindowHandle,
         code: KeyInputCode,
+        modifier: ModifierKey,
     },
     KeyUp {
         window: WindowHandle,
         code: KeyInputCode,
+        modifier: ModifierKey,
     },
     IMEStateChanges {
         window: WindowHandle,
@@ -3097,11 +3099,20 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::KeyDown { mut window, code } if code == KeyInputCode::Character('\t') => {
-                if let Some(next_focus) = window
-                    .keyboard_focus_state()
-                    .next_focus(&keyboard_focus_registry)
-                {
+            Event::KeyDown {
+                mut window,
+                code,
+                modifier,
+            } if code == KeyInputCode::Character('\t') => {
+                if let Some(next_focus) = if modifier.contains(ModifierKey::SHIFT) {
+                    window
+                        .keyboard_focus_state()
+                        .prev_focus(&keyboard_focus_registry)
+                } else {
+                    window
+                        .keyboard_focus_state()
+                        .next_focus(&keyboard_focus_registry)
+                } {
                     window.keyboard_focus_state_mut().update_focus_with_event(
                         next_focus,
                         &mut InputEventContext {
@@ -3117,7 +3128,7 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::KeyDown { mut window, code } => {
+            Event::KeyDown { window, code, .. } => {
                 window.keyboard_focus_state().handle_keydown(
                     code,
                     &mut InputEventContext {
@@ -3132,7 +3143,7 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::KeyUp { window, code } => {
+            Event::KeyUp { window, code, .. } => {
                 window.keyboard_focus_state().handle_keyup(
                     code,
                     &mut InputEventContext {

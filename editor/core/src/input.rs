@@ -1125,6 +1125,16 @@ pub enum KeyInputCode {
     UnknownNativeCode(u32),
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct ModifierKey : u8 {
+        const SHIFT = 0x01;
+        const ALT = 0x02;
+        const CONTROL = 0x04;
+        const SUPER = 0x08;
+    }
+}
+
 pub trait KeyInputEventHandler {
     #[allow(unused_variables)]
     fn focus_taken(&self, context: &mut InputEventContext) {}

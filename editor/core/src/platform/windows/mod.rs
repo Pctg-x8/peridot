@@ -43,7 +43,9 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
                 ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-                TrackMouseEvent,
+                TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
+                VK_LWIN, VK_MENU, VK_RCONTROL, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+                VK_UP,
             },
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
@@ -79,7 +81,8 @@ use crate::{
     graphics::{VulkanDevice, VulkanSurface},
     input::{
         InputEventContext, KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
-        PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit, ShellPointerActions,
+        ModifierKey, PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit,
+        ShellPointerActions,
         hittest::{
             CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
@@ -422,6 +425,7 @@ impl NativeWindow {
             },
             event_dispatcher,
             edit_context: None,
+            modifier_key_state: ModifierKey::empty(),
         });
         unsafe {
             SetWindowLongPtrW(
@@ -490,6 +494,7 @@ struct WindowEventHandler {
     state: WindowState,
     event_dispatcher: LogicFiberEventDispatcher,
     edit_context: Option<CoreTextEditContext>,
+    modifier_key_state: ModifierKey,
 }
 impl WindowEventHandler {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = NativeWindow::EVENT_HANDLER_LONG_PTR_INDEX;
@@ -707,6 +712,68 @@ impl WindowEventHandler {
         ht == HTCLOSE || ht == HTMAXBUTTON || ht == HTMINBUTTON
     }
 
+    fn keydown(&mut self, hwnd: HWND, code: usize) {
+        if code == VK_SHIFT.0 as _ || code == VK_LSHIFT.0 as _ || code == VK_RSHIFT.0 as _ {
+            self.modifier_key_state |= ModifierKey::SHIFT;
+        }
+        if code == VK_MENU.0 as _ || code == VK_LMENU.0 as _ || code == VK_RMENU.0 as _ {
+            self.modifier_key_state |= ModifierKey::ALT;
+        }
+        if code == VK_CONTROL.0 as _ || code == VK_LCONTROL.0 as _ || code == VK_RCONTROL.0 as _ {
+            self.modifier_key_state |= ModifierKey::CONTROL;
+        }
+        if code == VK_LWIN.0 as _ || code == VK_RWIN.0 as _ {
+            self.modifier_key_state |= ModifierKey::SUPER;
+        }
+
+        self.event_dispatcher.dispatch(Event::KeyDown {
+            code: match code {
+                v if v == VK_LEFT.0 as _ => KeyInputCode::LeftArrow,
+                v if v == VK_RIGHT.0 as _ => KeyInputCode::RightArrow,
+                v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
+                v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
+                _ => KeyInputCode::UnknownNativeCode(code as _),
+            },
+            modifier: self.modifier_key_state,
+            window: WindowHandle(hwnd),
+        });
+    }
+
+    fn keyup(&mut self, hwnd: HWND, code: usize) {
+        if code == VK_SHIFT.0 as _ || code == VK_LSHIFT.0 as _ || code == VK_RSHIFT.0 as _ {
+            self.modifier_key_state &= !ModifierKey::SHIFT;
+        }
+        if code == VK_MENU.0 as _ || code == VK_LMENU.0 as _ || code == VK_RMENU.0 as _ {
+            self.modifier_key_state &= !ModifierKey::ALT;
+        }
+        if code == VK_CONTROL.0 as _ || code == VK_LCONTROL.0 as _ || code == VK_RCONTROL.0 as _ {
+            self.modifier_key_state &= !ModifierKey::CONTROL;
+        }
+        if code == VK_LWIN.0 as _ || code == VK_RWIN.0 as _ {
+            self.modifier_key_state &= !ModifierKey::SUPER;
+        }
+
+        self.event_dispatcher.dispatch(Event::KeyUp {
+            code: match code {
+                v if v == VK_LEFT.0 as _ => KeyInputCode::LeftArrow,
+                v if v == VK_RIGHT.0 as _ => KeyInputCode::RightArrow,
+                v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
+                v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
+                _ => KeyInputCode::UnknownNativeCode(code as _),
+            },
+            modifier: self.modifier_key_state,
+            window: WindowHandle(hwnd),
+        });
+    }
+
+    fn char_key(&self, hwnd: HWND, code: usize) {
+        self.event_dispatcher.dispatch(Event::KeyDown {
+            code: KeyInputCode::Character(unsafe { char::from_u32_unchecked(code as _) }),
+            modifier: self.modifier_key_state,
+            window: WindowHandle(hwnd),
+        });
+    }
+
     extern "system" fn handle_messages(
         hwnd: HWND,
         msg: u32,
@@ -829,69 +896,21 @@ impl WindowEventHandler {
 
         if msg == WM_KEYDOWN {
             tracing::trace!(keycode = wparam.0, "keydown");
-            Self::dispatch_event(
-                hwnd,
-                Event::KeyDown {
-                    code: match wparam.0 {
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_LEFT.0 as _ => {
-                            KeyInputCode::LeftArrow
-                        }
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_RIGHT.0 as _ => {
-                            KeyInputCode::RightArrow
-                        }
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_UP.0 as _ => {
-                            KeyInputCode::UpArrow
-                        }
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_DOWN.0 as _ => {
-                            KeyInputCode::DownArrow
-                        }
-                        _ => KeyInputCode::UnknownNativeCode(wparam.0 as _),
-                    },
-                    window: WindowHandle(hwnd),
-                },
-            );
+            Self::get_for_window(hwnd).keydown(hwnd, wparam.0);
 
             return LRESULT(0);
         }
 
         if msg == WM_KEYUP {
             tracing::trace!(keycode = wparam.0, "keyup");
-            Self::dispatch_event(
-                hwnd,
-                Event::KeyUp {
-                    code: match wparam.0 {
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_LEFT.0 as _ => {
-                            KeyInputCode::LeftArrow
-                        }
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_RIGHT.0 as _ => {
-                            KeyInputCode::RightArrow
-                        }
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_UP.0 as _ => {
-                            KeyInputCode::UpArrow
-                        }
-                        v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_DOWN.0 as _ => {
-                            KeyInputCode::DownArrow
-                        }
-                        _ => KeyInputCode::UnknownNativeCode(wparam.0 as _),
-                    },
-                    window: WindowHandle(hwnd),
-                },
-            );
+            Self::get_for_window(hwnd).keyup(hwnd, wparam.0);
 
             return LRESULT(0);
         }
 
         if msg == WM_CHAR {
             tracing::trace!(keycode = wparam.0, "char input");
-            Self::dispatch_event(
-                hwnd,
-                Event::KeyDown {
-                    code: KeyInputCode::Character(unsafe {
-                        char::from_u32_unchecked(wparam.0 as _)
-                    }),
-                    window: WindowHandle(hwnd),
-                },
-            );
+            Self::get_for_window(hwnd).char_key(hwnd, wparam.0);
 
             return LRESULT(0);
         }
