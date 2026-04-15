@@ -138,7 +138,7 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub unsafe fn extra_data_mut<'a, T>(&'a self) -> &'a mut T {
+    pub unsafe fn extra_data_mut<'a, T>(&'a mut self) -> &'a mut T {
         unsafe {
             &mut *core::ptr::with_exposed_provenance_mut(
                 GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
