@@ -49,6 +49,8 @@ pub struct CompositeInstanceData {
     pub softedge: f32,
     pub gradient_data_index: f32,
     pub _padding: f32,
+    pub border_break_pattern: [f32; 2],
+    pub _padding2: [f32; 2],
 }
 
 #[repr(C)]
@@ -587,12 +589,14 @@ impl CornerRadius {
 pub struct Border<Event> {
     pub thickness: f32,
     pub color: AnimatableColor<Event>,
+    pub break_pattern: [f32; 2],
 }
 impl<Event> Default for Border<Event> {
     fn default() -> Self {
         Self {
             thickness: 0.0,
             color: AnimatableColor::Value([0.0, 0.0, 0.0, 0.0]),
+            break_pattern: [0.0, 0.0],
         }
     }
 }
@@ -1837,6 +1841,13 @@ impl<Event> CompositeTreeRender<Event> {
                                 _ => 0.0,
                             },
                             _padding: 0.0,
+                            border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
+                                [
+                                    b.break_pattern[0] * r.base_scale_factor,
+                                    b.break_pattern[1] * r.base_scale_factor,
+                                ]
+                            }),
+                            _padding2: [0.0, 0.0],
                         },
                     );
                 }
@@ -1932,6 +1943,8 @@ impl<Event> CompositeTreeRender<Event> {
                                 softedge: 0.0,
                                 gradient_data_index: 0.0,
                                 _padding: 0.0,
+                                border_break_pattern: [0.0, 0.0],
+                                _padding2: [0.0, 0.0],
                             },
                         );
                     }

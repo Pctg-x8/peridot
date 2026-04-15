@@ -263,6 +263,7 @@ impl OverlayPopupBasicFrameView {
             border: Some(Border {
                 thickness: 0.5,
                 color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
+                ..Default::default()
             }),
             ..Default::default()
         });

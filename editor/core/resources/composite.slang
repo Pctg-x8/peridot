@@ -44,6 +44,8 @@ struct CompositeInstanceData {
   float4 borderColor;
   /// border_thickness, softedge, gradientDataIndex, ..
   float4 miscValues2;
+  /// border_break_pattern_x, border_break_pattern_y, .., ..
+  float4 miscValues3;
 
   property texSlicedSizedPixels : float2 {
     inline get { return this.uvSTStatic.xy * this.uvSTStatic.zw; }
@@ -131,6 +133,7 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
   vo.fragmentInput.packedValues4.x = instanceDataArray[iindex].borderThickness;
   vo.fragmentInput.packedValues4.y = instanceDataArray[iindex].softedge;
   vo.fragmentInput.packedValues4.z = instanceDataArray[iindex].miscValues2.z;
+  vo.fragmentInput.packedValues5.xy = instanceDataArray[iindex].miscValues3.xy;
 
   return vo;
 }
@@ -144,6 +147,8 @@ struct FragmentInput {
   float4 packedValues3;
   /// borderThickness, softedge, gradientDataIndex, ..
   float4 packedValues4;
+  /// borderBreakPatternX, borderBreakPatternY, .., ..
+  float4 packedValues5;
   float4 sliceBordersLTRB;
   float4 colorTint;
   float4 texSlicedSizePixels;
@@ -230,6 +235,10 @@ struct FragmentInput {
     inline get { return this.packedValues4.x; }
   }
 
+  property borderBreakPattern : float2 {
+    inline get { return this.packedValues5.xy; }
+  }
+
   property softedge : float {
     inline get { return this.packedValues4.y; }
   }
@@ -303,10 +312,9 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
 
   // compute distance from edge
   // TODO: GPU負荷大きそうならテクスチャにするのも考える
-  var distanceFromEdge
-      : float = min(
-            min(input.renderingPixelCoordLeft, input.renderingPixelCoordRight),
-            min(input.renderingPixelCoordTop, input.renderingPixelCoordBottom));
+  var distanceFromEdge =
+      min(min(input.renderingPixelCoordLeft, input.renderingPixelCoordRight),
+          min(input.renderingPixelCoordTop, input.renderingPixelCoordBottom));
   if (input.renderingPixelCoordLeft < input.cornerRadiusLT.x &&
       input.renderingPixelCoordTop < input.cornerRadiusLT.y) {
     let roundedDistance = (1.0 - length((float2(input.renderingPixelCoordLeft,
@@ -357,10 +365,24 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   col.xyz *= col.w;
 
   // blend with borderline
+  let borderPatternAlpha =
+      select(input.borderBreakPattern.x == 0.0, 1.0,
+             select((int(min(input.renderingPixelCoordLeft,
+                             input.renderingPixelCoordRight) /
+                         input.borderBreakPattern.x) &
+                     0x01) == 0,
+                    1.0, 0.0)) *
+      select(input.borderBreakPattern.y == 0.0, 1.0,
+             select((int(min(input.renderingPixelCoordTop,
+                             input.renderingPixelCoordBottom) /
+                         input.borderBreakPattern.y) &
+                     0x01) == 0,
+                    1.0, 0.0));
   let borderAlpha =
       smoothstep(0.0, 1.0, distanceFromEdge) *
       (1.0 - smoothstep(0.0 + input.borderThickness,
-                        1.0 + input.borderThickness, distanceFromEdge));
+                        1.0 + input.borderThickness, distanceFromEdge)) *
+      borderPatternAlpha;
   col = blendAlphaPremultipliedColor(
       input.borderColor * borderAlpha * input.opacity, col);
 

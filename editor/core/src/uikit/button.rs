@@ -45,6 +45,7 @@ impl SimpleButtonView {
             border: Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
             }),
             text: Some(CompositeRectText {
                 runs: vec![CompositeRectTextRun {
@@ -59,6 +60,21 @@ impl SimpleButtonView {
             }),
             ..Default::default()
         });
+        let ct_focus = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(3.0), AnimatableFloat::Value(3.0)],
+            size: [AnimatableFloat::Value(-6.0), AnimatableFloat::Value(-6.0)],
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
+            corner_radius: CornerRadius::all(6.0),
+            border: Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+                break_pattern: [2.0, 2.0],
+            }),
+            ..Default::default()
+        });
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width: size.width,
             height: size.height,
@@ -66,8 +82,11 @@ impl SimpleButtonView {
             ..Default::default()
         });
 
+        ctx.composite_tree.add_child(ct_root, ct_focus);
+
         let action_handler = Rc::new(SimpleButtonActionHandler {
             ct_root,
+            ct_focus,
             click_event,
             state: core::cell::Cell::new(ButtonState::None),
         });
@@ -122,6 +141,7 @@ impl SimpleButtonView {
 
 struct SimpleButtonActionHandler {
     ct_root: CompositeTreeRef,
+    ct_focus: CompositeTreeRef,
     click_event: Option<Event>,
     state: core::cell::Cell<ButtonState>,
 }

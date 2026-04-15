@@ -1853,6 +1853,7 @@ impl TextInputViewEventHandler {
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },
+                ..Default::default()
             });
             context.composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(1.0);
         } else {
@@ -1866,6 +1867,7 @@ impl TextInputViewEventHandler {
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },
+                ..Default::default()
             });
             context.composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(0.0);
         }
@@ -2301,6 +2303,7 @@ impl TextInputView {
             border: Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+                ..Default::default()
             }),
             ..Default::default()
         });
