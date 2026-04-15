@@ -3,7 +3,8 @@ use std::rc::Rc;
 use crate::{
     Event, SyncEvent,
     input::{
-        EventContinueControl, InputEventContext,
+        EventContinueControl, FocusTargetToken, InputEventContext, KeyInputEventHandler,
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
             HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
@@ -25,6 +26,7 @@ pub struct SimpleButtonView {
     ht_root: HitTestTreeRef,
     size: Size<LogicalUnit>,
     action_handler: Rc<SimpleButtonActionHandler>,
+    kf_token: FocusTargetToken,
 }
 impl SimpleButtonView {
     pub fn new(
@@ -73,12 +75,15 @@ impl SimpleButtonView {
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
                 break_pattern: [2.0, 2.0],
             }),
+            opacity: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
+        let kf = ctx.keyboard_focus_registry.acquire_token();
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width: size.width,
             height: size.height,
             cursor_shape: CursorShape::Pointer,
+            keyboard_focus: Some(kf),
             ..Default::default()
         });
 
@@ -91,18 +96,40 @@ impl SimpleButtonView {
             state: core::cell::Cell::new(ButtonState::None),
         });
         ctx.ht_manager.set_action_handler(ht_root, &action_handler);
+        ctx.keyboard_focus_registry
+            .set_event_handler(kf, &action_handler);
 
         Self {
             ht_root,
             size,
             action_handler,
+            kf_token: kf,
         }
+    }
+
+    pub fn terminate(&mut self, ctx: &mut MountContext) {
+        ctx.ht_manager.free_all(self.ht_root);
+        ctx.composite_tree.free_all(self.action_handler.ct_root);
+        ctx.keyboard_focus_registry.release_token(self.kf_token);
     }
 
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree
             .add_child(parent.ct_root(), self.action_handler.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
+    }
+
+    pub fn unmount(&self, ctx: &mut MountContext) {
+        ctx.ht_manager.remove_child(self.ht_root);
+        ctx.composite_tree.remove_child(self.action_handler.ct_root);
+    }
+
+    pub fn set_keyboard_focus_group(
+        &self,
+        group: KeyboardFocusGroupRef,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        keyboard_focus_registry.join_group(group, self.kf_token);
     }
 
     pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
@@ -144,6 +171,17 @@ struct SimpleButtonActionHandler {
     ct_focus: CompositeTreeRef,
     click_event: Option<Event>,
     state: core::cell::Cell<ButtonState>,
+}
+impl KeyInputEventHandler for SimpleButtonActionHandler {
+    fn focus_taken(&self, context: &mut InputEventContext) {
+        context.composite_tree.get_mut(self.ct_focus).opacity = AnimatableFloat::Value(1.0);
+        context.composite_tree.mark_dirty(self.ct_focus);
+    }
+
+    fn focus_released(&self, context: &mut InputEventContext) {
+        context.composite_tree.get_mut(self.ct_focus).opacity = AnimatableFloat::Value(0.0);
+        context.composite_tree.mark_dirty(self.ct_focus);
+    }
 }
 impl HitTestTreeActionHandler for SimpleButtonActionHandler {
     fn on_pointer_enter(

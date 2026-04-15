@@ -78,8 +78,8 @@ use crate::{
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
     input::{
-        InputEventContext, KeyInputCode, PerWindowKeyboardFocusState, PointerInputManager,
-        PointerInputUnit, ShellPointerActions,
+        InputEventContext, KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
+        PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit, ShellPointerActions,
         hittest::{
             CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
@@ -315,6 +315,11 @@ impl WindowHandle {
     pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
         &mut self.state_mut().keyboard_focus_state
     }
+
+    #[inline(always)]
+    pub fn keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
+        self.state().root_focus_group
+    }
 }
 impl ShellPointerActions for WindowHandle {
     #[inline(always)]
@@ -384,6 +389,7 @@ impl NativeWindow {
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> Self {
         let w = unsafe {
             CreateWindowExW(
@@ -402,6 +408,7 @@ impl NativeWindow {
             )
             .expect("CreateWindowExW")
         };
+        let root_kf_group = keyboard_focus_registry.acquire_group();
         let event_handler = Box::new(WindowEventHandler {
             state: WindowState {
                 r#type: window_type,
@@ -409,7 +416,8 @@ impl NativeWindow {
                 composite_root,
                 ht_root,
                 latest_ui_scale_changes: Mutex::new(None),
-                keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+                keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
+                root_focus_group: root_kf_group,
                 destroying: false,
             },
             event_dispatcher,
@@ -454,6 +462,7 @@ pub struct WindowState {
     pub ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     pub keyboard_focus_state: PerWindowKeyboardFocusState,
+    pub root_focus_group: KeyboardFocusGroupRef,
     destroying: bool,
 }
 
@@ -1470,6 +1479,7 @@ impl SystemLink<'_> {
         &self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> WindowHandle {
         let ht = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
@@ -1485,6 +1495,7 @@ impl SystemLink<'_> {
             }),
             ht,
             unsafe { &*self.event_dispatcher }.clone(),
+            keyboard_focus_registry,
         );
         let h = w.make_handle();
         ht_manager.get_data_mut(ht).root_of_window = Some(h);
@@ -1510,10 +1521,12 @@ impl SystemLink<'_> {
         &mut self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager<'h>,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         setup_contents: impl FnOnce(
             WindowHandle,
             &mut CompositeTree<SyncEvent>,
             &mut HitTestTreeManager<'h>,
+            &mut KeyboardFocusTokenRegistry,
             &mut Self,
         ),
     ) -> WindowHandle {
@@ -1530,6 +1543,7 @@ impl SystemLink<'_> {
                 ..Default::default()
             }),
             unsafe { &*self.event_dispatcher }.clone(),
+            keyboard_focus_registry,
         );
         let h = w.make_handle();
 
@@ -1541,7 +1555,7 @@ impl SystemLink<'_> {
             }))
             .expect("rt_sender.send");
 
-        setup_contents(h, composite_tree, hit_tree, self);
+        setup_contents(h, composite_tree, hit_tree, keyboard_focus_registry, self);
         unsafe {
             let _ = ShowWindow(w.hwnd, SW_SHOW);
         }

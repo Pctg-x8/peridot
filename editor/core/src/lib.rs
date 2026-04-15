@@ -27,7 +27,8 @@ use crate::{
     graphics::VulkanDevice,
     input::{
         FocusTargetToken, InputEventContext, KeyInputCode, KeyInputEventHandler,
-        KeyboardFocusTokenRegistry, NativeDesktopSurface, PointerInputManager, PointerInputUnit,
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, NativeDesktopSurface,
+        PointerInputManager, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
             HitTestTreeRef, HitTestTreeScreenRepositionHandler, PointerActionArgs, PointerButton,
@@ -1127,6 +1128,15 @@ impl Popup for AlertDialogPresenter {
             .play_open_animation(ctx.composite_tree, ctx.current_sec);
     }
 
+    fn set_keyboard_focus_group(
+        &self,
+        group: KeyboardFocusGroupRef,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        self.confirm_button
+            .set_keyboard_focus_group(group, keyboard_focus_registry);
+    }
+
     fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
         self.frame.rescale(scale, composite_tree);
         self.confirm_button.rescale(scale, composite_tree);
@@ -1153,6 +1163,14 @@ impl Popup for AlertDialogPresenter {
             current_sec,
             SyncEvent::PopupUnmount { id: self.id },
         );
+    }
+
+    fn terminate(&mut self, ctx: &mut MountContext) {
+        self.confirm_button.unmount(ctx);
+        self.confirm_button.terminate(ctx);
+
+        ctx.composite_tree.free_all(self.mask.ct_root());
+        ctx.ht_manager.free_all(self.mask.ht_root());
     }
 }
 
@@ -2290,6 +2308,7 @@ impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHan
 
 pub struct TextInputView {
     ct_text_clip: CompositeTreeRef,
+    kf_token: FocusTargetToken,
     eh: Rc<TextInputViewEventHandler>,
 }
 impl TextInputView {
@@ -2403,7 +2422,11 @@ impl TextInputView {
 
         eh.update_text(ctx.composite_tree);
 
-        Self { ct_text_clip, eh }
+        Self {
+            ct_text_clip,
+            kf_token,
+            eh,
+        }
     }
 
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
@@ -2420,6 +2443,14 @@ impl TextInputView {
                 .screen_reposition_interests
                 .insert(self.eh.ht_root);
         }
+    }
+
+    pub fn set_keyboard_focus_group(
+        &self,
+        group: KeyboardFocusGroupRef,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        keyboard_focus_registry.join_group(group, self.kf_token);
     }
 
     pub fn rescale(
@@ -2504,7 +2535,11 @@ async fn run<'sys>(
     let mut current_active_context_menu_session = None::<ContextMenuSession>;
 
     #[cfg(any(windows, feature = "wayland"))]
-    let mut main_window = system_link.create_main_window(&mut composite_tree, &mut ht_manager);
+    let mut main_window = system_link.create_main_window(
+        &mut composite_tree,
+        &mut ht_manager,
+        &mut keyboard_focus_registry,
+    );
 
     composite_tree
         .get_mut(main_window.composite_root())
@@ -2519,8 +2554,8 @@ async fn run<'sys>(
             composite_tree: &mut composite_tree,
             ht_manager: &mut ht_manager,
             current_sec: global_time_base.elapsed().as_secs_f32(),
+            keyboard_focus_registry: &mut keyboard_focus_registry,
         },
-        keyboard_focus_registry: &mut keyboard_focus_registry,
         ui_scale_factor: main_window.ui_scale_factor(),
         system_link: &system_link,
     };
@@ -2766,9 +2801,17 @@ async fn run<'sys>(
         &mut view_init_ctx.mount_context.ht_manager,
     );
     test_alert_btn.mount(&mut view_init_ctx, &main_window);
+    test_alert_btn.set_keyboard_focus_group(
+        main_window.keyboard_focus_group(),
+        view_init_ctx.keyboard_focus_registry,
+    );
 
     let text_input_view = TextInputView::new(&mut view_init_ctx);
     text_input_view.mount(&mut view_init_ctx, &main_window);
+    text_input_view.set_keyboard_focus_group(
+        main_window.keyboard_focus_group(),
+        view_init_ctx.keyboard_focus_registry,
+    );
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -2781,7 +2824,8 @@ async fn run<'sys>(
                 system_link.open_window(
                     &mut composite_tree,
                     &mut ht_manager,
-                    |mut w, composite_tree, ht_manager, system_link| {
+                    &mut keyboard_focus_registry,
+                    |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
                         ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
 
                         composite_tree.get_mut(w.composite_root()).has_bitmap = true;
@@ -2794,8 +2838,8 @@ async fn run<'sys>(
                                 composite_tree,
                                 ht_manager,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
+                                keyboard_focus_registry,
                             },
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
                             ui_scale_factor: w.ui_scale_factor(),
                             system_link,
                         };
@@ -3053,7 +3097,27 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::KeyDown { window, code } => {
+            Event::KeyDown { mut window, code } if code == KeyInputCode::Character('\t') => {
+                if let Some(next_focus) = window
+                    .keyboard_focus_state()
+                    .next_focus(&keyboard_focus_registry)
+                {
+                    window.keyboard_focus_state_mut().update_focus_with_event(
+                        next_focus,
+                        &mut InputEventContext {
+                            composite_tree: &mut composite_tree,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            system_link: &mut system_link,
+                            drag_preview_popover: &drag_preview_popover,
+                            ht_manager: &ht_manager,
+                        },
+                        &keyboard_focus_registry,
+                    );
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
+            }
+            Event::KeyDown { mut window, code } => {
                 window.keyboard_focus_state().handle_keydown(
                     code,
                     &mut InputEventContext {
@@ -3113,8 +3177,8 @@ async fn run<'sys>(
                             composite_tree: &mut composite_tree,
                             ht_manager: &mut ht_manager,
                             current_sec: global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
                         ui_scale_factor: main_window.ui_scale_factor(),
                         system_link: &system_link,
                     },
@@ -3142,6 +3206,7 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         ht_manager: &mut ht_manager,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
                     },
                     id,
                 ) {
@@ -3170,8 +3235,8 @@ async fn run<'sys>(
                             composite_tree: &mut composite_tree,
                             ht_manager: &mut ht_manager,
                             current_sec: global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
                         ui_scale_factor: 1.0, // updated later
                         system_link: &system_link,
                     },
@@ -3259,8 +3324,8 @@ async fn run<'sys>(
                                 composite_tree: &mut composite_tree,
                                 ht_manager: &mut ht_manager,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
+                                keyboard_focus_registry: &mut keyboard_focus_registry,
                             },
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
                             ui_scale_factor: 1.0, // updated later
                             system_link: &system_link,
                         },

@@ -3,7 +3,7 @@
 use crate::{
     SyncEvent, SystemLink, WindowHandle,
     input::{
-        KeyboardFocusTokenRegistry,
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
     rendering::composite::{CompositeTree, CompositeTreeRef},
@@ -12,12 +12,12 @@ use crate::{
 pub struct MountContext<'a, 'h> {
     pub composite_tree: &'a mut CompositeTree<SyncEvent>,
     pub ht_manager: &'a mut HitTestTreeManager<'h>,
+    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
 }
 
 pub struct ViewInitContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
-    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub system_link: &'a SystemLink<'a>,
     pub ui_scale_factor: f32,
 }

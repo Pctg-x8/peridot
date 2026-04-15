@@ -808,6 +808,7 @@ impl super::SystemLink<'_> {
             .InsertAtTop(&cv_composited)
             .expect("drag.visual.add_child");
 
+        let root_kf_group = view_init_context.keyboard_focus_registry.acquire_group();
         set_state(
             h,
             Box::new(InstanceState {
@@ -815,7 +816,7 @@ impl super::SystemLink<'_> {
                 ht_root,
                 event_dispatcher: unsafe { &*self.event_dispatcher }.clone(),
                 _c_target: c_target,
-                keyboard_focus_state: PerWindowKeyboardFocusState::new(),
+                keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
                 depth,
                 pointer_focus: false,
                 views: Vec::new(),

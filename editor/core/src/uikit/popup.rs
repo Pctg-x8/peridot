@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use crate::{
     SyncEvent, WindowHandle,
-    input::hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
+    input::{
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
+        hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
+    },
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
         CompositeTree, CompositeTreeRef, CornerRadius,
@@ -23,6 +26,11 @@ impl PopupID {
 
 pub trait Popup {
     fn mount(&self, ctx: &mut MountContext, parent: &RawMountTarget);
+    fn set_keyboard_focus_group(
+        &self,
+        group: KeyboardFocusGroupRef,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    );
     fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>);
     fn close(
         &self,
@@ -31,10 +39,11 @@ pub trait Popup {
         current_sec: f32,
     );
     fn unmount(&self, ctx: &mut MountContext);
+    fn terminate(&mut self, ctx: &mut MountContext);
 }
 
 pub struct PopupManager {
-    instance_by_id: HashMap<PopupID, (Box<dyn Popup>, WindowHandle)>,
+    instance_by_id: HashMap<PopupID, (Box<dyn Popup>, WindowHandle, KeyboardFocusGroupRef)>,
 }
 impl PopupManager {
     #[inline(always)]
@@ -47,13 +56,19 @@ impl PopupManager {
     pub fn open<P: Popup + 'static>(
         &mut self,
         ctx: &mut ViewInitContext,
-        window: WindowHandle,
+        mut window: WindowHandle,
         ctor: impl FnOnce(PopupID, &mut ViewInitContext) -> P,
     ) -> PopupID {
         let id = PopupID::new();
+        let popup_focus_group = ctx.keyboard_focus_registry.acquire_group();
         let instance = ctor(id, ctx);
         instance.mount(ctx, &RawMountTarget::from_typed(&window));
-        self.instance_by_id.insert(id, (Box::new(instance), window));
+        instance.set_keyboard_focus_group(popup_focus_group, ctx.keyboard_focus_registry);
+        window
+            .keyboard_focus_state_mut()
+            .push_tab_stop_group(popup_focus_group);
+        self.instance_by_id
+            .insert(id, (Box::new(instance), window, popup_focus_group));
 
         id
     }
@@ -66,7 +81,7 @@ impl PopupManager {
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     ) -> bool {
-        if let Some((instance, _)) = self.instance_by_id.get(&id) {
+        if let Some((instance, _, _)) = self.instance_by_id.get(&id) {
             instance.close(composite_tree, ht_manager, current_sec);
             true
         } else {
@@ -76,8 +91,11 @@ impl PopupManager {
 
     #[inline(always)]
     pub fn unmount(&mut self, ctx: &mut MountContext, id: PopupID) -> bool {
-        if let Some((instance, _)) = self.instance_by_id.remove(&id) {
+        if let Some((mut instance, mut w, g)) = self.instance_by_id.remove(&id) {
+            w.keyboard_focus_state_mut().pop_tab_stop_group();
             instance.unmount(ctx);
+            ctx.keyboard_focus_registry.release_group(g);
+            instance.terminate(ctx);
             true
         } else {
             false
@@ -91,7 +109,7 @@ impl PopupManager {
         scale: f32,
         composite_tree: &mut CompositeTree<SyncEvent>,
     ) {
-        for (x, bound_window) in self.instance_by_id.values() {
+        for (x, bound_window, _) in self.instance_by_id.values() {
             if bound_window == &for_window {
                 x.rescale(scale, composite_tree);
             }

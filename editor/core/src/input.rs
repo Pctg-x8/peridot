@@ -1102,7 +1102,7 @@ impl PointerInputManager {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FocusTargetToken(usize);
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyInputCode {
     Character(char),
     LeftShift,
@@ -1146,24 +1146,28 @@ pub trait KeyInputEventHandler {
     }
 }
 
-struct KeyboardFocusTokenData {
-    event_handler: Option<Weak<dyn KeyInputEventHandler>>,
-}
-impl KeyboardFocusTokenData {
-    fn reset(&mut self) {
-        self.event_handler = None;
-    }
-}
-
 pub struct PerWindowKeyboardFocusState {
     window_focused: bool,
     current_focus: Option<usize>,
+    active_group_stack: Vec<KeyboardFocusGroupRef>,
 }
 impl PerWindowKeyboardFocusState {
-    pub fn new() -> Self {
+    pub fn new(root_group: KeyboardFocusGroupRef) -> Self {
         Self {
             current_focus: None,
             window_focused: false,
+            active_group_stack: vec![root_group],
+        }
+    }
+
+    pub fn push_tab_stop_group(&mut self, group: KeyboardFocusGroupRef) {
+        self.active_group_stack.push(group);
+    }
+
+    pub fn pop_tab_stop_group(&mut self) {
+        self.active_group_stack.pop();
+        if self.active_group_stack.is_empty() {
+            panic!("root group pop!");
         }
     }
 
@@ -1222,6 +1226,102 @@ impl PerWindowKeyboardFocusState {
         self.current_focus.take().map(FocusTargetToken)
     }
 
+    pub fn update_focus_with_event(
+        &mut self,
+        new_focus: FocusTargetToken,
+        action_context: &mut InputEventContext,
+        kf_registry: &KeyboardFocusTokenRegistry,
+    ) {
+        if self.current_focus == Some(new_focus.0) {
+            // no changes
+            return;
+        }
+
+        let released_focus = self.current_focus.replace(new_focus.0);
+
+        if let Some(eh) =
+            released_focus.and_then(|x| kf_registry.event_handler(FocusTargetToken(x)))
+        {
+            eh.focus_released(action_context);
+        }
+
+        if let Some(eh) = kf_registry.event_handler(new_focus) {
+            eh.focus_taken(action_context);
+        }
+    }
+
+    pub fn next_focus(&self, registry: &KeyboardFocusTokenRegistry) -> Option<FocusTargetToken> {
+        let active_group = self.active_group_stack.last().expect("no group");
+        if registry.groups[active_group.0].links.is_empty() {
+            // nothing in this group
+            return None;
+        }
+
+        let Some(current) = self.current_focus else {
+            // current_focusがない
+            let index = registry.groups[active_group.0].first_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        };
+
+        let Some(current_bound_group) = registry.token_data[current].tab_order_group else {
+            // current is not bound to any group(そんなことある？)
+            let index = registry.groups[active_group.0].first_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        };
+
+        if &current_bound_group.0 != active_group {
+            // 現在のフォーカスと別のgroupがactive
+            let index = registry.groups[active_group.0].first_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        }
+
+        let link_data_index = current_bound_group.1;
+        if link_data_index == registry.groups[active_group.0].last_order_index {
+            // 最後のTab Order ループさせる
+            let index = registry.groups[active_group.0].first_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        }
+
+        let index = registry.groups[active_group.0].links[link_data_index].next;
+        return Some(registry.groups[active_group.0].links[index].token);
+    }
+
+    pub fn prev_focus(&self, registry: &KeyboardFocusTokenRegistry) -> Option<FocusTargetToken> {
+        let active_group = self.active_group_stack.last().expect("no group");
+        if registry.groups[active_group.0].links.is_empty() {
+            // nothing registered in this group
+            return None;
+        }
+
+        let Some(current) = self.current_focus else {
+            // current_focusがない
+            let index = registry.groups[active_group.0].last_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        };
+
+        let Some(current_bound_group) = registry.token_data[current].tab_order_group else {
+            // current is not bound to any group(そんなことある？)
+            let index = registry.groups[active_group.0].last_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        };
+
+        if &current_bound_group.0 != active_group {
+            // 現在のフォーカスと別のgroupがactive
+            let index = registry.groups[active_group.0].last_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        }
+
+        let link_data_index = current_bound_group.1;
+        if link_data_index == registry.groups[active_group.0].first_order_index {
+            // 最初のTab Order ループさせる
+            let index = registry.groups[active_group.0].last_order_index;
+            return Some(registry.groups[active_group.0].links[index].token);
+        }
+
+        let index = registry.groups[active_group.0].links[link_data_index].prev;
+        return Some(registry.groups[active_group.0].links[index].token);
+    }
+
     pub fn handle_keydown(
         &self,
         code: KeyInputCode,
@@ -1272,10 +1372,38 @@ impl PerWindowKeyboardFocusState {
     }
 }
 
+struct KeyboardFocusTokenData {
+    event_handler: Option<Weak<dyn KeyInputEventHandler>>,
+    tab_order_group: Option<(KeyboardFocusGroupRef, usize)>,
+}
+impl KeyboardFocusTokenData {
+    fn reset(&mut self) {
+        self.event_handler = None;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct KeyboardFocusGroupRef(usize);
+
+#[derive(Debug)]
+struct KeyboardFocusTabOrderData {
+    token: FocusTargetToken,
+    next: usize,
+    prev: usize,
+}
+
+struct KeyboardFocusTabOrderGroup {
+    links: Vec<KeyboardFocusTabOrderData>,
+    first_order_index: usize,
+    last_order_index: usize,
+}
+
 pub struct KeyboardFocusTokenRegistry {
     last_token: usize,
     unused_token: BTreeSet<usize>,
     token_data: Vec<KeyboardFocusTokenData>,
+    unused_groups: BTreeSet<usize>,
+    groups: Vec<KeyboardFocusTabOrderGroup>,
 }
 impl KeyboardFocusTokenRegistry {
     pub fn new() -> Self {
@@ -1283,6 +1411,103 @@ impl KeyboardFocusTokenRegistry {
             last_token: 0,
             unused_token: BTreeSet::new(),
             token_data: Vec::new(),
+            unused_groups: BTreeSet::new(),
+            groups: Vec::new(),
+        }
+    }
+
+    pub fn acquire_group(&mut self) -> KeyboardFocusGroupRef {
+        if let Some(x) = self.unused_groups.pop_first() {
+            return KeyboardFocusGroupRef(x);
+        }
+
+        let g = KeyboardFocusGroupRef(self.groups.len());
+        self.groups.push(KeyboardFocusTabOrderGroup {
+            links: Vec::new(),
+            first_order_index: 0,
+            last_order_index: 0,
+        });
+        g
+    }
+
+    pub fn release_group(&mut self, r: KeyboardFocusGroupRef) {
+        // unlink all group-token relations
+        for l in self.groups[r.0].links.drain(..) {
+            self.token_data[l.token.0].tab_order_group = None;
+        }
+
+        if r.0 == self.groups.len() - 1 {
+            self.groups.pop();
+        } else {
+            self.unused_groups.insert(r.0);
+        }
+    }
+
+    pub fn join_group(&mut self, group: KeyboardFocusGroupRef, token: FocusTargetToken) {
+        // ensure no group is bound to the token
+        self.leave_group(token);
+
+        self.token_data[token.0].tab_order_group = Some((group, self.groups[group.0].links.len()));
+        if self.groups[group.0].links.is_empty() {
+            // first link
+            self.groups[group.0].links.push(KeyboardFocusTabOrderData {
+                token,
+                next: 0,
+                prev: 0,
+            });
+        } else {
+            // link to last
+            let new_last_order_index = self.groups[group.0].links.len();
+            let prev_last_order_index = core::mem::replace(
+                &mut self.groups[group.0].last_order_index,
+                new_last_order_index,
+            );
+            self.groups[group.0].links.push(KeyboardFocusTabOrderData {
+                token,
+                next: 0,
+                prev: prev_last_order_index,
+            });
+            self.groups[group.0].links[prev_last_order_index].next = new_last_order_index;
+        }
+    }
+
+    pub fn leave_group(&mut self, token: FocusTargetToken) {
+        let Some((group, data_index)) = self.token_data[token.0].tab_order_group.take() else {
+            // not bound with group
+            return;
+        };
+
+        if data_index == self.groups[group.0].first_order_index {
+            if data_index == self.groups[group.0].last_order_index {
+                // removed all
+                self.groups[group.0].links.clear();
+                self.groups[group.0].first_order_index = 0;
+                self.groups[group.0].last_order_index = 0;
+            } else {
+                // remove first
+                let removed_data = self.groups[group.0].links.swap_remove(data_index);
+                self.groups[group.0].first_order_index = removed_data.next;
+                // nextの戻り先だけ更新
+                let next_index = self.groups[group.0].links[data_index].next;
+                self.groups[group.0].links[next_index].prev = data_index;
+            }
+        } else {
+            if data_index == self.groups[group.0].last_order_index {
+                // remove last
+                let removed_data = self.groups[group.0].links.swap_remove(data_index);
+                self.groups[group.0].last_order_index = removed_data.prev;
+                // prevの次だけ更新
+                let prev_index = self.groups[group.0].links[data_index].prev;
+                self.groups[group.0].links[prev_index].next = data_index;
+            } else {
+                self.groups[group.0].links.swap_remove(data_index);
+
+                // 純粋につなぎ直し
+                let next_index = self.groups[group.0].links[data_index].next;
+                let prev_index = self.groups[group.0].links[data_index].prev;
+                self.groups[group.0].links[next_index].prev = data_index;
+                self.groups[group.0].links[prev_index].next = data_index;
+            }
         }
     }
 
@@ -1295,11 +1520,15 @@ impl KeyboardFocusTokenRegistry {
         self.last_token += 1;
         self.token_data.push(KeyboardFocusTokenData {
             event_handler: None,
+            tab_order_group: None,
         });
         t
     }
 
     pub fn release_token(&mut self, tok: FocusTargetToken) {
+        // ensure no group is bound to the token
+        self.leave_group(tok);
+
         if tok.0 == self.last_token - 1 {
             self.last_token -= 1;
         } else {
