@@ -2851,6 +2851,15 @@ async fn run<'sys>(
                         e.on_screen_reposition_required(ht, &mut input_context, pos);
                     }
                 }
+
+                // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
+                if let Some(c) = current_active_context_menu_session.take_if(|x| x.parent == window)
+                {
+                    c.terminate(&system_link, &mut composite_tree, &mut ht_manager);
+
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
             }
             Event::WindowRescaleUI {
                 mut window,
