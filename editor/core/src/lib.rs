@@ -135,6 +135,9 @@ pub fn launch() {
     #[cfg(feature = "wayland")]
     let window_registry = platform::unix::wayland::WindowRegistry::new();
 
+    #[cfg(target_os = "linux")]
+    let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
+
     let root_font_set = RootFontSet::new();
 
     let global_time_base = std::time::Instant::now();
@@ -161,6 +164,8 @@ pub fn launch() {
         wl_interfaces.as_mut(),
         #[cfg(feature = "wayland")]
         window_registry,
+        #[cfg(target_os = "linux")]
+        dbus,
     );
 }
 
@@ -182,10 +187,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         &mut platform::unix::wayland::GlobalInterfaces,
     >,
     #[cfg(feature = "wayland")] mut window_registry: platform::unix::wayland::WindowRegistry,
+    #[cfg(target_os = "linux")] dbus: dbus::Connection,
 ) {
-    #[cfg(target_os = "linux")]
-    let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
-
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
@@ -195,107 +198,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let drag_preview_popover = DragPreviewPopoverHandle::new(app_context);
 
     #[cfg(feature = "wayland")]
-    let popover_buf_shm_bytes = if wl_interfaces.single_pixel_buffer_manager.is_some() {
-        0
-    } else {
-        4
-    };
-    #[cfg(feature = "wayland")]
-    let window_decoration_pixbuf_offset = utils::rup2(
-        popover_buf_shm_bytes,
-        platform::unix::wayland::WindowDecorationPixbuf::REQUIRED_BYTE_ALIGNMENT,
-    );
-    #[cfg(feature = "wayland")]
-    let shm_total_byte_length = window_decoration_pixbuf_offset
-        + if platform::unix::wayland::Window::should_client_decoration(&wl_interfaces) {
-            platform::unix::wayland::WindowDecorationPixbuf::REQUIRED_BYTE_LENGTH
-        } else {
-            0
-        };
-    #[cfg(feature = "wayland")]
-    let shm_pair = if shm_total_byte_length > 0 {
-        let shm_region = utils::platform::unix::TemporalSharedMemory::new_unique(
-            c"/pme_shm",
-            libc::O_RDWR,
-            0o0600,
-        )
-        .expect("buf.shm.create")
-        .expect("buf.shm.create.non_unique");
-        unsafe {
-            utils::platform::unix::ftruncate(&shm_region, shm_total_byte_length as _)
-                .expect("buf.shm.resize");
-        }
-
-        let mapped = utils::platform::unix::MappedMemory::new(
-            None,
-            shm_total_byte_length,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            &shm_region,
-            0,
-        )
-        .expect("buf.mmap");
-
-        let shmp = wl_interfaces
-            .shm
-            .create_pool(&shm_region, shm_total_byte_length as _)
-            .expect("shmp.create.popup");
-
-        Some((shmp, shm_region, mapped))
-    } else {
-        None
-    };
-    #[cfg(feature = "wayland")]
-    let popover_buf = if let Some(ref spb) = wl_interfaces.single_pixel_buffer_manager {
-        let c = DragPreviewPopoverHandle::BG_COLOR.premultiplied();
-        let b = spb
-            .create_u32_rgba_buffer(c.r_u32(), c.g_u32(), c.b_u32(), c.a_u32())
-            .expect("popup_buf.create.single_pixel_buffer");
-
-        platform::unix::wayland::DragPreviewPopoverBuffer::SinglePixel(b)
-    } else {
-        // traditional shm-based single pixel buffer
-        let (shm, _, mapped) = shm_pair.as_ref().expect("no shm");
-
-        let buf = shm
-            .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
-            .expect("buf.create.popup");
-        unsafe {
-            core::ptr::write(
-                mapped.as_ptr().cast::<u32>(),
-                DragPreviewPopoverHandle::BG_COLOR
-                    .premultiplied()
-                    .argb8888(),
-            );
-        }
-
-        platform::unix::wayland::DragPreviewPopoverBuffer::Shm { buf }
-    };
-    #[cfg(feature = "wayland")]
-    let window_decoration_pixbuf = core::pin::pin!(
-        if platform::unix::wayland::Window::should_client_decoration(&wl_interfaces) {
-            let (shm, _, mapped) = shm_pair.as_ref().expect("no shm");
-
-            platform::unix::wayland::WindowDecorationPixbuf::generate_content(unsafe {
-                mapped.as_ptr().byte_add(window_decoration_pixbuf_offset)
-            });
-            Some(platform::unix::wayland::WindowDecorationPixbuf::new(
-                shm,
-                window_decoration_pixbuf_offset,
-            ))
-        } else {
-            None
-        }
-    );
-
-    #[cfg(feature = "wayland")]
-    let drag_preview_popover = DragPreviewPopoverHandle {
-        display: wl_display.as_mut().get_mut(),
-        wl_interfaces: wl_interfaces.as_ref().get_ref(),
-        root_window: core::cell::Cell::new(core::ptr::null_mut()),
-        buf: popover_buf,
-        popup: core::cell::UnsafeCell::new(None),
-    };
+    let static_pixbufs = platform::unix::wayland::StaticPixbufs::new(&wl_interfaces);
 
     #[cfg(target_os = "macos")]
     let drag_preview_popover = DragPreviewPopoverHandle {
@@ -396,7 +299,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_queue: EventQueue { event_store },
             global_time_base,
             renderer_sync,
-            drag_preview_popover,
         },
         #[cfg(windows)]
         SystemLink {
@@ -427,11 +329,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
                 },
                 window_registry: &mut window_registry,
-                decoration_pixbuf: window_decoration_pixbuf
-                    .as_ref()
-                    .get_ref()
-                    .as_ref()
-                    .map_or_else(core::ptr::null, |x| x as *const _),
+                static_pixbufs: &static_pixbufs,
                 global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
             },
             #[cfg(target_os = "linux")]
@@ -2510,7 +2408,6 @@ struct LaunchArgs<'sys> {
     pub event_queue: EventQueue,
     pub global_time_base: &'sys std::time::Instant,
     pub renderer_sync: &'sys Mutex<RendererSync>,
-    pub drag_preview_popover: DragPreviewPopoverHandle,
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
@@ -2519,11 +2416,12 @@ async fn run<'sys>(
         event_queue,
         global_time_base,
         renderer_sync,
-        drag_preview_popover,
     }: LaunchArgs<'sys>,
     mut system_link: SystemLink<'sys>,
 ) {
     tracing::info!("app start");
+
+    let drag_preview_popover = DragPreviewPopoverHandle::new(&system_link);
 
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();

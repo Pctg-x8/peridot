@@ -11,7 +11,7 @@ use peridot_tp_wayland::{self as wl, ProxyObject};
 use peridot_tp_xkbcommon as xkbcommon;
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
+    Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
     input::{
         KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
@@ -24,7 +24,11 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
+    utils::{
+        LogicalUnit, PixelsUnit, Point, Rect, Size,
+        platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},
+        rup2,
+    },
 };
 
 pub mod context_menu;
@@ -202,6 +206,19 @@ pub struct DragPreviewPopoverHandle {
     >,
 }
 impl DragPreviewPopoverHandle {
+    pub fn new(syslink: &SystemLink) -> Self {
+        Self {
+            display: syslink.display_server.wl_display,
+            wl_interfaces: syslink.display_server.wl_global_interfaces,
+            root_window: core::cell::Cell::new(core::ptr::null_mut()),
+            buf: unsafe { &*syslink.display_server.static_pixbufs }
+                .create_drag_preview_popover_bufs(unsafe {
+                    &*syslink.display_server.wl_global_interfaces
+                }),
+            popup: core::cell::UnsafeCell::new(None),
+        }
+    }
+
     pub fn bind_parent_window(&self, window: WindowHandle) {
         self.root_window.set(window.state().xdg_surface.as_ptr());
     }
@@ -340,12 +357,12 @@ pub struct DisplayServerLink {
     pub wl_global_interfaces: *const GlobalInterfaces,
     pub pointer_state_ref: *const Option<PointerState>,
     pub window_registry: *mut WindowRegistry,
-    pub decoration_pixbuf: *const WindowDecorationPixbuf,
+    pub static_pixbufs: *const StaticPixbufs,
     pub global_messaging_ptr: *const GlobalMessaging,
 }
 
 impl crate::SystemLink<'_> {
-    pub fn prelaunch(&self, main_window: WindowHandle) {
+    pub fn prelaunch(&self, _main_window: WindowHandle) {
         unsafe { &mut *self.display_server.wl_display }
             .roundtrip()
             .expect("roundtrip");
@@ -376,7 +393,9 @@ impl crate::SystemLink<'_> {
             }),
             ht_root,
             keyboard_focus_registry.acquire_group(),
-            unsafe { self.display_server.decoration_pixbuf.as_ref() },
+            unsafe { &*self.display_server.static_pixbufs }
+                .window_decoration
+                .as_ref(),
         );
         let main_window_handle = w.make_handle();
         ht_manager.get_data_mut(ht_root).root_of_window = Some(main_window_handle);
@@ -427,7 +446,9 @@ impl crate::SystemLink<'_> {
             }),
             ht_root,
             keyboard_focus_registry.acquire_group(),
-            unsafe { self.display_server.decoration_pixbuf.as_ref() },
+            unsafe { &*self.display_server.static_pixbufs }
+                .window_decoration
+                .as_ref(),
         );
         let window_handle = w.make_handle();
         hit_tree.get_data_mut(ht_root).root_of_window = Some(window_handle);
@@ -567,6 +588,113 @@ impl crate::SystemLink<'_> {
                 == SurfaceStateTag::ContextMenu
         } else {
             false
+        }
+    }
+}
+
+pub struct StaticPixbufs {
+    shm: Option<(wl::Owned<wl::ShmPool>, MappedMemory, TemporalSharedMemory)>,
+    pub window_decoration: Option<WindowDecorationPixbuf>,
+}
+impl StaticPixbufs {
+    pub fn new(interfaces: &GlobalInterfaces) -> Self {
+        let popover_buf_shm_bytes = if interfaces.single_pixel_buffer_manager.is_some() {
+            0
+        } else {
+            4
+        };
+        let window_decoration_pixbuf_offset = rup2(
+            popover_buf_shm_bytes,
+            WindowDecorationPixbuf::REQUIRED_BYTE_ALIGNMENT,
+        );
+        let shm_total_byte_length = window_decoration_pixbuf_offset
+            + if Window::should_client_decoration(interfaces) {
+                WindowDecorationPixbuf::REQUIRED_BYTE_LENGTH
+            } else {
+                0
+            };
+
+        let shm_pair = if shm_total_byte_length > 0 {
+            let shm_region = TemporalSharedMemory::new_unique(c"/pme_shm_st", libc::O_RDWR, 0o0600)
+                .expect("buf.shm.create")
+                .expect("buf.shm.create.non_unique");
+            unsafe {
+                ftruncate(&shm_region, shm_total_byte_length as _).expect("buf.shm.resize");
+            }
+
+            let mapped = MappedMemory::new(
+                None,
+                shm_total_byte_length,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                &shm_region,
+                0,
+            )
+            .expect("buf.mmap");
+
+            let shmp = interfaces
+                .shm
+                .create_pool(&shm_region, shm_total_byte_length as _)
+                .expect("shmp.create.popup");
+
+            Some((shmp, mapped, shm_region))
+        } else {
+            None
+        };
+
+        if interfaces.single_pixel_buffer_manager.is_none() {
+            // setup for traditional shm-based single pixel buffer
+            let (shm, mapped, _) = shm_pair.as_ref().expect("no shm");
+
+            unsafe {
+                core::ptr::write(
+                    mapped.as_ptr().cast::<u32>(),
+                    DragPreviewPopoverHandle::BG_COLOR
+                        .premultiplied()
+                        .argb8888(),
+                );
+            }
+        }
+        let window_decoration_pixbuf = if Window::should_client_decoration(interfaces) {
+            let (shm, mapped, _) = shm_pair.as_ref().expect("no shm");
+
+            WindowDecorationPixbuf::generate_content(unsafe {
+                mapped.as_ptr().byte_add(window_decoration_pixbuf_offset)
+            });
+            Some(WindowDecorationPixbuf::new(
+                shm,
+                window_decoration_pixbuf_offset,
+            ))
+        } else {
+            None
+        };
+
+        Self {
+            shm: shm_pair,
+            window_decoration: window_decoration_pixbuf,
+        }
+    }
+
+    pub fn create_drag_preview_popover_bufs(
+        &self,
+        interfaces: &GlobalInterfaces,
+    ) -> DragPreviewPopoverBuffer {
+        if let Some(ref spb) = interfaces.single_pixel_buffer_manager {
+            let c = DragPreviewPopoverHandle::BG_COLOR.premultiplied();
+            let b = spb
+                .create_u32_rgba_buffer(c.r_u32(), c.g_u32(), c.b_u32(), c.a_u32())
+                .expect("popup_buf.create.single_pixel_buffer");
+
+            DragPreviewPopoverBuffer::SinglePixel(b)
+        } else {
+            // traditional shm-based single pixel buffer
+            let (shm, _, _) = self.shm.as_ref().expect("no shm");
+
+            let buf = shm
+                .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
+                .expect("buf.create.popup");
+
+            DragPreviewPopoverBuffer::Shm { buf }
         }
     }
 }
