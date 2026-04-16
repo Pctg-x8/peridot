@@ -1,8 +1,5 @@
 use core::pin::Pin;
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex, atomic::AtomicBool},
-};
+use std::sync::{Mutex, atomic::AtomicBool};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use linux_input::Key;
@@ -190,11 +187,11 @@ impl crate::input::ShellPointerActions for WindowHandle {
 }
 
 pub struct DragPreviewPopoverHandle {
-    pub display: *mut wl::Display,
-    pub wl_interfaces: *const GlobalInterfaces,
-    pub root_window: core::cell::Cell<*mut wl::XdgSurface>,
-    pub buf: DragPreviewPopoverBuffer,
-    pub popup: core::cell::UnsafeCell<
+    display: *mut wl::Display,
+    wl_interfaces: *const GlobalInterfaces,
+    root_window: core::cell::Cell<*mut wl::XdgSurface>,
+    buf: DragPreviewPopoverBuffer,
+    popup: core::cell::UnsafeCell<
         Option<(
             Option<wl::Owned<wl::OrgKdeKwinBlur>>,
             wl::Owned<wl::XdgPopup>,
@@ -356,7 +353,6 @@ pub struct DisplayServerLink {
     pub wl_display: *mut wl::Display,
     pub wl_global_interfaces: *const GlobalInterfaces,
     pub pointer_state_ref: *const Option<PointerState>,
-    pub window_registry: *mut WindowRegistry,
     pub static_pixbufs: *const StaticPixbufs,
     pub global_messaging_ptr: *const GlobalMessaging,
 }
@@ -411,9 +407,7 @@ impl crate::SystemLink<'_> {
             .expect("rt_sender.send");
         w.commit();
 
-        unsafe { &mut *self.display_server.window_registry }
-            .objects
-            .insert(main_window_handle, w);
+        core::mem::forget(w);
         main_window_handle
     }
 
@@ -471,11 +465,7 @@ impl crate::SystemLink<'_> {
         );
         w.commit();
 
-        unsafe {
-            (*self.display_server.window_registry)
-                .objects
-                .insert(window_handle, w);
-        }
+        core::mem::forget(w);
         window_handle
     }
 
@@ -497,15 +487,16 @@ impl crate::SystemLink<'_> {
             .recv()
             .expect("done_event_receiver.recv");
 
-        composite_tree.free_all(window_handle.composite_root());
-        ht_manager.free_all(window_handle.ht_root());
-        keyboard_focus_registry.release_group(window_handle.state().kf_root_group);
+        let st =
+            unsafe { Box::from_raw((*window_handle.0).user_data().cast::<WindowEventListener>()) };
+        composite_tree.free_all(st.state.data.composite_root);
+        ht_manager.free_all(st.state.data.ht_root);
+        keyboard_focus_registry.release_group(st.state.data.kf_root_group);
+        drop(st);
 
-        unsafe {
-            (*self.display_server.window_registry)
-                .objects
-                .remove(&window_handle);
-        }
+        drop(unsafe {
+            wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(window_handle.0))
+        });
     }
 
     pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
@@ -644,7 +635,7 @@ impl StaticPixbufs {
 
         if interfaces.single_pixel_buffer_manager.is_none() {
             // setup for traditional shm-based single pixel buffer
-            let (shm, mapped, _) = shm_pair.as_ref().expect("no shm");
+            let (_, mapped, _) = shm_pair.as_ref().expect("no shm");
 
             unsafe {
                 core::ptr::write(
@@ -734,6 +725,8 @@ pub struct WindowState {
     surface_ptr: *mut wl::Surface,
     pub(self) xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
+    _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
+    _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     extra_data: *mut core::ffi::c_void,
@@ -764,8 +757,6 @@ struct SurfaceStateUntyped {
 
 pub struct Window {
     surface: wl::Owned<wl::Surface>,
-    _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
-    _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
 }
 impl Drop for Window {
     #[inline(always)]
@@ -816,7 +807,7 @@ impl Window {
         };
 
         // memo: HyprlandのViewporterはsrcの座標範囲の判定が間違っているので特殊判定して影を出さないようにする
-        let (mut deco, decoration) = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager
+        let (deco, decoration) = if let Some(ref dm) = wl_interfaces.zxdg_decoration_manager
             && !wl_interfaces.is_hyprland
         {
             let d = dm
@@ -866,6 +857,7 @@ impl Window {
 
         let xdg_surface_ptr = xdg_surface.as_ptr();
         let xdg_toplevel_ptr = xdg_toplevel.as_ptr();
+        let deco_ptr = deco.as_ref().map(wl::Owned::as_ptr);
         let mut event_listener = Box::new(WindowEventListener {
             state: SurfaceState {
                 tag: SurfaceStateTag::ToplevelWindow,
@@ -873,6 +865,8 @@ impl Window {
                     surface_ptr: surface.as_ptr(),
                     xdg_surface,
                     xdg_toplevel,
+                    _appmenu: appmenu,
+                    _deco: deco,
                     composite_root,
                     ht_root,
                     extra_data: core::ptr::null_mut(),
@@ -910,8 +904,9 @@ impl Window {
             .set_listener(event_listener.as_mut())
             .into_result()
             .expect("xdg_toplevel set listener");
-        if let Some(ref mut x) = deco {
-            x.set_listener(event_listener.as_mut())
+        if let Some(x) = deco_ptr {
+            unsafe { &mut *x }
+                .set_listener(event_listener.as_mut())
                 .into_result()
                 .expect("zxdg_toplevel_decoration_v1.set_listener");
         }
@@ -929,11 +924,7 @@ impl Window {
         // commits initial state
         surface.commit().expect("wl_surface.commit");
 
-        Self {
-            surface,
-            _appmenu: appmenu,
-            _deco: deco,
-        }
+        Self { surface }
     }
 
     #[inline(always)]
@@ -959,13 +950,6 @@ impl Window {
         })
     }
 
-    pub fn rebind_event_dispatcher(&mut self, event_dispatcher: LogicFiberEventDispatcher) {
-        unsafe {
-            (*self.surface.user_data().cast::<WindowEventListener>()).event_dispatcher =
-                event_dispatcher;
-        }
-    }
-
     fn commit(&self) {
         if let &Some(ref d) =
             unsafe { &(*self.surface.user_data().cast::<WindowEventListener>()).decoration }
@@ -973,10 +957,6 @@ impl Window {
             d.commit_all();
         }
         self.surface.commit().expect("wl_surface.commit");
-    }
-
-    pub(self) fn event_listener(&self) -> &WindowEventListener {
-        unsafe { &*self.surface.user_data().cast::<WindowEventListener>() }
     }
 }
 
@@ -1222,29 +1202,7 @@ impl WindowEventListener {
     }
 }
 
-pub struct WindowRegistry {
-    objects: HashMap<WindowHandle, Window>,
-}
-impl WindowRegistry {
-    #[inline(always)]
-    pub fn new() -> Self {
-        Self {
-            objects: HashMap::new(),
-        }
-    }
-
-    #[inline(always)]
-    pub fn get(&self, h: WindowHandle) -> Option<&Window> {
-        self.objects.get(&h)
-    }
-
-    #[inline(always)]
-    pub fn get_mut(&mut self, h: WindowHandle) -> Option<&mut Window> {
-        self.objects.get_mut(&h)
-    }
-}
-
-pub struct PopupState {
+struct PopupState {
     surface_ptr: *mut wl::Surface,
 }
 impl wl::XdgSurfaceEventListener for PopupState {
@@ -2009,8 +1967,8 @@ unsafe impl Sync for PointerEventID {}
 unsafe impl Send for PointerEventID {}
 
 struct PointerEnterState {
-    pub surface: *mut wl::Surface,
-    pub serial: u32,
+    surface: *mut wl::Surface,
+    serial: u32,
 }
 
 pub struct PointerState {
@@ -2025,7 +1983,7 @@ struct KeyboardEnterState {
     pub surface: *mut wl::Surface,
 }
 
-pub struct KeyboardState {
+struct KeyboardState {
     _wl_object: wl::Owned<wl::Keyboard>,
     xkb_keymap: Option<xkbcommon::Keymap>,
     xkb_state: Option<xkbcommon::State>,
@@ -2033,25 +1991,51 @@ pub struct KeyboardState {
     xkb_alt_mod_index: Option<u32>,
     xkb_ctrl_mod_index: Option<u32>,
     xkb_super_mod_index: Option<u32>,
-    modifier_key_state: ModifierKey,
     text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
     enter_state: Option<KeyboardEnterState>,
 }
 
-pub struct IMEPendingState {
-    pub committed_text: String,
-    pub preedit_text: String,
+struct IMEPendingState {
+    committed_text: String,
+    preedit_text: String,
 }
 
 pub struct GlobalMessaging {
-    pub text_input_manager: *mut wl::ZwpTextInputManagerV3,
-    pub xkb_context: xkbcommon::Context,
-    pub keyboard: Option<KeyboardState>,
+    text_input_manager: *mut wl::ZwpTextInputManagerV3,
+    xkb_context: xkbcommon::Context,
+    keyboard: Option<KeyboardState>,
     pub pointer: Option<PointerState>,
-    pub cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
-    pub event_dispatcher: LogicFiberEventDispatcher,
-    pub ime_pending_state: IMEPendingState,
-    pub _pinned: core::marker::PhantomPinned,
+    cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
+    event_dispatcher: LogicFiberEventDispatcher,
+    ime_pending_state: IMEPendingState,
+    _pinned: core::marker::PhantomPinned,
+}
+impl GlobalMessaging {
+    pub fn new(interfaces: &GlobalInterfaces, event_dispatcher: LogicFiberEventDispatcher) -> Self {
+        Self {
+            text_input_manager: interfaces.text_input_manager.as_ptr(),
+            xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
+                .expect("xkb_context.create"),
+            keyboard: None,
+            pointer: None,
+            cursor_shape_manager: interfaces.cursor_shape_manager.as_ref().map(|x| x.as_ptr()),
+            event_dispatcher,
+            ime_pending_state: IMEPendingState {
+                committed_text: String::new(),
+                preedit_text: String::new(),
+            },
+            _pinned: core::marker::PhantomPinned,
+        }
+    }
+
+    pub fn reset_event_dispatcher(
+        self: core::pin::Pin<&mut Self>,
+        event_dispatcher: LogicFiberEventDispatcher,
+    ) {
+        unsafe {
+            self.get_unchecked_mut().event_dispatcher = event_dispatcher;
+        }
+    }
 }
 impl wl::XdgWmBaseEventListener for GlobalMessaging {
     #[inline(always)]
@@ -2113,7 +2097,6 @@ impl wl::SeatEventListener for GlobalMessaging {
                 xkb_alt_mod_index: None,
                 xkb_ctrl_mod_index: None,
                 xkb_super_mod_index: None,
-                modifier_key_state: ModifierKey::empty(),
                 text_input: Some(ti),
                 enter_state: None,
             });

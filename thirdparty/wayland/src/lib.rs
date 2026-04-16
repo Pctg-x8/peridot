@@ -1160,6 +1160,7 @@ pub enum KeyboardKeymapFormat {
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyboardKeyState {
     Released = 0,
     Pressed = 1,

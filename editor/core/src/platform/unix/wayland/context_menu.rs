@@ -206,21 +206,21 @@ struct EventHandler(SurfaceState<InstanceData>);
 impl wl::SurfaceEventListener for EventHandler {
     fn enter(
         &mut self,
-        surface: &mut peridot_tp_wayland::Surface,
-        output: &mut peridot_tp_wayland::Output,
+        _surface: &mut peridot_tp_wayland::Surface,
+        _output: &mut peridot_tp_wayland::Output,
     ) {
         tracing::debug!("context menu enter");
     }
 
     fn leave(
         &mut self,
-        surface: &mut peridot_tp_wayland::Surface,
-        output: &mut peridot_tp_wayland::Output,
+        _surface: &mut peridot_tp_wayland::Surface,
+        _output: &mut peridot_tp_wayland::Output,
     ) {
         tracing::debug!("context menu leave");
     }
 
-    fn preferred_buffer_scale(&mut self, surface: &mut peridot_tp_wayland::Surface, factor: i32) {
+    fn preferred_buffer_scale(&mut self, _surface: &mut peridot_tp_wayland::Surface, factor: i32) {
         let has_fractional_scale_support = self.0.data.scaling.is_manual();
         tracing::debug!(
             has_fractional_scale_support,
@@ -237,7 +237,7 @@ impl wl::SurfaceEventListener for EventHandler {
 
     fn preferred_buffer_transform(
         &mut self,
-        surface: &mut peridot_tp_wayland::Surface,
+        _surface: &mut peridot_tp_wayland::Surface,
         transform: u32,
     ) {
         tracing::debug!(transform, "context menu preferred buffer transform");
@@ -316,7 +316,7 @@ impl wl::XdgSurfaceEventListener for EventHandler {
 impl wl::XdgPopupEventListener for EventHandler {
     fn configure(
         &mut self,
-        sender: &mut peridot_tp_wayland::XdgPopup,
+        _sender: &mut peridot_tp_wayland::XdgPopup,
         x: i32,
         y: i32,
         width: i32,
@@ -325,18 +325,18 @@ impl wl::XdgPopupEventListener for EventHandler {
         tracing::debug!(x, y, width, height, "context menu configure");
     }
 
-    fn popup_done(&mut self, sender: &mut peridot_tp_wayland::XdgPopup) {
+    fn popup_done(&mut self, _sender: &mut peridot_tp_wayland::XdgPopup) {
         tracing::debug!("context menu done");
     }
 
-    fn repositioned(&mut self, sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
+    fn repositioned(&mut self, _sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
         tracing::debug!(token, "context menu repositioned");
     }
 }
 impl wl::WpFractionalScaleV1EventListener for EventHandler {
     fn preferred_scale(
         &mut self,
-        sender: &mut peridot_tp_wayland::WpFractionalScaleV1,
+        _sender: &mut peridot_tp_wayland::WpFractionalScaleV1,
         scale: u32,
     ) {
         tracing::debug!(scale, "context menu preferred scale(fractional)");

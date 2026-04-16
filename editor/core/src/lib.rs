@@ -7,8 +7,6 @@ use peridot_tp_dbus as dbus;
 #[cfg(feature = "wayland")]
 use peridot_tp_wayland as wl;
 #[cfg(target_os = "linux")]
-use peridot_tp_xkbcommon as xkbcommon;
-#[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(not(windows))]
 #[cfg(target_os = "linux")]
@@ -133,7 +131,7 @@ pub fn launch() {
             .expect("wl_interfaces.collect_sync")
     );
     #[cfg(feature = "wayland")]
-    let window_registry = platform::unix::wayland::WindowRegistry::new();
+    let static_pixbufs = platform::unix::wayland::StaticPixbufs::new(&wl_interfaces);
 
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
@@ -163,9 +161,9 @@ pub fn launch() {
         #[cfg(feature = "wayland")]
         wl_interfaces.as_mut(),
         #[cfg(feature = "wayland")]
-        window_registry,
+        &static_pixbufs,
         #[cfg(target_os = "linux")]
-        dbus,
+        &dbus,
     );
 }
 
@@ -186,8 +184,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")] mut wl_interfaces: core::pin::Pin<
         &mut platform::unix::wayland::GlobalInterfaces,
     >,
-    #[cfg(feature = "wayland")] mut window_registry: platform::unix::wayland::WindowRegistry,
-    #[cfg(target_os = "linux")] dbus: dbus::Connection,
+    #[cfg(feature = "wayland")] static_pixbufs: &platform::unix::wayland::StaticPixbufs,
+    #[cfg(target_os = "linux")] dbus: &dbus::Connection,
 ) {
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
@@ -196,9 +194,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(windows)]
     let drag_preview_popover = DragPreviewPopoverHandle::new(app_context);
-
-    #[cfg(feature = "wayland")]
-    let static_pixbufs = platform::unix::wayland::StaticPixbufs::new(&wl_interfaces);
 
     #[cfg(target_os = "macos")]
     let drag_preview_popover = DragPreviewPopoverHandle {
@@ -266,23 +261,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
 
     #[cfg(feature = "wayland")]
-    let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging {
-        text_input_manager: wl_interfaces.text_input_manager.as_ptr(),
-        xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
-            .expect("xkb_context.create"),
-        keyboard: None,
-        pointer: None,
-        cursor_shape_manager: wl_interfaces
-            .cursor_shape_manager
-            .as_ref()
-            .map(|x| x.as_ptr()),
-        event_dispatcher: empty_dispatcher.clone(),
-        ime_pending_state: platform::unix::wayland::IMEPendingState {
-            committed_text: String::new(),
-            preedit_text: String::new(),
-        },
-        _pinned: core::marker::PhantomPinned,
-    });
+    let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging::new(
+        &wl_interfaces,
+        empty_dispatcher.clone()
+    ));
 
     #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
@@ -320,7 +302,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             root_font_set: &root_font_set,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
-            dbus: &dbus,
+            dbus,
             #[cfg(feature = "wayland")]
             display_server: platform::unix::DisplayServerLink {
                 wl_display: wl_display.as_mut().get_mut(),
@@ -328,8 +310,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 pointer_state_ref: unsafe {
                     &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
                 },
-                window_registry: &mut window_registry,
-                static_pixbufs: &static_pixbufs,
+                static_pixbufs,
                 global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
             },
             #[cfg(target_os = "linux")]
@@ -345,13 +326,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     app_event_dispatcher.future_ptr = unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ };
     #[cfg(feature = "wayland")]
-    unsafe {
-        wl_global_msg
-            .as_mut()
-            .get_unchecked_mut()
-            .event_dispatcher
-            .future_ptr = app.as_mut().get_unchecked_mut() as *mut _ as _;
-    }
+    wl_global_msg
+        .as_mut()
+        .reset_event_dispatcher(app_event_dispatcher.clone());
     #[cfg(target_os = "macos")]
     w.rebind_event_dispatcher(LogicFiberEventDispatcher {
         event_store,
