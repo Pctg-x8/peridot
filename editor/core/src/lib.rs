@@ -93,19 +93,9 @@ pub fn launch() {
         .init();
 
     let mut event_store = VecDeque::new();
+    let events = SyncEventBus::new();
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
     let fs = FileSystem::new();
-    let events = SyncEventBus {
-        queue: std::sync::Mutex::new(VecDeque::new()),
-        #[cfg(target_os = "linux")]
-        efd: linux_eventfd::EventFD::new(0, linux_eventfd::EventFDFlags::empty())
-            .expect("app_event_bus.efd.create"),
-        #[cfg(windows)]
-        event_notify: unsafe {
-            windows::Win32::System::Threading::CreateEventW(None, true, false, None)
-                .expect("event_notify.create")
-        },
-    };
     let vk_device = VulkanDevice::new(&fs);
     #[cfg(windows)]
     assert!(
@@ -265,6 +255,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         &wl_interfaces,
         empty_dispatcher.clone()
     ));
+    #[cfg(feature = "wayland")]
+    wl_interfaces.bind_global_messaging(wl_global_msg.as_mut());
 
     #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
@@ -307,9 +299,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             display_server: platform::unix::DisplayServerLink {
                 wl_display: wl_display.as_mut().get_mut(),
                 wl_global_interfaces: wl_interfaces.as_ref().get_ref(),
-                pointer_state_ref: unsafe {
-                    &mut wl_global_msg.as_mut().get_unchecked_mut().pointer as *mut _
-                },
                 static_pixbufs,
                 global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
             },
@@ -336,19 +325,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
         future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
     });
-
-    #[cfg(feature = "wayland")]
-    wl_interfaces
-        .xdg_wm_base
-        .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
-        .into_result()
-        .expect("xdg_wm_base set_listener");
-    #[cfg(feature = "wayland")]
-    wl_interfaces
-        .seat
-        .set_listener(unsafe { wl_global_msg.as_mut().get_unchecked_mut() })
-        .into_result()
-        .expect("seat set_listener");
 
     // initial poll
     unsafe {
@@ -4167,6 +4143,20 @@ impl Drop for SyncEventBus {
     }
 }
 impl SyncEventBus {
+    pub fn new() -> Self {
+        Self {
+            queue: std::sync::Mutex::new(VecDeque::new()),
+            #[cfg(target_os = "linux")]
+            efd: linux_eventfd::EventFD::new(0, linux_eventfd::EventFDFlags::empty())
+                .expect("app_event_bus.efd.create"),
+            #[cfg(windows)]
+            event_notify: unsafe {
+                windows::Win32::System::Threading::CreateEventW(None, true, false, None)
+                    .expect("event_notify.create")
+            },
+        }
+    }
+
     pub fn push(&self, e: SyncEvent) {
         self.queue.lock().expect("poisoned").push_back(e);
         #[cfg(target_os = "linux")]

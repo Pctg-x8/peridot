@@ -352,7 +352,6 @@ impl DragPreviewPopoverHandle {
 pub struct DisplayServerLink {
     pub wl_display: *mut wl::Display,
     pub wl_global_interfaces: *const GlobalInterfaces,
-    pub pointer_state_ref: *const Option<PointerState>,
     pub static_pixbufs: *const StaticPixbufs,
     pub global_messaging_ptr: *const GlobalMessaging,
 }
@@ -370,11 +369,6 @@ impl crate::SystemLink<'_> {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> WindowHandle {
-        let ht_root = ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
         let w = Window::new(
             WindowType::Main {
                 #[cfg(target_os = "linux")]
@@ -383,26 +377,25 @@ impl crate::SystemLink<'_> {
             unsafe { &*self.display_server.wl_global_interfaces },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
-            composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-            ht_root,
-            keyboard_focus_registry.acquire_group(),
+            composite_tree,
+            ht_manager,
+            keyboard_focus_registry,
             unsafe { &*self.display_server.static_pixbufs }
                 .window_decoration
                 .as_ref(),
         );
         let main_window_handle = w.make_handle();
-        ht_manager.get_data_mut(ht_root).root_of_window = Some(main_window_handle);
 
-        let vk_surface = w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
-            &*self.vk_device
-        });
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: main_window_handle,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+                vk_surface: NewWindowVulkanSurface(
+                    w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+                        &*self.vk_device
+                    })
+                    .unbound()
+                    .1,
+                ),
             }))
             .expect("rt_sender.send");
         w.commit();
@@ -424,36 +417,30 @@ impl crate::SystemLink<'_> {
             &Self,
         ),
     ) -> WindowHandle {
-        let ht_root = hit_tree.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
         let w = Window::new(
             WindowType::Sub,
             unsafe { &*self.display_server.wl_global_interfaces },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
-            composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-            ht_root,
-            keyboard_focus_registry.acquire_group(),
+            composite_tree,
+            hit_tree,
+            keyboard_focus_registry,
             unsafe { &*self.display_server.static_pixbufs }
                 .window_decoration
                 .as_ref(),
         );
         let window_handle = w.make_handle();
-        hit_tree.get_data_mut(ht_root).root_of_window = Some(window_handle);
 
-        let vk_surface = w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
-            &*self.vk_device
-        });
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: window_handle,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+                vk_surface: NewWindowVulkanSurface(
+                    w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+                        &*self.vk_device
+                    })
+                    .unbound()
+                    .1,
+                ),
             }))
             .expect("rt_sender.send");
         setup_contents(
@@ -487,16 +474,12 @@ impl crate::SystemLink<'_> {
             .recv()
             .expect("done_event_receiver.recv");
 
-        let st =
-            unsafe { Box::from_raw((*window_handle.0).user_data().cast::<WindowEventListener>()) };
-        composite_tree.free_all(st.state.data.composite_root);
-        ht_manager.free_all(st.state.data.ht_root);
-        keyboard_focus_registry.release_group(st.state.data.kf_root_group);
-        drop(st);
-
-        drop(unsafe {
-            wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(window_handle.0))
-        });
+        Window {
+            surface: unsafe {
+                wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(window_handle.0))
+            },
+        }
+        .terminate(composite_tree, ht_manager, keyboard_focus_registry);
     }
 
     pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
@@ -504,7 +487,9 @@ impl crate::SystemLink<'_> {
             enter_state: Some(PointerEnterState { serial, .. }),
             cursor: Some(ref shape_device),
             ..
-        }) = unsafe { (*self.display_server.pointer_state_ref).as_ref() }
+        }) = unsafe { &*self.display_server.global_messaging_ptr }
+            .pointer
+            .as_ref()
         {
             shape_device
                 .set_shape(serial, cursor.as_wayland())
@@ -572,7 +557,7 @@ impl crate::SystemLink<'_> {
     }
 
     pub fn any_pointer_on_context_menu(&self) -> bool {
-        if let Some(p) = unsafe { &*self.display_server.pointer_state_ref }
+        if let Some(ref p) = unsafe { &*self.display_server.global_messaging_ptr }.pointer
             && let Some(ref p) = p.enter_state
         {
             unsafe { &*(*p.surface).user_data().cast::<SurfaceStateUntyped>() }.tag
@@ -761,7 +746,7 @@ pub struct Window {
 impl Drop for Window {
     #[inline(always)]
     fn drop(&mut self) {
-        drop(self.unbind_listener());
+        panic!("Window::drop called unexpectedly!");
     }
 }
 impl Window {
@@ -770,14 +755,14 @@ impl Window {
         wl_interfaces.zxdg_decoration_manager.is_some()
     }
 
-    fn new(
+    fn new<E>(
         r#type: WindowType,
         wl_interfaces: &GlobalInterfaces,
         dbus: &dbus::Connection,
         event_dispatcher: LogicFiberEventDispatcher,
-        composite_root: CompositeTreeRef,
-        ht_root: HitTestTreeRef,
-        kf_root_group: KeyboardFocusGroupRef,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         deco_pixbuf: Option<&WindowDecorationPixbuf>,
     ) -> Self {
         let mut surface = wl_interfaces
@@ -855,6 +840,18 @@ impl Window {
             core::ptr::null_mut()
         };
 
+        let composite_root = composite_tree.create(CompositeRect {
+            relative_size_adjustment: [1.0, 1.0],
+            ..Default::default()
+        });
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            root_of_window: Some(WindowHandle(surface.as_ptr())),
+            ..Default::default()
+        });
+        let kf_root_group = keyboard_focus_registry.acquire_group();
+
         let xdg_surface_ptr = xdg_surface.as_ptr();
         let xdg_toplevel_ptr = xdg_toplevel.as_ptr();
         let deco_ptr = deco.as_ref().map(wl::Owned::as_ptr);
@@ -927,15 +924,27 @@ impl Window {
         Self { surface }
     }
 
+    fn terminate<E>(
+        mut self,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        let e = unsafe { Box::from_raw(self.surface.user_data().cast::<WindowEventListener>()) };
+        keyboard_focus_registry.release_group(e.state.data.kf_root_group);
+        composite_tree.free_all(e.state.data.composite_root);
+        ht_manager.free_all(e.state.data.ht_root);
+        drop(e);
+
+        unsafe {
+            core::ptr::drop_in_place(&mut self.surface);
+        }
+        core::mem::forget(self);
+    }
+
     #[inline(always)]
     const fn make_handle(&self) -> WindowHandle {
         WindowHandle(self.surface.as_ptr())
-    }
-
-    fn unbind_listener(&mut self) -> Box<WindowEventListener> {
-        let p = unsafe { Box::from_raw(self.surface.user_data().cast::<WindowEventListener>()) };
-        self.surface.set_user_data(core::ptr::null_mut());
-        p
     }
 
     fn create_vk_surface<'d, 'fs>(
@@ -2004,7 +2013,7 @@ pub struct GlobalMessaging {
     text_input_manager: *mut wl::ZwpTextInputManagerV3,
     xkb_context: xkbcommon::Context,
     keyboard: Option<KeyboardState>,
-    pub pointer: Option<PointerState>,
+    pointer: Option<PointerState>,
     cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
     event_dispatcher: LogicFiberEventDispatcher,
     ime_pending_state: IMEPendingState,
@@ -2706,6 +2715,17 @@ impl GlobalInterfaces {
             alpha_modifier: rl.alpha_modifier,
             is_hyprland: rl.is_hyprland,
         })
+    }
+
+    pub fn bind_global_messaging(&mut self, mut g: core::pin::Pin<&mut GlobalMessaging>) {
+        self.xdg_wm_base
+            .set_listener(unsafe { g.as_mut().get_unchecked_mut() })
+            .into_result()
+            .expect("xdg_wm_base set_listener");
+        self.seat
+            .set_listener(unsafe { g.as_mut().get_unchecked_mut() })
+            .into_result()
+            .expect("seat set_listener");
     }
 }
 
