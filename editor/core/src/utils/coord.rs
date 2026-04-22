@@ -1,20 +1,26 @@
 use std::marker::PhantomData;
 
 pub trait Unit {
+    const DBG_NAME: &'static str;
+
     type UnsignedValueType: Copy;
     type SignedValueType: Copy;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LogicalUnit {}
 impl Unit for LogicalUnit {
+    const DBG_NAME: &'static str = "LogicalUnit";
+
     type UnsignedValueType = f32;
     type SignedValueType = f32;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PixelsUnit {}
 impl Unit for PixelsUnit {
+    const DBG_NAME: &'static str = "PixelsUnit";
+
     type UnsignedValueType = u32;
     type SignedValueType = i32;
 }
@@ -32,11 +38,19 @@ impl Zero for i32 {
     const ZERO: i32 = 0;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Point<U: Unit> {
     pub x: U::SignedValueType,
     pub y: U::SignedValueType,
     _marker: PhantomData<U>,
+}
+impl<U: Unit<SignedValueType: core::fmt::Debug>> core::fmt::Debug for Point<U> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("Point<{}>", U::DBG_NAME))
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .finish()
+    }
 }
 impl Point<LogicalUnit> {
     pub const fn new_logical(x: f32, y: f32) -> Self {
@@ -105,11 +119,19 @@ impl Point<PixelsUnit> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Size<U: Unit> {
     pub width: U::UnsignedValueType,
     pub height: U::UnsignedValueType,
     _marker: PhantomData<U>,
+}
+impl<U: Unit<UnsignedValueType: core::fmt::Debug>> core::fmt::Debug for Size<U> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("Size<{}>", U::DBG_NAME))
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
 }
 impl Size<LogicalUnit> {
     #[inline(always)]

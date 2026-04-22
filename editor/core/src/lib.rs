@@ -708,14 +708,14 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     });
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SyncEvent {
     WindowPostResizeRenderBuffer { window: WindowHandle },
     ContextMenuPostResizeRenderBuffer { target: ContextMenuHandle },
     PopupUnmount { id: PopupID },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Event {
     Sync(SyncEvent),
     Quit,
@@ -2689,7 +2689,9 @@ async fn run<'sys>(
 
     system_link.prelaunch(main_window);
     loop {
-        match event_queue.next_event().await {
+        let e = event_queue.next_event().await;
+        tracing::trace!(target: "event-trace", event = ?e);
+        match e {
             Event::Quit => break,
             Event::SubWindowOpen => {
                 system_link.open_window(

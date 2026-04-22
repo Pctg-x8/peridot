@@ -26,7 +26,7 @@ use crate::{
     utils::{LogicalUnit, PixelsUnit, Point, Size, platform::linux::TimerFD},
 };
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Handle(pub(super) *mut wl::Surface);
 unsafe impl Sync for Handle {}
 unsafe impl Send for Handle {}

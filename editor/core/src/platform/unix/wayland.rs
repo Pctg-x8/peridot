@@ -32,7 +32,7 @@ pub mod context_menu;
 
 pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct WindowHandle(*mut wl::Surface);
 unsafe impl Send for WindowHandle {}
 unsafe impl Sync for WindowHandle {}
@@ -1949,7 +1949,7 @@ impl WindowDecoration {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerID(*mut wl::Pointer);
 impl PointerID {
     #[inline(always)]
@@ -1967,7 +1967,7 @@ impl PointerID {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PointerEventID {
     serial: u32,
     seat_ptr: *mut wl::Seat,

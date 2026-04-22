@@ -17,7 +17,7 @@ use crate::{
     utils::{LogicalUnit, SafeF32, Size},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum MenuItem {
     Heading { label: String },
     Command { label: String, command_id: u64 },
