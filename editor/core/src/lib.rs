@@ -1048,12 +1048,16 @@ struct TextInputViewEventHandler {
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
+        tracing::debug!("text input focus taken");
+
         self.update(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
+        tracing::debug!("text input focus released");
+
         self.update(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
@@ -2852,6 +2856,9 @@ async fn run<'sys>(
                 } else {
                     mgr.notify_window_lost_focus(&mut input_context, &keyboard_focus_registry);
                 }
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::WindowActivatingStateChanged { window, activated } => {
                 if !activated {

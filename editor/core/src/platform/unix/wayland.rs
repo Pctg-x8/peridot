@@ -2467,19 +2467,29 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         state.enter_state = Some(KeyboardEnterState {
             surface: NonNull::from_mut(surface),
         });
+        self.event_dispatcher.dispatch(Event::WindowFocusChanged {
+            window: WindowHandle(NonNull::from_mut(surface)),
+            focused: true,
+        });
     }
 
-    #[tracing::instrument(skip(self, _sender, _surface))]
+    #[tracing::instrument(skip(self, _sender, surface))]
     fn leave(
         &mut self,
         _sender: &mut wl::Keyboard,
         serial: u32,
-        _surface: Option<&mut wl::Surface>,
+        surface: Option<&mut wl::Surface>,
     ) {
         tracing::trace!("keyboard::leave");
 
         let state = self.keyboard.as_mut().expect("no keyboard");
         state.enter_state = None;
+        if let Some(s) = surface {
+            self.event_dispatcher.dispatch(Event::WindowFocusChanged {
+                window: WindowHandle(NonNull::from_mut(s)),
+                focused: false,
+            });
+        }
     }
 
     #[tracing::instrument(skip(self, _sender))]
