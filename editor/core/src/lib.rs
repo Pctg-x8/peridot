@@ -385,7 +385,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         let evdevs = (0..32)
             .filter_map(|x| {
                 linux_input::EventDevice::open(
-                    &std::ffi::CString::new(format!("/dev/input/event{}", x)).expect("invalid str"),
+                    &std::ffi::CString::new(format!("/dev/input/event{x}")).expect("invalid str"),
                 )
                 .ok()
             })
@@ -835,6 +835,9 @@ pub enum Event {
     ContextMenuPointerLeave {
         pointer_id: PointerID,
         target: ContextMenuHandle,
+    },
+    ContextMenuSelectCommand {
+        id: u64,
     },
     GlobalMouseClicked,
     #[cfg(windows)]
@@ -3362,6 +3365,22 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::ContextMenuSelectCommand { id } => {
+                tracing::debug!(id, "ContextMenuSelectCommand");
+
+                // コマンド選択したらとじる
+                if let Some(c) = current_active_context_menu_session.take() {
+                    c.terminate(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
+
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
             }
             Event::GlobalMouseClicked => {
                 if !system_link.any_pointer_on_context_menu() {

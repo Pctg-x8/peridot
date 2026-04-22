@@ -668,6 +668,21 @@ impl HitTestTreeActionHandler for CommandViewEventHandler {
 
         crate::input::EventContinueControl::STOP_PROPAGATION
     }
+
+    fn on_click(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        _args: &crate::input::hittest::PointerButtonActionArgs,
+    ) -> crate::input::EventContinueControl {
+        context
+            .system_link
+            .dispatch_event(Event::ContextMenuSelectCommand {
+                id: self.command_id,
+            });
+
+        crate::input::EventContinueControl::STOP_PROPAGATION
+    }
 }
 impl CommandViewEventHandler {
     pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
