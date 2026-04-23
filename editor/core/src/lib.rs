@@ -4,8 +4,6 @@ use linux_epoll::{Epoll, EpollEventBits};
 use linux_eventfd::{EventFD, EventFDFlags};
 #[cfg(target_os = "linux")]
 use peridot_tp_dbus as dbus;
-#[cfg(feature = "wayland")]
-use peridot_tp_wayland as wl;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(not(windows))]
@@ -96,12 +94,6 @@ pub fn launch() {
     let events = SyncEventBus::new();
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
     let fs = FileSystem::new();
-    let vk_device = VulkanDevice::new(&fs);
-    #[cfg(windows)]
-    assert!(
-        vk_device.presentation_support(),
-        "win32 presentation not supported on graphics queue"
-    );
 
     #[cfg(windows)]
     let app_context = platform::windows::ApplicationContext::new();
@@ -109,24 +101,26 @@ pub fn launch() {
     let dx_context = platform::windows::DxContext::new();
 
     #[cfg(feature = "wayland")]
-    let mut wl_display = core::pin::pin!(wl::Display::connect().expect("wl_display connect"));
+    let mut dp_context = platform::unix::wayland::DisplayServerContext::connect();
     #[cfg(feature = "wayland")]
-    assert!(
-        vk_device.presentation_support(&wl_display),
-        "wayland presentation not supported on graphics queue"
-    );
-    #[cfg(feature = "wayland")]
-    let mut wl_interfaces = core::pin::pin!(
-        platform::unix::wayland::GlobalInterfaces::collect_sync(&wl_display)
-            .expect("wl_interfaces.collect_sync")
-    );
-    #[cfg(feature = "wayland")]
-    let static_pixbufs = platform::unix::wayland::StaticPixbufs::new(&wl_interfaces);
+    let static_pixbufs = platform::unix::wayland::StaticPixbufs::new(&dp_context);
 
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
     let root_font_set = RootFontSet::new();
+
+    let vk_device = VulkanDevice::new(&fs);
+    #[cfg(windows)]
+    assert!(
+        vk_device.presentation_support(),
+        "win32 presentation not supported on graphics queue"
+    );
+    #[cfg(feature = "wayland")]
+    assert!(
+        dp_context.check_for_vk(&vk_device),
+        "wayland presentation not supported on graphics queue"
+    );
 
     let global_time_base = std::time::Instant::now();
     main_wrapper(
@@ -147,9 +141,7 @@ pub fn launch() {
         #[cfg(windows)]
         &dx_context,
         #[cfg(feature = "wayland")]
-        wl_display.as_mut(),
-        #[cfg(feature = "wayland")]
-        wl_interfaces.as_mut(),
+        &mut dp_context,
         #[cfg(feature = "wayland")]
         &static_pixbufs,
         #[cfg(target_os = "linux")]
@@ -170,12 +162,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     root_font_set: RootFontSet,
     #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
-    #[cfg(feature = "wayland")] mut wl_display: core::pin::Pin<&mut wl::Display>,
-    #[cfg(feature = "wayland")] mut wl_interfaces: core::pin::Pin<
-        &mut platform::unix::wayland::GlobalInterfaces,
-    >,
-    #[cfg(feature = "wayland")] static_pixbufs: &platform::unix::wayland::StaticPixbufs,
-    #[cfg(target_os = "linux")] dbus: &dbus::Connection,
+    #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
+    #[cfg(feature = "wayland")] static_pixbufs: &'sys platform::unix::wayland::StaticPixbufs,
+    #[cfg(target_os = "linux")] dbus: &'sys dbus::Connection,
 ) {
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
@@ -252,11 +241,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging::new(
-        &wl_interfaces,
+        dp_context,
         empty_dispatcher.clone()
     ));
     #[cfg(feature = "wayland")]
-    wl_interfaces.bind_global_messaging(wl_global_msg.as_mut());
+    dp_context.bind_global_messaging(wl_global_msg.as_mut());
 
     #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
@@ -297,8 +286,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             dbus,
             #[cfg(feature = "wayland")]
             display_server: platform::unix::DisplayServerLink {
-                wl_display: wl_display.as_mut().get_mut(),
-                wl_global_interfaces: wl_interfaces.as_ref().get_ref(),
+                context: dp_context,
                 static_pixbufs,
                 global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
             },
@@ -363,7 +351,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         let epoll = Epoll::new(0).expect("epoll.new");
         #[cfg(feature = "wayland")]
         epoll
-            .add(wl_display.as_ref().get_ref(), EpollEventBits::IN, 0)
+            .add(&dp_context.display_fd(), EpollEventBits::IN, 0)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
@@ -410,7 +398,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(target_os = "linux")]
         'app: loop {
             #[cfg(feature = "wayland")]
-            if platform::unix::wayland::dp_prepare_read(&mut wl_display).is_err() {
+            if dp_context.prepare_read().is_err() {
                 break 'app;
             }
             let active_events = epoll.wait(&mut eventbuf, None).expect("epoll.wait");
@@ -470,12 +458,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             }
 
             if wl_display_signal {
-                wl_display.read_events().expect("wl_display.read_events");
-                wl_display
-                    .dispatch_pending()
-                    .expect("wl_display.dispatch_pending");
+                dp_context.process_events();
             } else {
-                wl_display.cancel_read();
+                dp_context.cancel_reading();
             }
 
             if terminate_signal {

@@ -1,5 +1,8 @@
 use core::{pin::Pin, ptr::NonNull};
-use std::sync::{Mutex, atomic::AtomicBool};
+use std::{
+    os::fd::{AsRawFd, RawFd},
+    sync::{Mutex, atomic::AtomicBool},
+};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use linux_input::Key;
@@ -220,13 +223,13 @@ pub struct DragPreviewPopoverHandle {
 impl DragPreviewPopoverHandle {
     pub fn new(syslink: &SystemLink) -> Self {
         Self {
-            display: syslink.display_server.wl_display,
-            wl_interfaces: syslink.display_server.wl_global_interfaces,
+            display: &mut unsafe { &mut *syslink.display_server.context }.dp,
+            wl_interfaces: &unsafe { &*syslink.display_server.context }.global_interfaces,
             root_window: core::cell::Cell::new(core::ptr::null_mut()),
             buf: unsafe { &*syslink.display_server.static_pixbufs }
-                .create_drag_preview_popover_bufs(unsafe {
-                    &*syslink.display_server.wl_global_interfaces
-                }),
+                .create_drag_preview_popover_bufs(
+                    &unsafe { &*syslink.display_server.context }.global_interfaces,
+                ),
             popup: core::cell::UnsafeCell::new(None),
         }
     }
@@ -364,16 +367,80 @@ impl DragPreviewPopoverHandle {
     }
 }
 
+pub struct DisplayServerContext {
+    pub(self) global_interfaces: GlobalInterfaces,
+    pub(self) dp: wl::Display,
+}
+impl DisplayServerContext {
+    pub fn connect() -> Self {
+        let dp = wl::Display::connect().expect("display.connect");
+        let global_interfaces =
+            GlobalInterfaces::collect_sync(&dp).expect("global_interfaces.collect_sync");
+
+        Self {
+            dp,
+            global_interfaces,
+        }
+    }
+
+    pub fn display_fd(&self) -> RawFd {
+        self.dp.as_raw_fd()
+    }
+
+    pub fn prepare_read(&mut self) -> Result<(), ()> {
+        loop {
+            match self.dp.prepare_read() {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    self.dp
+                        .dispatch_pending()
+                        .expect("wl.display.dispatch_pending");
+                }
+                Err(e) => {
+                    tracing::error!(reason = ?e, "wl.display.prepare_read");
+                    return Err(());
+                }
+            }
+        }
+
+        self.dp.flush().expect("wl.display.flush");
+        Ok(())
+    }
+
+    pub fn process_events(&mut self) {
+        self.dp.read_events().expect("wl_display.read_events");
+        self.dp
+            .dispatch_pending()
+            .expect("wl_display.dispatch_pending");
+    }
+
+    pub fn cancel_reading(&mut self) {
+        self.dp.cancel_read();
+    }
+
+    pub fn check_for_vk(&self, device: &VulkanDevice) -> bool {
+        device.presentation_support(&self.dp)
+    }
+
+    pub fn bind_global_messaging(
+        &mut self,
+        global_messaging: core::pin::Pin<&mut GlobalMessaging>,
+    ) {
+        self.global_interfaces
+            .bind_global_messaging(global_messaging);
+    }
+}
+
 pub struct DisplayServerLink {
-    pub wl_display: *mut wl::Display,
-    pub wl_global_interfaces: *const GlobalInterfaces,
+    pub context: *mut DisplayServerContext,
     pub static_pixbufs: *const StaticPixbufs,
     pub global_messaging_ptr: *const GlobalMessaging,
 }
 
 impl crate::SystemLink<'_> {
     pub fn prelaunch(&self, _main_window: WindowHandle) {
-        unsafe { &mut *self.display_server.wl_display }
+        unsafe { &mut *self.display_server.context }
+            .dp
             .roundtrip()
             .expect("roundtrip");
     }
@@ -389,7 +456,7 @@ impl crate::SystemLink<'_> {
                 #[cfg(target_os = "linux")]
                 termination_event: self.terminate_event.clone(),
             },
-            unsafe { &*self.display_server.wl_global_interfaces },
+            &unsafe { &*self.display_server.context }.global_interfaces,
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
             composite_tree,
@@ -404,7 +471,7 @@ impl crate::SystemLink<'_> {
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: WindowHandle(unsafe { NonNull::new_unchecked(w.surface.as_ptr()) }),
                 vk_surface: NewWindowVulkanSurface(
-                    w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+                    w.create_vk_surface(&unsafe { &*self.display_server.context }.dp, unsafe {
                         &*self.vk_device
                     })
                     .unbound()
@@ -432,7 +499,7 @@ impl crate::SystemLink<'_> {
     ) -> WindowHandle {
         let w = Window::new(
             WindowType::Sub,
-            unsafe { &*self.display_server.wl_global_interfaces },
+            &unsafe { &*self.display_server.context }.global_interfaces,
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
             composite_tree,
@@ -447,7 +514,7 @@ impl crate::SystemLink<'_> {
             .send(RenderMessage::NewWindow(NewWindowData {
                 key: WindowHandle(unsafe { NonNull::new_unchecked(w.surface.as_ptr()) }),
                 vk_surface: NewWindowVulkanSurface(
-                    w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+                    w.create_vk_surface(&unsafe { &*self.display_server.context }.dp, unsafe {
                         &*self.vk_device
                     })
                     .unbound()
@@ -585,8 +652,8 @@ pub struct StaticPixbufs {
     pub window_decoration: Option<WindowDecorationPixbuf>,
 }
 impl StaticPixbufs {
-    pub fn new(interfaces: &GlobalInterfaces) -> Self {
-        let popover_buf_shm_bytes = if interfaces.single_pixel_buffer_manager.is_some() {
+    pub fn new(ctx: &DisplayServerContext) -> Self {
+        let popover_buf_shm_bytes = if ctx.global_interfaces.single_pixel_buffer_manager.is_some() {
             0
         } else {
             4
@@ -596,7 +663,7 @@ impl StaticPixbufs {
             WindowDecorationPixbuf::REQUIRED_BYTE_ALIGNMENT,
         );
         let shm_total_byte_length = window_decoration_pixbuf_offset
-            + if Window::should_client_decoration(interfaces) {
+            + if Window::should_client_decoration(&ctx.global_interfaces) {
                 WindowDecorationPixbuf::REQUIRED_BYTE_LENGTH
             } else {
                 0
@@ -620,7 +687,8 @@ impl StaticPixbufs {
             )
             .expect("buf.mmap");
 
-            let shmp = interfaces
+            let shmp = ctx
+                .global_interfaces
                 .shm
                 .create_pool(&shm_region, shm_total_byte_length as _)
                 .expect("shmp.create.popup");
@@ -630,7 +698,7 @@ impl StaticPixbufs {
             None
         };
 
-        if interfaces.single_pixel_buffer_manager.is_none() {
+        if ctx.global_interfaces.single_pixel_buffer_manager.is_none() {
             // setup for traditional shm-based single pixel buffer
             let (_, mapped, _) = shm_pair.as_ref().expect("no shm");
 
@@ -643,7 +711,7 @@ impl StaticPixbufs {
                 );
             }
         }
-        let window_decoration_pixbuf = if Window::should_client_decoration(interfaces) {
+        let window_decoration_pixbuf = if Window::should_client_decoration(&ctx.global_interfaces) {
             let (shm, mapped, _) = shm_pair.as_ref().expect("no shm");
 
             WindowDecorationPixbuf::generate_content(unsafe {
@@ -685,24 +753,6 @@ impl StaticPixbufs {
             DragPreviewPopoverBuffer::Shm { buf }
         }
     }
-}
-
-pub fn dp_prepare_read(dp: &mut wl::Display) -> Result<(), ()> {
-    loop {
-        match dp.prepare_read() {
-            Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                dp.dispatch_pending().expect("wl.display.dispatch_pending");
-            }
-            Err(e) => {
-                tracing::error!(reason = ?e, "wl.display.prepare_read");
-                return Err(());
-            }
-        }
-    }
-
-    dp.flush().expect("wl.display.flush");
-    Ok(())
 }
 
 pub struct WindowCommittedState {
@@ -2044,14 +2094,18 @@ pub struct GlobalMessaging {
     _pinned: core::marker::PhantomPinned,
 }
 impl GlobalMessaging {
-    pub fn new(interfaces: &GlobalInterfaces, event_dispatcher: LogicFiberEventDispatcher) -> Self {
+    pub fn new(ctx: &DisplayServerContext, event_dispatcher: LogicFiberEventDispatcher) -> Self {
         Self {
-            text_input_manager: interfaces.text_input_manager.as_ptr(),
+            text_input_manager: ctx.global_interfaces.text_input_manager.as_ptr(),
             xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
                 .expect("xkb_context.create"),
             keyboard: None,
             pointer: None,
-            cursor_shape_manager: interfaces.cursor_shape_manager.as_ref().map(|x| x.as_ptr()),
+            cursor_shape_manager: ctx
+                .global_interfaces
+                .cursor_shape_manager
+                .as_ref()
+                .map(|x| x.as_ptr()),
             event_dispatcher,
             ime_pending_state: IMEPendingState {
                 committed_text: String::new(),
