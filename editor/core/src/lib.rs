@@ -91,7 +91,7 @@ pub fn launch() {
         .init();
 
     let mut event_store = VecDeque::new();
-    let events = SyncEventBus::new();
+    let mut events = SyncEventBus::new();
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
     let fs = FileSystem::new();
 
@@ -132,7 +132,7 @@ pub fn launch() {
         }),
         &fs,
         &vk_device,
-        &events,
+        &mut events,
         rt_sender,
         rt_receiver,
         root_font_set,
@@ -156,7 +156,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     renderer_sync: &'sys Mutex<RendererSync>,
     fs: &'sys FileSystem,
     vk_device: &'sys VulkanDevice,
-    sync_event_bus: &'sys SyncEventBus,
+    sync_event_bus: &'sys mut SyncEventBus,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     root_font_set: RootFontSet,
@@ -252,6 +252,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     wl_global_msg
         .as_mut()
         .reset_event_dispatcher(app_event_dispatcher.clone());
+    #[cfg(target_os = "macos")]
+    {
+        sync_event_bus.bind_redispatch_to(app_event_dispatcher.clone());
+    }
 
     // initial poll
     unsafe {
@@ -3882,10 +3886,12 @@ pub struct SyncEventBus {
     efd: linux_eventfd::EventFD,
     #[cfg(windows)]
     event_notify: windows::Win32::Foundation::HANDLE,
+    #[cfg(target_os = "macos")]
+    redispatch_to: LogicFiberEventDispatcher,
 }
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 unsafe impl Sync for SyncEventBus {}
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 unsafe impl Send for SyncEventBus {}
 impl Drop for SyncEventBus {
     fn drop(&mut self) {
@@ -3909,7 +3915,15 @@ impl SyncEventBus {
                 windows::Win32::System::Threading::CreateEventW(None, true, false, None)
                     .expect("event_notify.create")
             },
+            // initialized later
+            #[cfg(target_os = "macos")]
+            redispatch_to: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn bind_redispatch_to(&mut self, dispatcher: LogicFiberEventDispatcher) {
+        self.redispatch_to = dispatcher;
     }
 
     pub fn push(&self, e: SyncEvent) {
@@ -3920,6 +3934,18 @@ impl SyncEventBus {
         unsafe {
             windows::Win32::System::Threading::SetEvent(self.event_notify)
                 .expect("event_notify.set");
+        }
+        #[cfg(target_os = "macos")]
+        unsafe {
+            extern "C" fn callback(ctx: *mut core::ffi::c_void) {
+                let this = unsafe { &*(ctx.cast::<SyncEventBus>()) };
+                this.redispatch(&this.redispatch_to);
+            }
+
+            platform::mac::bridge::ni_post_unbound_callback_from_thread(
+                callback,
+                self as *const _ as _,
+            );
         }
     }
 

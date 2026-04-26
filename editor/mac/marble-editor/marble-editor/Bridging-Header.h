@@ -14,6 +14,8 @@ typedef struct {
     void (*onPointerUp)(void* callerContext, WindowLink window);
 } WindowLinkCallbacks;
 
+typedef void (*UnboundCallback)(void* callerContext);
+
 void rs_launch();
 
 #ifdef __cplusplus

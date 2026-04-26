@@ -26,6 +26,8 @@ pub struct WindowLinkCallbacks {
     pub on_pointer_up: extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink),
 }
 
+pub type UnboundCallback = extern "C" fn(caller_context: *mut c_void);
+
 #[repr(u8)]
 pub enum CursorShape {
     Arrow = 0,
@@ -79,6 +81,8 @@ unsafe extern "C" {
 
     pub fn ni_set_pointer_hovering_timeout();
     pub fn ni_kill_pointer_hovering_timeout();
+
+    pub fn ni_post_unbound_callback_from_thread(f: UnboundCallback, caller_context: *mut c_void);
 
     pub fn manual_capture_begin(window_link: *mut WindowLink);
     pub fn manual_capture_end();

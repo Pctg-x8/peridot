@@ -246,6 +246,13 @@ func getWindowCallbackContext(windowLink: UnsafeMutableRawPointer) -> UnsafeMuta
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().getCallbackContextPointer()
 }
 
+@_cdecl("ni_post_unbound_callback_from_thread")
+func postUnboundCallbackFromThread(cb: UnboundCallback, ctx: UnsafeMutableRawPointer) {
+    DispatchQueue.main.async {
+        cb(ctx)
+    }
+}
+
 @_cdecl("ni_get_size_logical")
 func getSizePixels(windowLink: UnsafeMutableRawPointer, width: UnsafeMutablePointer<CDouble>, height: UnsafeMutablePointer<CDouble>) {
     let size = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().mainView.backingSize
