@@ -55,17 +55,25 @@ func manualCaptureEnd() {
 
 final class AppMainDelegate : NSObject, NSApplicationDelegate {}
 
-protocol AppWindowDelegate : NSWindowDelegate {}
+class AppWindowDelegate : NSObject, NSWindowDelegate {
+    unowned var callbacks: WindowLinkCallbackSet? = nil
+    
+    func windowDidBecomeKey(_ notification: Notification) {
+        self.callbacks?.notifyKeyFocusStateChanged(true)
+    }
+    
+    func windowDidResignKey(_ notification: Notification) {
+        self.callbacks?.notifyKeyFocusStateChanged(false)
+    }
+}
 
-final class MainWindowDelegate : NSObject, AppWindowDelegate {
+final class MainWindowDelegate : AppWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         app.terminate(nil)
     }
 }
 
-final class SubWindowDelegate : NSObject, AppWindowDelegate {
-    unowned var callbacks: WindowLinkCallbackSet? = nil
-    
+final class SubWindowDelegate : AppWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         self.callbacks?.performCloseAction()
         return true
@@ -93,6 +101,14 @@ final class WindowLinkCallbackSet {
     
     func performCloseAction() {
         self.funcs.pointee.onWindowClose(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()))
+    }
+    
+    func notifyKeyFocusStateChanged(_ focused: Bool) {
+        self.funcs.pointee.onKeyFocusStateChanged(
+            self.ctx,
+            OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()),
+            focused ? 1 : 0
+        )
     }
     
     func notifyResize(_ width: Double, _ height: Double) {
@@ -147,18 +163,20 @@ struct WindowCreationFlags : OptionSet {
 }
 
 final class WindowLink : NSWindow {
-    private var windowDelegate: AppWindowDelegate? = nil
+    private let windowDelegate: AppWindowDelegate
     private var callbacks: WindowLinkCallbackSet? = nil
     
     init(_ flags: WindowCreationFlags) {
         let styleMask: StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         
+        self.windowDelegate = flags.contains(.main) ? MainWindowDelegate() : SubWindowDelegate()
         super.init(
             contentRect: NSRect(x: 0.0, y: 0.0, width: 960.0, height: 540.0),
             styleMask: styleMask,
             backing: .buffered,
             defer: false
         )
+        self.delegate = self.windowDelegate
         self.acceptsMouseMovedEvents = true
         self.titlebarAppearsTransparent = true
         self.titleVisibility = .hidden
@@ -168,9 +186,9 @@ final class WindowLink : NSWindow {
         mainView.setup()
         self.contentView = mainView
         
-        if !flags.contains(.main) {
-            self.windowDelegate = SubWindowDelegate()
-            self.delegate = self.windowDelegate
+        if flags.contains(.main) {
+            self.center()
+            self.makeKeyAndOrderFront(nil)
         }
     }
     
@@ -191,9 +209,7 @@ final class WindowLink : NSWindow {
     ) {
         self.callbacks = WindowLinkCallbackSet(funcs: callbacks, ctx: callerContext, owner: self)
         self.mainView.windowLinkCallbacks = self.callbacks
-        if let subWindowDelegate = self.delegate as? SubWindowDelegate {
-            subWindowDelegate.callbacks = self.callbacks
-        }
+        self.windowDelegate.callbacks = self.callbacks
     }
     
     func getCallbackContextPointer() -> UnsafeMutableRawPointer? {
@@ -203,13 +219,6 @@ final class WindowLink : NSWindow {
     func unsetCallbacks() {
         self.callbacks = nil
         self.mainView.windowLinkCallbacks = nil
-    }
-    
-    func makePrimaryWindow() {
-        self.windowDelegate = MainWindowDelegate()
-        self.delegate = self.windowDelegate
-        self.center()
-        self.makeKeyAndOrderFront(nil)
     }
     
     func show() {
@@ -262,11 +271,6 @@ func createWindow(flags: UInt32) -> UnsafeMutableRawPointer {
 @_cdecl("ni_release_window")
 func releaseWindow(p: UnsafeMutableRawPointer) {
     Unmanaged<WindowLink>.fromOpaque(p).takeUnretainedValue().close()
-}
-
-@_cdecl("ni_make_primary_window")
-func makePrimaryWindow(windowLink: UnsafeMutableRawPointer) {
-    Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().makePrimaryWindow()
 }
 
 @_cdecl("ni_show_window")

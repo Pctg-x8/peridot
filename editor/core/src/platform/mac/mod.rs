@@ -219,7 +219,12 @@ impl crate::SystemLink<'_> {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> WindowHandle {
-        let mut w = MacWindow::new(
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
+        let w = MacWindow::new(
             WindowType::Main {},
             self::bridge::WindowCreationFlags::MAIN,
             unsafe { &*self.event_dispatcher }.clone(),
@@ -227,15 +232,11 @@ impl crate::SystemLink<'_> {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
             }),
-            ht_manager.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            }),
+            ht_root,
             keyboard_focus_registry,
         );
         let main_window_handle = w.make_handle();
-        w.make_primary_window();
+        ht_manager.get_data_mut(ht_root).root_of_window = Some(main_window_handle);
 
         let vk_surface = VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
             bedrock::MetalSurfaceCreateInfo::new(w.metal_layer())
@@ -280,6 +281,11 @@ impl crate::SystemLink<'_> {
             &Self,
         ),
     ) -> WindowHandle {
+        let ht_root = hit_tree.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
         let mut w = MacWindow::new(
             WindowType::Sub,
             self::bridge::WindowCreationFlags::empty(),
@@ -288,14 +294,11 @@ impl crate::SystemLink<'_> {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
             }),
-            hit_tree.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            }),
+            ht_root,
             keyboard_focus_manager,
         );
         let handle = w.make_handle();
+        hit_tree.get_data_mut(ht_root).root_of_window = Some(handle);
         w.show();
         // notify resize on show(register to pointer input manager)
         let mut width = core::mem::MaybeUninit::uninit();
@@ -477,6 +480,7 @@ impl MacWindow {
                 on_key_down: MacWindowDispatcher::on_key_down,
                 on_key_down_with_char: MacWindowDispatcher::on_key_down_with_char,
                 on_key_up: MacWindowDispatcher::on_key_up,
+                on_key_focus_state_changed: MacWindowDispatcher::on_key_focus_state_changed,
             };
         unsafe {
             self::bridge::ni_set_window_callbacks(
@@ -502,13 +506,6 @@ impl MacWindow {
     #[inline(always)]
     fn dispatcher_mut(&mut self) -> &mut MacWindowDispatcher {
         unsafe { &mut *self::bridge::ni_get_window_callback_context(self.native_ptr).cast() }
-    }
-
-    #[inline(always)]
-    pub fn make_primary_window(&mut self) {
-        unsafe {
-            self::bridge::ni_make_primary_window(self.native_ptr);
-        }
     }
 
     #[inline(always)]
@@ -724,6 +721,19 @@ impl MacWindowDispatcher {
             window: WindowHandle(window),
             code: KeyInputCode::UnknownNativeCode(code as _),
             modifier,
+        });
+    }
+
+    extern "C" fn on_key_focus_state_changed(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut crate::platform::mac::bridge::WindowLink,
+        focused: u8,
+    ) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        this.event_dispatcher.dispatch(Event::WindowFocusChanged {
+            window: WindowHandle(window),
+            focused: focused != 0,
         });
     }
 }

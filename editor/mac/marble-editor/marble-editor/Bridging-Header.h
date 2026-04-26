@@ -14,7 +14,8 @@ typedef struct {
     void (*onPointerUp)(void* callerContext, WindowLink window);
     void (*onKeyDown)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags);
     void (*onKeyDownWithChar)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags, uint32_t ch);
-    void (*onKeyUp)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierF   lags);
+    void (*onKeyUp)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags);
+    void (*onKeyFocusStateChanged)(void* callerContext, WindowLink window, uint8_t focused);
 } WindowLinkCallbacks;
 
 typedef void (*UnboundCallback)(void* callerContext);

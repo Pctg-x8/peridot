@@ -43,6 +43,8 @@ pub struct WindowLinkCallbacks {
         code: u16,
         modifier_flags: u32,
     ),
+    pub on_key_focus_state_changed:
+        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, focused: u8),
 }
 
 pub type UnboundCallback = extern "C" fn(caller_context: *mut c_void);
@@ -73,7 +75,6 @@ unsafe extern "C" {
 
     pub fn ni_create_window(flags: u32) -> *mut WindowLink;
     pub fn ni_release_window(window_link: *mut WindowLink);
-    pub fn ni_make_primary_window(window_link: *mut WindowLink);
     pub fn ni_show_window(window_link: *mut WindowLink);
     pub fn ni_get_content_scale(window_link: *mut WindowLink) -> c_float;
     pub fn ni_set_window_callbacks(
