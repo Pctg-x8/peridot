@@ -24,9 +24,34 @@ pub struct WindowLinkCallbacks {
     pub on_pointer_move:
         extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, x: f64, y: f64),
     pub on_pointer_up: extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink),
+    pub on_key_down: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        code: u16,
+        modifier_flags: u32,
+    ),
+    pub on_key_down_with_char: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        code: u16,
+        modifier_flags: u32,
+        char: u32,
+    ),
+    pub on_key_up: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        code: u16,
+        modifier_flags: u32,
+    ),
 }
 
 pub type UnboundCallback = extern "C" fn(caller_context: *mut c_void);
+
+// NSEventModifierFlags constants
+pub const NSEVENT_MODIFIER_FLAG_SHIFT: u32 = 1 << 17;
+pub const NSEVENT_MODIFIER_FLAG_CONTROL: u32 = 1 << 18;
+pub const NSEVENT_MODIFIER_FLAG_OPTION: u32 = 1 << 19;
+pub const NSEVENT_MODIFIER_FLAG_COMMAND: u32 = 1 << 20;
 
 #[repr(u8)]
 pub enum CursorShape {

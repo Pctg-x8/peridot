@@ -1,8 +1,11 @@
 import Cocoa
+import os
 
 let app = NSApplication.shared
 let delegate = AppMainDelegate()
 app.delegate = delegate
+
+let logger = Logger()
 
 let filesystemCacheDir = URL.cachesDirectory.path.utf8CString
 
@@ -107,6 +110,34 @@ final class WindowLinkCallbackSet {
     func notifyPointerUp() {
         self.funcs.pointee.onPointerUp(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()))
     }
+    
+    func notifyKeyDown(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags) {
+        self.funcs.pointee.onKeyDown(
+            self.ctx,
+            OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()),
+            code,
+            UInt32(modifierFlags.rawValue)
+        )
+    }
+    
+    func notifyKeyDownWithChar(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags, _ ch: Unicode.Scalar) {
+        self.funcs.pointee.onKeyDownWithChar(
+            self.ctx,
+            OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()),
+            code,
+            UInt32(modifierFlags.rawValue),
+            ch.value
+        )
+    }
+    
+    func notifyKeyUp(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags) {
+        self.funcs.pointee.onKeyUp(
+            self.ctx,
+            OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()),
+            code,
+            UInt32(modifierFlags.rawValue)
+        )
+    }
 }
 
 struct WindowCreationFlags : OptionSet {
@@ -120,7 +151,7 @@ final class WindowLink : NSWindow {
     private var callbacks: WindowLinkCallbackSet? = nil
     
     init(_ flags: WindowCreationFlags) {
-        var styleMask: StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        let styleMask: StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         
         super.init(
             contentRect: NSRect(x: 0.0, y: 0.0, width: 960.0, height: 540.0),
@@ -204,6 +235,22 @@ final class WindowLink : NSWindow {
     override func mouseUp(with event: NSEvent) {
         NSLog("mouseUp \(event.buttonMask)")
         self.callbacks?.notifyPointerUp()
+    }
+    
+    override func keyDown(with event: NSEvent) {
+        if let characters = event.characters {
+            if characters.unicodeScalars.count > 1 {
+                logger.warning("multiple unicode codepoint contained in keydown event: \(characters)")
+            }
+        
+            self.callbacks?.notifyKeyDownWithChar(event.keyCode, event.modifierFlags, characters.unicodeScalars.first!)
+        } else {
+            self.callbacks?.notifyKeyDown(event.keyCode, event.modifierFlags)
+        }
+    }
+    
+    override func keyUp(with event: NSEvent) {
+        self.callbacks?.notifyKeyUp(event.keyCode, event.modifierFlags)
     }
 }
 

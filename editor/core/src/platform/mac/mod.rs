@@ -6,8 +6,8 @@ use crate::{
     ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowType,
     graphics::VulkanSurface,
     input::{
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
-        PointerInputUnit,
+        KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
+        PerWindowKeyboardFocusState, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
@@ -474,6 +474,9 @@ impl MacWindow {
                 on_pointer_down: MacWindowDispatcher::on_pointer_down,
                 on_pointer_move: MacWindowDispatcher::on_pointer_move,
                 on_pointer_up: MacWindowDispatcher::on_pointer_up,
+                on_key_down: MacWindowDispatcher::on_key_down,
+                on_key_down_with_char: MacWindowDispatcher::on_key_down_with_char,
+                on_key_up: MacWindowDispatcher::on_key_up,
             };
         unsafe {
             self::bridge::ni_set_window_callbacks(
@@ -627,6 +630,100 @@ impl MacWindowDispatcher {
             window: WindowHandle(window),
             button: PointerButton::Primary,
             pointer_id: PointerID(),
+        });
+    }
+
+    extern "C" fn on_key_down(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut crate::platform::mac::bridge::WindowLink,
+        code: u16,
+        modifier_flags: u32,
+    ) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        let mut modifier = ModifierKey::empty();
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
+            modifier |= ModifierKey::SHIFT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
+            modifier |= ModifierKey::CONTROL;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
+            modifier |= ModifierKey::ALT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
+            modifier |= ModifierKey::SUPER;
+        }
+
+        this.event_dispatcher.dispatch(Event::KeyDown {
+            window: WindowHandle(window),
+            code: KeyInputCode::UnknownNativeCode(code as _),
+            modifier,
+        });
+    }
+
+    extern "C" fn on_key_down_with_char(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut crate::platform::mac::bridge::WindowLink,
+        code: u16,
+        modifier_flags: u32,
+        char: u32,
+    ) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let char = unsafe { char::from_u32_unchecked(char) };
+
+        let mut modifier = ModifierKey::empty();
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
+            modifier |= ModifierKey::SHIFT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
+            modifier |= ModifierKey::CONTROL;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
+            modifier |= ModifierKey::ALT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
+            modifier |= ModifierKey::SUPER;
+        }
+
+        this.event_dispatcher.dispatch(Event::KeyDown {
+            window: WindowHandle(window),
+            code: if char == '\r' {
+                // これだけKeyInputCodeでとる
+                KeyInputCode::Enter
+            } else {
+                KeyInputCode::Character(char)
+            },
+            modifier,
+        });
+    }
+
+    extern "C" fn on_key_up(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut crate::platform::mac::bridge::WindowLink,
+        code: u16,
+        modifier_flags: u32,
+    ) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        let mut modifier = ModifierKey::empty();
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
+            modifier |= ModifierKey::SHIFT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
+            modifier |= ModifierKey::CONTROL;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
+            modifier |= ModifierKey::ALT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
+            modifier |= ModifierKey::SUPER;
+        }
+
+        this.event_dispatcher.dispatch(Event::KeyUp {
+            window: WindowHandle(window),
+            code: KeyInputCode::UnknownNativeCode(code as _),
+            modifier,
         });
     }
 }
