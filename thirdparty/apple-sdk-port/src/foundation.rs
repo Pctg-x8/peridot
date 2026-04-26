@@ -1,4 +1,4 @@
-use crate::{MutableObject, Object, Owned, raw::*};
+use crate::{AnyObject, MutableObject, Object, Owned, raw::*};
 
 pub type Boolean = crate::raw::Boolean;
 pub type UniChar = crate::raw::UniChar;
@@ -667,24 +667,12 @@ impl Number {
 
     #[inline(always)]
     pub fn new_i64(allocator: Option<&Allocator>, value: i64) -> Option<Owned<Self>> {
-        unsafe {
-            Self::new_raw(
-                allocator,
-                NumberType::SInt64,
-                value.to_ne_bytes().as_ptr().cast(),
-            )
-        }
+        unsafe { Self::new_raw(allocator, NumberType::SInt64, &value as *const _ as _) }
     }
 
     #[inline(always)]
     pub fn new_f32(allocator: Option<&Allocator>, value: f32) -> Option<Owned<Self>> {
-        unsafe {
-            Self::new_raw(
-                allocator,
-                NumberType::Float32,
-                value.to_ne_bytes().as_ptr().cast(),
-            )
-        }
+        unsafe { Self::new_raw(allocator, NumberType::Float32, &value as *const _ as _) }
     }
 
     #[inline(always)]
@@ -918,7 +906,7 @@ impl AttributedString {
     pub fn new(
         allocator: Option<&Allocator>,
         str: &String,
-        attributes: Option<&Dictionary<String, dyn Object>>,
+        attributes: Option<&Dictionary<String, AnyObject>>,
     ) -> Option<Owned<Self>> {
         unsafe {
             Owned::from_ptr(CFAttributedStringCreate(

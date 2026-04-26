@@ -1,3 +1,4 @@
+use apple_sdk_port::Object;
 #[cfg(feature = "fontconfig")]
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
@@ -593,6 +594,11 @@ impl TextLayout {
                 &*crate::platform::mac::bridge::ni_ak_font_id(),
             )
         };
+        tracing::debug!(
+            rc = ak_spacing_inline_start.retain_count(),
+            "ak_spacing_inline_start"
+        );
+        tracing::debug!(rc = ak_font_id.retain_count(), "ak_font_id");
         #[cfg(target_os = "macos")]
         let mut attributed_string_runs = Vec::with_capacity(ub.unwrap_or(lb));
         #[cfg(target_os = "macos")]
@@ -602,27 +608,29 @@ impl TextLayout {
             let font = font_set.select(r.font);
             let range = apple_sdk_port::foundation::Range {
                 location: total_bytes as _,
-                length: r.content.len() as _,
+                length: 0, // replace_attributed_stringでAppendする場合はここを0にする必要があるらしい
             };
 
             let mut str_attr = apple_sdk_port::foundation::MutableDictionary::<
                 apple_sdk_port::foundation::String,
-                dyn apple_sdk_port::Object,
-            >::new_copying_key_generic_value(None, 2)
+                apple_sdk_port::AnyObject,
+            >::new_copying_key_generic_value(None, 3)
             .expect("str_attr.create");
             str_attr.set(
                 apple_sdk_port::foundation::AttributedStringKey::font(),
-                font,
+                font.as_any(),
             );
             str_attr.set(
                 &ak_spacing_inline_start,
-                &*apple_sdk_port::foundation::Number::new_f32(None, r.spacing_inline_start)
-                    .expect("Number.create"),
+                apple_sdk_port::foundation::Number::new_f32(None, r.spacing_inline_start)
+                    .expect("Number.create")
+                    .as_any(),
             );
             str_attr.set(
                 &ak_font_id,
-                &*apple_sdk_port::foundation::Number::new_i64(None, r.font as usize as _)
-                    .expect("Number.create"),
+                apple_sdk_port::foundation::Number::new_i64(None, r.font as usize as _)
+                    .expect("Number.create")
+                    .as_any(),
             );
 
             attributed_string_runs.push((
@@ -645,8 +653,8 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         str.begin_editing();
         #[cfg(target_os = "macos")]
-        for (s, r) in attributed_string_runs {
-            str.replace_attributed_string(r, &s);
+        for (s, r) in &attributed_string_runs {
+            str.replace_attributed_string(r.clone(), s);
         }
         #[cfg(target_os = "macos")]
         str.end_editing();
