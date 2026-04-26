@@ -393,12 +393,18 @@ impl crate::SystemLink<'_> {
         // TODO: これmacでやることあるのか？（起こらない気がする）
     }
 
+    #[inline(always)]
     pub fn set_pointer_hovering_timeout(&self) {
-        unimplemented!("set_pointer_hovering_timeout")
+        unsafe {
+            self::bridge::ni_set_pointer_hovering_timeout();
+        }
     }
 
+    #[inline(always)]
     pub fn kill_pointer_hovering_timeout(&self) {
-        unimplemented!("kill_pointer_hovering_timeout")
+        unsafe {
+            self::bridge::ni_kill_pointer_hovering_timeout();
+        }
     }
 
     pub fn pop_context_menu(

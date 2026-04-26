@@ -77,6 +77,9 @@ unsafe extern "C" {
     pub fn ni_degreade_thread_priroity_temporarily() -> *mut c_void;
     pub fn ni_restore_thread_priority(context_ptr: *mut c_void);
 
+    pub fn ni_set_pointer_hovering_timeout();
+    pub fn ni_kill_pointer_hovering_timeout();
+
     pub fn manual_capture_begin(window_link: *mut WindowLink);
     pub fn manual_capture_end();
 

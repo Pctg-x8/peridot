@@ -339,6 +339,26 @@ func restoreThreadPriority(contextPtr: UnsafeMutableRawPointer) {
     Unmanaged<ThreadPriorityContext>.fromOpaque(contextPtr).release()
 }
 
+var currentHoveringTimeoutWorkItem: DispatchWorkItem? = nil
+
+@_cdecl("ni_set_pointer_hovering_timeout")
+func setPointerHoveringTimeout() {
+    let workItem = DispatchWorkItem {
+        NSLog("Pointer Hovering timeout!")
+    }
+    currentHoveringTimeoutWorkItem = workItem
+    DispatchQueue.main.asyncAfter(
+        deadline: DispatchTime.now().advanced(by: DispatchTimeInterval.milliseconds(400)),
+        execute: workItem
+    )
+}
+
+@_cdecl("ni_kill_pointer_hovering_timeout")
+func killPointerHoveringTimeout() {
+    currentHoveringTimeoutWorkItem?.cancel()
+    currentHoveringTimeoutWorkItem = nil
+}
+
 enum CustomAttributeKey: NSString {
     case SpacingInlineStart = "peridot.spacing_inline_start"
     case FontID = "peridot.font_id"
