@@ -1,5 +1,8 @@
-use core::pin::Pin;
-use std::sync::{Mutex, atomic::AtomicBool};
+use core::{pin::Pin, ptr::NonNull};
+use std::{
+    os::fd::{AsRawFd, RawFd},
+    sync::{Mutex, atomic::AtomicBool},
+};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use linux_input::Key;
@@ -32,24 +35,39 @@ pub mod context_menu;
 
 pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowHandle(*mut wl::Surface);
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct WindowHandle(NonNull<wl::Surface>);
 unsafe impl Send for WindowHandle {}
 unsafe impl Sync for WindowHandle {}
 impl WindowHandle {
     #[inline(always)]
     fn event_listener(&self) -> &WindowEventListener {
-        unsafe { &*(*self.0).user_data().cast::<WindowEventListener>() }
+        unsafe { &*self.0.as_ref().user_data().cast::<WindowEventListener>() }
     }
 
     #[inline(always)]
     pub fn state(&self) -> &WindowState {
-        unsafe { &(*(*self.0).user_data().cast::<SurfaceState<WindowState>>()).data }
+        unsafe {
+            &(*self
+                .0
+                .as_ref()
+                .user_data()
+                .cast::<SurfaceState<WindowState>>())
+            .data
+        }
     }
 
     #[inline(always)]
     fn state_mut(&mut self) -> &mut WindowState {
-        unsafe { &mut (*(*self.0).user_data().cast::<SurfaceState<WindowState>>()).data }
+        unsafe {
+            &mut (*self
+                .0
+                .as_mut()
+                .user_data()
+                .cast::<SurfaceState<WindowState>>())
+            .data
+        }
     }
 
     #[inline(always)]
@@ -205,13 +223,13 @@ pub struct DragPreviewPopoverHandle {
 impl DragPreviewPopoverHandle {
     pub fn new(syslink: &SystemLink) -> Self {
         Self {
-            display: syslink.display_server.wl_display,
-            wl_interfaces: syslink.display_server.wl_global_interfaces,
+            display: &mut unsafe { &mut *syslink.display_server.context }.dp,
+            wl_interfaces: &unsafe { &*syslink.display_server.context }.global_interfaces,
             root_window: core::cell::Cell::new(core::ptr::null_mut()),
             buf: unsafe { &*syslink.display_server.static_pixbufs }
-                .create_drag_preview_popover_bufs(unsafe {
-                    &*syslink.display_server.wl_global_interfaces
-                }),
+                .create_drag_preview_popover_bufs(
+                    &unsafe { &*syslink.display_server.context }.global_interfaces,
+                ),
             popup: core::cell::UnsafeCell::new(None),
         }
     }
@@ -349,16 +367,80 @@ impl DragPreviewPopoverHandle {
     }
 }
 
+pub struct DisplayServerContext {
+    pub(self) global_interfaces: GlobalInterfaces,
+    pub(self) dp: wl::Display,
+}
+impl DisplayServerContext {
+    pub fn connect() -> Self {
+        let dp = wl::Display::connect().expect("display.connect");
+        let global_interfaces =
+            GlobalInterfaces::collect_sync(&dp).expect("global_interfaces.collect_sync");
+
+        Self {
+            dp,
+            global_interfaces,
+        }
+    }
+
+    pub fn display_fd(&self) -> RawFd {
+        self.dp.as_raw_fd()
+    }
+
+    pub fn prepare_read(&mut self) -> Result<(), ()> {
+        loop {
+            match self.dp.prepare_read() {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    self.dp
+                        .dispatch_pending()
+                        .expect("wl.display.dispatch_pending");
+                }
+                Err(e) => {
+                    tracing::error!(reason = ?e, "wl.display.prepare_read");
+                    return Err(());
+                }
+            }
+        }
+
+        self.dp.flush().expect("wl.display.flush");
+        Ok(())
+    }
+
+    pub fn process_events(&mut self) {
+        self.dp.read_events().expect("wl_display.read_events");
+        self.dp
+            .dispatch_pending()
+            .expect("wl_display.dispatch_pending");
+    }
+
+    pub fn cancel_reading(&mut self) {
+        self.dp.cancel_read();
+    }
+
+    pub fn check_for_vk(&self, device: &VulkanDevice) -> bool {
+        device.presentation_support(&self.dp)
+    }
+
+    pub fn bind_global_messaging(
+        &mut self,
+        global_messaging: core::pin::Pin<&mut GlobalMessaging>,
+    ) {
+        self.global_interfaces
+            .bind_global_messaging(global_messaging);
+    }
+}
+
 pub struct DisplayServerLink {
-    pub wl_display: *mut wl::Display,
-    pub wl_global_interfaces: *const GlobalInterfaces,
+    pub context: *mut DisplayServerContext,
     pub static_pixbufs: *const StaticPixbufs,
     pub global_messaging_ptr: *const GlobalMessaging,
 }
 
 impl crate::SystemLink<'_> {
     pub fn prelaunch(&self, _main_window: WindowHandle) {
-        unsafe { &mut *self.display_server.wl_display }
+        unsafe { &mut *self.display_server.context }
+            .dp
             .roundtrip()
             .expect("roundtrip");
     }
@@ -374,7 +456,7 @@ impl crate::SystemLink<'_> {
                 #[cfg(target_os = "linux")]
                 termination_event: self.terminate_event.clone(),
             },
-            unsafe { &*self.display_server.wl_global_interfaces },
+            &unsafe { &*self.display_server.context }.global_interfaces,
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
             composite_tree,
@@ -384,13 +466,12 @@ impl crate::SystemLink<'_> {
                 .window_decoration
                 .as_ref(),
         );
-        let main_window_handle = w.make_handle();
 
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
-                key: main_window_handle,
+                key: WindowHandle(unsafe { NonNull::new_unchecked(w.surface.as_ptr()) }),
                 vk_surface: NewWindowVulkanSurface(
-                    w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+                    w.create_vk_surface(&unsafe { &*self.display_server.context }.dp, unsafe {
                         &*self.vk_device
                     })
                     .unbound()
@@ -400,8 +481,7 @@ impl crate::SystemLink<'_> {
             .expect("rt_sender.send");
         w.commit();
 
-        core::mem::forget(w);
-        main_window_handle
+        w.into_handle()
     }
 
     pub fn open_window<'h>(
@@ -419,7 +499,7 @@ impl crate::SystemLink<'_> {
     ) -> WindowHandle {
         let w = Window::new(
             WindowType::Sub,
-            unsafe { &*self.display_server.wl_global_interfaces },
+            &unsafe { &*self.display_server.context }.global_interfaces,
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
             composite_tree,
@@ -429,13 +509,12 @@ impl crate::SystemLink<'_> {
                 .window_decoration
                 .as_ref(),
         );
-        let window_handle = w.make_handle();
 
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
-                key: window_handle,
+                key: WindowHandle(unsafe { NonNull::new_unchecked(w.surface.as_ptr()) }),
                 vk_surface: NewWindowVulkanSurface(
-                    w.create_vk_surface(unsafe { &*self.display_server.wl_display }, unsafe {
+                    w.create_vk_surface(&unsafe { &*self.display_server.context }.dp, unsafe {
                         &*self.vk_device
                     })
                     .unbound()
@@ -444,7 +523,7 @@ impl crate::SystemLink<'_> {
             }))
             .expect("rt_sender.send");
         setup_contents(
-            window_handle,
+            WindowHandle(unsafe { NonNull::new_unchecked(w.surface.as_ptr()) }),
             composite_tree,
             hit_tree,
             keyboard_focus_registry,
@@ -452,8 +531,7 @@ impl crate::SystemLink<'_> {
         );
         w.commit();
 
-        core::mem::forget(w);
-        window_handle
+        w.into_handle()
     }
 
     pub fn close_window(
@@ -474,12 +552,11 @@ impl crate::SystemLink<'_> {
             .recv()
             .expect("done_event_receiver.recv");
 
-        Window {
-            surface: unsafe {
-                wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(window_handle.0))
-            },
-        }
-        .terminate(composite_tree, ht_manager, keyboard_focus_registry);
+        Window::from_handle(window_handle).terminate(
+            composite_tree,
+            ht_manager,
+            keyboard_focus_registry,
+        );
     }
 
     pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
@@ -557,14 +634,16 @@ impl crate::SystemLink<'_> {
     }
 
     pub fn any_pointer_on_context_menu(&self) -> bool {
-        if let Some(ref p) = unsafe { &*self.display_server.global_messaging_ptr }.pointer
-            && let Some(ref p) = p.enter_state
-        {
-            unsafe { &*(*p.surface).user_data().cast::<SurfaceStateUntyped>() }.tag
-                == SurfaceStateTag::ContextMenu
-        } else {
-            false
-        }
+        let Some(PointerState {
+            enter_state: Some(ref p),
+            ..
+        }) = unsafe { &*self.display_server.global_messaging_ptr }.pointer
+        else {
+            return false;
+        };
+
+        unsafe { &*p.surface.as_ref().user_data().cast::<SurfaceStateUntyped>() }.tag
+            == SurfaceStateTag::ContextMenu
     }
 }
 
@@ -573,8 +652,8 @@ pub struct StaticPixbufs {
     pub window_decoration: Option<WindowDecorationPixbuf>,
 }
 impl StaticPixbufs {
-    pub fn new(interfaces: &GlobalInterfaces) -> Self {
-        let popover_buf_shm_bytes = if interfaces.single_pixel_buffer_manager.is_some() {
+    pub fn new(ctx: &DisplayServerContext) -> Self {
+        let popover_buf_shm_bytes = if ctx.global_interfaces.single_pixel_buffer_manager.is_some() {
             0
         } else {
             4
@@ -584,7 +663,7 @@ impl StaticPixbufs {
             WindowDecorationPixbuf::REQUIRED_BYTE_ALIGNMENT,
         );
         let shm_total_byte_length = window_decoration_pixbuf_offset
-            + if Window::should_client_decoration(interfaces) {
+            + if Window::should_client_decoration(&ctx.global_interfaces) {
                 WindowDecorationPixbuf::REQUIRED_BYTE_LENGTH
             } else {
                 0
@@ -608,7 +687,8 @@ impl StaticPixbufs {
             )
             .expect("buf.mmap");
 
-            let shmp = interfaces
+            let shmp = ctx
+                .global_interfaces
                 .shm
                 .create_pool(&shm_region, shm_total_byte_length as _)
                 .expect("shmp.create.popup");
@@ -618,7 +698,7 @@ impl StaticPixbufs {
             None
         };
 
-        if interfaces.single_pixel_buffer_manager.is_none() {
+        if ctx.global_interfaces.single_pixel_buffer_manager.is_none() {
             // setup for traditional shm-based single pixel buffer
             let (_, mapped, _) = shm_pair.as_ref().expect("no shm");
 
@@ -631,7 +711,7 @@ impl StaticPixbufs {
                 );
             }
         }
-        let window_decoration_pixbuf = if Window::should_client_decoration(interfaces) {
+        let window_decoration_pixbuf = if Window::should_client_decoration(&ctx.global_interfaces) {
             let (shm, mapped, _) = shm_pair.as_ref().expect("no shm");
 
             WindowDecorationPixbuf::generate_content(unsafe {
@@ -675,24 +755,6 @@ impl StaticPixbufs {
     }
 }
 
-pub fn dp_prepare_read(dp: &mut wl::Display) -> Result<(), ()> {
-    loop {
-        match dp.prepare_read() {
-            Ok(_) => break,
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                dp.dispatch_pending().expect("wl.display.dispatch_pending");
-            }
-            Err(e) => {
-                tracing::error!(reason = ?e, "wl.display.prepare_read");
-                return Err(());
-            }
-        }
-    }
-
-    dp.flush().expect("wl.display.flush");
-    Ok(())
-}
-
 pub struct WindowCommittedState {
     pub active_buffer_scale: f32,
     pub active_size: Size<PixelsUnit>,
@@ -707,7 +769,7 @@ enum SurfaceStateTag {
 }
 
 pub struct WindowState {
-    surface_ptr: *mut wl::Surface,
+    surface_ptr: NonNull<wl::Surface>,
     pub(self) xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
@@ -750,6 +812,21 @@ impl Drop for Window {
     }
 }
 impl Window {
+    #[inline(always)]
+    const fn into_handle(self) -> WindowHandle {
+        let surface = unsafe { core::ptr::read(&self.surface) };
+        core::mem::forget(self);
+
+        WindowHandle(surface.unwrap())
+    }
+
+    #[inline(always)]
+    const fn from_handle(h: WindowHandle) -> Self {
+        Self {
+            surface: unsafe { wl::Owned::wrap_unchecked(h.0) },
+        }
+    }
+
     #[inline(always)]
     pub const fn should_client_decoration(wl_interfaces: &GlobalInterfaces) -> bool {
         wl_interfaces.zxdg_decoration_manager.is_some()
@@ -847,7 +924,9 @@ impl Window {
         let ht_root = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
-            root_of_window: Some(WindowHandle(surface.as_ptr())),
+            root_of_window: Some(WindowHandle(unsafe {
+                NonNull::new_unchecked(surface.as_ptr())
+            })),
             ..Default::default()
         });
         let kf_root_group = keyboard_focus_registry.acquire_group();
@@ -859,7 +938,7 @@ impl Window {
             state: SurfaceState {
                 tag: SurfaceStateTag::ToplevelWindow,
                 data: WindowState {
-                    surface_ptr: surface.as_ptr(),
+                    surface_ptr: unsafe { NonNull::new_unchecked(surface.as_ptr()) },
                     xdg_surface,
                     xdg_toplevel,
                     _appmenu: appmenu,
@@ -940,11 +1019,6 @@ impl Window {
             core::ptr::drop_in_place(&mut self.surface);
         }
         core::mem::forget(self);
-    }
-
-    #[inline(always)]
-    const fn make_handle(&self) -> WindowHandle {
-        WindowHandle(self.surface.as_ptr())
     }
 
     fn create_vk_surface<'d, 'fs>(
@@ -1132,13 +1206,13 @@ impl WindowEventListener {
             if let Some(s) = self.pending_configure_buffer_scale.take() {
                 match self.scaling {
                     WindowScaling::Automatic => {
-                        unsafe { &*self.state.data.surface_ptr }
+                        unsafe { self.state.data.surface_ptr.as_ref() }
                             .set_buffer_scale(s as _)
                             .expect("wl_surface.set_buffer_scale");
                     }
                     WindowScaling::Manual { .. } => {
                         // fractional scaleでは1固定にして、viewporterでスケールを適用する必要がある
-                        unsafe { &*self.state.data.surface_ptr }
+                        unsafe { self.state.data.surface_ptr.as_ref() }
                             .set_buffer_scale(1)
                             .expect("wl_surface.set_buffer_scale");
                     }
@@ -1949,7 +2023,7 @@ impl WindowDecoration {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerID(*mut wl::Pointer);
 impl PointerID {
     #[inline(always)]
@@ -1967,7 +2041,7 @@ impl PointerID {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PointerEventID {
     serial: u32,
     seat_ptr: *mut wl::Seat,
@@ -1976,7 +2050,7 @@ unsafe impl Sync for PointerEventID {}
 unsafe impl Send for PointerEventID {}
 
 struct PointerEnterState {
-    surface: *mut wl::Surface,
+    surface: NonNull<wl::Surface>,
     serial: u32,
 }
 
@@ -1989,7 +2063,7 @@ pub struct PointerState {
 }
 
 struct KeyboardEnterState {
-    pub surface: *mut wl::Surface,
+    pub surface: NonNull<wl::Surface>,
 }
 
 struct KeyboardState {
@@ -2020,14 +2094,18 @@ pub struct GlobalMessaging {
     _pinned: core::marker::PhantomPinned,
 }
 impl GlobalMessaging {
-    pub fn new(interfaces: &GlobalInterfaces, event_dispatcher: LogicFiberEventDispatcher) -> Self {
+    pub fn new(ctx: &DisplayServerContext, event_dispatcher: LogicFiberEventDispatcher) -> Self {
         Self {
-            text_input_manager: interfaces.text_input_manager.as_ptr(),
+            text_input_manager: ctx.global_interfaces.text_input_manager.as_ptr(),
             xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
                 .expect("xkb_context.create"),
             keyboard: None,
             pointer: None,
-            cursor_shape_manager: interfaces.cursor_shape_manager.as_ref().map(|x| x.as_ptr()),
+            cursor_shape_manager: ctx
+                .global_interfaces
+                .cursor_shape_manager
+                .as_ref()
+                .map(|x| x.as_ptr()),
             event_dispatcher,
             ime_pending_state: IMEPendingState {
                 committed_text: String::new(),
@@ -2135,7 +2213,7 @@ impl wl::PointerEventListener for GlobalMessaging {
 
         let state = self.pointer.as_mut().expect("no pointer state initialized");
         state.enter_state = Some(PointerEnterState {
-            surface: surface as *mut _,
+            surface: NonNull::from_mut(surface),
             serial,
         });
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
@@ -2175,7 +2253,7 @@ impl wl::PointerEventListener for GlobalMessaging {
             SurfaceStateTag::ToplevelWindow => {
                 self.event_dispatcher.dispatch(Event::PointerMove {
                     pointer_id: PointerID(pointer),
-                    window: WindowHandle(surface as *mut _),
+                    window: WindowHandle(NonNull::from_mut(surface)),
                     client_pos: state.pos,
                 });
             }
@@ -2183,7 +2261,7 @@ impl wl::PointerEventListener for GlobalMessaging {
                 self.event_dispatcher
                     .dispatch(Event::ContextMenuPointerMove {
                         pointer_id: PointerID(pointer),
-                        target: context_menu::Handle(surface),
+                        target: context_menu::Handle(NonNull::from_mut(surface)),
                         client_pos: state.pos,
                     });
             }
@@ -2216,7 +2294,9 @@ impl wl::PointerEventListener for GlobalMessaging {
 
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
         let surface_state = unsafe {
-            &*(*enter_state.surface)
+            &*enter_state
+                .surface
+                .as_ref()
                 .user_data()
                 .cast::<SurfaceStateUntyped>()
         };
@@ -2256,7 +2336,9 @@ impl wl::PointerEventListener for GlobalMessaging {
 
         if state == wl::PointerButtonState::Pressed {
             let surface_state = unsafe {
-                &*(*enter_state.surface)
+                &*enter_state
+                    .surface
+                    .as_ref()
                     .user_data()
                     .cast::<SurfaceStateUntyped>()
             };
@@ -2307,7 +2389,9 @@ impl wl::PointerEventListener for GlobalMessaging {
             }
         } else if state == wl::PointerButtonState::Released {
             let surface_state = unsafe {
-                &*(*enter_state.surface)
+                &*enter_state
+                    .surface
+                    .as_ref()
                     .user_data()
                     .cast::<SurfaceStateUntyped>()
             };
@@ -2434,20 +2518,32 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         tracing::trace!("keyboard::enter");
 
         let state = self.keyboard.as_mut().expect("no keyboard");
-        state.enter_state = Some(KeyboardEnterState { surface });
+        state.enter_state = Some(KeyboardEnterState {
+            surface: NonNull::from_mut(surface),
+        });
+        self.event_dispatcher.dispatch(Event::WindowFocusChanged {
+            window: WindowHandle(NonNull::from_mut(surface)),
+            focused: true,
+        });
     }
 
-    #[tracing::instrument(skip(self, _sender, _surface))]
+    #[tracing::instrument(skip(self, _sender, surface))]
     fn leave(
         &mut self,
         _sender: &mut wl::Keyboard,
         serial: u32,
-        _surface: Option<&mut wl::Surface>,
+        surface: Option<&mut wl::Surface>,
     ) {
         tracing::trace!("keyboard::leave");
 
         let state = self.keyboard.as_mut().expect("no keyboard");
         state.enter_state = None;
+        if let Some(s) = surface {
+            self.event_dispatcher.dispatch(Event::WindowFocusChanged {
+                window: WindowHandle(NonNull::from_mut(s)),
+                focused: false,
+            });
+        }
     }
 
     #[tracing::instrument(skip(self, _sender))]

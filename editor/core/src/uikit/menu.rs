@@ -17,7 +17,7 @@ use crate::{
     utils::{LogicalUnit, SafeF32, Size},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum MenuItem {
     Heading { label: String },
     Command { label: String, command_id: u64 },
@@ -664,6 +664,21 @@ impl HitTestTreeActionHandler for CommandViewEventHandler {
             .dispatch_event(Event::ContextMenuSelectItem {
                 depth: self.depth,
                 index: self.index,
+            });
+
+        crate::input::EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        _args: &crate::input::hittest::PointerButtonActionArgs,
+    ) -> crate::input::EventContinueControl {
+        context
+            .system_link
+            .dispatch_event(Event::ContextMenuSelectCommand {
+                id: self.command_id,
             });
 
         crate::input::EventContinueControl::STOP_PROPAGATION

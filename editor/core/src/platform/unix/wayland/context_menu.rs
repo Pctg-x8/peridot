@@ -1,3 +1,4 @@
+use core::ptr::NonNull;
 use std::{
     rc::Rc,
     sync::{Mutex, atomic::AtomicBool},
@@ -26,23 +27,38 @@ use crate::{
     utils::{LogicalUnit, PixelsUnit, Point, Size, platform::linux::TimerFD},
 };
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Handle(pub(super) *mut wl::Surface);
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Handle(pub(super) NonNull<wl::Surface>);
 unsafe impl Sync for Handle {}
 unsafe impl Send for Handle {}
 impl Handle {
     #[inline(always)]
     fn data(&self) -> &InstanceData {
-        &unsafe { &*(*self.0).user_data().cast::<SurfaceState<InstanceData>>() }.data
+        &unsafe {
+            &*self
+                .0
+                .as_ref()
+                .user_data()
+                .cast::<SurfaceState<InstanceData>>()
+        }
+        .data
     }
 
     #[inline(always)]
     fn data_mut(&mut self) -> &mut InstanceData {
-        &mut unsafe { &mut *(*self.0).user_data().cast::<SurfaceState<InstanceData>>() }.data
+        &mut unsafe {
+            &mut *self
+                .0
+                .as_mut()
+                .user_data()
+                .cast::<SurfaceState<InstanceData>>()
+        }
+        .data
     }
 
     pub fn close(
-        self,
+        mut self,
         syslink: &SystemLink,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
@@ -58,13 +74,13 @@ impl Handle {
             .expect("done_event_receiver.recv");
         tracing::debug!("render surface done");
 
-        let eh = unsafe { Box::from_raw((&*self.0).user_data().cast::<EventHandler>()) };
+        let eh = unsafe { Box::from_raw(self.0.as_mut().user_data().cast::<EventHandler>()) };
         composite_tree.free_all(eh.0.data.ct_root);
         ht_manager.free_all(eh.0.data.ht_root);
         keyboard_focus_registry.release_group(eh.0.data.kf_root_group);
         drop(eh);
 
-        drop(unsafe { wl::Owned::wrap_unchecked(core::ptr::NonNull::new_unchecked(self.0)) });
+        drop(unsafe { wl::Owned::wrap_unchecked(self.0) });
     }
 
     #[inline(always)]
@@ -377,21 +393,25 @@ pub fn pop(
     let height = MenuItemLayout::height(layouted_items.iter());
     tracing::debug!(%width, %height, "pop context menu");
 
-    let mut surface = unsafe { &*syslink.display_server.wl_global_interfaces }
+    let mut surface = unsafe { &*syslink.display_server.context }
+        .global_interfaces
         .compositor
         .create_surface()
         .expect("compositor.create_surface");
-    let xdg_surface = unsafe { &*syslink.display_server.wl_global_interfaces }
+    let xdg_surface = unsafe { &*syslink.display_server.context }
+        .global_interfaces
         .xdg_wm_base
         .get_xdg_surface(&surface)
         .expect("xdg_wm_base.get_xdg_surface");
-    let scaling = if let Some(ref fs) =
-        unsafe { &*syslink.display_server.wl_global_interfaces }.fractional_scale_manager
+    let scaling = if let Some(ref fs) = unsafe { &*syslink.display_server.context }
+        .global_interfaces
+        .fractional_scale_manager
     {
         let f = fs
             .get_fractional_scale(&surface)
             .expect("fractional_scale.create");
-        let vp = unsafe { &*syslink.display_server.wl_global_interfaces }
+        let vp = unsafe { &*syslink.display_server.context }
+            .global_interfaces
             .viewporter
             .get_viewport(&surface)
             .expect("viewporter.get_viewport");
@@ -404,7 +424,8 @@ pub fn pop(
         WindowScaling::Automatic
     };
 
-    let pos = unsafe { &*syslink.display_server.wl_global_interfaces }
+    let pos = unsafe { &*syslink.display_server.context }
+        .global_interfaces
         .xdg_wm_base
         .create_positioner()
         .expect("create_positioner");
@@ -491,7 +512,7 @@ pub fn pop(
 
     let vk_surface = unsafe {
         br::WaylandSurfaceCreateInfo::new(
-            (*syslink.display_server.wl_display).as_raw().cast(),
+            (*syslink.display_server.context).dp.as_raw().cast(),
             surface.as_ptr().cast(),
         )
         .execute((&*syslink.vk_device).instance(), None)
@@ -501,16 +522,21 @@ pub fn pop(
     syslink
         .rt_sender
         .send(RenderMessage::NewContextMenu(NewContextMenuData {
-            w: Handle(surface.as_ptr()),
+            w: Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
             vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
             composite_root: ct_root,
         }))
         .expect("rt_sender.send");
 
     surface.commit().expect("surface.commit");
-    let views = setup_contents(layouted_items, Handle(surface.as_ptr()), view_init_context);
+    let views = setup_contents(
+        layouted_items,
+        Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
+        view_init_context,
+    );
     unsafe { &mut *surface.user_data().cast::<SurfaceState<InstanceData>>() }
         .data
         .views = views;
-    Handle(surface.unwrap().as_ptr())
+
+    Handle(surface.unwrap())
 }
