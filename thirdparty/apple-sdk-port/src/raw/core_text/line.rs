@@ -47,13 +47,13 @@ unsafe extern "C" {
         flush_factor: CGFloat,
         flush_width: c_double,
     ) -> c_double;
-    pub fn CTLineGetTypogaphicBounds(
+    pub fn CTLineGetTypographicBounds(
         line: CTLineRef,
         ascent: *mut CGFloat,
         descent: *mut CGFloat,
         leading: *mut CGFloat,
     ) -> c_double;
-    pub fn CTLineGetBoundsWithoptions(line: CTLineRef, options: CTLineBoundsOptions) -> CGRect;
+    pub fn CTLineGetBoundsWithOptions(line: CTLineRef, options: CTLineBoundsOptions) -> CGRect;
     pub fn CTLineGetTrailingWhitespaceWidth(line: CTLineRef) -> c_double;
     pub fn CTLineGetStringIndexForPosition(line: CTLineRef, position: CGPoint) -> CFIndex;
     pub fn CTLineGetOffsetForStringIndex(

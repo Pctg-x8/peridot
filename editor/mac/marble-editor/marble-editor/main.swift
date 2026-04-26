@@ -186,6 +186,7 @@ final class WindowLink : NSWindow {
     }
     
     override func mouseDown(with event: NSEvent) {
+        NSLog("mouseDown \(event.buttonMask)")
         let p = event.locationInWindow
         self.callbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y))
     }
@@ -201,6 +202,7 @@ final class WindowLink : NSWindow {
     }
     
     override func mouseUp(with event: NSEvent) {
+        NSLog("mouseUp \(event.buttonMask)")
         self.callbacks?.notifyPointerUp()
     }
 }

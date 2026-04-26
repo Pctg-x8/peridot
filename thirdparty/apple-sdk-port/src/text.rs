@@ -364,6 +364,28 @@ impl Line {
     pub fn glyph_runs(&self) -> &Array<Run> {
         unsafe { &*CTLineGetGlyphRuns(&self.0).cast::<Array<Run>>() }
     }
+
+    #[inline(always)]
+    pub fn bound(&self, options: CTLineBoundsOptions) -> CGRect {
+        unsafe { CTLineGetBoundsWithOptions(&self.0, options) }
+    }
+
+    #[inline(always)]
+    pub fn typographic_bounds(
+        &self,
+        ascent: Option<&mut core::mem::MaybeUninit<CGFloat>>,
+        descent: Option<&mut core::mem::MaybeUninit<CGFloat>>,
+        leading: Option<&mut core::mem::MaybeUninit<CGFloat>>,
+    ) -> core::ffi::c_double {
+        unsafe {
+            CTLineGetTypographicBounds(
+                &self.0,
+                ascent.map_or(core::ptr::null_mut(), |x| x.as_mut_ptr()),
+                descent.map_or(core::ptr::null_mut(), |x| x.as_mut_ptr()),
+                leading.map_or(core::ptr::null_mut(), |x| x.as_mut_ptr()),
+            )
+        }
+    }
 }
 
 #[repr(transparent)]

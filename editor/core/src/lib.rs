@@ -48,7 +48,7 @@ use crate::{
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
         SimpleButtonView, ViewInitContext,
     },
-    utils::{Color32, LogicalUnit, PixelsUnit, Point, Rect, SafeF32, Size},
+    utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
 };
 #[cfg(target_os = "macos")]
 use crate::{input::PerWindowKeyboardFocusState, utils::PixelsUnit};
@@ -185,62 +185,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(windows)]
     let drag_preview_popover = DragPreviewPopoverHandle::new(app_context);
 
-    #[cfg(target_os = "macos")]
-    let drag_preview_popover = DragPreviewPopoverHandle {
-        position_base_window_link: core::cell::Cell::new(core::ptr::null_mut()),
-    };
-
-    #[cfg(target_os = "macos")]
-    let mut w = MacWindow::new(
-        WindowType::Main {},
-        platform::mac::bridge::WindowCreationFlags::MAIN,
-        empty_dispatcher.clone(),
-        composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        }),
-        ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        }),
-    );
-    #[cfg(target_os = "macos")]
-    let main_window_handle = w.make_handle();
-    #[cfg(target_os = "macos")]
-    w.make_primary_window();
-
-    #[cfg(target_os = "macos")]
-    let vk_surface = graphics::VulkanSurface::new(&vk_device, unsafe {
-        bedrock::SurfaceCreateInfo::execute(
-            &bedrock::MetalSurfaceCreateInfo::new(w.metal_layer()),
-            bedrock::InstanceChild::instance(&vk_device),
-            None,
-        )
-        .expect("vk_surface.create")
-    });
-
-    #[cfg(target_os = "macos")]
-    rt_sender
-        .send(RenderMessage::NewWindow(rendering::NewWindowData {
-            #[cfg(target_os = "macos")]
-            init_scale: SafeF32::new(
-                *w.dispatcher()
-                    .state
-                    .active_buffer_scale
-                    .lock()
-                    .expect("poisoned"),
-            )
-            .expect("invalid scale"),
-            #[cfg(target_os = "macos")]
-            latest_ui_scale_changes: utils::UnboundedRef::new(
-                &w.dispatcher().state.latest_ui_scale_changes,
-            ),
-            key: main_window_handle,
-            vk_surface: rendering::NewWindowVulkanSurface(vk_surface.unbound().1),
-        }))
-        .expect("rt_sender.send");
-
     let mut polling = false;
     let empty_dispatcher = LogicFiberEventDispatcher {
         event_store,
@@ -309,7 +253,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             #[cfg(feature = "wayland")]
             context_menu: platform::unix::wayland::context_menu::SharedState {
                 delayed_action_timer,
-            }
+            },
+            #[cfg(target_os = "macos")]
+            context_menu: platform::mac::context_menu::SharedState {},
         },
     ));
 
@@ -318,13 +264,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     wl_global_msg
         .as_mut()
         .reset_event_dispatcher(app_event_dispatcher.clone());
-    #[cfg(target_os = "macos")]
-    w.rebind_event_dispatcher(LogicFiberEventDispatcher {
-        event_store,
-        polling: &mut polling,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
-        future_ptr: unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ },
-    });
 
     // initial poll
     unsafe {
@@ -796,7 +735,7 @@ pub enum Event {
         items: Vec<MenuItem>,
         #[cfg(windows)]
         screen_pos: Point<PixelsUnit>,
-        #[cfg(feature = "wayland")]
+        #[cfg(any(feature = "wayland", target_os = "macos"))]
         surface_pos: Point<LogicalUnit>,
     },
     ContextMenuCloseAll,
@@ -2405,7 +2344,6 @@ async fn run<'sys>(
     );
     let mut current_active_context_menu_session = None::<ContextMenuSession>;
 
-    #[cfg(any(windows, feature = "wayland"))]
     let mut main_window = system_link.create_main_window(
         &mut composite_tree,
         &mut ht_manager,
@@ -2637,7 +2575,7 @@ async fn run<'sys>(
                     ],
                     #[cfg(windows)]
                     screen_pos: platform::windows::pointer_pos(args.pointer_id),
-                    #[cfg(feature = "wayland")]
+                    #[cfg(any(feature = "wayland", target_os = "macos"))]
                     surface_pos: args.pointer_id.surface_pos(),
                 });
 
@@ -3135,7 +3073,7 @@ async fn run<'sys>(
                 items,
                 #[cfg(windows)]
                 screen_pos,
-                #[cfg(feature = "wayland")]
+                #[cfg(any(feature = "wayland", target_os = "macos"))]
                 surface_pos,
             } => {
                 current_active_context_menu_session = Some(ContextMenuSession::new(
@@ -3144,7 +3082,7 @@ async fn run<'sys>(
                     &system_link,
                     #[cfg(windows)]
                     screen_pos,
-                    #[cfg(feature = "wayland")]
+                    #[cfg(any(feature = "wayland", target_os = "macos"))]
                     surface_pos,
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -3550,19 +3488,19 @@ impl ContextMenuSession {
         items: Vec<MenuItem>,
         system_link: &SystemLink,
         #[cfg(windows)] screen_pos: Point<PixelsUnit>,
-        #[cfg(feature = "wayland")] surface_pos: Point<LogicalUnit>,
+        #[cfg(any(feature = "wayland", target_os = "macos"))] surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
         typing_context: &ThreadLocalTypingContext,
     ) -> Self {
         let root_surface = system_link.pop_context_menu(
-            #[cfg(feature = "wayland")]
+            #[cfg(any(feature = "wayland", target_os = "macos"))]
             parent,
             view_init_context,
             0,
             #[cfg(windows)]
             screen_pos,
-            #[cfg(feature = "wayland")]
+            #[cfg(any(feature = "wayland", target_os = "macos"))]
             surface_pos,
             |render_scale| {
                 #[allow(unused_mut)]
@@ -3639,7 +3577,7 @@ impl ContextMenuSession {
                     });
 
                     let surface = system_link.pop_context_menu(
-                        #[cfg(feature = "wayland")]
+                        #[cfg(any(feature = "wayland", target_os = "macos"))]
                         self.parent,
                         view_init_context,
                         depth + 1,
@@ -3735,7 +3673,7 @@ impl ContextMenuSession {
             });
 
         let surface = system_link.pop_context_menu(
-            #[cfg(feature = "wayland")]
+            #[cfg(any(feature = "wayland", target_os = "macos"))]
             self.parent,
             view_init_context,
             depth + 1,
@@ -3843,6 +3781,8 @@ pub struct SystemLink<'sys> {
     pointer_hovering_timer: *const utils::platform::linux::TimerFD,
     #[cfg(feature = "wayland")]
     pub context_menu: platform::unix::wayland::context_menu::SharedState,
+    #[cfg(target_os = "macos")]
+    pub context_menu: platform::mac::context_menu::SharedState,
 }
 #[cfg(not(windows))]
 impl SystemLink<'_> {
@@ -3859,117 +3799,6 @@ impl SystemLink<'_> {
     #[inline(always)]
     pub fn dispatch_event(&self, event: Event) {
         unsafe { &*self.event_dispatcher }.dispatch(event);
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn open_window<'h, HT: HitTestTreeCreate<'h> + ?Sized>(
-        &self,
-        composite_tree: &mut CompositeTree<Event>,
-        hit_tree: &mut HT,
-        setup_content: impl FnOnce(WindowHandle, &mut CompositeTree<Event>, &mut HT),
-    ) -> WindowHandle {
-        let mut w = MacWindow::new(
-            WindowType::Sub,
-            platform::mac::bridge::WindowCreationFlags::empty(),
-            unsafe { (*self.event_dispatcher).clone() },
-            composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-            hit_tree.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            }),
-        );
-        let handle = w.make_handle();
-        w.show();
-        // notify resize on show(register to pointer input manager)
-        let mut width = core::mem::MaybeUninit::uninit();
-        let mut height = core::mem::MaybeUninit::uninit();
-        unsafe {
-            platform::mac::bridge::ni_get_size_logical(
-                w.native_ptr,
-                width.as_mut_ptr(),
-                height.as_mut_ptr(),
-            )
-        }
-        unsafe { &*self.event_dispatcher }.dispatch(Event::WindowResize {
-            window: handle,
-            size: Size::new_logical(unsafe { width.assume_init() as _ }, unsafe {
-                height.assume_init() as _
-            }),
-        });
-
-        let vk_surface = graphics::VulkanSurface::new(unsafe { &*self.vk_device }, unsafe {
-            bedrock::SurfaceCreateInfo::execute(
-                &bedrock::MetalSurfaceCreateInfo::new(w.metal_layer()),
-                bedrock::InstanceChild::instance(&*self.vk_device),
-                None,
-            )
-            .expect("vk_surface.create")
-        });
-        self.rt_sender
-            .send(RenderMessage::NewWindow(rendering::NewWindowData {
-                init_scale: SafeF32::new(
-                    *w.dispatcher()
-                        .state
-                        .active_buffer_scale
-                        .lock()
-                        .expect("poisoned"),
-                )
-                .expect("invalid scale"),
-                latest_ui_scale_changes: utils::UnboundedRef::new(
-                    &w.dispatcher().state.latest_ui_scale_changes,
-                ),
-                key: handle,
-                vk_surface: rendering::NewWindowVulkanSurface(vk_surface.unbound().1),
-            }))
-            .expect("rt_sender.send");
-
-        setup_content(handle, composite_tree, hit_tree);
-        handle
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn close_window(&self, window_handle: WindowHandle) {
-        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-        self.rt_sender
-            .send(RenderMessage::DestroyWindow(
-                window_handle,
-                done_event_sender,
-            ))
-            .expect("rt_sender.send.destroy_window");
-        let tpctx = unsafe { platform::mac::bridge::ni_degreade_thread_priroity_temporarily() };
-        done_event_receiver
-            .recv()
-            .expect("done_event_receiver.recv");
-        unsafe {
-            platform::mac::bridge::ni_restore_thread_priority(tpctx);
-        }
-
-        unsafe {
-            platform::mac::bridge::ni_release_window(window_handle.0);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
-        unsafe {
-            platform::mac::bridge::ni_set_cursor_shape(match cursor {
-                CursorShape::Default => platform::mac::bridge::CursorShape::Arrow as _,
-                CursorShape::Pointer => platform::mac::bridge::CursorShape::Pointer as _,
-                CursorShape::IBeam => platform::mac::bridge::CursorShape::IBeam as _,
-                CursorShape::ResizeHorizontal => {
-                    platform::mac::bridge::CursorShape::ResizeHorizontal as _
-                }
-            })
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn notify_ui_scale_changes_to_render(&self, _window: WindowHandle, _new_scale: f32) {
-        // TODO: これmacでやることあるのか？（起こらない気がする）
     }
 
     #[cfg(feature = "wayland")]
@@ -4008,118 +3837,31 @@ pub enum WindowType {
 
 #[cfg(windows)]
 pub type PointerID = platform::windows::PointerID;
+#[cfg(target_os = "macos")]
+pub type PointerID = platform::mac::PointerID;
 #[cfg(feature = "wayland")]
 pub type PointerID = platform::unix::wayland::PointerID;
 
 #[cfg(windows)]
 pub type DragPreviewPopoverHandle = platform::windows::DragPreviewPopoverHandle;
+#[cfg(target_os = "macos")]
+pub type DragPreviewPopoverHandle = platform::mac::DragPreviewPopoverHandle;
 #[cfg(feature = "wayland")]
 pub type DragPreviewPopoverHandle = platform::unix::wayland::DragPreviewPopoverHandle;
 
 #[cfg(windows)]
 pub type WindowHandle = platform::windows::WindowHandle;
+#[cfg(target_os = "macos")]
+pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]
 pub type WindowHandle = platform::unix::wayland::WindowHandle;
 
 #[cfg(windows)]
 pub type ContextMenuHandle = platform::windows::context_menu::Handle;
+#[cfg(target_os = "macos")]
+pub type ContextMenuHandle = platform::mac::context_menu::Handle;
 #[cfg(feature = "wayland")]
 pub type ContextMenuHandle = platform::unix::wayland::context_menu::Handle;
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct WindowHandle(*mut crate::platform::mac::bridge::WindowLink);
-#[cfg(target_os = "macos")]
-unsafe impl Sync for WindowHandle {}
-#[cfg(target_os = "macos")]
-unsafe impl Send for WindowHandle {}
-#[cfg(target_os = "macos")]
-impl WindowHandle {
-    #[inline(always)]
-    pub fn state(&self) -> &MacWindowState {
-        unsafe {
-            &(*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<MacWindowDispatcher>())
-            .state
-        }
-    }
-
-    #[inline(always)]
-    fn state_mut(&mut self) -> &mut MacWindowState {
-        unsafe {
-            &mut (*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<MacWindowDispatcher>())
-            .state
-        }
-    }
-
-    #[inline(always)]
-    pub fn associate_extra_data<T>(&mut self, data: Box<T>) {
-        self.state_mut().extra_data = Box::into_raw(data) as _;
-    }
-
-    #[inline(always)]
-    pub unsafe fn extra_data_ref<T>(&self) -> &T {
-        unsafe { &*self.state().extra_data.cast() }
-    }
-
-    #[inline(always)]
-    pub unsafe fn extra_data_mut<T>(&mut self) -> &mut T {
-        unsafe { &mut *self.state_mut().extra_data.cast() }
-    }
-
-    #[inline(always)]
-    pub unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
-        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
-        self.state_mut().extra_data = core::ptr::null_mut();
-
-        r
-    }
-
-    #[inline(always)]
-    pub fn client_size(&self) -> Size<LogicalUnit> {
-        let state = self.state();
-
-        state
-            .active_rt_size
-            .lock()
-            .expect("poisoned")
-            .to_logical(*state.active_buffer_scale.lock().expect("poisoned"))
-    }
-
-    #[inline(always)]
-    pub fn ui_scale_factor(&self) -> f32 {
-        *self.state().active_buffer_scale.lock().expect("poisoned")
-    }
-
-    #[inline(always)]
-    pub fn composite_root(&self) -> CompositeTreeRef {
-        self.state().composite_root
-    }
-
-    #[inline(always)]
-    pub fn ht_root(&self) -> HitTestTreeRef {
-        self.state().ht_root
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
-        &self.state().keyboard_focus_state
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
-        &mut self.state_mut().keyboard_focus_state
-    }
-}
-#[cfg(target_os = "macos")]
-impl input::ShellPointerActions for WindowHandle {
-    #[inline(always)]
-    fn capture_pointer(&self) {}
-
-    #[inline(always)]
-    fn release_pointer(&self) {}
-}
 
 pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,
@@ -4194,54 +3936,6 @@ impl SyncEventBus {
         {
             // TODO
             Ok(())
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-pub struct DragPreviewPopoverHandle {
-    position_base_window_link: core::cell::Cell<*mut platform::mac::bridge::WindowLink>,
-}
-#[cfg(target_os = "macos")]
-impl DragPreviewPopoverHandle {
-    #[inline(always)]
-    pub fn bind_position_base_window_link(&self, w: WindowHandle) {
-        self.position_base_window_link.set(w.0);
-    }
-
-    pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
-        unsafe {
-            // macの場合はスクリーン座標が必要
-            let mut x = pos.x as f64;
-            let mut y = pos.y as f64;
-            platform::mac::bridge::ni_convert_point_to_screen(
-                self.position_base_window_link.get(),
-                &mut x,
-                &mut y,
-            );
-
-            platform::mac::bridge::ni_show_drag_preview(x, y, size.width as _, size.height as _);
-        }
-    }
-
-    pub fn r#move(&self, pos: &Point<PointerInputUnit>) {
-        unsafe {
-            // macの場合はスクリーン座標が必要
-            let mut x = pos.x as f64;
-            let mut y = pos.y as f64;
-            platform::mac::bridge::ni_convert_point_to_screen(
-                self.position_base_window_link.get(),
-                &mut x,
-                &mut y,
-            );
-
-            platform::mac::bridge::ni_move_drag_preview(x, y);
-        }
-    }
-
-    pub fn hide(&self) {
-        unsafe {
-            platform::mac::bridge::ni_hide_drag_preview();
         }
     }
 }
@@ -4404,232 +4098,3 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
         }
     }
 }
-
-#[cfg(target_os = "macos")]
-#[derive(Clone, Copy)]
-pub struct PointerID();
-
-#[cfg(target_os = "macos")]
-pub struct MacWindow {
-    native_ptr: *mut platform::mac::bridge::WindowLink,
-}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for MacWindow {}
-#[cfg(target_os = "macos")]
-unsafe impl Send for MacWindow {}
-#[cfg(target_os = "macos")]
-impl MacWindow {
-    pub fn new(
-        window_type: WindowType,
-        flags: platform::mac::bridge::WindowCreationFlags,
-        event_dispatcher: LogicFiberEventDispatcher,
-        composite_root: CompositeTreeRef,
-        ht_root: HitTestTreeRef,
-    ) -> Self {
-        let native_ptr = unsafe { platform::mac::bridge::ni_create_window(flags.bits()) };
-        let init_scale = unsafe { platform::mac::bridge::ni_get_content_scale(native_ptr) };
-        let dispatcher = Box::new(MacWindowDispatcher {
-            event_dispatcher,
-            window_type,
-            state: MacWindowState {
-                wlink: native_ptr,
-                swapchain_externally_invalidation_signal: std::sync::Arc::new(
-                    std::sync::atomic::AtomicBool::new(false),
-                ),
-                latest_ui_scale_changes: Mutex::new(None),
-                active_size: std::sync::Mutex::new(Size::new_logical(960.0, 540.0)),
-                active_rt_size: std::sync::Mutex::new(
-                    Size::new_logical(960.0, 540.0).to_pixels_ceil(init_scale),
-                ),
-                active_buffer_scale: std::sync::Mutex::new(init_scale),
-                composite_root,
-                ht_root,
-            },
-        });
-        let callbacks: &'static platform::mac::bridge::WindowLinkCallbacks =
-            &platform::mac::bridge::WindowLinkCallbacks {
-                destructor: MacWindowDispatcher::destructor,
-                on_window_close: MacWindowDispatcher::on_window_close,
-                on_resize: MacWindowDispatcher::on_resize,
-                on_pointer_down: MacWindowDispatcher::on_pointer_down,
-                on_pointer_move: MacWindowDispatcher::on_pointer_move,
-                on_pointer_up: MacWindowDispatcher::on_pointer_up,
-            };
-        unsafe {
-            platform::mac::bridge::ni_set_window_callbacks(
-                native_ptr,
-                callbacks,
-                Box::into_raw(dispatcher) as _,
-            );
-        }
-
-        Self { native_ptr }
-    }
-
-    #[inline(always)]
-    pub const fn make_handle(&self) -> WindowHandle {
-        WindowHandle(self.native_ptr)
-    }
-
-    #[inline(always)]
-    pub fn dispatcher(&self) -> &MacWindowDispatcher {
-        unsafe { &*platform::mac::bridge::ni_get_window_callback_context(self.native_ptr).cast() }
-    }
-
-    #[inline(always)]
-    pub fn dispatcher_mut(&mut self) -> &mut MacWindowDispatcher {
-        unsafe {
-            &mut *platform::mac::bridge::ni_get_window_callback_context(self.native_ptr).cast()
-        }
-    }
-
-    #[inline(always)]
-    pub fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher) {
-        self.dispatcher_mut().event_dispatcher = dispatcher;
-    }
-
-    #[inline(always)]
-    pub fn make_primary_window(&mut self) {
-        unsafe {
-            platform::mac::bridge::ni_make_primary_window(self.native_ptr);
-        }
-    }
-
-    #[inline(always)]
-    pub fn show(&mut self) {
-        unsafe {
-            platform::mac::bridge::ni_show_window(self.native_ptr);
-        }
-    }
-
-    #[inline(always)]
-    pub fn metal_layer(&self) -> *mut core::ffi::c_void {
-        unsafe { platform::mac::bridge::ni_get_metal_layer(self.native_ptr) }
-    }
-
-    #[inline(always)]
-    pub fn manual_capture_begin(&self) {
-        unsafe {
-            platform::mac::bridge::manual_capture_begin(self.native_ptr);
-        }
-    }
-}
-
-#[cfg(target_os = "macos")]
-struct MacWindowDispatcher {
-    event_dispatcher: LogicFiberEventDispatcher,
-    window_type: WindowType,
-    state: MacWindowState,
-}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for MacWindowDispatcher {}
-#[cfg(target_os = "macos")]
-unsafe impl Send for MacWindowDispatcher {}
-#[cfg(target_os = "macos")]
-impl MacWindowDispatcher {
-    extern "C" fn destructor(this: *mut core::ffi::c_void) {
-        tracing::trace!(?this, "window_dispatcher.destruct");
-        drop(unsafe { Box::from_raw(this.cast::<Self>()) });
-    }
-
-    extern "C" fn on_window_close(
-        caller_context: *mut core::ffi::c_void,
-        window: *mut platform::mac::bridge::WindowLink,
-    ) {
-        let this = unsafe { &*caller_context.cast::<Self>() };
-        if let WindowType::Sub = this.window_type {
-            this.event_dispatcher.dispatch(Event::SubWindowClose {
-                window: WindowHandle(window),
-            });
-        }
-    }
-
-    extern "C" fn on_resize(
-        caller_context: *mut core::ffi::c_void,
-        window: *mut crate::platform::mac::bridge::WindowLink,
-        width: f64,
-        height: f64,
-    ) {
-        let this = unsafe { &mut *caller_context.cast::<Self>() };
-
-        let new_size = Size::new_logical(width as _, height as _);
-        let mut active_size_locked = this.state.active_size.lock().expect("poisoned");
-        if new_size != *active_size_locked {
-            *active_size_locked = new_size;
-            *this.state.active_rt_size.lock().expect("poisoned") =
-                new_size.to_pixels_ceil(*this.state.active_buffer_scale.lock().expect("poisoned"));
-            this.state
-                .swapchain_externally_invalidation_signal
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            this.event_dispatcher.dispatch(Event::WindowResize {
-                window: WindowHandle(window),
-                size: new_size,
-            });
-        }
-    }
-
-    extern "C" fn on_pointer_down(
-        caller_context: *mut core::ffi::c_void,
-        window: *mut crate::platform::mac::bridge::WindowLink,
-        x: f64,
-        y: f64,
-    ) {
-        let this = unsafe { &mut *caller_context.cast::<Self>() };
-
-        // tracing::info!(x, y, "pointer down");
-        this.event_dispatcher.dispatch(Event::PointerMove {
-            pointer_id: PointerID(),
-            window: WindowHandle(window),
-            client_pos: Point::new_logical(x as _, y as _),
-        });
-        this.event_dispatcher.dispatch(Event::PointerDown {
-            window: WindowHandle(window),
-        });
-    }
-
-    extern "C" fn on_pointer_move(
-        caller_context: *mut core::ffi::c_void,
-        window: *mut crate::platform::mac::bridge::WindowLink,
-        x: f64,
-        y: f64,
-    ) {
-        let this = unsafe { &mut *caller_context.cast::<Self>() };
-
-        // tracing::trace!(x, y, "pointer move");
-        this.event_dispatcher.dispatch(Event::PointerMove {
-            pointer_id: PointerID(),
-            window: WindowHandle(window),
-            client_pos: Point::new_logical(x as _, y as _),
-        });
-    }
-
-    extern "C" fn on_pointer_up(
-        caller_context: *mut core::ffi::c_void,
-        window: *mut crate::platform::mac::bridge::WindowLink,
-    ) {
-        let this = unsafe { &mut *caller_context.cast::<Self>() };
-
-        // tracing::info!("pointer up");
-        this.event_dispatcher.dispatch(Event::PointerUp {
-            window: WindowHandle(window),
-        });
-    }
-}
-
-#[cfg(target_os = "macos")]
-struct MacWindowState {
-    wlink: *mut platform::mac::bridge::WindowLink,
-    extra_data: *mut core::ffi::c_void,
-    swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    latest_ui_scale_changes: Mutex<Option<f32>>,
-    active_size: std::sync::Mutex<Size<LogicalUnit>>,
-    active_rt_size: std::sync::Mutex<Size<PixelsUnit>>,
-    active_buffer_scale: std::sync::Mutex<f32>,
-    composite_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    keyboard_focus_state: PerWindowKeyboardFocusState,
-}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for MacWindowState {}
-#[cfg(target_os = "macos")]
-unsafe impl Send for MacWindowState {}

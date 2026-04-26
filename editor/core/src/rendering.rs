@@ -39,10 +39,6 @@ unsafe impl Send for NewWindowVulkanSurface {}
 pub struct NewWindowData {
     pub key: WindowHandle,
     pub vk_surface: NewWindowVulkanSurface,
-    #[cfg(not(any(feature = "wayland", windows)))]
-    pub latest_ui_scale_changes: UnboundedRef<Mutex<Option<f32>>>,
-    #[cfg(not(any(feature = "wayland", windows)))]
-    pub init_scale: SafeF32,
 }
 
 pub struct NewContextMenuData {
@@ -199,11 +195,9 @@ impl<'main> RenderThread<'main> {
                                 .active_buffer_scale,
                         )
                         .expect("invalid scale");
-                        #[cfg(windows)]
+                        #[cfg(any(windows, target_os = "macos"))]
                         let init_scale =
                             SafeF32::new(wd.key.ui_scale_factor()).expect("invalid scale");
-                        #[cfg(not(any(feature = "wayland", windows)))]
-                        let init_scale = wd.init_scale;
 
                         let window_glyph_atlas = match glyph_atlas_per_scale.entry(init_scale) {
                             // use existing
@@ -253,11 +247,8 @@ impl<'main> RenderThread<'main> {
                         };
                     }
                     Ok(RenderMessage::NewContextMenu(create_data)) => {
-                        #[cfg(any(windows, feature = "wayland"))]
                         let init_scale =
                             SafeF32::new(create_data.w.render_scale()).expect("invalid scale");
-                        #[cfg(not(any(feature = "wayland", windows)))]
-                        let init_scale = wd.init_scale;
 
                         let window_glyph_atlas = match glyph_atlas_per_scale.entry(init_scale) {
                             // use existing
@@ -942,20 +933,7 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(not(windows))]
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         #[cfg(not(windows))]
-        let vk_swapchain = VulkanSwapchain::new(
-            &surface,
-            #[cfg(any(windows, feature = "wayland"))]
-            || create_data.w.pixels_size(),
-            #[cfg(target_os = "macos")]
-            || {
-                *create_data
-                    .key
-                    .state()
-                    .active_rt_size
-                    .lock()
-                    .expect("poisoned")
-            },
-        );
+        let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.w.pixels_size());
 
         #[cfg(windows)]
         let presentation_size = create_data.w.pixels_size().to_vk();
@@ -1143,10 +1121,7 @@ impl<'d> ContextMenuRenderer<'d> {
 
         Self {
             w: create_data.w,
-            #[cfg(any(feature = "wayland", windows))]
             active_scale: init_scale,
-            #[cfg(not(any(feature = "wayland", windows)))]
-            active_scale: create_data.init_scale,
             font_set,
             vk_device: device,
             composite_root: create_data.composite_root,
@@ -1200,9 +1175,13 @@ impl<'d> ContextMenuRenderer<'d> {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(feature = "wayland")]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
         self.w.take_swapchain_externally_invalidation_signal()
+    }
+    #[cfg(not(feature = "wayland"))]
+    pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
+        false
     }
 
     #[cfg(not(windows))]
@@ -1297,13 +1276,8 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(not(windows))]
         self.surface.refresh_caps();
         #[cfg(not(windows))]
-        self.swapchain.recreate(
-            &self.surface,
-            #[cfg(any(windows, feature = "wayland"))]
-            || self.w.pixels_size(),
-            #[cfg(target_os = "macos")]
-            || *self.w.state().active_rt_size.lock().expect("poisoned"),
-        );
+        self.swapchain
+            .recreate(&self.surface, || self.w.pixels_size());
 
         // recrease rt resources
         #[cfg(not(windows))]
@@ -1512,20 +1486,7 @@ impl<'d> WindowRenderer<'d> {
         font_set.rescale((init_scale.value() * 72.0) as _);
 
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
-        let vk_swapchain = VulkanSwapchain::new(
-            &surface,
-            #[cfg(any(windows, feature = "wayland"))]
-            || create_data.key.pixels_client_size(),
-            #[cfg(target_os = "macos")]
-            || {
-                *create_data
-                    .key
-                    .state()
-                    .active_rt_size
-                    .lock()
-                    .expect("poisoned")
-            },
-        );
+        let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.key.pixels_client_size());
 
         let mut update_cp = br::CommandPoolObject::new(
             device,
@@ -1590,10 +1551,7 @@ impl<'d> WindowRenderer<'d> {
 
         Self {
             w: create_data.key,
-            #[cfg(any(feature = "wayland", windows))]
             active_scale: init_scale,
-            #[cfg(not(any(feature = "wayland", windows)))]
-            active_scale: create_data.init_scale,
             latest_ui_scale_changes: &create_data.key.state().latest_ui_scale_changes,
             font_set,
             vk_device: device,
@@ -1735,13 +1693,8 @@ impl<'d> WindowRenderer<'d> {
         self.invalidate_render_commands();
 
         self.surface.refresh_caps();
-        self.swapchain.recreate(
-            &self.surface,
-            #[cfg(any(windows, feature = "wayland"))]
-            || self.w.pixels_client_size(),
-            #[cfg(target_os = "macos")]
-            || *self.w.state().active_rt_size.lock().expect("poisoned"),
-        );
+        self.swapchain
+            .recreate(&self.surface, || self.w.pixels_client_size());
 
         // recrease rt resources
         self.composite_renderer.recreate_rt_resources(
@@ -1815,14 +1768,8 @@ impl<'d> WindowRenderer<'d> {
                     return r;
                 };
 
-                #[cfg(any(windows, feature = "wayland"))]
                 let rt_pixel_size = self.w.pixels_client_size();
-                #[cfg(target_os = "macos")]
-                let rt_pixel_size = *self.w.state().active_rt_size.lock().expect("poisoned");
-                #[cfg(any(windows, feature = "wayland"))]
                 let rt_logical_size = self.w.client_size();
-                #[cfg(target_os = "macos")]
-                let rt_logical_size = *self.w.state().active_rt_size.lock().expect("poisoned");
 
                 let r = if self
                     .last_composite_render_data

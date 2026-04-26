@@ -269,6 +269,10 @@ pub struct RootFontSet {
     #[cfg(windows)]
     ui_title_project_name: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
 }
+#[cfg(target_os = "macos")]
+unsafe impl Sync for RootFontSet {}
+#[cfg(target_os = "macos")]
+unsafe impl Send for RootFontSet {}
 impl RootFontSet {
     #[cfg(windows)]
     pub fn new() -> Self {
@@ -624,8 +628,8 @@ impl TextLayout {
             attributed_string_runs.push((
                 apple_sdk_port::foundation::AttributedString::new(
                     None,
-                    unsafe {
-                        &apple_sdk_port::foundation::String::from_str_no_copy(None, r.content)
+                    &*unsafe {
+                        apple_sdk_port::foundation::String::from_str_no_copy(None, r.content)
                     },
                     Some(&str_attr),
                 )
@@ -975,7 +979,7 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         tracing::debug!(line_count = lines.len(), "frameset lines");
         #[cfg(target_os = "macos")]
-        let mut height = 0.0;
+        let mut height = 0.0f32;
         #[cfg(target_os = "macos")]
         for n in 0..lines.len() {
             let runs = lines[n].glyph_runs();
@@ -1032,7 +1036,7 @@ impl TextLayout {
                     },
                     None => 0,
                 };
-                x_shift += spacing_inline_start;
+                x_shift += spacing_inline_start as f32;
 
                 let glyph_count = run.glyph_count();
                 tracing::debug!(count = glyph_count, "run");
@@ -1659,8 +1663,21 @@ impl TextLayout {
 
     #[cfg(not(windows))]
     #[inline(always)]
+    #[cfg(feature = "harfbuzz")]
     pub fn height(&self) -> f32 {
         self.height
+    }
+
+    #[cfg(target_os = "macos")]
+    #[inline(always)]
+    pub fn height(&self) -> f32 {
+        // TODO: multi-line consideration
+        let mut ascender = core::mem::MaybeUninit::uninit();
+        let mut descender = core::mem::MaybeUninit::uninit();
+        let l = &self.frame.lines()[0];
+        l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
+
+        unsafe { (ascender.assume_init() + descender.assume_init()) as f32 * self.render_scale }
     }
 
     #[cfg(windows)]
@@ -1756,13 +1773,13 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         tracing::debug!(line_count = lines.len(), "frameset lines");
         #[cfg(target_os = "macos")]
-        let mut width = 0.0;
+        let mut width = 0.0f32;
         #[cfg(target_os = "macos")]
         for n in 0..lines.len() {
             let runs = lines[n].glyph_runs();
 
-            let mut line_width = 0.0;
-            let mut x_shift = 0.0;
+            let mut line_width = 0.0f32;
+            let mut x_shift = 0.0f32;
             for m in 0..runs.len() {
                 let run = &runs[m];
 
@@ -1795,7 +1812,7 @@ impl TextLayout {
                     },
                     None => 0,
                 };
-                x_shift += spacing_inline_start;
+                x_shift += spacing_inline_start as f32;
 
                 let glyph_count = run.glyph_count();
                 tracing::debug!(count = glyph_count, "run");
@@ -1899,12 +1916,12 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         tracing::debug!(line_count = lines.len(), "frameset lines");
         #[cfg(target_os = "macos")]
-        let mut left_cursor = 0.0;
+        let mut left_cursor = 0.0 as f32;
         #[cfg(target_os = "macos")]
         for n in 0..lines.len() {
             let runs = lines[n].glyph_runs();
 
-            let mut line_left_cursor = 0.0;
+            let mut line_left_cursor = 0.0 as f32;
             let mut x_shift = 0.0;
             for m in 0..runs.len() {
                 let run = &runs[m];
@@ -1938,7 +1955,7 @@ impl TextLayout {
                     },
                     None => 0,
                 };
-                x_shift += spacing_inline_start;
+                x_shift += spacing_inline_start as f32;
 
                 let glyph_count = run.glyph_count();
                 tracing::debug!(count = glyph_count, "run");
@@ -2101,6 +2118,9 @@ impl TextLayout {
                     .fold(0, |a, c| a + c.len_utf8()),
             )
         }
+
+        #[cfg(target_os = "macos")]
+        todo!("hittest with ctframe")
     }
 }
 
