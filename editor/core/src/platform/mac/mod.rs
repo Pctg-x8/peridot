@@ -71,13 +71,7 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
-        let state = self.state();
-
-        state
-            .active_rt_size
-            .lock()
-            .expect("poisoned")
-            .to_logical(*state.active_buffer_scale.lock().expect("poisoned"))
+        *self.state().active_size.lock().expect("poisoned")
     }
 
     pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
@@ -245,17 +239,6 @@ impl crate::SystemLink<'_> {
         });
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
-                /*init_scale: SafeF32::new(
-                    *w.dispatcher()
-                        .state
-                        .active_buffer_scale
-                        .lock()
-                        .expect("poisoned"),
-                )
-                .expect("invalid scale"),
-                latest_ui_scale_changes: utils::UnboundedRef::new(
-                    &w.dispatcher().state.latest_ui_scale_changes,
-                ),*/
                 key: main_window_handle,
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
             }))
@@ -323,17 +306,6 @@ impl crate::SystemLink<'_> {
         });
         self.rt_sender
             .send(RenderMessage::NewWindow(NewWindowData {
-                /*init_scale: SafeF32::new(
-                    *w.dispatcher()
-                        .state
-                        .active_buffer_scale
-                        .lock()
-                        .expect("poisoned"),
-                )
-                .expect("invalid scale"),
-                latest_ui_scale_changes: utils::UnboundedRef::new(
-                    &w.dispatcher().state.latest_ui_scale_changes,
-                ),*/
                 key: handle,
                 vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
             }))
@@ -561,18 +533,21 @@ impl MacWindowDispatcher {
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        let new_size = Size::new_logical(width as _, height as _);
-        let mut active_size_locked = this.state.active_size.lock().expect("poisoned");
-        if new_size != *active_size_locked {
-            *active_size_locked = new_size;
-            *this.state.active_rt_size.lock().expect("poisoned") =
-                new_size.to_pixels_ceil(*this.state.active_buffer_scale.lock().expect("poisoned"));
+        let new_rt_size = Size::new_pixels(width as _, height as _);
+        let mut active_rt_size_locked = this.state.active_rt_size.lock().expect("poisoned");
+        if new_rt_size != *active_rt_size_locked {
+            let logical_size =
+                new_rt_size.to_logical(*this.state.active_buffer_scale.lock().expect("poisoned"));
+
+            *active_rt_size_locked = new_rt_size;
+            *this.state.active_size.lock().expect("poisoned") = logical_size;
+
             this.state
                 .swapchain_externally_invalidation_signal
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             this.event_dispatcher.dispatch(Event::WindowResize {
                 window: WindowHandle(window),
-                size: new_size,
+                size: logical_size,
             });
         }
     }
@@ -662,7 +637,7 @@ impl MacWindowDispatcher {
     extern "C" fn on_key_down_with_char(
         caller_context: *mut core::ffi::c_void,
         window: *mut crate::platform::mac::bridge::WindowLink,
-        code: u16,
+        _code: u16,
         modifier_flags: u32,
         char: u32,
     ) {
@@ -741,7 +716,7 @@ impl MacWindowDispatcher {
 pub struct MacWindowState {
     wlink: *mut self::bridge::WindowLink,
     extra_data: *mut core::ffi::c_void,
-    swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     active_size: std::sync::Mutex<Size<LogicalUnit>>,
     active_rt_size: std::sync::Mutex<Size<PixelsUnit>>,

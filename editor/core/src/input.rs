@@ -516,6 +516,7 @@ impl PointerInputManager {
         self.last_client_pointer_pos
             .insert(pointer_id, (surface, client_pos));
         let ws = surface.size();
+        tracing::debug!(?ws, "MouseMove");
 
         if let PointerDownGestureState::Click {
             base_client_pos,

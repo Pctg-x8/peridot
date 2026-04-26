@@ -1658,7 +1658,7 @@ impl<'d> WindowRenderer<'d> {
         needs_update_commands
     }
 
-    #[cfg(feature = "wayland")]
+    #[cfg(any(feature = "wayland", target_os = "macos"))]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
         self.w
             .state()
@@ -1671,7 +1671,7 @@ impl<'d> WindowRenderer<'d> {
             )
             == Ok(true)
     }
-    #[cfg(not(feature = "wayland"))]
+    #[cfg(not(any(feature = "wayland", target_os = "macos")))]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
         false
     }
