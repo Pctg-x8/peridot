@@ -115,16 +115,16 @@ final class WindowLinkCallbackSet {
         self.funcs.pointee.onResize(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), width, height)
     }
     
-    func notifyPointerDown(_ x: Double, _ y: Double) {
-        self.funcs.pointee.onPointerDown(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), x, y)
+    func notifyPointerDown(_ x: Double, _ y: Double, _ button: UInt8) {
+        self.funcs.pointee.onPointerDown(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), x, y, button)
     }
     
     func notifyPointerMove(_ x: Double, _ y: Double) {
         self.funcs.pointee.onPointerMove(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), x, y)
     }
     
-    func notifyPointerUp() {
-        self.funcs.pointee.onPointerUp(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()))
+    func notifyPointerUp(_ button: UInt8) {
+        self.funcs.pointee.onPointerUp(self.ctx, OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()), button)
     }
     
     func notifyKeyDown(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags) {
@@ -226,9 +226,13 @@ final class WindowLink : NSWindow {
     }
     
     override func mouseDown(with event: NSEvent) {
-        NSLog("mouseDown \(event.buttonMask)")
         let p = event.locationInWindow
-        self.callbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y))
+        self.callbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonLeft)
+    }
+    
+    override func rightMouseDown(with event: NSEvent) {
+        let p = event.locationInWindow
+        self.callbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonRight)
     }
     
     override func mouseMoved(with event: NSEvent) {
@@ -242,8 +246,11 @@ final class WindowLink : NSWindow {
     }
     
     override func mouseUp(with event: NSEvent) {
-        NSLog("mouseUp \(event.buttonMask)")
-        self.callbacks?.notifyPointerUp()
+        self.callbacks?.notifyPointerUp(MouseButtonLeft)
+    }
+    
+    override func rightMouseUp(with event: NSEvent) {
+        self.callbacks?.notifyPointerUp(MouseButtonRight)
     }
     
     override func keyDown(with event: NSEvent) {

@@ -19,11 +19,17 @@ pub struct WindowLinkCallbacks {
         width: f64,
         height: f64,
     ),
-    pub on_pointer_down:
-        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, x: f64, y: f64),
+    pub on_pointer_down: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        x: f64,
+        y: f64,
+        button: MouseButton,
+    ),
     pub on_pointer_move:
         extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, x: f64, y: f64),
-    pub on_pointer_up: extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink),
+    pub on_pointer_up:
+        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, button: MouseButton),
     pub on_key_down: extern "C" fn(
         caller_context: *mut c_void,
         window: *mut WindowLink,
@@ -61,6 +67,12 @@ pub enum CursorShape {
     Pointer = 1,
     IBeam = 2,
     ResizeHorizontal = 3,
+}
+
+#[repr(u8)]
+pub enum MouseButton {
+    Left = 0,
+    Right = 1,
 }
 
 bitflags! {

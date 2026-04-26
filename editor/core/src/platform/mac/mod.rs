@@ -471,16 +471,6 @@ impl MacWindow {
     }
 
     #[inline(always)]
-    fn dispatcher(&self) -> &MacWindowDispatcher {
-        unsafe { &*self::bridge::ni_get_window_callback_context(self.native_ptr).cast() }
-    }
-
-    #[inline(always)]
-    fn dispatcher_mut(&mut self) -> &mut MacWindowDispatcher {
-        unsafe { &mut *self::bridge::ni_get_window_callback_context(self.native_ptr).cast() }
-    }
-
-    #[inline(always)]
     pub fn show(&mut self) {
         unsafe {
             self::bridge::ni_show_window(self.native_ptr);
@@ -557,11 +547,10 @@ impl MacWindowDispatcher {
         window: *mut crate::platform::mac::bridge::WindowLink,
         x: f64,
         y: f64,
+        button: self::bridge::MouseButton,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        // TODO: いったんPrimary固定
-        // tracing::info!(x, y, "pointer down");
         this.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(window),
@@ -569,7 +558,10 @@ impl MacWindowDispatcher {
         });
         this.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(window),
-            button: PointerButton::Primary,
+            button: match button {
+                self::bridge::MouseButton::Left => PointerButton::Primary,
+                self::bridge::MouseButton::Right => PointerButton::Secondary,
+            },
             pointer_id: PointerID(),
         });
     }
@@ -593,14 +585,16 @@ impl MacWindowDispatcher {
     extern "C" fn on_pointer_up(
         caller_context: *mut core::ffi::c_void,
         window: *mut crate::platform::mac::bridge::WindowLink,
+        button: self::bridge::MouseButton,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        // TODO: いったんPrimary固定
-        // tracing::info!("pointer up");
         this.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(window),
-            button: PointerButton::Primary,
+            button: match button {
+                self::bridge::MouseButton::Left => PointerButton::Primary,
+                self::bridge::MouseButton::Right => PointerButton::Secondary,
+            },
             pointer_id: PointerID(),
         });
     }
