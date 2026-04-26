@@ -10,6 +10,7 @@ final class MainView : NSView {
         self.layerContentsPlacement = .scaleAxesIndependently
         
         let layer = CAMetalLayer()
+        layer.framebufferOnly = false // BackdropBlurやるのに必要（ただgrabしない形のやり方も考えた方が良さそう そっちの方が効率いいはず）
         let scaling = self.convertToBacking(NSSize(width: 1.0, height: 1.0))
         self.contentsScale = min(scaling.width, scaling.height)
         layer.contentsScale = self.contentsScale

@@ -726,6 +726,9 @@ impl<'fs> br::DeviceChild for VulkanSwapchain<'_, 'fs> {
 }
 impl br::Swapchain for VulkanSwapchain<'_, '_> {}
 impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
+    const IMAGE_USAGE_FLAGS: br::ImageUsageFlags =
+        br::ImageUsageFlags::COLOR_ATTACHMENT.merge(br::ImageUsageFlags::TRANSFER_SRC);
+
     pub fn new(
         surface: &VulkanSurface<'d, 'fs>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
@@ -757,7 +760,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
             surface.unbound.caps.minImageCount.max(2),
             surface.unbound.selected_format,
             ext,
-            br::ImageUsageFlags::COLOR_ATTACHMENT,
+            Self::IMAGE_USAGE_FLAGS,
         )
         .present_mode(surface.unbound.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)
@@ -838,7 +841,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
             surface.unbound.caps.minImageCount.max(2),
             surface.unbound.selected_format,
             self.ext,
-            br::ImageUsageFlags::COLOR_ATTACHMENT,
+            Self::IMAGE_USAGE_FLAGS,
         )
         .present_mode(surface.unbound.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)

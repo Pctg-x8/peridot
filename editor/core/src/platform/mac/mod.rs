@@ -23,7 +23,7 @@ use crate::{
 pub mod bridge;
 pub mod context_menu;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowHandle(*mut self::bridge::WindowLink);
 unsafe impl Sync for WindowHandle {}
 unsafe impl Send for WindowHandle {}
@@ -492,18 +492,13 @@ impl MacWindow {
     }
 
     #[inline(always)]
-    pub fn dispatcher(&self) -> &MacWindowDispatcher {
+    fn dispatcher(&self) -> &MacWindowDispatcher {
         unsafe { &*self::bridge::ni_get_window_callback_context(self.native_ptr).cast() }
     }
 
     #[inline(always)]
-    pub fn dispatcher_mut(&mut self) -> &mut MacWindowDispatcher {
+    fn dispatcher_mut(&mut self) -> &mut MacWindowDispatcher {
         unsafe { &mut *self::bridge::ni_get_window_callback_context(self.native_ptr).cast() }
-    }
-
-    #[inline(always)]
-    pub fn rebind_event_dispatcher(&mut self, dispatcher: LogicFiberEventDispatcher) {
-        self.dispatcher_mut().event_dispatcher = dispatcher;
     }
 
     #[inline(always)]
