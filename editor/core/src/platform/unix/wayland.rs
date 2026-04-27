@@ -731,7 +731,7 @@ impl StaticPixbufs {
         }
     }
 
-    pub fn create_drag_preview_popover_bufs(
+    fn create_drag_preview_popover_bufs(
         &self,
         interfaces: &GlobalInterfaces,
     ) -> DragPreviewPopoverBuffer {
@@ -828,7 +828,7 @@ impl Window {
     }
 
     #[inline(always)]
-    pub const fn should_client_decoration(wl_interfaces: &GlobalInterfaces) -> bool {
+    const fn should_client_decoration(wl_interfaces: &GlobalInterfaces) -> bool {
         wl_interfaces.zxdg_decoration_manager.is_some()
     }
 
@@ -2746,7 +2746,7 @@ impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
     }
 }
 
-pub struct GlobalInterfaces {
+struct GlobalInterfaces {
     outputs: Vec<wl::Owned<wl::Output>>,
     compositor: wl::Owned<wl::Compositor>,
     subcompositor: wl::Owned<wl::Subcompositor>,
@@ -2768,7 +2768,7 @@ pub struct GlobalInterfaces {
     is_hyprland: bool,
 }
 impl GlobalInterfaces {
-    pub fn collect_sync(display: &wl::Display) -> std::io::Result<Self> {
+    fn collect_sync(display: &wl::Display) -> std::io::Result<Self> {
         let mut wl_registry = display.get_registry()?;
         let mut rl = RegistryListener::default();
         wl_registry
