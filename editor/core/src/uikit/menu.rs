@@ -177,7 +177,6 @@ impl MenuItemLayout {
             .scan(0.0, |ad_accum, (index, x)| match x.item {
                 MenuItem::Heading { label } => Some(MenuItemView::Heading(HeadingView::new(
                     ctx,
-                    common_res,
                     label,
                     x.placement_y,
                 ))),
@@ -212,7 +211,6 @@ impl MenuItemLayout {
                 }
                 MenuItem::Separator => Some(MenuItemView::Separator(SeparatorView::new(
                     ctx,
-                    common_res,
                     x.placement_y,
                 ))),
             })
@@ -270,12 +268,7 @@ pub struct HeadingView {
     ct_root: CompositeTreeRef,
 }
 impl HeadingView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        common_res: &CommonResources,
-        label: String,
-        placement_y: f32,
-    ) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, label: String, placement_y: f32) -> Self {
         let base_scale_factor = ctx.ui_scale_factor;
         let ct_root = ctx.composite_tree.create(CompositeRect {
             base_scale_factor,
@@ -595,7 +588,7 @@ pub struct SeparatorView {
     ct_root: CompositeTreeRef,
 }
 impl SeparatorView {
-    pub fn new(ctx: &mut ViewInitContext, common_res: &CommonResources, placement_y: f32) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, placement_y: f32) -> Self {
         let base_scale_factor = ctx.ui_scale_factor;
         let ct_root = ctx.composite_tree.create(CompositeRect {
             base_scale_factor,
@@ -634,9 +627,9 @@ impl BaseSurfaceEventHandler {
 impl HitTestTreeActionHandler for BaseSurfaceEventHandler {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
+        _args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
         context
             .system_link
@@ -655,9 +648,9 @@ struct CommandViewEventHandler {
 impl HitTestTreeActionHandler for CommandViewEventHandler {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
+        _args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
         context
             .system_link
@@ -718,9 +711,9 @@ struct SubMenuViewEventHandler {
 impl HitTestTreeActionHandler for SubMenuViewEventHandler {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
+        _args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
         context
             .system_link

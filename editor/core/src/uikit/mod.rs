@@ -3,7 +3,7 @@
 use crate::{
     SyncEvent, SystemLink, WindowHandle,
     input::{
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
+        KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
     rendering::composite::{CompositeTree, CompositeTreeRef},

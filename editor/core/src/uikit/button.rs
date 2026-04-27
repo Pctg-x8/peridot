@@ -187,7 +187,7 @@ impl KeyInputEventHandler for SimpleButtonActionHandler {
         &self,
         context: &mut InputEventContext,
         code: crate::input::KeyInputCode,
-        modifier: crate::input::ModifierKey,
+        _modifier: crate::input::ModifierKey,
     ) {
         if code == crate::input::KeyInputCode::Enter {
             // hit enter

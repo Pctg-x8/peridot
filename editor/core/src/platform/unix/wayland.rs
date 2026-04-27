@@ -2025,21 +2025,6 @@ impl WindowDecoration {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerID(*mut wl::Pointer);
-impl PointerID {
-    #[inline(always)]
-    fn global_messaging(&self) -> &GlobalMessaging {
-        unsafe { &*(*self.0).user_data().cast() }
-    }
-
-    #[inline(always)]
-    pub fn surface_pos(&self) -> Point<LogicalUnit> {
-        self.global_messaging()
-            .pointer
-            .as_ref()
-            .expect("pointer.none")
-            .pos
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct PointerEventID {
@@ -2762,25 +2747,25 @@ impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
 }
 
 pub struct GlobalInterfaces {
-    pub outputs: Vec<wl::Owned<wl::Output>>,
-    pub compositor: wl::Owned<wl::Compositor>,
-    pub subcompositor: wl::Owned<wl::Subcompositor>,
-    pub xdg_wm_base: wl::Owned<wl::XdgWmBase>,
-    pub seat: wl::Owned<wl::Seat>,
-    pub shm: wl::Owned<wl::Shm>,
-    pub viewporter: wl::Owned<wl::WpViewporter>,
-    pub text_input_manager: wl::Owned<wl::ZwpTextInputManagerV3>,
+    outputs: Vec<wl::Owned<wl::Output>>,
+    compositor: wl::Owned<wl::Compositor>,
+    subcompositor: wl::Owned<wl::Subcompositor>,
+    xdg_wm_base: wl::Owned<wl::XdgWmBase>,
+    seat: wl::Owned<wl::Seat>,
+    shm: wl::Owned<wl::Shm>,
+    viewporter: wl::Owned<wl::WpViewporter>,
+    text_input_manager: wl::Owned<wl::ZwpTextInputManagerV3>,
     // optional requirements
-    pub single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
-    pub kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
-    pub kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
-    pub kde_shadow_manager: Option<wl::Owned<wl::OrgKdeKwinShadowManager>>,
-    pub zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
-    pub cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
-    pub fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
-    pub alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
+    single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
+    kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
+    kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
+    kde_shadow_manager: Option<wl::Owned<wl::OrgKdeKwinShadowManager>>,
+    zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
+    cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
+    fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
+    alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
     // flags
-    pub is_hyprland: bool,
+    is_hyprland: bool,
 }
 impl GlobalInterfaces {
     pub fn collect_sync(display: &wl::Display) -> std::io::Result<Self> {
@@ -2854,6 +2839,11 @@ impl wl::RegistryListener for RegistryListener {
         version: u32,
     ) {
         tracing::info!(target: "wl::diag::global_interface", name, ?interface, version);
+
+        if interface == c"hyprland_surface_manager_v1" {
+            // 暫定的にこのインターフェイスがあった場合はHyprland扱いする
+            self.is_hyprland = true;
+        }
 
         if interface == c"wl_compositor" {
             self.compositor = Some(registry.bind(name, version).expect("bind compositor"));
@@ -2948,11 +2938,7 @@ impl wl::RegistryListener for RegistryListener {
         }
         if interface == c"wp_alpha_modifier_v1" {
             self.alpha_modifier = Some(registry.bind(name, version).expect("bind alpha_modifier"));
-        }
-
-        if interface == c"hyprland_surface_manager_v1" {
-            // 暫定的にこのインターフェイスがあった場合はHyprland扱いする
-            self.is_hyprland = true;
+            return;
         }
     }
 

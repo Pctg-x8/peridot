@@ -280,6 +280,7 @@ impl<'fs> VulkanDevice<'fs> {
             }
         }
 
+        #[allow(unused_mut)]
         let mut device_extensions = vec![
             c"VK_KHR_swapchain",
             c"VK_KHR_timeline_semaphore",
@@ -733,31 +734,12 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         surface: &VulkanSurface<'d, 'fs>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) -> Self {
-        let ext = if surface.unbound.caps.currentExtent.width == 0xffffffff
-            || surface.unbound.caps.currentExtent.height == 0xffffffff
-        {
-            let window_ext = query_window_extent();
-
-            br::Extent2D {
-                width: if surface.unbound.caps.currentExtent.width == 0xffffffff {
-                    window_ext.width
-                } else {
-                    surface.unbound.caps.currentExtent.width
-                },
-                height: if surface.unbound.caps.currentExtent.height == 0xffffffff {
-                    window_ext.height
-                } else {
-                    surface.unbound.caps.currentExtent.height
-                },
-            }
-        } else {
-            surface.unbound.caps.currentExtent
-        };
+        let ext = surface.unbound.compute_real_extent(query_window_extent);
 
         tracing::trace!(?ext, "swapchain.create");
         let o = br::SwapchainWithSurfaceBuilder::new(
             surface,
-            surface.unbound.caps.minImageCount.max(2),
+            surface.unbound.image_count(),
             surface.unbound.selected_format,
             ext,
             Self::IMAGE_USAGE_FLAGS,
@@ -814,31 +796,12 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         }
         self.images.clear();
 
-        self.ext = if surface.unbound.caps.currentExtent.width == 0xffffffff
-            || surface.unbound.caps.currentExtent.height == 0xffffffff
-        {
-            let window_ext = query_window_extent();
-
-            br::Extent2D {
-                width: if surface.unbound.caps.currentExtent.width == 0xffffffff {
-                    window_ext.width
-                } else {
-                    surface.unbound.caps.currentExtent.width
-                },
-                height: if surface.unbound.caps.currentExtent.height == 0xffffffff {
-                    window_ext.height
-                } else {
-                    surface.unbound.caps.currentExtent.height
-                },
-            }
-        } else {
-            surface.unbound.caps.currentExtent
-        };
+        self.ext = surface.unbound.compute_real_extent(query_window_extent);
 
         tracing::trace!(ext = ?self.ext, "swapchain.recreate");
         let o = br::SwapchainWithSurfaceBuilder::new(
             surface,
-            surface.unbound.caps.minImageCount.max(2),
+            surface.unbound.image_count(),
             surface.unbound.selected_format,
             self.ext,
             Self::IMAGE_USAGE_FLAGS,
@@ -958,6 +921,38 @@ impl UnboundVulkanSurface {
     #[inline(always)]
     pub const fn format(&self) -> br::Format {
         self.selected_format.format
+    }
+
+    #[inline(always)]
+    fn image_count(&self) -> u32 {
+        self.caps.minImageCount.max(2)
+    }
+
+    fn compute_real_extent(
+        &self,
+        query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
+    ) -> br::Extent2D {
+        let w_undefined = self.caps.currentExtent.width == 0xffff_ffff;
+        let h_undefined = self.caps.currentExtent.height == 0xffff_ffff;
+
+        if w_undefined || h_undefined {
+            let window_ext = query_window_extent();
+
+            br::Extent2D {
+                width: if w_undefined {
+                    window_ext.width
+                } else {
+                    self.caps.currentExtent.width
+                },
+                height: if h_undefined {
+                    window_ext.height
+                } else {
+                    self.caps.currentExtent.height
+                },
+            }
+        } else {
+            self.caps.currentExtent
+        }
     }
 }
 
