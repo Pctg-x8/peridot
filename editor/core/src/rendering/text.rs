@@ -1,4 +1,3 @@
-use apple_sdk_port::Object;
 #[cfg(feature = "fontconfig")]
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
@@ -594,11 +593,6 @@ impl TextLayout {
                 &*crate::platform::mac::bridge::ni_ak_font_id(),
             )
         };
-        tracing::debug!(
-            rc = ak_spacing_inline_start.retain_count(),
-            "ak_spacing_inline_start"
-        );
-        tracing::debug!(rc = ak_font_id.retain_count(), "ak_font_id");
         #[cfg(target_os = "macos")]
         let mut attributed_string_runs = Vec::with_capacity(ub.unwrap_or(lb));
         #[cfg(target_os = "macos")]

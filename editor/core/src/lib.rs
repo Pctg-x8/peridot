@@ -2534,7 +2534,6 @@ async fn run<'sys>(
 
                 input::EventContinueControl::STOP_PROPAGATION
             } else {
-                // tracing::debug!("right click!");
                 context.system_link.dispatch_event(Event::ContextMenuOpen {
                     parent: context
                         .ht_manager
@@ -2572,7 +2571,7 @@ async fn run<'sys>(
                     #[cfg(windows)]
                     screen_pos: platform::windows::pointer_pos(args.pointer_id),
                     #[cfg(any(feature = "wayland", target_os = "macos"))]
-                    surface_pos: args.pointer_id.surface_pos(),
+                    surface_pos: args.client_pos,
                 });
 
                 input::EventContinueControl::STOP_PROPAGATION
