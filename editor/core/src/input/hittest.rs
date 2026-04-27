@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use crate::{
     PointerID, WindowHandle,
     input::{EventContinueControl, FocusTargetToken, InputEventContext, PointerInputUnit},
-    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct HitTestTreeData<'h> {
@@ -87,8 +87,8 @@ impl<'h> HitTestTreeData<'h> {
 pub struct HitTestTreeRef(usize);
 
 struct HitTestTreeRelationData {
-    parent: Option<usize>,
-    children: Vec<usize>,
+    parent: Option<HitTestTreeRef>,
+    children: Vec<HitTestTreeRef>,
 }
 
 pub struct HitTestTreeManager<'h> {
@@ -129,10 +129,10 @@ impl<'h> HitTestTreeManager<'h> {
     }
 
     pub fn free_all(&mut self, r: HitTestTreeRef) {
-        let mut stack = vec![r.0];
+        let mut stack = vec![r];
         while let Some(c) = stack.pop() {
-            stack.extend(self.relations[c].children.drain(..));
-            self.free(HitTestTreeRef(c));
+            stack.extend(self.relations[c.0].children.drain(..));
+            self.free(c);
         }
     }
 
@@ -176,10 +176,7 @@ impl<'h> HitTestTreeManager<'h> {
 
     #[inline]
     pub fn parent_of(&self, r: HitTestTreeRef) -> Option<HitTestTreeRef> {
-        self.relations
-            .get(r.0)
-            .and_then(|r| r.parent)
-            .map(HitTestTreeRef)
+        self.relations.get(r.0)?.parent
     }
 
     #[inline(always)]
@@ -194,14 +191,14 @@ impl<'h> HitTestTreeManager<'h> {
     }
 
     pub fn add_child(&mut self, parent: HitTestTreeRef, child: HitTestTreeRef) {
-        if let Some(old_parent) = self.relations[child.0].parent.replace(parent.0) {
+        if let Some(old_parent) = self.relations[child.0].parent.replace(parent) {
             // 古い親から外す
-            self.relations[old_parent]
+            self.relations[old_parent.0]
                 .children
-                .retain(|&x| x != child.0);
+                .retain(|&x| x != child);
         }
 
-        self.relations[parent.0].children.push(child.0);
+        self.relations[parent.0].children.push(child);
     }
 
     pub fn remove_child(&mut self, child: HitTestTreeRef) {
@@ -210,11 +207,11 @@ impl<'h> HitTestTreeManager<'h> {
             return;
         };
 
-        self.relations[p].children.retain(|&x| x != child.0);
+        self.relations[p.0].children.retain(|&x| x != child);
     }
 
     pub fn dump(&self, root: HitTestTreeRef) {
-        fn rec(sink: &mut String, this: &HitTestTreeManager, r: usize, indent: usize) {
+        fn rec(sink: &mut String, this: &HitTestTreeManager, r: HitTestTreeRef, indent: usize) {
             use std::fmt::Write;
 
             for _ in 0..indent {
@@ -233,7 +230,7 @@ impl<'h> HitTestTreeManager<'h> {
                 width_adjustment_factor,
                 height_adjustment_factor,
                 ..
-            } = this.data[r];
+            } = this.data[r.0];
 
             let mut flags = Vec::with_capacity(2);
             if active {
@@ -246,16 +243,17 @@ impl<'h> HitTestTreeManager<'h> {
             let _ = writeln!(
                 sink,
                 "#{r}: (x{left_adjustment_factor}+{left}, x{top_adjustment_factor}+{top}) size (x{width_adjustment_factor}+{width}, x{height_adjustment_factor}+{height}) {flags}",
+                r = r.0,
                 flags = flags.join("/")
             );
 
-            for &c in &this.relations[r].children {
+            for &c in &this.relations[r.0].children {
                 rec(sink, this, c, indent + 1);
             }
         }
 
         let mut buf = String::from("\n");
-        rec(&mut buf, self, root.0, 0);
+        rec(&mut buf, self, root, 0);
         tracing::debug!(hit_test_tree = %buf);
     }
 
@@ -289,7 +287,7 @@ impl<'h> HitTestTreeManager<'h> {
                     parent_effective_width,
                     parent_effective_height,
                 ) = self.translate_client_to_tree_local(
-                    HitTestTreeRef(p),
+                    p,
                     client_x,
                     client_y,
                     client_width,
@@ -325,7 +323,7 @@ impl<'h> HitTestTreeManager<'h> {
             ),
             Some(parent) => {
                 let (parent_x, parent_y, parent_w, parent_h, root_ht) =
-                    self.compute_global_rect(HitTestTreeRef(parent), root_width, root_height);
+                    self.compute_global_rect(parent, root_width, root_height);
                 (
                     parent_x + parent_w * d.left_adjustment_factor + d.left,
                     parent_y + parent_h * d.top_adjustment_factor + d.top,
@@ -362,7 +360,7 @@ impl<'h> HitTestTreeManager<'h> {
             }
             Some(parent) => {
                 let (parent_x, parent_y, parent_w, parent_h, root_ht) =
-                    self.compute_global_rect_autoroot(HitTestTreeRef(parent));
+                    self.compute_global_rect_autoroot(parent);
                 (
                     parent_x + parent_w * d.left_adjustment_factor + d.left,
                     parent_y + parent_h * d.top_adjustment_factor + d.top,
@@ -402,7 +400,7 @@ impl<'h> HitTestTreeManager<'h> {
 
     pub fn query_root_window(&self, r: HitTestTreeRef) -> Option<WindowHandle> {
         match self.relations[r.0].parent {
-            Some(p) => self.query_root_window(HitTestTreeRef(p)),
+            Some(p) => self.query_root_window(p),
             None => self.data[r.0].root_of_window,
         }
     }
@@ -452,7 +450,7 @@ impl<'h> HitTestTreeManager<'h> {
             .children
             .iter()
             .rev()
-            .find_map(|&c| self.test(HitTestTreeRef(c), global_pos, &effective_global_rect))
+            .find_map(|&c| self.test(c, global_pos, &effective_global_rect))
         {
             // 子にヒット
             return Some(t);
