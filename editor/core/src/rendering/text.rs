@@ -599,6 +599,8 @@ impl TextLayout {
         let mut total_bytes = 0;
         #[cfg(target_os = "macos")]
         for (n, r) in text_runs.enumerate() {
+            use apple_sdk_port::Object;
+
             let font = font_set.select(r.font);
             let range = apple_sdk_port::foundation::Range {
                 location: total_bytes as _,

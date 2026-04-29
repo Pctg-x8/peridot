@@ -585,9 +585,9 @@ impl<'main> RenderThread<'main> {
                     Err(e) => Err(e).expect("acquire next"),
                 };
 
-                #[cfg(not(windows))]
+                #[cfg(feature = "wayland")]
                 let new_ui_scale = x.take_latest_ui_scale_changes();
-                #[cfg(not(windows))]
+                #[cfg(feature = "wayland")]
                 if let Some(scale) = new_ui_scale {
                     let scale = SafeF32::new(scale).expect("scale.invalid");
 
@@ -1184,7 +1184,8 @@ impl<'d> ContextMenuRenderer<'d> {
         false
     }
 
-    #[cfg(not(windows))]
+    // waylandのときだけRenderScaleがあとからくるので変更を受け付ける必要がある
+    #[cfg(feature = "wayland")]
     pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
         self.w.take_latest_ui_scale_change()
     }

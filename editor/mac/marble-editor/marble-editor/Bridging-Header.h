@@ -21,7 +21,15 @@ typedef struct {
     void (*onKeyFocusStateChanged)(void* callerContext, WindowLink window, uint8_t focused);
 } WindowLinkCallbacks;
 
+typedef struct ContextMenuSurface_* ContextMenuSurface;
+typedef struct {
+    void (*onPointerDown)(ContextMenuSurface sender, double x, double y, uint8_t button);
+    void (*onPointerMove)(ContextMenuSurface sender, double x, double y);
+    void (*onPointerUp)(ContextMenuSurface sender, uint8_t button);
+} ContextMenuSurfaceCallbacks;
+
 typedef void (*UnboundCallback)(void* callerContext);
+typedef void (*ContextMenuGlobalClickCallback)(void* callerContext, uint8_t onContextMenuSurface);
 
 void rs_launch();
 

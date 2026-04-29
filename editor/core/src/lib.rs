@@ -243,7 +243,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 delayed_action_timer,
             },
             #[cfg(target_os = "macos")]
-            context_menu: platform::mac::context_menu::SharedState {},
+            context_menu: platform::mac::context_menu::SharedState {
+                event_dispatcher: app_event_dispatcher.as_mut().get_mut()
+            },
         },
     ));
 
@@ -2786,6 +2788,16 @@ async fn run<'sys>(
                     mgr.notify_window_lost_focus(&mut input_context, &keyboard_focus_registry);
                 }
 
+                if !focused && let Some(c) = current_active_context_menu_session.take() {
+                    // フォーカスロストした時もコンテキストメニューを閉じる
+                    c.terminate(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
+                }
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
@@ -3509,6 +3521,9 @@ impl ContextMenuSession {
         common_res: &MenuItemCommonResources,
         typing_context: &ThreadLocalTypingContext,
     ) -> Self {
+        #[cfg(target_os = "macos")]
+        system_link.context_menu.observe_global_click();
+
         let root_surface = system_link.pop_context_menu(
             #[cfg(any(feature = "wayland", target_os = "macos"))]
             parent,
@@ -3739,6 +3754,9 @@ impl ContextMenuSession {
                 keyboard_focus_registry,
             );
         }
+
+        #[cfg(target_os = "macos")]
+        system_link.context_menu.unobserve_global_click();
     }
 
     pub fn select_item(

@@ -1,4 +1,5 @@
 use core::ffi::*;
+use std::task::Context;
 
 use apple_sdk_port::raw::CFStringRef;
 use bitflags::bitflags;
@@ -53,7 +54,22 @@ pub struct WindowLinkCallbacks {
         extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, focused: u8),
 }
 
+#[repr(C)]
+pub struct ContextMenuSurface(
+    [u8; 0],
+    core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
+);
+#[repr(C)]
+pub struct ContextMenuSurfaceCallbacks {
+    pub on_pointer_down:
+        extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64, button: MouseButton),
+    pub on_pointer_move: extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64),
+    pub on_pointer_up: extern "C" fn(sender: *mut ContextMenuSurface, button: MouseButton),
+}
+
 pub type UnboundCallback = extern "C" fn(caller_context: *mut c_void);
+pub type ContextMenuGlobalClickCallback =
+    extern "C" fn(caller_context: *mut c_void, on_context_menu_surface: u8);
 
 // NSEventModifierFlags constants
 pub const NSEVENT_MODIFIER_FLAG_SHIFT: u32 = 1 << 17;
@@ -119,6 +135,40 @@ unsafe extern "C" {
 
     pub fn ni_set_pointer_hovering_timeout();
     pub fn ni_kill_pointer_hovering_timeout();
+
+    pub fn ni_create_context_menu_surface(
+        parent: *mut WindowLink,
+        x: c_float,
+        y: c_float,
+        instance_vars: *mut c_void,
+        callbacks: *mut ContextMenuSurfaceCallbacks,
+    ) -> *mut ContextMenuSurface;
+    pub fn ni_release_context_menu_surface(
+        surface: *mut ContextMenuSurface,
+        ret_instance_vars: *mut *mut c_void,
+        ret_callbacks: *mut *mut ContextMenuSurfaceCallbacks,
+    );
+    pub fn ni_context_menu_get_metal_layer(surface: *mut ContextMenuSurface) -> *mut c_void;
+    pub fn ni_context_menu_get_content_scale(surface: *mut ContextMenuSurface) -> c_float;
+    pub fn ni_context_menu_resize(
+        surface: *mut ContextMenuSurface,
+        width: c_float,
+        height: c_float,
+    );
+    pub fn ni_context_menu_instance_vars_ptr(surface: *mut ContextMenuSurface) -> *mut c_void;
+
+    pub fn ni_context_menu_reserve_delayed_action(
+        millis: c_int,
+        callback: UnboundCallback,
+        caller_context: *mut c_void,
+    );
+    pub fn ni_context_menu_unreserve_delayed_action();
+
+    pub fn ni_context_menu_observe_global_click(
+        callback: ContextMenuGlobalClickCallback,
+        caller_context: *mut c_void,
+    );
+    pub fn ni_context_menu_unobserve_global_click();
 
     pub fn ni_post_unbound_callback_from_thread(f: UnboundCallback, caller_context: *mut c_void);
 

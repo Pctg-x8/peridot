@@ -200,11 +200,6 @@ impl DragPreviewPopoverHandle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PointerID();
-impl PointerID {
-    pub fn surface_pos(&self) -> Point<LogicalUnit> {
-        unimplemented!("PointerID::surface_pos")
-    }
-}
 
 impl crate::SystemLink<'_> {
     pub fn create_main_window(
@@ -395,7 +390,25 @@ impl crate::SystemLink<'_> {
             &mut ViewInitContext,
         ) -> Vec<MenuItemView>,
     ) -> ContextMenuHandle {
-        unimplemented!("pop_context_menu")
+        let mut h = ContextMenuHandle::new(
+            parent,
+            surface_pos,
+            self,
+            &mut view_init_context.mount_context.composite_tree,
+            &mut view_init_context.mount_context.ht_manager,
+            &mut view_init_context.mount_context.keyboard_focus_registry,
+        );
+
+        let layouted_items = layouted_items(h.render_scale());
+        let width = MenuItemLayout::min_width(layouted_items.iter());
+        let height = MenuItemLayout::height(layouted_items.iter());
+        h.resize(Size::new_logical(width.value(), height.value()));
+
+        let views = setup_contents(layouted_items, h, view_init_context);
+        h.set_views(views);
+
+        h.create_render_thread_objects(self);
+        h
     }
 
     pub fn any_pointer_on_context_menu(&self) -> bool {
