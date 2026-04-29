@@ -1864,7 +1864,7 @@ impl TextInputViewEventHandler {
             window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[selection_range],
+            &self.content.borrow()[..selection_range.end],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
             window.ui_scale_factor(),
@@ -1873,7 +1873,7 @@ impl TextInputViewEventHandler {
         let ct = composite_tree.get_mut(self.ct_selection_bg);
         ct.offset[0] =
             AnimatableFloat::Value(o / ct.base_scale_factor + self.content_h_offset.get());
-        ct.size[0] = AnimatableFloat::Value(tw / ct.base_scale_factor);
+        ct.size[0] = AnimatableFloat::Value((tw - o) / ct.base_scale_factor);
 
         composite_tree.mark_dirty(self.ct_selection_bg);
     }
