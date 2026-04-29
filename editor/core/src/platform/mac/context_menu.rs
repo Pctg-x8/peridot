@@ -1,4 +1,5 @@
 use core::ptr::NonNull;
+use std::rc::Rc;
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 
@@ -13,7 +14,7 @@ use crate::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::{MenuItemView, MountTarget},
+    uikit::{MenuBaseSurfaceEventHandler, MenuItemView, MountTarget},
     utils::{LogicalUnit, PixelsUnit, Point, Size},
 };
 
@@ -43,6 +44,7 @@ impl Handle {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> Self {
+        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
         let ct_root = composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             // macの場合は背景は不要（NSVisualEffectViewが背景がわりになる）
@@ -53,6 +55,7 @@ impl Handle {
             height_adjustment_factor: 1.0,
             ..Default::default()
         });
+        ht_manager.set_action_handler(ht_root, &base_surface_event_handler);
         let kf_root_group = keyboard_focus_registry.acquire_group();
         let h = Self(unsafe {
             NonNull::new_unchecked(super::bridge::ni_create_context_menu_surface(
@@ -69,6 +72,7 @@ impl Handle {
                     views: Vec::new(),
                     spawned_position: surface_pos,
                     size: Size::new_logical(0.0, 0.0),
+                    _base_surface_event_handler: base_surface_event_handler,
                 }))
                 .cast(),
                 Box::into_raw(Box::new(super::bridge::ContextMenuSurfaceCallbacks {
@@ -289,6 +293,7 @@ struct InstanceVars {
     views: Vec<MenuItemView>,
     spawned_position: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
+    _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
 }
 impl InstanceVars {
     fn dispatch_event(&self, event: Event) {
