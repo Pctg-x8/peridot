@@ -1996,7 +1996,8 @@ impl TextLayout {
                 }
             }
 
-            left_cursor = left_cursor.max(line_left_cursor);
+            left_cursor =
+                left_cursor.max(line_left_cursor + lines[n].trailing_whitespace_width() as f32);
         }
 
         #[cfg(windows)]

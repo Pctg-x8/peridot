@@ -388,6 +388,11 @@ impl Line {
     }
 
     #[inline(always)]
+    pub fn trailing_whitespace_width(&self) -> f64 {
+        unsafe { CTLineGetTrailingWhitespaceWidth(&self.0) }
+    }
+
+    #[inline(always)]
     pub fn string_index_for_position(&self, pos: CGPoint) -> Option<CFIndex> {
         match unsafe { CTLineGetStringIndexForPosition(&self.0, pos) } {
             v if v == kCFNotFound => None,
