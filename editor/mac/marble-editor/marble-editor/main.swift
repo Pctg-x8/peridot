@@ -169,6 +169,7 @@ struct WindowCreationFlags : OptionSet {
 final class WindowLink : NSWindow {
     private let windowDelegate: AppWindowDelegate
     private var callbacks: WindowLinkCallbackSet? = nil
+    let mainView = MainView()
     
     init(_ flags: WindowCreationFlags) {
         let styleMask: StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
@@ -186,9 +187,8 @@ final class WindowLink : NSWindow {
         self.titleVisibility = .hidden
         self.title = "Peridot Marble Editor"
         
-        let mainView = MainView()
-        mainView.setup()
-        self.contentView = mainView
+        self.mainView.setup()
+        self.contentView = self.mainView
         
         if flags.contains(.main) {
             self.center()
@@ -196,11 +196,6 @@ final class WindowLink : NSWindow {
         }
     }
     
-    var mainView: MainView {
-        get {
-            return self.contentView! as! MainView
-        }
-    }
     var metalLayer: CAMetalLayer {
         get {
             return self.mainView.actualLayer
@@ -227,6 +222,14 @@ final class WindowLink : NSWindow {
     
     func show() {
         self.orderFront(nil)
+    }
+    
+    func acceptsKeyInputsToView() {
+        self.makeFirstResponder(self.mainView)
+    }
+    
+    func acceptsKeyInputsToWindow() {
+        self.makeFirstResponder(nil)
     }
     
     override func mouseDown(with event: NSEvent) {
@@ -420,6 +423,35 @@ func setWindowCallbacks(
 @_cdecl("ni_get_window_callback_context")
 func getWindowCallbackContext(windowLink: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().getCallbackContextPointer()
+}
+
+@_cdecl("ni_accepts_key_inputs_to_view")
+func acceptsKeyInputsToView(
+    _ windowLink: UnsafeMutableRawPointer,
+    _ textInputClientForwardingFT: UnsafePointer<TextInputClientForwardingFT>,
+    _ textInputClientForwardingContext: UnsafeMutableRawPointer
+) {
+    let w = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue()
+    
+    w.mainView.textInputClientForwarding = TextInputClientForwarding(
+        ftable: textInputClientForwardingFT,
+        context: textInputClientForwardingContext
+    )
+    w.acceptsKeyInputsToView()
+}
+
+@_cdecl("ni_accepts_key_inputs_to_window")
+func acceptsKeyInputsToWindow(
+    _ windowLink: UnsafeMutableRawPointer,
+    _ retTextInputClientForwardingFT: UnsafeMutablePointer<UnsafePointer<TextInputClientForwardingFT>>,
+    _ retTextInputClientForwardingContext: UnsafeMutablePointer<UnsafeMutableRawPointer>,
+) {
+    let w = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue()
+    
+    w.acceptsKeyInputsToWindow()
+    retTextInputClientForwardingFT.pointee = w.mainView.textInputClientForwarding!.ftable
+    retTextInputClientForwardingContext.pointee = w.mainView.textInputClientForwarding!.context
+    w.mainView.textInputClientForwarding = nil
 }
 
 @_cdecl("ni_post_unbound_callback_from_thread")

@@ -335,7 +335,7 @@ impl<'h> HitTestTreeManager<'h> {
         }
     }
 
-    fn compute_global_rect_autoroot(
+    pub fn compute_global_rect_autoroot(
         &self,
         r: HitTestTreeRef,
     ) -> (f32, f32, f32, f32, HitTestTreeRef) {

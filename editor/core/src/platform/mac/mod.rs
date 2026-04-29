@@ -4,7 +4,8 @@ use bedrock::{InstanceChild, SurfaceCreateInfo};
 use tracing::{Level, Subscriber};
 use tracing_subscriber::{
     Layer,
-    fmt::{FmtContext, FormatEvent, FormatFields, MakeWriter},
+    fmt::{FormatFields, FormattedFields},
+    registry::LookupSpan,
 };
 
 use crate::{
@@ -140,6 +141,33 @@ impl WindowHandle {
 
     pub fn on_click_sys_restore_button(&self) {
         unimplemented!("WindowHandle::on_click_sys_restore_button")
+    }
+
+    pub fn begin_text_input<T: TextInputClientForwarding>(&self, forwarding: *mut T) {
+        unsafe {
+            self::bridge::ni_accepts_key_inputs_to_view(
+                self.0,
+                Box::into_raw(Box::new(
+                    self::bridge::TextInputClientForwardingFT::r#for::<T>(),
+                )),
+                forwarding.cast(),
+            );
+        }
+    }
+
+    pub fn end_text_input(&self) {
+        let mut ftable = core::mem::MaybeUninit::uninit();
+        let mut context = core::mem::MaybeUninit::uninit();
+
+        unsafe {
+            self::bridge::ni_accepts_key_inputs_to_window(
+                self.0,
+                ftable.as_mut_ptr(),
+                context.as_mut_ptr(),
+            );
+        }
+
+        drop(unsafe { Box::from_raw(ftable.assume_init().cast_mut()) })
     }
 }
 impl crate::input::ShellPointerActions for WindowHandle {
@@ -669,11 +697,17 @@ impl WindowDispatcher {
 
         this.event_dispatcher.dispatch(Event::KeyDown {
             window: WindowHandle(window),
-            code: if char == '\r' {
-                // これだけKeyInputCodeでとる
-                KeyInputCode::Enter
-            } else {
-                KeyInputCode::Character(char)
+            // Macの場合はいくつか文字コードで入ってくる
+            code: match char {
+                '\r' => KeyInputCode::Enter,
+                self::bridge::NS_LEFT_ARROW_FUNCTION_KEY => KeyInputCode::LeftArrow,
+                self::bridge::NS_RIGHT_ARROW_FUNCTION_KEY => KeyInputCode::RightArrow,
+                self::bridge::NS_HOME_FUNCTION_KEY => KeyInputCode::Home,
+                self::bridge::NS_END_FUNCTION_KEY => KeyInputCode::End,
+                // macはbksp/deleteの文字の割り振りが違う
+                '\x7f' => KeyInputCode::Character('\x08'),
+                self::bridge::NS_DELETE_FUNCTION_KEY => KeyInputCode::Character('\x7f'),
+                c => KeyInputCode::Character(c),
             },
             modifier,
         });
@@ -738,13 +772,49 @@ pub struct WindowState {
 unsafe impl Sync for WindowState {}
 unsafe impl Send for WindowState {}
 
-pub struct LogLayer;
-impl<S: Subscriber> Layer<S> for LogLayer {
-    fn on_event(
+pub trait TextInputClientForwarding {
+    fn has_marked_text(&self) -> bool;
+    fn marked_range(&self, out_location: *mut i64, out_length: *mut i64) -> bool;
+    fn selected_range(&self, out_location: *mut i64, out_length: *mut i64);
+    fn set_marked_text(
         &self,
-        event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
+        text: &core::ffi::CStr,
+        new_selection_location: i64,
+        new_selection_length: i64,
+        replacement_location: i64,
+        replacement_length: i64,
+    );
+    fn insert_text(
+        &self,
+        text: &core::ffi::CStr,
+        replacement_location: i64,
+        replacement_length: i64,
+    );
+    fn substring(
+        &self,
+        location: i64,
+        length: i64,
+        actual_location: *mut i64,
+        actual_length: *mut i64,
+        out_chars: *mut *const core::ffi::c_char,
+        out_len: *mut u64,
+    );
+    fn first_rect(
+        &self,
+        location: i64,
+        length: i64,
+        actual_location: *mut i64,
+        actual_length: *mut i64,
+        surface_x: *mut f32,
+        surface_y: *mut f32,
+        width: *mut f32,
+        height: *mut f32,
+    );
+}
+
+pub struct LogLayer;
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for LogLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
         thread_local! {
             static BUF: RefCell<String> = RefCell::new(String::new());
         }
@@ -824,6 +894,18 @@ impl<S: Subscriber> Layer<S> for LogLayer {
                     self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
                 }
                 return;
+            }
+
+            if let Some(scope) = ctx.event_scope(event) {
+                for s in scope {
+                    write!(
+                        writer,
+                        "\n  in {}:{} {}",
+                        s.metadata().file().unwrap_or("<unknown file>"),
+                        s.metadata().line().unwrap_or(0),
+                        s.name()
+                    );
+                }
             }
 
             if let Err(_) = write!(writer, "\0") {

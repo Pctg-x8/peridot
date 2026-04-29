@@ -386,6 +386,14 @@ impl Line {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn string_index_for_position(&self, pos: CGPoint) -> Option<CFIndex> {
+        match unsafe { CTLineGetStringIndexForPosition(&self.0, pos) } {
+            v if v == kCFNotFound => None,
+            v => Some(v),
+        }
+    }
 }
 
 #[repr(transparent)]

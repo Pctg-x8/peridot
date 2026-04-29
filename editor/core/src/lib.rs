@@ -983,6 +983,10 @@ struct TextInputViewEventHandler {
     dragging: core::cell::Cell<bool>,
     #[cfg(windows)]
     native_text_input_context: platform::windows::NativeTextInputContext,
+    #[cfg(target_os = "macos")]
+    ht_manager_ptr: *mut HitTestTreeManager<'static>,
+    #[cfg(target_os = "macos")]
+    composite_tree_ptr: *mut CompositeTree<SyncEvent>,
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
@@ -991,6 +995,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         self.update(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
+        #[cfg(target_os = "macos")]
+        context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted")
+            .begin_text_input(core::ptr::from_ref(self).cast_mut());
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
@@ -999,6 +1009,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         self.update(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
+        #[cfg(target_os = "macos")]
+        context
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("not mounted")
+            .end_text_input();
 
         // clear selection
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
@@ -2118,6 +2134,228 @@ impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHan
         Ok(())
     }
 }
+#[cfg(target_os = "macos")]
+impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandler {
+    fn has_marked_text(&self) -> bool {
+        tracing::debug!(
+            start = self.preedit_range_start_bytes.get(),
+            end = self.preedit_range_end_bytes.get(),
+            "hasMarkedText"
+        );
+        self.preedit_range_start_bytes.get() != self.preedit_range_end_bytes.get()
+    }
+
+    fn marked_range(&self, out_location: *mut i64, out_length: *mut i64) -> bool {
+        let start = self.preedit_range_start_bytes.get();
+        let end = self.preedit_range_end_bytes.get();
+        tracing::debug!(start, end, "markedRange");
+
+        if start == end {
+            return false;
+        }
+
+        unsafe {
+            out_location.write(start as _);
+            out_length.write((end - start) as _);
+        }
+        true
+    }
+
+    fn selected_range(&self, out_location: *mut i64, out_length: *mut i64) {
+        let r = self.selection_range();
+
+        unsafe {
+            out_location.write(r.start as _);
+            out_length.write((r.end - r.start) as _);
+        }
+    }
+
+    fn set_marked_text(
+        &self,
+        text: &core::ffi::CStr,
+        new_selection_location: i64,
+        new_selection_length: i64,
+        replacement_location: i64,
+        replacement_length: i64,
+    ) {
+        tracing::debug!(
+            ?text,
+            new_selection_location,
+            new_selection_length,
+            replacement_location,
+            replacement_length,
+            "set marked text"
+        );
+
+        // なんかreplacement系の範囲が信用できなさそうなので自前でどこを書き換えるか判定する
+        let preedit_start = self.preedit_range_start_bytes.get();
+        let preedit_end = self.preedit_range_end_bytes.get();
+        if preedit_start == preedit_end {
+            // non-preedit state
+            let r = self.selection_range();
+            let text = text.to_str().expect("invalid input str");
+            let mut content = self.content.borrow_mut();
+            content.replace_range(r.clone(), text);
+            drop(content);
+
+            self.preedit_range_start_bytes.set(r.start);
+            self.preedit_range_end_bytes.set(r.start + text.len());
+            self.cursor_pos_bytes.set(r.start + text.len());
+            self.selection_begin_bytes.set(r.start + text.len());
+
+            let window = unsafe { &*self.ht_manager_ptr }
+                .query_root_window(self.ht_root)
+                .expect("not mounted");
+            self.update_text(unsafe { &mut *self.composite_tree_ptr });
+            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+        } else {
+            let text = text.to_str().expect("invalid input str");
+            let mut content = self.content.borrow_mut();
+            content.replace_range(preedit_start..preedit_end, text);
+            drop(content);
+
+            self.preedit_range_end_bytes.set(preedit_start + text.len());
+            self.cursor_pos_bytes.set(preedit_start + text.len());
+            self.selection_begin_bytes.set(preedit_start + text.len());
+
+            let window = unsafe { &*self.ht_manager_ptr }
+                .query_root_window(self.ht_root)
+                .expect("not mounted");
+            self.update_text(unsafe { &mut *self.composite_tree_ptr });
+            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+        }
+    }
+
+    fn insert_text(
+        &self,
+        text: &core::ffi::CStr,
+        replacement_location: i64,
+        replacement_length: i64,
+    ) {
+        tracing::debug!(
+            ?text,
+            replacement_location,
+            replacement_length,
+            "insert text"
+        );
+
+        // なんかreplacement系の範囲が信用できなさそうなので自前でどこを書き換えるか判定する
+        let preedit_start = self.preedit_range_start_bytes.get();
+        let preedit_end = self.preedit_range_end_bytes.get();
+        if preedit_start == preedit_end {
+            // non-preedit state
+            let r = self.selection_range();
+            let text = text.to_str().expect("invalid input str");
+            let mut content = self.content.borrow_mut();
+            content.replace_range(r.clone(), text);
+            drop(content);
+
+            self.preedit_range_start_bytes.set(r.start);
+            self.preedit_range_end_bytes.set(r.start);
+            self.cursor_pos_bytes.set(r.start + text.len());
+            self.selection_begin_bytes.set(r.start + text.len());
+
+            let window = unsafe { &*self.ht_manager_ptr }
+                .query_root_window(self.ht_root)
+                .expect("not mounted");
+            self.update_text(unsafe { &mut *self.composite_tree_ptr });
+            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+        } else {
+            let text = text.to_str().expect("invalid input str");
+            let mut content = self.content.borrow_mut();
+            content.replace_range(preedit_start..preedit_end, text);
+            drop(content);
+
+            self.preedit_range_end_bytes.set(preedit_start);
+            self.cursor_pos_bytes.set(preedit_start + text.len());
+            self.selection_begin_bytes.set(preedit_start + text.len());
+
+            let window = unsafe { &*self.ht_manager_ptr }
+                .query_root_window(self.ht_root)
+                .expect("not mounted");
+            self.update_text(unsafe { &mut *self.composite_tree_ptr });
+            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+        }
+    }
+
+    fn substring(
+        &self,
+        location: i64,
+        length: i64,
+        actual_location: *mut i64,
+        actual_length: *mut i64,
+        out_chars: *mut *const core::ffi::c_char,
+        out_len: *mut u64,
+    ) {
+        let location = location.max(0);
+        let length = length.min(self.content.borrow().len() as i64);
+        unsafe {
+            out_chars.write(self.content.borrow().as_ptr().add(location as _).cast());
+            out_len.write(length as _);
+        }
+
+        if !actual_location.is_null() {
+            unsafe {
+                actual_location.write(location);
+            }
+        }
+        if !actual_length.is_null() {
+            unsafe {
+                actual_length.write(length);
+            }
+        }
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn first_rect(
+        &self,
+        location: i64,
+        length: i64,
+        actual_location: *mut i64,
+        actual_length: *mut i64,
+        surface_x: *mut f32,
+        surface_y: *mut f32,
+        width: *mut f32,
+        height: *mut f32,
+    ) {
+        tracing::debug!(location, length, "first rect");
+
+        let window = unsafe { &*self.ht_manager_ptr }
+            .query_root_window(self.ht_root)
+            .expect("not mounted");
+        let tw = TextLayout::measure_total_advances(
+            &self.content.borrow()[..(location + length) as _],
+            FontID::UIDefault,
+            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            1.0, // no scaling for this measure
+        );
+
+        if !actual_location.is_null() {
+            unsafe {
+                actual_location.write(location);
+            }
+        }
+        if !actual_length.is_null() {
+            unsafe {
+                actual_length.write(length);
+            }
+        }
+
+        let (sx, sy, _, sh, _) =
+            unsafe { &*self.ht_manager_ptr }.compute_global_rect_autoroot(self.ht_root);
+
+        unsafe {
+            surface_x.write(sx + tw);
+            surface_y.write(sy);
+            width.write(0.0);
+            height.write(sh);
+        }
+    }
+}
 
 pub struct TextInputView {
     ct_text_clip: CompositeTreeRef,
@@ -2221,6 +2459,10 @@ impl TextInputView {
             native_text_input_context: platform::windows::NativeTextInputContext::new(
                 ctx.system_link,
             ),
+            #[cfg(target_os = "macos")]
+            ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
+            #[cfg(target_os = "macos")]
+            composite_tree_ptr: core::ptr::from_mut(ctx.composite_tree),
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);

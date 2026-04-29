@@ -57,7 +57,7 @@
       <EnvironmentVariables>
          <EnvironmentVariable
             key = "RUST_LOG"
-            value = "trace"
+            value = "trace,apple_sdk_port::drop_trace=error"
             isEnabled = "YES">
          </EnvironmentVariable>
       </EnvironmentVariables>

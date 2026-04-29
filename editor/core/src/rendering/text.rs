@@ -649,8 +649,8 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         str.begin_editing();
         #[cfg(target_os = "macos")]
-        for (s, r) in &attributed_string_runs {
-            str.replace_attributed_string(r.clone(), s);
+        for (s, r) in attributed_string_runs {
+            str.replace_attributed_string(r, &s);
         }
         #[cfg(target_os = "macos")]
         str.end_editing();
@@ -1012,9 +1012,9 @@ impl TextLayout {
                 let run = &runs[m];
 
                 let attributes = run.attributes();
-                attributes.apply_untyped_value(|key, value| {
-                    tracing::debug!(?key, ?value, "run attribute");
-                });
+                // attributes.apply_untyped_value(|key, value| {
+                //     tracing::debug!(?key, ?value, "run attribute");
+                // });
                 let font = match attributes
                     .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
                 {
@@ -1675,6 +1675,11 @@ impl TextLayout {
     #[cfg(target_os = "macos")]
     #[inline(always)]
     pub fn height(&self) -> f32 {
+        if self.frame.lines().len() == 0 {
+            // no lines(empty string)
+            return 0.0;
+        }
+
         // TODO: multi-line consideration
         let mut ascender = core::mem::MaybeUninit::uninit();
         let mut descender = core::mem::MaybeUninit::uninit();
@@ -2124,8 +2129,18 @@ impl TextLayout {
         }
 
         #[cfg(target_os = "macos")]
-        tracing::warn!("notimpl: hittest with ctframe");
-        (0.0, 0)
+        if layout.frame.lines().len() == 0 {
+            // no lines(empty string)
+            return (0.0, 0);
+        }
+        #[cfg(target_os = "macos")]
+        match layout.frame.lines()[0].string_index_for_position(apple_sdk_port::raw::CGPoint {
+            x: (x / render_scale) as _,
+            y: 0.0,
+        }) {
+            Some(x) => (0.0, text.chars().take(x as _).map(|x| x.len_utf8()).sum()),
+            None => (0.0, text.len() - 1),
+        }
     }
 }
 

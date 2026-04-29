@@ -29,6 +29,36 @@ typedef struct {
     void (*onPointerLeave)(ContextMenuSurface sender);
 } ContextMenuSurfaceCallbacks;
 
+typedef struct {
+    uint8_t (*hasMarkedText)(void* context);
+    uint8_t (*markedRange)(void* context, int64_t* outLocation, int64_t* outLength);
+    void (*selectedRange)(void* context, int64_t* outLocation, int64_t* outLength);
+    void (*setMarkedText)(
+        void* context,
+        const char* str,
+        int64_t newSelectionLocation,
+        int64_t newSelectionLength,
+        int64_t replacementLocation,
+        int64_t replacementLength
+    );
+    void (*insertText)(
+        void* context,
+        const char* str,
+        int64_t replacementLocation,
+        int64_t replacementLength
+    );
+    void (*substring)(
+        void* context,
+        int64_t location,
+        int64_t length,
+        int64_t* actualLocation,
+        int64_t* actualLength,
+        const char** outChars,
+        uint64_t* outLen
+    );
+    void (*firstRect)(void* context, int64_t location, int64_t length, int64_t* actualLocation, int64_t* actualLength, float* surfaceX, float* surfaceY, float* width, float* height);
+} TextInputClientForwardingFT;
+
 typedef void (*UnboundCallback)(void* callerContext);
 typedef void (*ContextMenuGlobalClickCallback)(void* callerContext, uint8_t onContextMenuSurface);
 
