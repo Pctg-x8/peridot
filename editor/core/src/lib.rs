@@ -2154,9 +2154,12 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
             return false;
         }
 
+        let startc = self.content.borrow()[..start].chars().count();
+        let endc = self.content.borrow()[..end].chars().count();
+
         unsafe {
-            out_location.write(start as _);
-            out_length.write((end - start) as _);
+            out_location.write(startc as _);
+            out_length.write((endc - startc) as _);
         }
         true
     }
@@ -2164,9 +2167,12 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
     fn selected_range(&self, out_location: *mut i64, out_length: *mut i64) {
         let r = self.selection_range();
 
+        let startc = self.content.borrow()[..r.start].chars().count();
+        let endc = self.content.borrow()[..r.end].chars().count();
+
         unsafe {
-            out_location.write(r.start as _);
-            out_length.write((r.end - r.start) as _);
+            out_location.write(startc as _);
+            out_length.write((endc - startc) as _);
         }
     }
 
@@ -2284,18 +2290,34 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
 
     fn substring(
         &self,
-        location: i64,
+        location: Option<i64>,
         length: i64,
         actual_location: *mut i64,
         actual_length: *mut i64,
         out_chars: *mut *const core::ffi::c_char,
         out_len: *mut u64,
     ) {
-        let location = location.max(0);
+        let location = location.unwrap_or(0);
         let length = length.min(self.content.borrow().len() as i64);
+
+        let loc = self
+            .content
+            .borrow()
+            .chars()
+            .take(location as _)
+            .map(|x| x.len_utf8())
+            .sum();
+        let endloc = self
+            .content
+            .borrow()
+            .chars()
+            .take((location + length) as _)
+            .map(|x| x.len_utf8())
+            .sum::<usize>();
+
         unsafe {
-            out_chars.write(self.content.borrow().as_ptr().add(location as _).cast());
-            out_len.write(length as _);
+            out_chars.write(self.content.borrow().as_ptr().add(loc).cast());
+            out_len.write((endloc - loc) as _);
         }
 
         if !actual_location.is_null() {
@@ -2324,11 +2346,19 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
     ) {
         tracing::debug!(location, length, "first rect");
 
+        let endloc = self
+            .content
+            .borrow()
+            .chars()
+            .take((location + length) as _)
+            .map(|x| x.len_utf8())
+            .sum();
+
         let window = unsafe { &*self.ht_manager_ptr }
             .query_root_window(self.ht_root)
             .expect("not mounted");
         let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[..(location + length) as _],
+            &self.content.borrow()[..endloc],
             FontID::UIDefault,
             unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
             1.0, // no scaling for this measure

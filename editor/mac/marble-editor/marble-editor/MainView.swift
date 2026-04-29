@@ -133,6 +133,7 @@ final class MainView : NSView, NSTextInputClient {
             
             fw.ftable.pointee.substring(
                 fw.context,
+                range.location == NSNotFound ? 1 : 0,
                 Int64(range.location),
                 Int64(range.length),
                 &actualLocation,
@@ -146,6 +147,7 @@ final class MainView : NSView, NSTextInputClient {
         } else {
             fw.ftable.pointee.substring(
                 fw.context,
+                range.location == NSNotFound ? 1 : 0,
                 Int64(range.location),
                 Int64(range.length),
                 nil,

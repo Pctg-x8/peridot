@@ -189,11 +189,6 @@ final class WindowLink : NSWindow {
         
         self.mainView.setup()
         self.contentView = self.mainView
-        
-        if flags.contains(.main) {
-            self.center()
-            self.makeKeyAndOrderFront(nil)
-        }
     }
     
     var metalLayer: CAMetalLayer {
@@ -218,6 +213,11 @@ final class WindowLink : NSWindow {
     func unsetCallbacks() {
         self.callbacks = nil
         self.mainView.windowLinkCallbacks = nil
+    }
+    
+    func showAsPrimary() {
+        self.center()
+        self.makeKeyAndOrderFront(nil)
     }
     
     func show() {
@@ -404,6 +404,11 @@ func releaseWindow(p: UnsafeMutableRawPointer) {
 @_cdecl("ni_show_window")
 func showWindow(windowLink: UnsafeMutableRawPointer) {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().show()
+}
+
+@_cdecl("ni_show_window_as_primary")
+func showWindowAsPrimary(windowLink: UnsafeMutableRawPointer) {
+    Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().showAsPrimary()
 }
 
 @_cdecl("ni_get_content_scale")

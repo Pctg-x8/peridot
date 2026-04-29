@@ -49,6 +49,7 @@ typedef struct {
     );
     void (*substring)(
         void* context,
+        uint8_t locationIsNotFound,
         int64_t location,
         int64_t length,
         int64_t* actualLocation,

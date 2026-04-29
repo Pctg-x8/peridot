@@ -90,6 +90,7 @@ pub struct TextInputClientForwardingFT {
     ),
     pub substring: extern "C" fn(
         context: *mut c_void,
+        location_is_not_found: u8,
         location: i64,
         length: i64,
         actual_location: *mut i64,
@@ -170,6 +171,7 @@ impl TextInputClientForwardingFT {
         }
         extern "C" fn substring<T: super::TextInputClientForwarding>(
             context: *mut c_void,
+            location_is_not_found: u8,
             location: i64,
             length: i64,
             actual_location: *mut i64,
@@ -179,7 +181,11 @@ impl TextInputClientForwardingFT {
         ) {
             T::substring(
                 unsafe { &*context.cast::<T>() },
-                location,
+                if location_is_not_found != 0 {
+                    None
+                } else {
+                    Some(location)
+                },
                 length,
                 actual_location,
                 actual_length,
@@ -267,6 +273,7 @@ unsafe extern "C" {
     pub fn ni_create_window(flags: u32) -> *mut WindowLink;
     pub fn ni_release_window(window_link: *mut WindowLink);
     pub fn ni_show_window(window_link: *mut WindowLink);
+    pub fn ni_show_window_as_primary(window_link: *mut WindowLink);
     pub fn ni_get_content_scale(window_link: *mut WindowLink) -> c_float;
     pub fn ni_set_window_callbacks(
         window_link: *mut WindowLink,

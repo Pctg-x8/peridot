@@ -271,8 +271,10 @@ impl crate::SystemLink<'_> {
         main_window_handle
     }
 
-    pub fn prelaunch(&self, _main_window: WindowHandle) {
-        // nothing to do
+    pub fn prelaunch(&self, main_window: WindowHandle) {
+        unsafe {
+            self::bridge::ni_show_window_as_primary(main_window.0);
+        }
     }
 
     pub fn open_window<'h>(
@@ -788,7 +790,7 @@ pub trait TextInputClientForwarding {
     );
     fn substring(
         &self,
-        location: i64,
+        location: Option<i64>,
         length: i64,
         actual_location: *mut i64,
         actual_length: *mut i64,
