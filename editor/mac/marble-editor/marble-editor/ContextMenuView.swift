@@ -30,4 +30,12 @@ final class ContextMenuView : NSView {
             return self.layer! as! CAMetalLayer
         }
     }
+    
+    override func updateTrackingAreas() {
+        for a in self.trackingAreas {
+            self.removeTrackingArea(a)
+        }
+        
+        self.addTrackingArea(NSTrackingArea(rect: self.bounds, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: self))
+    }
 }

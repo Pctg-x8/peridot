@@ -65,6 +65,7 @@ pub struct ContextMenuSurfaceCallbacks {
         extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64, button: MouseButton),
     pub on_pointer_move: extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64),
     pub on_pointer_up: extern "C" fn(sender: *mut ContextMenuSurface, button: MouseButton),
+    pub on_pointer_leave: extern "C" fn(sender: *mut ContextMenuSurface),
 }
 
 pub type UnboundCallback = extern "C" fn(caller_context: *mut c_void);

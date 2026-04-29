@@ -769,6 +769,7 @@ pub enum Event {
     ContextMenuSelectCommand {
         id: u64,
     },
+    #[cfg(not(target_os = "macos"))]
     GlobalMouseClicked,
     #[cfg(windows)]
     CoreTextLayoutRequested {
@@ -3320,6 +3321,7 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
+            #[cfg(not(target_os = "macos"))]
             Event::GlobalMouseClicked => {
                 if !system_link.any_pointer_on_context_menu() {
                     if let Some(c) = current_active_context_menu_session.take() {
@@ -3569,6 +3571,7 @@ impl ContextMenuSession {
     }
 
     pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
+        #[cfg(not(target_os = "macos"))]
         for s in self.opening_surfaces.iter() {
             s.handle.rescale(scale, composite_tree);
         }

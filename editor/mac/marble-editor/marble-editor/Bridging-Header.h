@@ -26,6 +26,7 @@ typedef struct {
     void (*onPointerDown)(ContextMenuSurface sender, double x, double y, uint8_t button);
     void (*onPointerMove)(ContextMenuSurface sender, double x, double y);
     void (*onPointerUp)(ContextMenuSurface sender, uint8_t button);
+    void (*onPointerLeave)(ContextMenuSurface sender);
 } ContextMenuSurfaceCallbacks;
 
 typedef void (*UnboundCallback)(void* callerContext);

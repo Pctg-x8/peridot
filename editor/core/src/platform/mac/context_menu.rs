@@ -11,9 +11,7 @@ use crate::{
     },
     rendering::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
-        composite::{
-            AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
-        },
+        composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     uikit::{MenuItemView, MountTarget},
     utils::{LogicalUnit, PixelsUnit, Point, Size},
@@ -38,6 +36,7 @@ impl MountTarget for Handle {
 impl Handle {
     pub(super) fn new<E>(
         parent: super::WindowHandle,
+        depth: usize,
         surface_pos: Point<LogicalUnit>,
         syslink: &SystemLink,
         composite_tree: &mut CompositeTree<E>,
@@ -62,6 +61,7 @@ impl Handle {
                 surface_pos.y,
                 Box::into_raw(Box::new(InstanceVars {
                     event_dispatcher: syslink.event_dispatcher,
+                    depth,
                     ct_root,
                     ht_root,
                     kf_state: PerWindowKeyboardFocusState::new(kf_root_group),
@@ -75,6 +75,7 @@ impl Handle {
                     on_pointer_down: Self::pointer_down,
                     on_pointer_move: Self::pointer_move,
                     on_pointer_up: Self::pointer_up,
+                    on_pointer_leave: Self::pointer_leave,
                 })),
             ))
         });
@@ -187,10 +188,6 @@ impl Handle {
         unsafe { super::bridge::ni_context_menu_get_content_scale(self.0.as_ptr()) }
     }
 
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        unimplemented!("Handle::rescale")
-    }
-
     #[inline(always)]
     pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
         &mut self.instance_vars_mut().kf_state
@@ -271,10 +268,20 @@ impl Handle {
                 },
             });
     }
+
+    extern "C" fn pointer_leave(sender: *mut super::bridge::ContextMenuSurface) {
+        let h = Self(unsafe { NonNull::new_unchecked(sender) });
+
+        h.instance_vars()
+            .dispatch_event(Event::ContextMenuDeselectItem {
+                depth: h.instance_vars().depth,
+            });
+    }
 }
 
 struct InstanceVars {
     event_dispatcher: *mut LogicFiberEventDispatcher,
+    depth: usize,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     kf_state: PerWindowKeyboardFocusState,

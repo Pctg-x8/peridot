@@ -335,6 +335,10 @@ final class ContextMenuSurface : NSPanel, NSWindowDelegate {
         }
     }
     
+    override func mouseExited(with event: NSEvent) {
+        self.callbacks.pointee.onPointerLeave(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()))
+    }
+    
     override func mouseMoved(with event: NSEvent) {
         let p = event.locationInWindow
         

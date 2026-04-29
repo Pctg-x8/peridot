@@ -392,6 +392,7 @@ impl crate::SystemLink<'_> {
     ) -> ContextMenuHandle {
         let mut h = ContextMenuHandle::new(
             parent,
+            depth,
             surface_pos,
             self,
             &mut view_init_context.mount_context.composite_tree,
@@ -409,10 +410,6 @@ impl crate::SystemLink<'_> {
 
         h.create_render_thread_objects(self);
         h
-    }
-
-    pub fn any_pointer_on_context_menu(&self) -> bool {
-        unimplemented!("any_pointer_on_context_menu")
     }
 }
 
