@@ -2124,7 +2124,8 @@ impl TextLayout {
         }
 
         #[cfg(target_os = "macos")]
-        todo!("hittest with ctframe")
+        tracing::warn!("notimpl: hittest with ctframe");
+        (0.0, 0)
     }
 }
 

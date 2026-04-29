@@ -178,4 +178,11 @@ unsafe extern "C" {
 
     pub fn ni_ak_spacing_inline_start() -> CFStringRef;
     pub fn ni_ak_font_id() -> CFStringRef;
+
+    pub fn ni_log_err(charbuf: *const u8);
+    pub fn ni_log_warn(charbuf: *const u8);
+    pub fn ni_log_info(charbuf: *const u8);
+    pub fn ni_log_debug(charbuf: *const u8);
+    pub fn ni_log_trace(charbuf: *const u8);
+    pub fn ni_log_fault(charbuf: *const u8);
 }

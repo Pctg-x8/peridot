@@ -15,6 +15,8 @@ use std::{
     rc::Rc,
     sync::Mutex,
 };
+#[cfg(target_os = "macos")]
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(not(windows))]
 #[cfg(feature = "wayland")]
@@ -48,8 +50,6 @@ use crate::{
     },
     utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
 };
-#[cfg(target_os = "macos")]
-use crate::{input::PerWindowKeyboardFocusState, utils::PixelsUnit};
 
 #[cfg(windows)]
 mod bindgen;
@@ -74,10 +74,14 @@ pub fn launch() {
     utils::platform::windows::set_panic_hook();
 
     #[cfg(target_os = "macos")]
-    tracing_subscriber::fmt()
-        .with_ansi(false)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    tracing_subscriber::registry()
+        .with(platform::mac::LogLayer)
+        .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    // tracing_subscriber::fmt()
+    //     .with_ansi(false)
+    //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    //     .init();
     #[cfg(windows)]
     tracing_subscriber::fmt()
         .with_ansi(false)

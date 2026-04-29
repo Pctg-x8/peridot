@@ -1,6 +1,11 @@
-use std::sync::Mutex;
+use std::{cell::RefCell, sync::Mutex};
 
 use bedrock::{InstanceChild, SurfaceCreateInfo};
+use tracing::{Level, Subscriber};
+use tracing_subscriber::{
+    Layer,
+    fmt::{FmtContext, FormatEvent, FormatFields, MakeWriter},
+};
 
 use crate::{
     ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowType,
@@ -29,19 +34,19 @@ unsafe impl Sync for WindowHandle {}
 unsafe impl Send for WindowHandle {}
 impl WindowHandle {
     #[inline(always)]
-    pub fn state(&self) -> &MacWindowState {
+    pub fn state(&self) -> &WindowState {
         unsafe {
             &(*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<MacWindowDispatcher>())
+                .cast::<WindowDispatcher>())
             .state
         }
     }
 
     #[inline(always)]
-    fn state_mut(&mut self) -> &mut MacWindowState {
+    fn state_mut(&mut self) -> &mut WindowState {
         unsafe {
             &mut (*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<MacWindowDispatcher>())
+                .cast::<WindowDispatcher>())
             .state
         }
     }
@@ -213,7 +218,7 @@ impl crate::SystemLink<'_> {
             height_adjustment_factor: 1.0,
             ..Default::default()
         });
-        let w = MacWindow::new(
+        let w = NativeWindow::new(
             WindowType::Main {},
             self::bridge::WindowCreationFlags::MAIN,
             unsafe { &*self.event_dispatcher }.clone(),
@@ -264,7 +269,7 @@ impl crate::SystemLink<'_> {
             height_adjustment_factor: 1.0,
             ..Default::default()
         });
-        let mut w = MacWindow::new(
+        let mut w = NativeWindow::new(
             WindowType::Sub,
             self::bridge::WindowCreationFlags::empty(),
             unsafe { (*self.event_dispatcher).clone() },
@@ -413,12 +418,12 @@ impl crate::SystemLink<'_> {
     }
 }
 
-pub struct MacWindow {
+pub struct NativeWindow {
     native_ptr: *mut self::bridge::WindowLink,
 }
-unsafe impl Sync for MacWindow {}
-unsafe impl Send for MacWindow {}
-impl MacWindow {
+unsafe impl Sync for NativeWindow {}
+unsafe impl Send for NativeWindow {}
+impl NativeWindow {
     pub fn new(
         window_type: WindowType,
         flags: self::bridge::WindowCreationFlags,
@@ -430,10 +435,10 @@ impl MacWindow {
         let native_ptr = unsafe { self::bridge::ni_create_window(flags.bits()) };
         let init_scale = unsafe { self::bridge::ni_get_content_scale(native_ptr) };
         let kf_root_group = keyboard_focus_manager.acquire_group();
-        let dispatcher = Box::new(MacWindowDispatcher {
+        let dispatcher = Box::new(WindowDispatcher {
             event_dispatcher,
             window_type,
-            state: MacWindowState {
+            state: WindowState {
                 wlink: native_ptr,
                 extra_data: core::ptr::null_mut(),
                 swapchain_externally_invalidation_signal: std::sync::Arc::new(
@@ -453,16 +458,16 @@ impl MacWindow {
         });
         let callbacks: &'static self::bridge::WindowLinkCallbacks =
             &self::bridge::WindowLinkCallbacks {
-                destructor: MacWindowDispatcher::destructor,
-                on_window_close: MacWindowDispatcher::on_window_close,
-                on_resize: MacWindowDispatcher::on_resize,
-                on_pointer_down: MacWindowDispatcher::on_pointer_down,
-                on_pointer_move: MacWindowDispatcher::on_pointer_move,
-                on_pointer_up: MacWindowDispatcher::on_pointer_up,
-                on_key_down: MacWindowDispatcher::on_key_down,
-                on_key_down_with_char: MacWindowDispatcher::on_key_down_with_char,
-                on_key_up: MacWindowDispatcher::on_key_up,
-                on_key_focus_state_changed: MacWindowDispatcher::on_key_focus_state_changed,
+                destructor: WindowDispatcher::destructor,
+                on_window_close: WindowDispatcher::on_window_close,
+                on_resize: WindowDispatcher::on_resize,
+                on_pointer_down: WindowDispatcher::on_pointer_down,
+                on_pointer_move: WindowDispatcher::on_pointer_move,
+                on_pointer_up: WindowDispatcher::on_pointer_up,
+                on_key_down: WindowDispatcher::on_key_down,
+                on_key_down_with_char: WindowDispatcher::on_key_down_with_char,
+                on_key_up: WindowDispatcher::on_key_up,
+                on_key_focus_state_changed: WindowDispatcher::on_key_focus_state_changed,
             };
         unsafe {
             self::bridge::ni_set_window_callbacks(
@@ -500,14 +505,14 @@ impl MacWindow {
     }
 }
 
-struct MacWindowDispatcher {
+struct WindowDispatcher {
     event_dispatcher: LogicFiberEventDispatcher,
     window_type: WindowType,
-    state: MacWindowState,
+    state: WindowState,
 }
-unsafe impl Sync for MacWindowDispatcher {}
-unsafe impl Send for MacWindowDispatcher {}
-impl MacWindowDispatcher {
+unsafe impl Sync for WindowDispatcher {}
+unsafe impl Send for WindowDispatcher {}
+impl WindowDispatcher {
     extern "C" fn destructor(this: *mut core::ffi::c_void) {
         tracing::trace!(?this, "window_dispatcher.destruct");
         drop(unsafe { Box::from_raw(this.cast::<Self>()) });
@@ -717,7 +722,7 @@ impl MacWindowDispatcher {
     }
 }
 
-pub struct MacWindowState {
+pub struct WindowState {
     wlink: *mut self::bridge::WindowLink,
     extra_data: *mut core::ffi::c_void,
     pub swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -730,5 +735,113 @@ pub struct MacWindowState {
     keyboard_focus_state: PerWindowKeyboardFocusState,
     kf_root_group: KeyboardFocusGroupRef,
 }
-unsafe impl Sync for MacWindowState {}
-unsafe impl Send for MacWindowState {}
+unsafe impl Sync for WindowState {}
+unsafe impl Send for WindowState {}
+
+pub struct LogLayer;
+impl<S: Subscriber> Layer<S> for LogLayer {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        thread_local! {
+            static BUF: RefCell<String> = RefCell::new(String::new());
+        }
+
+        BUF.with(|buf| {
+            let mut buflock = buf.try_borrow_mut();
+            let mut tmpbuf;
+            let mut buf = match buflock.as_mut() {
+                Ok(x) => &mut *x,
+                Err(_) => {
+                    tmpbuf = String::new();
+                    &mut tmpbuf
+                }
+            };
+            let current_thread = std::thread::current();
+            let nowtime = time::OffsetDateTime::from(std::time::SystemTime::now());
+
+            struct StringIoWrite<'a>(&'a mut String);
+            impl std::io::Write for StringIoWrite<'_> {
+                #[inline(always)]
+                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                    self.0.push_str(unsafe { str::from_utf8_unchecked(buf) });
+                    Ok(buf.len())
+                }
+
+                #[inline(always)]
+                fn flush(&mut self) -> std::io::Result<()> {
+                    Ok(())
+                }
+            }
+
+            if let Err(_) = nowtime.format_into(
+                &mut StringIoWrite(&mut buf),
+                &time::format_description::well_known::Iso8601::DEFAULT,
+            ) {
+                unsafe {
+                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
+                }
+                return;
+            }
+            let mut writer = tracing_subscriber::fmt::format::Writer::new(&mut *buf);
+            if let Err(_) = write!(
+                writer,
+                " [{}] {}: ",
+                event.metadata().level(),
+                event.metadata().target()
+            ) {
+                unsafe {
+                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
+                }
+                return;
+            }
+            if let Err(_) = tracing_subscriber::fmt::format::DefaultFields::new()
+                .format_fields(writer.by_ref(), event)
+            {
+                unsafe {
+                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
+                }
+                return;
+            }
+            if let Err(_) = write!(
+                writer,
+                "\n  at {}:{} ",
+                event.metadata().file().unwrap_or("<unknown file>"),
+                event.metadata().line().unwrap_or(0)
+            ) {
+                unsafe {
+                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
+                }
+                return;
+            }
+            if let Err(_) = match current_thread.name() {
+                Some(n) => write!(writer, "[{n}]"),
+                None => write!(writer, "[ThreadID#{:?}]", current_thread.id()),
+            } {
+                unsafe {
+                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
+                }
+                return;
+            }
+
+            if let Err(_) = write!(writer, "\0") {
+                unsafe {
+                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
+                }
+                return;
+            }
+
+            match event.metadata().level() {
+                &Level::ERROR => unsafe { self::bridge::ni_log_err(buf.as_ptr()) },
+                &Level::WARN => unsafe { self::bridge::ni_log_warn(buf.as_ptr()) },
+                &Level::INFO => unsafe { self::bridge::ni_log_info(buf.as_ptr()) },
+                &Level::DEBUG => unsafe { self::bridge::ni_log_debug(buf.as_ptr()) },
+                &Level::TRACE => unsafe { self::bridge::ni_log_trace(buf.as_ptr()) },
+            }
+
+            buf.clear();
+        })
+    }
+}

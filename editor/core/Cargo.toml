@@ -29,7 +29,9 @@ peridot-math = { path = "../../modules/math" }
 peridot-tp-freetype = { path = "../../thirdparty/freetype", optional = true }
 peridot-tp-fontconfig = { path = "../../thirdparty/fontconfig", optional = true }
 peridot-tp-harfbuzz = { path = "../../thirdparty/harfbuzz", optional = true }
-peridot-tp-budoux = { path = "../../thirdparty/budoux", features = ["embedded-ja_knbc"] }
+peridot-tp-budoux = { path = "../../thirdparty/budoux", features = [
+    "embedded-ja_knbc",
+] }
 peridot-tp-unicode-properties = { path = "../../thirdparty/unicode-properties" }
 bitflags = "2.10.0"
 uuid = { version = "1.22.0", features = ["v4"] }
@@ -88,7 +90,7 @@ features = [
     "text-input-unstable-v3",
     "cursor-shape-v1",
     "fractional-scale-v1",
-    "alpha-modifier-v1"
+    "alpha-modifier-v1",
 ]
 
 [target.'cfg(unix)'.dependencies]
@@ -103,6 +105,8 @@ peridot-tp-xkbcommon = { path = "../../thirdparty/xkbcommon" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
+# required for timestamp logging
+time = { version = "0.3", features = ["formatting", "std"] }
 
 [lints]
 workspace = true

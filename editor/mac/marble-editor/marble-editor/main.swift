@@ -664,3 +664,29 @@ func akSpacingInlineStart() -> CFString {
 func akFontID() -> CFString {
     CustomAttributeKey.FontID.rawValue
 }
+
+// TODO: できればNoCopyにしたい StringのNoCopy系initがdeprecatedなので使うのはちょっと厳しい......
+@_cdecl("ni_log_err")
+func logErr(_ charbuf: UnsafePointer<UInt8>) {
+    logger.error("\(String(cString: charbuf))")
+}
+@_cdecl("ni_log_warn")
+func logWarn(_ charbuf: UnsafePointer<UInt8>) {
+    logger.warning("\(String(cString: charbuf))")
+}
+@_cdecl("ni_log_info")
+func logInfo(_ charbuf: UnsafePointer<UInt8>) {
+    logger.info("\(String(cString: charbuf))")
+}
+@_cdecl("ni_log_debug")
+func logDebug(_ charbuf: UnsafePointer<UInt8>) {
+    logger.debug("\(String(cString: charbuf))")
+}
+@_cdecl("ni_log_trace")
+func logTrace(_ charbuf: UnsafePointer<UInt8>) {
+    logger.trace("\(String(cString: charbuf))")
+}
+@_cdecl("ni_log_fault")
+func logFault(_ charbuf: UnsafePointer<UInt8>) {
+    logger.fault("\(String(cString: charbuf))")
+}
