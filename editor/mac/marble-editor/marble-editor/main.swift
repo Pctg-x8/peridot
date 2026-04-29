@@ -557,13 +557,13 @@ func restoreThreadPriority(contextPtr: UnsafeMutableRawPointer) {
 var currentHoveringTimeoutWorkItem: DispatchWorkItem? = nil
 
 @_cdecl("ni_set_pointer_hovering_timeout")
-func setPointerHoveringTimeout() {
+func setPointerHoveringTimeout(_ millis: UInt32) {
     let workItem = DispatchWorkItem {
         NSLog("Pointer Hovering timeout!")
     }
     currentHoveringTimeoutWorkItem = workItem
     DispatchQueue.main.asyncAfter(
-        deadline: DispatchTime.now().advanced(by: DispatchTimeInterval.milliseconds(400)),
+        deadline: DispatchTime.now().advanced(by: .milliseconds(Int(millis))),
         execute: workItem
     )
 }

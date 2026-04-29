@@ -2,11 +2,7 @@ use std::{cell::RefCell, sync::Mutex};
 
 use bedrock::{InstanceChild, SurfaceCreateInfo};
 use tracing::{Level, Subscriber};
-use tracing_subscriber::{
-    Layer,
-    fmt::{FormatFields, FormattedFields},
-    registry::LookupSpan,
-};
+use tracing_subscriber::{Layer, fmt::FormatFields, registry::LookupSpan};
 
 use crate::{
     ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowType,
@@ -399,7 +395,7 @@ impl crate::SystemLink<'_> {
     #[inline(always)]
     pub fn set_pointer_hovering_timeout(&self) {
         unsafe {
-            self::bridge::ni_set_pointer_hovering_timeout();
+            self::bridge::ni_set_pointer_hovering_timeout(crate::input::POINTER_HOVER_TIMEOUT_MS);
         }
     }
 
@@ -898,13 +894,18 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for LogLayer {
 
             if let Some(scope) = ctx.event_scope(event) {
                 for s in scope {
-                    write!(
+                    if let Err(_) = write!(
                         writer,
                         "\n  in {}:{} {}",
                         s.metadata().file().unwrap_or("<unknown file>"),
                         s.metadata().line().unwrap_or(0),
                         s.name()
-                    );
+                    ) {
+                        unsafe {
+                            self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
+                        }
+                        return;
+                    }
                 }
             }
 

@@ -1,5 +1,4 @@
 use core::ffi::*;
-use std::task::Context;
 
 use apple_sdk_port::raw::CFStringRef;
 use bitflags::bitflags;
@@ -308,7 +307,7 @@ unsafe extern "C" {
     pub fn ni_degreade_thread_priroity_temporarily() -> *mut c_void;
     pub fn ni_restore_thread_priority(context_ptr: *mut c_void);
 
-    pub fn ni_set_pointer_hovering_timeout();
+    pub fn ni_set_pointer_hovering_timeout(millis: u32);
     pub fn ni_kill_pointer_hovering_timeout();
 
     pub fn ni_create_context_menu_surface(
