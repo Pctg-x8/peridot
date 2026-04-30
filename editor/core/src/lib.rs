@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
@@ -971,7 +972,6 @@ struct TextInputViewEventHandler {
     preedit_range_start_bytes: core::cell::Cell<usize>,
     preedit_range_end_bytes: core::cell::Cell<usize>,
     selection_begin_bytes: core::cell::Cell<usize>,
-    dragging: core::cell::Cell<bool>,
     #[cfg(windows)]
     native_text_input_context: platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
@@ -1026,224 +1026,40 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .query_root_window(self.ht_root)
             .expect("not mounted");
 
-        match code {
+        let view_update_mask = match code {
+            // cursor operations
             KeyInputCode::LeftArrow => {
-                let selection_mode = modifier.contains(ModifierKey::SHIFT);
-                if selection_mode && self.selection_begin_bytes.get() == self.cursor_pos_bytes.get()
-                {
-                    // Shiftがおされており、選択範囲がない
-                    self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-                }
-
-                let mut new_cursor_pos = self.cursor_pos_bytes.get().saturating_sub(1);
-                while new_cursor_pos > 0 {
-                    if self.content.borrow().is_char_boundary(new_cursor_pos) {
-                        break;
-                    }
-
-                    new_cursor_pos -= 1;
-                }
-                self.cursor_pos_bytes.set(new_cursor_pos);
-                if !selection_mode {
-                    self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
-                }
-                self.update_cursor_position(
-                    context.composite_tree,
-                    mounted_window,
-                    context.system_link,
-                    context.ht_manager,
-                    mounted_window.client_size(),
-                );
-                self.update_selection(context.composite_tree, mounted_window);
-                self.sync_selection_native();
+                self.move_cursor_to_left(modifier.contains(ModifierKey::SHIFT))
             }
             KeyInputCode::RightArrow => {
-                let selection_mode = modifier.contains(ModifierKey::SHIFT);
-                if selection_mode && self.selection_begin_bytes.get() == self.cursor_pos_bytes.get()
-                {
-                    // Shiftがおされており、選択範囲がない
-                    self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-                }
-
-                let mut new_cursor_pos = self
-                    .cursor_pos_bytes
-                    .get()
-                    .saturating_add(1)
-                    .min(self.content.borrow().len());
-                while new_cursor_pos < self.content.borrow().len() {
-                    if self.content.borrow().is_char_boundary(new_cursor_pos) {
-                        break;
-                    }
-
-                    new_cursor_pos += 1;
-                }
-                self.cursor_pos_bytes.set(new_cursor_pos);
-                if !selection_mode {
-                    self.selection_begin_bytes.set(new_cursor_pos); // 選択を解除
-                }
-                self.update_cursor_position(
-                    context.composite_tree,
-                    mounted_window,
-                    context.system_link,
-                    context.ht_manager,
-                    mounted_window.client_size(),
-                );
-                self.update_selection(context.composite_tree, mounted_window);
-                self.sync_selection_native();
+                self.move_cursor_to_right(modifier.contains(ModifierKey::SHIFT))
             }
-            KeyInputCode::Home => {
-                self.cursor_pos_bytes.set(0);
-                self.selection_begin_bytes.set(0); // 選択を解除
-                self.update_cursor_position(
-                    context.composite_tree,
-                    mounted_window,
-                    context.system_link,
-                    context.ht_manager,
-                    mounted_window.client_size(),
-                );
-                self.update_selection(context.composite_tree, mounted_window);
-                self.sync_selection_native();
+            KeyInputCode::Home => self.jump_to_beginning_of_line(),
+            KeyInputCode::End => self.jump_to_end_of_line(),
+            // TODO: insert mode
+            KeyInputCode::Insert => TextInputViewUpdateMask::empty(),
+            // deletions
+            KeyInputCode::Backspace if !self.has_selection() => self.delete_prev_char(),
+            KeyInputCode::Backspace => self.delete_selection(),
+            KeyInputCode::Delete if !self.has_selection() => self.delete_next_char(),
+            KeyInputCode::Delete => self.delete_selection(),
+            // non-control chars
+            KeyInputCode::Character(c) if !c.is_control() && !self.has_selection() => {
+                self.insert_char_at_cursor(c)
             }
-            KeyInputCode::End => {
-                self.cursor_pos_bytes.set(self.content.borrow().len());
-                self.selection_begin_bytes.set(self.content.borrow().len()); // 選択を解除
-                self.update_cursor_position(
-                    context.composite_tree,
-                    mounted_window,
-                    context.system_link,
-                    context.ht_manager,
-                    mounted_window.client_size(),
-                );
-                self.update_selection(context.composite_tree, mounted_window);
-                self.sync_selection_native();
-            }
-            KeyInputCode::Insert => {
-                // TODO: insert mode
-            }
-            KeyInputCode::Character(c) if c == '\n' => (/* ignore enter key */),
-            KeyInputCode::Character(c) if c == '\x08' => {
-                // bksp
-                let selection_range = self.selection_range();
-                if selection_range.is_empty() {
-                    // single character removal
+            KeyInputCode::Character(c) if !c.is_control() => self.replace_selection_by_char(c),
+            // ignore enter key
+            KeyInputCode::Enter => TextInputViewUpdateMask::empty(),
+            _ => TextInputViewUpdateMask::empty(),
+        };
 
-                    let mut remove_to = self.cursor_pos_bytes.get().saturating_sub(1);
-                    while remove_to > 0 {
-                        if self.content.borrow().is_char_boundary(remove_to) {
-                            break;
-                        }
-
-                        remove_to -= 1;
-                    }
-                    if remove_to != self.cursor_pos_bytes.get() {
-                        self.content
-                            .borrow_mut()
-                            .replace_range(remove_to..self.cursor_pos_bytes.get(), "");
-                        self.cursor_pos_bytes.set(remove_to);
-                        self.selection_begin_bytes.set(remove_to);
-
-                        self.update_text(context.composite_tree);
-                        self.update_cursor_position(
-                            context.composite_tree,
-                            mounted_window,
-                            context.system_link,
-                            context.ht_manager,
-                            mounted_window.client_size(),
-                        );
-                        self.sync_selection_native();
-                    }
-                } else {
-                    // remove selection
-                    self.content
-                        .borrow_mut()
-                        .replace_range(selection_range.clone(), "");
-                    self.cursor_pos_bytes.set(selection_range.start);
-                    self.selection_begin_bytes.set(selection_range.start);
-
-                    self.update_text(context.composite_tree);
-                    self.update_cursor_position(
-                        context.composite_tree,
-                        mounted_window,
-                        context.system_link,
-                        context.ht_manager,
-                        mounted_window.client_size(),
-                    );
-                    self.update_selection(context.composite_tree, mounted_window);
-                    self.sync_selection_native();
-                }
-            }
-            KeyInputCode::Character(c) if c == '\x7f' => {
-                // del
-                let selection_range = self.selection_range();
-                if selection_range.is_empty() {
-                    // single character removal
-                    if self.cursor_pos_bytes.get() < self.content.borrow().len() {
-                        let remove_to = self.cursor_pos_bytes.get();
-                        let remove_to = remove_to
-                            + self.content.borrow()[remove_to..]
-                                .chars()
-                                .next()
-                                .expect("no char")
-                                .len_utf8();
-
-                        self.content
-                            .borrow_mut()
-                            .replace_range(self.cursor_pos_bytes.get()..remove_to, "");
-                        self.update_text(context.composite_tree);
-                        self.sync_selection_native();
-                    }
-                } else {
-                    // remove selection
-                    self.content
-                        .borrow_mut()
-                        .replace_range(selection_range.clone(), "");
-                    self.update_text(context.composite_tree);
-
-                    self.cursor_pos_bytes.set(selection_range.start);
-                    self.selection_begin_bytes.set(selection_range.start);
-                    self.update_cursor_position(
-                        context.composite_tree,
-                        mounted_window,
-                        context.system_link,
-                        context.ht_manager,
-                        mounted_window.client_size(),
-                    );
-                    self.update_selection(context.composite_tree, mounted_window);
-                    self.sync_selection_native();
-                }
-            }
-            KeyInputCode::Character(c) if !c.is_control() => {
-                let selection_range = self.selection_range();
-                if selection_range.is_empty() {
-                    // just insert
-                    self.content
-                        .borrow_mut()
-                        .insert(self.cursor_pos_bytes.get(), c);
-                    self.cursor_pos_bytes
-                        .set(self.cursor_pos_bytes.get() + c.len_utf8());
-                } else {
-                    // replace selection
-                    self.content
-                        .borrow_mut()
-                        .replace_range(selection_range.clone(), &c.to_string());
-                    self.cursor_pos_bytes
-                        .set(selection_range.start + c.len_utf8());
-                }
-
-                self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-                self.update_text(context.composite_tree);
-                self.update_cursor_position(
-                    context.composite_tree,
-                    mounted_window,
-                    context.system_link,
-                    context.ht_manager,
-                    mounted_window.client_size(),
-                );
-                self.update_selection(context.composite_tree, mounted_window);
-                self.sync_selection_native();
-            }
-            _ => (),
-        }
+        self.update_views(
+            view_update_mask,
+            context.composite_tree,
+            mounted_window,
+            context.system_link,
+            context.ht_manager,
+        );
     }
 
     fn ime_state_changes(
@@ -1366,6 +1182,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             mounted_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
+
         self.selection_begin_bytes.set(bytes); // 最初は同じところ(=範囲選択なし)
         self.update_cursor_position(
             context.composite_tree,
@@ -1376,7 +1193,6 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         );
         self.update_selection(context.composite_tree, mounted_window);
         self.sync_selection_native();
-        self.dragging.set(true);
 
         input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
     }
@@ -1387,11 +1203,6 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
-        if !self.dragging.get() {
-            // not dragging
-            return input::EventContinueControl::STOP_PROPAGATION;
-        }
-
         let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
             sender,
             args.client_pos.x,
@@ -1414,6 +1225,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             mounted_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
+
         self.update_cursor_position(
             context.composite_tree,
             mounted_window,
@@ -1442,7 +1254,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         );
         let mounted_window = context
             .ht_manager
-            .query_root_window(self.ht_root)
+            .query_root_window(sender)
             .expect("not mounted");
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
@@ -1455,6 +1267,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             mounted_window.ui_scale_factor(),
         );
         self.cursor_pos_bytes.set(bytes);
+
         self.update_cursor_position(
             context.composite_tree,
             mounted_window,
@@ -1464,7 +1277,6 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         );
         self.update_selection(context.composite_tree, mounted_window);
         self.sync_selection_native();
-        self.dragging.set(false);
 
         input::EventContinueControl::STOP_PROPAGATION
             | input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
@@ -1477,60 +1289,12 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         args: &PointerButtonActionArgs,
     ) -> input::EventContinueControl {
         #[cfg(windows)]
-        let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
-            .expect("globalization_preferences.languages")
-            .First()
-            .expect("vector_view.first")
-            .Current()
-            .expect("iterator.current");
+        let selection_range =
+            self.select_word_at(&*self.content.borrow(), self.cursor_pos_bytes.get());
         #[cfg(windows)]
-        let word_segmenter =
-            windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
-                .expect("words_segmenter.create");
+        self.selection_begin_bytes.set(selection_range.start);
         #[cfg(windows)]
-        let content = self.content.borrow();
-        #[cfg(windows)]
-        let start_index = content
-            .char_indices()
-            .take_while(|&(i, _)| i < self.cursor_pos_bytes.get())
-            .count()
-            .min(content.chars().count() - 1);
-        #[cfg(windows)]
-        let ws = word_segmenter
-            .GetTokenAt(
-                &windows_core::HSTRING::from_wide(&{
-                    let mut u16s = Vec::new();
-                    for c in content.chars() {
-                        let mut b = [0; 2];
-                        u16s.extend_from_slice(c.encode_utf16(&mut b));
-                    }
-                    u16s
-                }),
-                start_index as _,
-            )
-            .expect("word_segmenter.get_token_at");
-        #[cfg(windows)]
-        let text_segment = ws
-            .SourceTextSegment()
-            .expect("word_segment.source_text_segment");
-        #[cfg(windows)]
-        self.selection_begin_bytes.set(
-            self.content
-                .borrow()
-                .chars()
-                .take(text_segment.StartPosition as _)
-                .map(|c| c.len_utf8())
-                .sum(),
-        );
-        #[cfg(windows)]
-        self.cursor_pos_bytes.set(
-            self.content
-                .borrow()
-                .chars()
-                .take((text_segment.StartPosition + text_segment.Length) as _)
-                .map(|c| c.len_utf8())
-                .sum(),
-        );
+        self.cursor_pos_bytes.set(selection_range.end);
 
         #[cfg(not(windows))]
         use unicode_segmentation::UnicodeSegmentation;
@@ -1873,6 +1637,36 @@ impl TextInputViewEventHandler {
         composite_tree.mark_dirty(self.ct_selection_bg);
     }
 
+    fn update_views(
+        &self,
+        mask: TextInputViewUpdateMask,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        window: WindowHandle,
+        system_link: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+    ) {
+        if mask.contains(TextInputViewUpdateMask::TEXT) {
+            // needs update text
+            self.update_text(composite_tree);
+        }
+        if mask.contains(TextInputViewUpdateMask::CURSOR) {
+            // needs update cursor position and selection highlight
+            self.update_cursor_position(
+                composite_tree,
+                window,
+                system_link,
+                ht_manager,
+                window.client_size(),
+            );
+            self.update_selection(composite_tree, window);
+        }
+
+        if mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR) {
+            // どっちにも影響する
+            self.sync_selection_native();
+        }
+    }
+
     fn sync_selection_native(&self) {
         #[cfg(windows)]
         let selection_begin_bytes = self.selection_begin_bytes.get();
@@ -1899,6 +1693,29 @@ impl TextInputViewEventHandler {
         );
     }
 
+    fn compute_prev_char_pos_bytes(content: &str, current_pos_bytes: usize) -> usize {
+        let mut new_cursor_pos = current_pos_bytes.saturating_sub(1);
+        while new_cursor_pos > 0 && !content.is_char_boundary(new_cursor_pos) {
+            new_cursor_pos -= 1;
+        }
+
+        new_cursor_pos
+    }
+
+    fn compute_next_char_pos_bytes(content: &str, current_pos_bytes: usize) -> usize {
+        let mut new_cursor_pos = current_pos_bytes.saturating_add(1).min(content.len());
+        while new_cursor_pos < content.len() && !content.is_char_boundary(new_cursor_pos) {
+            new_cursor_pos += 1;
+        }
+
+        new_cursor_pos
+    }
+
+    #[inline(always)]
+    fn has_selection(&self) -> bool {
+        self.selection_begin_bytes.get() != self.cursor_pos_bytes.get()
+    }
+
     fn selection_range(&self) -> core::ops::Range<usize> {
         match (
             self.cursor_pos_bytes.get(),
@@ -1906,6 +1723,196 @@ impl TextInputViewEventHandler {
         ) {
             (a, b) if a <= b => a..b,
             (a, b) => b..a,
+        }
+    }
+
+    fn deselect(&self) -> TextInputViewUpdateMask {
+        self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+
+        TextInputViewUpdateMask::CURSOR
+    }
+
+    fn insert_char_at_cursor(&self, c: char) -> TextInputViewUpdateMask {
+        self.content
+            .borrow_mut()
+            .insert(self.cursor_pos_bytes.get(), c);
+        self.cursor_pos_bytes.update(|x| x + c.len_utf8());
+        let deselect_updates = self.deselect();
+
+        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR | deselect_updates
+    }
+
+    fn replace_selection_by_char(&self, c: char) -> TextInputViewUpdateMask {
+        let selection_range = self.selection_range();
+        assert!(!selection_range.is_empty(), "replacing empty selection");
+
+        self.content
+            .borrow_mut()
+            .replace_range(selection_range.clone(), &c.to_string());
+        self.cursor_pos_bytes
+            .set(selection_range.start + c.len_utf8());
+        let deselect_updates = self.deselect();
+
+        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR | deselect_updates
+    }
+
+    fn delete_prev_char(&self) -> TextInputViewUpdateMask {
+        let remove_from = self.cursor_pos_bytes.get();
+        let remove_to = Self::compute_prev_char_pos_bytes(&*self.content.borrow(), remove_from);
+        if remove_from == remove_to {
+            // no deletion
+            return TextInputViewUpdateMask::empty();
+        }
+
+        // remove_to < remove_from
+        self.content
+            .borrow_mut()
+            .replace_range(remove_to..remove_from, "");
+        self.cursor_pos_bytes.set(remove_to);
+        self.selection_begin_bytes.set(remove_to);
+
+        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR
+    }
+
+    fn delete_next_char(&self) -> TextInputViewUpdateMask {
+        let remove_from = self.cursor_pos_bytes.get();
+        let remove_to = remove_from
+            + self.content.borrow()[remove_from..]
+                .chars()
+                .next()
+                .map_or(0, |x| x.len_utf8());
+
+        if remove_from == remove_to {
+            // no deletion
+            return TextInputViewUpdateMask::empty();
+        }
+
+        self.content
+            .borrow_mut()
+            .replace_range(remove_from..remove_to, "");
+        // no cursor updates here
+
+        TextInputViewUpdateMask::TEXT
+    }
+
+    fn delete_selection(&self) -> TextInputViewUpdateMask {
+        let selection_range = self.selection_range();
+        if selection_range.is_empty() {
+            // no selection
+            return TextInputViewUpdateMask::empty();
+        }
+
+        self.content
+            .borrow_mut()
+            .replace_range(selection_range.clone(), "");
+        self.cursor_pos_bytes.set(selection_range.start);
+        self.selection_begin_bytes.set(selection_range.start);
+
+        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR
+    }
+
+    fn jump_to_beginning_of_line(&self) -> TextInputViewUpdateMask {
+        // TODO: multiline
+        self.cursor_pos_bytes.set(0);
+        self.selection_begin_bytes.set(0); // 選択を解除
+
+        TextInputViewUpdateMask::CURSOR
+    }
+
+    fn jump_to_end_of_line(&self) -> TextInputViewUpdateMask {
+        // TODO: multiline
+        let last_pos = self.content.borrow().len();
+        self.cursor_pos_bytes.set(last_pos);
+        self.selection_begin_bytes.set(last_pos); // 選択を解除
+
+        TextInputViewUpdateMask::CURSOR
+    }
+
+    fn move_cursor_to_left(&self, with_selection: bool) -> TextInputViewUpdateMask {
+        if with_selection && !self.has_selection() {
+            // Shiftがおされており、選択範囲がない
+            self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+        }
+
+        let new_cursor_pos =
+            Self::compute_prev_char_pos_bytes(&*self.content.borrow(), self.cursor_pos_bytes.get());
+        self.cursor_pos_bytes.set(new_cursor_pos);
+
+        let deselect_mask = if !with_selection {
+            self.deselect()
+        } else {
+            TextInputViewUpdateMask::empty()
+        };
+
+        TextInputViewUpdateMask::CURSOR | deselect_mask
+    }
+
+    fn move_cursor_to_right(&self, with_selection: bool) -> TextInputViewUpdateMask {
+        if with_selection && !self.has_selection() {
+            // Shiftがおされており、選択範囲がない
+            self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+        }
+
+        let new_cursor_pos =
+            Self::compute_next_char_pos_bytes(&*self.content.borrow(), self.cursor_pos_bytes.get());
+        self.cursor_pos_bytes.set(new_cursor_pos);
+
+        let deselect_mask = if !with_selection {
+            self.deselect()
+        } else {
+            TextInputViewUpdateMask::empty()
+        };
+
+        TextInputViewUpdateMask::CURSOR | deselect_mask
+    }
+
+    fn select_word_at(&self, content: &str, cursor_pos_bytes: usize) -> core::ops::Range<usize> {
+        #[cfg(windows)]
+        {
+            let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
+                .expect("globalization_preferences.languages")
+                .First()
+                .expect("vector_view.first")
+                .Current()
+                .expect("iterator.current");
+            let word_segmenter =
+                windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
+                    .expect("words_segmenter.create");
+
+            let start_index = content
+                .char_indices()
+                .take_while(|&(i, _)| i < cursor_pos_bytes)
+                .count()
+                .min(content.chars().count() - 1);
+            let ws = word_segmenter
+                .GetTokenAt(
+                    &windows_core::HSTRING::from_wide(&{
+                        let mut u16s = Vec::new();
+                        for c in content.chars() {
+                            let mut b = [0; 2];
+                            u16s.extend_from_slice(c.encode_utf16(&mut b));
+                        }
+                        u16s
+                    }),
+                    start_index as _,
+                )
+                .expect("word_segmenter.get_token_at");
+            let text_segment = ws
+                .SourceTextSegment()
+                .expect("word_segment.source_text_segment");
+
+            let start = content
+                .chars()
+                .take(text_segment.StartPosition as _)
+                .map(|c| c.len_utf8())
+                .sum();
+            let end = content
+                .chars()
+                .take((text_segment.StartPosition + text_segment.Length) as _)
+                .map(|c| c.len_utf8())
+                .sum();
+
+            start..end
         }
     }
 }
@@ -2382,6 +2389,14 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
     }
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct TextInputViewUpdateMask : u32 {
+        const TEXT = 1 << 0;
+        const CURSOR = 1 << 1;
+    }
+}
+
 pub struct TextInputView {
     ct_text_clip: CompositeTreeRef,
     kf_token: FocusTargetToken,
@@ -2479,7 +2494,6 @@ impl TextInputView {
             preedit_range_start_bytes: core::cell::Cell::new(0),
             preedit_range_end_bytes: core::cell::Cell::new(0),
             selection_begin_bytes: core::cell::Cell::new(0),
-            dragging: core::cell::Cell::new(false),
             #[cfg(windows)]
             native_text_input_context: platform::windows::NativeTextInputContext::new(
                 ctx.system_link,

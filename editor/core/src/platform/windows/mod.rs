@@ -43,9 +43,9 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
                 ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-                TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
-                VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN,
-                VK_SHIFT, VK_UP,
+                TrackMouseEvent, VK_CONTROL, VK_DELETE, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU,
+                VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
+                VK_RWIN, VK_SHIFT, VK_UP,
             },
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
@@ -733,6 +733,7 @@ impl WindowEventHandler {
                 v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
                 v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
                 v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
+                v if v == VK_DELETE.0 as _ => KeyInputCode::Delete,
                 _ => KeyInputCode::UnknownNativeCode(code as _),
             },
             modifier: self.modifier_key_state,
@@ -761,6 +762,7 @@ impl WindowEventHandler {
                 v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
                 v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
                 v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
+                v if v == VK_DELETE.0 as _ => KeyInputCode::Delete,
                 _ => KeyInputCode::UnknownNativeCode(code as _),
             },
             modifier: self.modifier_key_state,
@@ -769,6 +771,11 @@ impl WindowEventHandler {
     }
 
     fn char_key(&self, hwnd: HWND, code: usize) {
+        if code == 0x08 || code == 0x0d {
+            // 一部の記号キーはすでにイベント投げてるのでここでは見ない
+            return;
+        }
+
         self.event_dispatcher.dispatch(Event::KeyDown {
             code: KeyInputCode::Character(unsafe { char::from_u32_unchecked(code as _) }),
             modifier: self.modifier_key_state,
