@@ -983,7 +983,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         tracing::debug!("text input focus taken");
 
-        self.update(context);
+        self.update_focus(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
         #[cfg(target_os = "macos")]
@@ -997,7 +997,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
         tracing::debug!("text input focus released");
 
-        self.update(context);
+        self.update_focus(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
         #[cfg(target_os = "macos")]
@@ -1062,6 +1062,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         );
     }
 
+    #[cfg(feature = "wayland")]
     fn ime_state_changes(
         &self,
         context: &mut InputEventContext,
@@ -1181,18 +1182,17 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
             mounted_window.ui_scale_factor(),
         );
-        self.cursor_pos_bytes.set(bytes);
 
-        self.selection_begin_bytes.set(bytes); // 最初は同じところ(=範囲選択なし)
-        self.update_cursor_position(
+        // PointerDownのときは範囲選択なし状態
+        let update_mask = self.move_cursor(bytes);
+
+        self.update_views(
+            update_mask,
             context.composite_tree,
             mounted_window,
             context.system_link,
             context.ht_manager,
-            args.client_size,
         );
-        self.update_selection(context.composite_tree, mounted_window);
-        self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION | input::EventContinueControl::CAPTURE_ELEMENT
     }
@@ -1224,17 +1224,16 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
             mounted_window.ui_scale_factor(),
         );
-        self.cursor_pos_bytes.set(bytes);
 
-        self.update_cursor_position(
+        let update_mask = self.move_cursor_keep_selection(bytes);
+
+        self.update_views(
+            update_mask,
             context.composite_tree,
             mounted_window,
             context.system_link,
             context.ht_manager,
-            args.client_size,
         );
-        self.update_selection(context.composite_tree, mounted_window);
-        self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION
     }
@@ -1266,17 +1265,16 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
             mounted_window.ui_scale_factor(),
         );
-        self.cursor_pos_bytes.set(bytes);
 
-        self.update_cursor_position(
+        let update_mask = self.move_cursor_keep_selection(bytes);
+
+        self.update_views(
+            update_mask,
             context.composite_tree,
             mounted_window,
             context.system_link,
             context.ht_manager,
-            args.client_size,
         );
-        self.update_selection(context.composite_tree, mounted_window);
-        self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION
             | input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
@@ -1292,9 +1290,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         let selection_range =
             self.select_word_at(&*self.content.borrow(), self.cursor_pos_bytes.get());
         #[cfg(windows)]
-        self.selection_begin_bytes.set(selection_range.start);
-        #[cfg(windows)]
-        self.cursor_pos_bytes.set(selection_range.end);
+        let update_mask = self.select_range(selection_range);
 
         #[cfg(not(windows))]
         use unicode_segmentation::UnicodeSegmentation;
@@ -1406,24 +1402,20 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         }
 
         #[cfg(not(windows))]
-        self.cursor_pos_bytes.set(select_range.end);
-        #[cfg(not(windows))]
-        self.selection_begin_bytes.set(select_range.start);
+        let update_mask = self.select_range(select_range);
 
         let mounted_window = context
             .ht_manager
             .query_root_window(self.ht_root)
             .expect("not mounted");
 
-        self.update_cursor_position(
+        self.update_views(
+            update_mask,
             context.composite_tree,
             mounted_window,
             context.system_link,
             context.ht_manager,
-            args.client_size,
         );
-        self.update_selection(context.composite_tree, mounted_window);
-        self.sync_selection_native();
 
         input::EventContinueControl::STOP_PROPAGATION
     }
@@ -1442,7 +1434,7 @@ impl HitTestTreeScreenRepositionHandler for TextInputViewEventHandler {
     }
 }
 impl TextInputViewEventHandler {
-    fn update(&self, context: &mut InputEventContext) {
+    fn update_focus(&self, context: &mut InputEventContext) {
         let mounted_window = context
             .ht_manager
             .query_root_window(self.ht_root)
@@ -1503,7 +1495,6 @@ impl TextInputViewEventHandler {
         window: WindowHandle,
         system_link: &SystemLink,
         ht_manager: &HitTestTreeManager,
-        client_size: Size<LogicalUnit>,
     ) {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
@@ -1533,6 +1524,8 @@ impl TextInputViewEventHandler {
         }
         cursor_rect.offset[0] = AnimatableFloat::Value(cursor_display_x);
 
+        #[cfg(feature = "wayland")]
+        let client_size = window.client_size();
         #[cfg(feature = "wayland")]
         let (sx, sy) = ht_manager.translate_tree_local_to_root(
             self.ht_root,
@@ -1651,13 +1644,7 @@ impl TextInputViewEventHandler {
         }
         if mask.contains(TextInputViewUpdateMask::CURSOR) {
             // needs update cursor position and selection highlight
-            self.update_cursor_position(
-                composite_tree,
-                window,
-                system_link,
-                ht_manager,
-                window.client_size(),
-            );
+            self.update_cursor_position(composite_tree, window, system_link, ht_manager);
             self.update_selection(composite_tree, window);
         }
 
@@ -1726,8 +1713,28 @@ impl TextInputViewEventHandler {
         }
     }
 
+    fn move_cursor(&self, pos_bytes: usize) -> TextInputViewUpdateMask {
+        self.cursor_pos_bytes.set(pos_bytes);
+        self.selection_begin_bytes.set(pos_bytes);
+
+        TextInputViewUpdateMask::CURSOR
+    }
+
+    fn move_cursor_keep_selection(&self, pos_bytes: usize) -> TextInputViewUpdateMask {
+        self.cursor_pos_bytes.set(pos_bytes);
+
+        TextInputViewUpdateMask::CURSOR
+    }
+
     fn deselect(&self) -> TextInputViewUpdateMask {
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
+
+        TextInputViewUpdateMask::CURSOR
+    }
+
+    fn select_range(&self, range: core::ops::Range<usize>) -> TextInputViewUpdateMask {
+        self.selection_begin_bytes.set(range.start);
+        self.cursor_pos_bytes.set(range.end);
 
         TextInputViewUpdateMask::CURSOR
     }
@@ -1813,19 +1820,12 @@ impl TextInputViewEventHandler {
 
     fn jump_to_beginning_of_line(&self) -> TextInputViewUpdateMask {
         // TODO: multiline
-        self.cursor_pos_bytes.set(0);
-        self.selection_begin_bytes.set(0); // 選択を解除
-
-        TextInputViewUpdateMask::CURSOR
+        self.move_cursor(0)
     }
 
     fn jump_to_end_of_line(&self) -> TextInputViewUpdateMask {
         // TODO: multiline
-        let last_pos = self.content.borrow().len();
-        self.cursor_pos_bytes.set(last_pos);
-        self.selection_begin_bytes.set(last_pos); // 選択を解除
-
-        TextInputViewUpdateMask::CURSOR
+        self.move_cursor(self.content.borrow().len())
     }
 
     fn move_cursor_to_left(&self, with_selection: bool) -> TextInputViewUpdateMask {
@@ -1836,15 +1836,12 @@ impl TextInputViewEventHandler {
 
         let new_cursor_pos =
             Self::compute_prev_char_pos_bytes(&*self.content.borrow(), self.cursor_pos_bytes.get());
-        self.cursor_pos_bytes.set(new_cursor_pos);
 
-        let deselect_mask = if !with_selection {
-            self.deselect()
+        if with_selection {
+            self.move_cursor_keep_selection(new_cursor_pos)
         } else {
-            TextInputViewUpdateMask::empty()
-        };
-
-        TextInputViewUpdateMask::CURSOR | deselect_mask
+            self.move_cursor(new_cursor_pos)
+        }
     }
 
     fn move_cursor_to_right(&self, with_selection: bool) -> TextInputViewUpdateMask {
@@ -1855,15 +1852,12 @@ impl TextInputViewEventHandler {
 
         let new_cursor_pos =
             Self::compute_next_char_pos_bytes(&*self.content.borrow(), self.cursor_pos_bytes.get());
-        self.cursor_pos_bytes.set(new_cursor_pos);
 
-        let deselect_mask = if !with_selection {
-            self.deselect()
+        if with_selection {
+            self.move_cursor_keep_selection(new_cursor_pos)
         } else {
-            TextInputViewUpdateMask::empty()
-        };
-
-        TextInputViewUpdateMask::CURSOR | deselect_mask
+            self.move_cursor(new_cursor_pos)
+        }
     }
 
     fn select_word_at(&self, content: &str, cursor_pos_bytes: usize) -> core::ops::Range<usize> {
@@ -2065,22 +2059,20 @@ impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHan
             .take(new_selection.EndCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
 
+        let update_mask = self.select_range(new_cursor_start_bytes..new_cursor_end_bytes)
+            | TextInputViewUpdateMask::TEXT;
+
         let window = ctx
             .ht_manager
             .query_root_window(self.ht_root)
             .expect("no root window");
-        self.selection_begin_bytes.set(new_cursor_start_bytes);
-        self.cursor_pos_bytes.set(new_cursor_end_bytes);
-
-        self.update_text(ctx.composite_tree);
-        self.update_cursor_position(
+        self.update_views(
+            update_mask,
             ctx.composite_tree,
             window,
             ctx.system_link,
             ctx.ht_manager,
-            window.client_size(),
         );
-        self.update_selection(ctx.composite_tree, window);
 
         e.SetResult(windows::UI::Text::Core::CoreTextTextUpdatingResult::Succeeded)?;
         Ok(())
@@ -2105,10 +2097,6 @@ impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHan
         );
 
         // TODO: Windowsの場合は複数下線要素ができる場合がある（部分的に変換する場合など）
-        let window = ctx
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("no root window");
         if underline_type == windows::UI::Text::UnderlineType::None {
             self.preedit_range_start_bytes.set(0);
             self.preedit_range_end_bytes.set(0);
@@ -2131,6 +2119,10 @@ impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHan
             );
         }
 
+        let window = ctx
+            .ht_manager
+            .query_root_window(self.ht_root)
+            .expect("no root window");
         self.update_preedit_underline(ctx.composite_tree, window);
 
         Ok(())
