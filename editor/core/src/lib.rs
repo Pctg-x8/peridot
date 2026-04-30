@@ -78,12 +78,9 @@ pub fn launch() {
         .with(platform::mac::LogLayer)
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    // tracing_subscriber::fmt()
-    //     .with_ansi(false)
-    //     .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-    //     .init();
     #[cfg(windows)]
     tracing_subscriber::fmt()
+        .pretty()
         .with_ansi(false)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(utils::platform::windows::DebugOutputWriter)
@@ -725,9 +722,6 @@ pub enum Event {
     ContextMenuOpen {
         parent: WindowHandle,
         items: Vec<MenuItem>,
-        #[cfg(windows)]
-        screen_pos: Point<crate::utils::PixelsUnit>,
-        #[cfg(any(feature = "wayland", target_os = "macos"))]
         surface_pos: Point<LogicalUnit>,
     },
     ContextMenuCloseAll,
@@ -2848,9 +2842,6 @@ async fn run<'sys>(
                             command_id: 3,
                         },
                     ],
-                    #[cfg(windows)]
-                    screen_pos: platform::windows::pointer_pos(args.pointer_id),
-                    #[cfg(any(feature = "wayland", target_os = "macos"))]
                     surface_pos: args.client_pos,
                 });
 
@@ -3361,18 +3352,12 @@ async fn run<'sys>(
             Event::ContextMenuOpen {
                 parent,
                 items,
-                #[cfg(windows)]
-                screen_pos,
-                #[cfg(any(feature = "wayland", target_os = "macos"))]
                 surface_pos,
             } => {
                 current_active_context_menu_session = Some(ContextMenuSession::new(
                     parent,
                     items,
                     &system_link,
-                    #[cfg(windows)]
-                    screen_pos,
-                    #[cfg(any(feature = "wayland", target_os = "macos"))]
                     surface_pos,
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -3566,7 +3551,7 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::ContextMenuPointerLeave { pointer_id, target } => {
+            Event::ContextMenuPointerLeave { pointer_id, .. } => {
                 pointer_input_manager.handle_mouse_leave(
                     pointer_id,
                     &ht_manager,
@@ -3794,8 +3779,7 @@ impl ContextMenuSession {
         parent: WindowHandle,
         items: Vec<MenuItem>,
         system_link: &SystemLink,
-        #[cfg(windows)] screen_pos: Point<crate::utils::PixelsUnit>,
-        #[cfg(any(feature = "wayland", target_os = "macos"))] surface_pos: Point<LogicalUnit>,
+        surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
         typing_context: &ThreadLocalTypingContext,
@@ -3804,13 +3788,9 @@ impl ContextMenuSession {
         system_link.context_menu.observe_global_click();
 
         let root_surface = system_link.pop_context_menu(
-            #[cfg(any(feature = "wayland", target_os = "macos"))]
             parent,
             view_init_context,
             0,
-            #[cfg(windows)]
-            screen_pos,
-            #[cfg(any(feature = "wayland", target_os = "macos"))]
             surface_pos,
             |render_scale| {
                 #[allow(unused_mut)]
@@ -3888,7 +3868,6 @@ impl ContextMenuSession {
                     });
 
                     let surface = system_link.pop_context_menu(
-                        #[cfg(any(feature = "wayland", target_os = "macos"))]
                         self.parent,
                         view_init_context,
                         depth + 1,
@@ -3984,7 +3963,6 @@ impl ContextMenuSession {
             });
 
         let surface = system_link.pop_context_menu(
-            #[cfg(any(feature = "wayland", target_os = "macos"))]
             self.parent,
             view_init_context,
             depth + 1,

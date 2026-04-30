@@ -1653,17 +1653,6 @@ impl SystemLink<'_> {
     }
 }
 
-pub fn pointer_pos(_p: PointerID) -> Point<PixelsUnit> {
-    // WindowsではPointerIDは無視（マルチタッチ対応を本格的に考えないといけなくなった場合に考える）
-    let mut p = core::mem::MaybeUninit::uninit();
-    unsafe {
-        GetCursorPos(p.as_mut_ptr()).expect("GetCursorPos");
-    }
-    let p = unsafe { p.assume_init() };
-
-    Point::new_pixels(p.x, p.y)
-}
-
 pub trait TextProvider {
     fn text(&self, range: CoreTextRange) -> windows_core::Result<HSTRING>;
     fn selection(&self, req: &CoreTextSelectionRequest) -> windows_core::Result<()>;

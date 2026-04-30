@@ -13,17 +13,17 @@ use windows::{
                 DXGI_SCALING_STRETCH, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 DXGI_USAGE_RENDER_TARGET_OUTPUT, IDXGIFactory2, IDXGISwapChain3,
             },
-            Gdi::{MONITOR_DEFAULTTONEAREST, MapWindowPoints, MonitorFromPoint},
+            Gdi::MapWindowPoints,
         },
         UI::{
             Controls::WM_MOUSELEAVE,
-            HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
+            HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
-                GetWindowLongPtrW, GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
-                HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP,
-                HTTOPLEFT, HTTOPRIGHT, HTTRANSPARENT, KillTimer, SW_SHOWNOACTIVATE, SetTimer,
+                GetWindowLongPtrW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
+                HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT,
+                HTTOPRIGHT, HTTRANSPARENT, KillTimer, SW_SHOWNOACTIVATE, SetTimer,
                 SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
                 WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
                 WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW,
@@ -37,7 +37,7 @@ use windows_core::{Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
 use crate::{
-    ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
+    ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowHandle,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -158,21 +158,23 @@ impl Handle {
     }
 
     #[inline(always)]
-    pub fn submenu_pop_position(&self, index: usize) -> Option<Point<PixelsUnit>> {
+    pub fn submenu_pop_position(&self, index: usize) -> Option<Point<LogicalUnit>> {
         match state(self.0).views.get(index)? {
             MenuItemView::SubMenu(x) => {
                 let mut window_rect = core::mem::MaybeUninit::uninit();
                 unsafe {
-                    GetWindowRect(self.0, window_rect.as_mut_ptr()).expect("GetWindowRect");
+                    GetClientRect(self.0, window_rect.as_mut_ptr()).expect("GetClientRect");
                 }
                 let window_rect = unsafe { window_rect.assume_init() };
 
-                Some(Point::new_pixels(
-                    window_rect.right - SHADOW_SIZE.ceil() as i32,
-                    window_rect.top
-                        + (x.placement_y * self.render_scale()).round() as i32
-                        + SHADOW_SIZE.ceil() as i32,
-                ))
+                Some(
+                    Point::new_pixels(
+                        window_rect.right - (SHADOW_SIZE * 2.0).round() as i32,
+                        window_rect.top + (x.placement_y * self.render_scale()).round() as i32,
+                    )
+                    .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
+                    .with_offset(state(self.0).spawned_surface_pos),
+                )
             }
             _ => None,
         }
@@ -187,6 +189,7 @@ pub struct InstanceState {
     keyboard_focus_state: PerWindowKeyboardFocusState,
     kf_root_group: KeyboardFocusGroupRef,
     depth: usize,
+    spawned_surface_pos: Point<LogicalUnit>,
     pointer_focus: bool,
     views: Vec<MenuItemView>,
     _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
@@ -624,9 +627,10 @@ impl SharedState {
 impl super::SystemLink<'_> {
     pub fn pop_context_menu(
         &self,
+        parent: WindowHandle,
         view_init_context: &mut ViewInitContext,
         depth: usize,
-        screen_pos: Point<PixelsUnit>,
+        surface_pos: Point<LogicalUnit>,
         layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
@@ -634,26 +638,22 @@ impl super::SystemLink<'_> {
             &mut ViewInitContext,
         ) -> Vec<MenuItemView>,
     ) -> ContextMenuHandle {
-        let mut dest_dpi_x = core::mem::MaybeUninit::uninit();
-        let mut dest_dpi_y = core::mem::MaybeUninit::uninit();
+        let render_scale = parent.ui_scale_factor();
+        let mut ps = [surface_pos.to_pixels_round(render_scale).to_win32()];
         unsafe {
-            GetDpiForMonitor(
-                MonitorFromPoint(screen_pos.to_win32(), MONITOR_DEFAULTTONEAREST),
-                MDT_EFFECTIVE_DPI,
-                dest_dpi_x.as_mut_ptr(),
-                dest_dpi_y.as_mut_ptr(),
-            )
-            .expect("GetDpiForMonitor");
+            MapWindowPoints(Some(parent.0), None, &mut ps);
         }
-        let dest_render_scale = unsafe { dest_dpi_x.assume_init() as f32 / 96.0 };
-        let layouted_items = layouted_items(dest_render_scale);
+        let screen_pos = Point::from_win32(ps[0]);
+
+        let layouted_items = layouted_items(render_scale);
         let width = MenuItemLayout::min_width(layouted_items.iter());
         let height = MenuItemLayout::height(layouted_items.iter());
         let pixels_size =
-            Size::new_logical(width.value(), height.value()).to_pixels_ceil(dest_render_scale);
+            Size::new_logical(width.value(), height.value()).to_pixels_ceil(render_scale);
 
         let hinstance = current_instance_handle();
         let h = unsafe {
+            // Note: ウィンドウの親子関係にしちゃうとcropされちゃうので独立させる
             CreateWindowExW(
                 WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
                 PCWSTR(self.context_menu.window_class as _),
@@ -823,6 +823,7 @@ impl super::SystemLink<'_> {
                 keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
                 kf_root_group: root_kf_group,
                 depth,
+                spawned_surface_pos: surface_pos,
                 pointer_focus: false,
                 views: Vec::new(),
                 _base_surface_event_handler: base_surface_event_handler,

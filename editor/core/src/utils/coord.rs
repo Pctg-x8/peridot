@@ -118,6 +118,19 @@ impl Point<PixelsUnit> {
         }
     }
 }
+impl<U: Unit> Point<U>
+where
+    U::SignedValueType: core::ops::Add<U::SignedValueType, Output = U::SignedValueType>,
+{
+    #[inline(always)]
+    pub fn with_offset(self, offset: Point<U>) -> Self {
+        Self {
+            x: offset.x + self.x,
+            y: offset.y + self.y,
+            _marker: PhantomData,
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Size<U: Unit> {
