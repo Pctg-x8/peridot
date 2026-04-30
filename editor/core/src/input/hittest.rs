@@ -378,7 +378,7 @@ impl<'h> HitTestTreeManager<'h> {
         r: HitTestTreeRef,
         inset_lt: Point<LogicalUnit>,
         inset_rb: Point<LogicalUnit>,
-    ) -> Rect<PixelsUnit> {
+    ) -> Rect<crate::utils::PixelsUnit> {
         let (gx, gy, gw, gh, root_ht) = self.compute_global_rect_autoroot(r);
         let (wx, wy, s) = match self.data[root_ht.0].root_of_window {
             None => (0, 0, 1.0),

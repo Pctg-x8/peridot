@@ -42,7 +42,10 @@ use windows::{
             Controls::{MARGINS, WM_MOUSELEAVE},
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
-                ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP
+                ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+                TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT,
+                VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN,
+                VK_SHIFT, VK_UP,
             },
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
@@ -97,7 +100,7 @@ use crate::{
 
 pub mod context_menu;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowHandle(HWND);
 unsafe impl Send for WindowHandle {}
 unsafe impl Sync for WindowHandle {}
@@ -337,7 +340,7 @@ impl ShellPointerActions for WindowHandle {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PointerID();
 
 pub struct WindowClassSet {
@@ -1162,7 +1165,7 @@ impl DragPreviewPopoverHandle {
         self.base_window_handle.set(window.0);
     }
 
-    pub fn new(app: &ApplicationContext) -> Self {
+    pub fn new(syslink: &SystemLink) -> Self {
         let atom_drag_floating = unsafe {
             register_class(&WNDCLASSEXW {
                 cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
@@ -1170,7 +1173,7 @@ impl DragPreviewPopoverHandle {
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 lpfnWndProc: Some(Self::wndproc),
-                hInstance: app.hinstance,
+                hInstance: (&*syslink.app_context_ptr).hinstance,
                 hIcon: HICON(core::ptr::null_mut()),
                 hCursor: HCURSOR(core::ptr::null_mut()),
                 hbrBackground: HBRUSH(core::ptr::null_mut()),
@@ -1196,7 +1199,7 @@ impl DragPreviewPopoverHandle {
                 128,
                 None,
                 None,
-                Some(app.hinstance),
+                Some((&*syslink.app_context_ptr).hinstance),
                 None,
             )
             .expect("CreateWindowExW")
@@ -1211,11 +1214,11 @@ impl DragPreviewPopoverHandle {
         fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
         fx.SetOptimization(EffectOptimization::Speed)
             .expect("drag.fx.set_optimization");
-        let effect_factory = app
+        let effect_factory = unsafe { &*syslink.app_context_ptr }
             .native_compositor
             .CreateEffectFactory(&fx)
             .expect("drag.fx.create_factory");
-        let backdrop_brush = app
+        let backdrop_brush = unsafe { &*syslink.app_context_ptr }
             .native_compositor
             .CreateBackdropBrush()
             .expect("drag.backdrop_brush.create");
@@ -1223,7 +1226,7 @@ impl DragPreviewPopoverHandle {
         blur_brush
             .SetSourceParameter(h!("Source"), &backdrop_brush)
             .expect("drag.fx.set_blur_source");
-        let blur_visual = app
+        let blur_visual = unsafe { &*syslink.app_context_ptr }
             .native_compositor
             .CreateSpriteVisual()
             .expect("drag.visual.blur.create");
@@ -1241,7 +1244,7 @@ impl DragPreviewPopoverHandle {
             .expect("drag.visual.blur.set_brush");
         blur_visual
             .SetShadow(&{
-                let x = app
+                let x = unsafe { &*syslink.app_context_ptr }
                     .native_compositor
                     .CreateDropShadow()
                     .expect("drag.visual.shadow.create");
@@ -1253,13 +1256,14 @@ impl DragPreviewPopoverHandle {
                 x
             })
             .expect("drag.visual.set_shadow");
-        let color_tint_visual = app
+        let color_tint_visual = unsafe { &*syslink.app_context_ptr }
             .native_compositor
             .CreateSpriteVisual()
             .expect("drag.visual.color_tint.create");
         color_tint_visual
             .SetBrush(
-                &app.native_compositor
+                &unsafe { &*syslink.app_context_ptr }
+                    .native_compositor
                     .CreateColorBrushWithColor(
                         DragPreviewPopoverHandle::BG_COLOR.windows_native_color(),
                     )
@@ -1279,7 +1283,8 @@ impl DragPreviewPopoverHandle {
             .expect("drag.visual.add_child");
 
         let composition_target = unsafe {
-            app.native_compositor
+            (&*syslink.app_context_ptr)
+                .native_compositor
                 .cast::<ICompositorDesktopInterop>()
                 .expect("native_compositor.cast.desktop_interop")
                 .CreateDesktopWindowTarget(w, true)

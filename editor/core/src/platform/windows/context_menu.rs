@@ -59,7 +59,7 @@ use crate::{
 };
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Handle(HWND);
 impl core::hash::Hash for Handle {
     #[inline(always)]

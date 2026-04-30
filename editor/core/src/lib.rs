@@ -175,9 +175,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
     );
 
-    #[cfg(windows)]
-    let drag_preview_popover = DragPreviewPopoverHandle::new(app_context);
-
     let mut polling = false;
     let empty_dispatcher = LogicFiberEventDispatcher {
         event_store,
@@ -729,7 +726,7 @@ pub enum Event {
         parent: WindowHandle,
         items: Vec<MenuItem>,
         #[cfg(windows)]
-        screen_pos: Point<PixelsUnit>,
+        screen_pos: Point<crate::utils::PixelsUnit>,
         #[cfg(any(feature = "wayland", target_os = "macos"))]
         surface_pos: Point<LogicalUnit>,
     },
@@ -1497,21 +1494,25 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
                 .expect("words_segmenter.create");
         #[cfg(windows)]
+        let content = self.content.borrow();
+        #[cfg(windows)]
+        let start_index = content
+            .char_indices()
+            .take_while(|&(i, _)| i < self.cursor_pos_bytes.get())
+            .count()
+            .min(content.chars().count() - 1);
+        #[cfg(windows)]
         let ws = word_segmenter
             .GetTokenAt(
                 &windows_core::HSTRING::from_wide(&{
                     let mut u16s = Vec::new();
-                    for c in self.content.borrow().chars() {
+                    for c in content.chars() {
                         let mut b = [0; 2];
                         u16s.extend_from_slice(c.encode_utf16(&mut b));
                     }
                     u16s
                 }),
-                self.content
-                    .borrow()
-                    .char_indices()
-                    .take_while(|&(i, _)| i < self.cursor_pos_bytes.get())
-                    .count() as _,
+                start_index as _,
             )
             .expect("word_segmenter.get_token_at");
         #[cfg(windows)]
@@ -3793,7 +3794,7 @@ impl ContextMenuSession {
         parent: WindowHandle,
         items: Vec<MenuItem>,
         system_link: &SystemLink,
-        #[cfg(windows)] screen_pos: Point<PixelsUnit>,
+        #[cfg(windows)] screen_pos: Point<crate::utils::PixelsUnit>,
         #[cfg(any(feature = "wayland", target_os = "macos"))] surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
