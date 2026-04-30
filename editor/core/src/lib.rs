@@ -2561,7 +2561,7 @@ impl TextInputView {
         ct.mark_dirty_all(self.eh.ct_selection_bg);
 
         self.eh
-            .update_cursor_position(ct, window, syslink, ht_manager, window.client_size());
+            .update_cursor_position(ct, window, syslink, ht_manager);
         self.eh.update_preedit_underline(ct, window);
     }
 }
