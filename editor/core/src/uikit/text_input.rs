@@ -5,14 +5,15 @@ use bitflags::bitflags;
 #[cfg(target_os = "macos")]
 use crate::{Event, LogicFiberEventDispatcher, input::hittest::HitTestTreeManager};
 use crate::{
-    PerWindowData, SystemLink, WindowHandle,
+    LogicFiberEventDispatcher, PerWindowData, SystemLink, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
         PointerInputUnit,
         hittest::{
-            CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef,
-            HitTestTreeScreenRepositionHandler, PointerActionArgs, PointerButtonActionArgs,
+            CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
+            HitTestTreeRef, HitTestTreeScreenRepositionHandler, PointerActionArgs,
+            PointerButtonActionArgs,
         },
     },
     rendering::{
@@ -28,7 +29,7 @@ use crate::{
         MountContext, MountTarget, ViewEventHandler, ViewIdentifier, ViewInitContext,
         ViewUpdateContext,
     },
-    utils::{Point, SafeF32},
+    utils::{LogicalUnit, Point, SafeF32},
 };
 
 pub struct TextInputView {
@@ -36,12 +37,12 @@ pub struct TextInputView {
     eh: Rc<TextInputViewEventHandler>,
 }
 impl TextInputView {
-    pub fn new(ctx: &mut ViewInitContext) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, pos: Point<LogicalUnit>) -> Self {
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(20.0)],
-            offset: [AnimatableFloat::Value(200.0), AnimatableFloat::Value(300.0)],
+            offset: [AnimatableFloat::Value(pos.x), AnimatableFloat::Value(pos.y)],
             has_bitmap: true,
             border: Some(Border {
                 thickness: 1.0,
@@ -98,8 +99,8 @@ impl TextInputView {
         let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
             width: 128.0,
             height: 20.0,
-            left: 200.0,
-            top: 300.0,
+            left: pos.x,
+            top: pos.y,
             cursor_shape: CursorShape::IBeam,
             keyboard_focus: Some(kf_token),
             ..Default::default()
@@ -129,14 +130,12 @@ impl TextInputView {
             preedit_range_end_bytes: core::cell::Cell::new(0),
             selection_begin_bytes: core::cell::Cell::new(0),
             #[cfg(windows)]
-            native_text_input_context: platform::windows::NativeTextInputContext::new(
+            native_text_input_context: crate::platform::windows::NativeTextInputContext::new(
                 ctx.system_link,
             ),
             #[cfg(target_os = "macos")]
             ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
-            #[cfg(target_os = "macos")]
             pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
-            #[cfg(target_os = "macos")]
             event_dispatcher: ctx.system_link.event_dispatcher,
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
@@ -224,12 +223,10 @@ struct TextInputViewEventHandler {
     preedit_range_end_bytes: core::cell::Cell<usize>,
     selection_begin_bytes: core::cell::Cell<usize>,
     #[cfg(windows)]
-    native_text_input_context: platform::windows::NativeTextInputContext,
+    native_text_input_context: crate::platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
     ht_manager_ptr: *const HitTestTreeManager<'static>,
-    #[cfg(target_os = "macos")]
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
-    #[cfg(target_os = "macos")]
     event_dispatcher: *mut LogicFiberEventDispatcher,
 }
 impl ViewEventHandler for TextInputViewEventHandler {
@@ -1212,7 +1209,7 @@ impl TextInputViewEventHandler {
     }
 }
 #[cfg(windows)]
-impl platform::windows::TextProvider for TextInputViewEventHandler {
+impl crate::platform::windows::TextProvider for TextInputViewEventHandler {
     fn text(
         &self,
         range: windows::UI::Text::Core::CoreTextRange,
@@ -1258,7 +1255,7 @@ impl platform::windows::TextProvider for TextInputViewEventHandler {
     }
 }
 #[cfg(windows)]
-impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHandler {
+impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHandler {
     fn layout(
         &self,
         ctx: &mut InputEventContext,

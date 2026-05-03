@@ -1275,9 +1275,16 @@ async fn run<'sys>(
         view_init_ctx.keyboard_focus_registry,
     );
 
-    let text_input_view = TextInputView::new(&mut view_init_ctx);
+    let text_input_view = TextInputView::new(&mut view_init_ctx, Point::new_logical(200.0, 300.0));
     text_input_view.mount(&mut view_init_ctx, &main_window);
     text_input_view.set_keyboard_focus_group(
+        main_window.keyboard_focus_group(),
+        view_init_ctx.keyboard_focus_registry,
+    );
+
+    let text_input_view2 = TextInputView::new(&mut view_init_ctx, Point::new_logical(200.0, 324.0));
+    text_input_view2.mount(&mut view_init_ctx, &main_window);
+    text_input_view2.set_keyboard_focus_group(
         main_window.keyboard_focus_group(),
         view_init_ctx.keyboard_focus_registry,
     );
