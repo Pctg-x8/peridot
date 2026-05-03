@@ -53,23 +53,6 @@ impl SafeF32 {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy)]
-pub struct UnboundedRef<T>(*const T);
-unsafe impl<T: Sync> Sync for UnboundedRef<T> {}
-unsafe impl<T: Send> Send for UnboundedRef<T> {}
-impl<T> UnboundedRef<T> {
-    #[inline(always)]
-    pub const fn new(ptr: *const T) -> Self {
-        Self(ptr)
-    }
-
-    #[inline(always)]
-    pub const fn get(&self) -> *const T {
-        self.0
-    }
-}
-
-#[repr(transparent)]
 pub struct ByteLengthFormatter(pub usize);
 impl core::fmt::Display for ByteLengthFormatter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
