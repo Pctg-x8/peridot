@@ -630,7 +630,7 @@ impl TextLayout {
             let mut str_attr = apple_sdk_port::foundation::MutableDictionary::<
                 apple_sdk_port::foundation::String,
                 apple_sdk_port::AnyObject,
-            >::new_copying_key_generic_value(None, 3)
+            >::new_copying_key_generic_value(None, 2)
             .expect("str_attr.create");
             str_attr.set(
                 apple_sdk_port::foundation::AttributedStringKey::font(),
@@ -639,12 +639,6 @@ impl TextLayout {
             str_attr.set(
                 crate::platform::mac::ak_spacing_inline_start(),
                 apple_sdk_port::foundation::Number::new_f32(None, r.spacing_inline_start)
-                    .expect("Number.create")
-                    .as_any(),
-            );
-            str_attr.set(
-                crate::platform::mac::ak_font_id(),
-                apple_sdk_port::foundation::Number::new_i64(None, r.font as usize as _)
                     .expect("Number.create")
                     .as_any(),
             );
@@ -675,10 +669,8 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         str.end_editing();
         #[cfg(target_os = "macos")]
-        let framesetter = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
-            .expect("Framesetter.create");
-        #[cfg(target_os = "macos")]
-        let frame = framesetter
+        let frame = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
+            .expect("Framesetter.create")
             .create_frame(
                 apple_sdk_port::foundation::Range {
                     location: 0,
@@ -1018,11 +1010,24 @@ impl TextLayout {
                 };
                 fonts_per_run.push(font);
 
-                baseline_pos = baseline_pos.max(font.ascent());
-                // TODO: 複数行になる場合はleadingを行間に足す
-                height = height.max((font.ascent() + font.descent()) as f32 * 2.0);
+                let mut ascent = core::mem::MaybeUninit::uninit();
+                let mut descent = core::mem::MaybeUninit::uninit();
+                r.typographic_bounds(
+                    apple_sdk_port::raw::CFRange {
+                        location: 0,
+                        length: 0,
+                    },
+                    Some(&mut ascent),
+                    Some(&mut descent),
+                    None,
+                );
+                let ascent = unsafe { ascent.assume_init() };
+                let descent = unsafe { descent.assume_init() };
 
-                accumulated_inline_shifts.push(inline_shifts);
+                baseline_pos = baseline_pos.max(ascent);
+                // TODO: 複数行になる場合はleadingを行間に足す
+                height = height.max((ascent + descent) as f32 * 2.0);
+
                 if let Some(x) =
                     attributes.get_untyped_value(crate::platform::mac::ak_spacing_inline_start())
                 {
@@ -1032,6 +1037,7 @@ impl TextLayout {
                             .expect("invalid attr value")
                     }
                 };
+                accumulated_inline_shifts.push(inline_shifts);
             }
 
             for ((r, font), x_shift) in runs
