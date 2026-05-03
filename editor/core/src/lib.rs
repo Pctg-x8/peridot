@@ -73,7 +73,7 @@ pub fn launch() {
 
     #[cfg(target_os = "macos")]
     tracing_subscriber::registry()
-        .with(platform::mac::LogLayer)
+        .with(utils::platform::mac::LogLayer)
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     #[cfg(windows)]

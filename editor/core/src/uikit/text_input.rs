@@ -1430,7 +1430,7 @@ impl platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHan
     }
 }
 #[cfg(target_os = "macos")]
-impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandler {
+impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewEventHandler {
     fn has_marked_text(&self) -> bool {
         tracing::debug!(
             start = self.preedit_range_start_bytes.get(),

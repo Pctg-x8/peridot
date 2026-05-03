@@ -2491,7 +2491,7 @@ impl<Event> CompositeTree<Event> {
 
     pub fn mark_dirty_all(&mut self, index: CompositeTreeRef) {
         self.dirty_flags[index.0].dirty = true;
-        if let Some(ref mut x) = self.rects[index.0].text {
+        if self.rects[index.0].text.is_some() {
             self.dirty_flags[index.0].text_layout_dirty = true;
         }
         self.dirty_rects.insert(index.0, DirtyRect::Modified);
@@ -4898,34 +4898,19 @@ impl CompositionSurfaceAtlas {
         };
 
         if let Err(e) = unsafe {
-            gfx.bind_sparse_raw(
-                &[br::vk::VkBindSparseInfo {
-                    sType: br::vk::VkBindSparseInfo::TYPE,
-                    pNext: core::ptr::null(),
-                    waitSemaphoreCount: 0,
-                    pWaitSemaphores: core::ptr::null(),
-                    signalSemaphoreCount: 0,
-                    pSignalSemaphores: core::ptr::null(),
-                    bufferBindCount: 0,
-                    pBufferBinds: core::ptr::null(),
-                    imageBindCount: 1,
-                    pImageBinds: [br::vk::VkSparseImageMemoryBindInfo {
-                        image: resource.image().native_ptr(),
-                        bindCount: 1,
-                        pBinds: [br::vk::VkSparseImageMemoryBind {
-                            subresource: br::ImageSubresource::new(br::AspectMask::COLOR, 0, 0),
-                            offset: br::Offset3D::ZERO,
-                            extent: br::Extent2D::spread1(Self::GRANULARITY).with_depth(1),
-                            memory: memory.native_ptr(),
-                            memoryOffset: 0,
-                            flags: 0,
-                        }]
-                        .as_ptr(),
-                    }]
-                    .as_ptr(),
-                    imageOpaqueBindCount: 0,
-                    pImageOpaqueBinds: core::ptr::null(),
-                }],
+            gfx.bind_sparse(
+                &[
+                    br::BindSparseInfo::new().image_binds(&[br::SparseImageMemoryBindInfo::new(
+                        resource.image(),
+                        &[br::SparseImageMemoryBind::new(
+                            br::ImageSubresource::new(br::AspectMask::COLOR, 0, 0),
+                            br::Offset3D::ZERO,
+                            br::Extent2D::spread1(Self::GRANULARITY).with_depth(1),
+                            &memory,
+                            0,
+                        )],
+                    )]),
+                ],
                 None,
             )
         } {

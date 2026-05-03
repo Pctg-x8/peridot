@@ -67,6 +67,45 @@ pub struct ContextMenuSurfaceCallbacks {
     pub on_pointer_leave: extern "C" fn(sender: *mut ContextMenuSurface),
 }
 
+pub trait TextInputClientForwarding {
+    fn has_marked_text(&self) -> bool;
+    fn marked_range(&self, out_location: *mut i64, out_length: *mut i64) -> bool;
+    fn selected_range(&self, out_location: *mut i64, out_length: *mut i64);
+    fn set_marked_text(
+        &self,
+        text: &core::ffi::CStr,
+        new_selection_location: i64,
+        new_selection_length: i64,
+        replacement_location: i64,
+        replacement_length: i64,
+    );
+    fn insert_text(
+        &self,
+        text: &core::ffi::CStr,
+        replacement_location: i64,
+        replacement_length: i64,
+    );
+    fn substring(
+        &self,
+        location: Option<i64>,
+        length: i64,
+        actual_location: *mut i64,
+        actual_length: *mut i64,
+        out_chars: *mut *const core::ffi::c_char,
+        out_len: *mut u64,
+    );
+    fn first_rect(
+        &self,
+        location: i64,
+        length: i64,
+        actual_location: *mut i64,
+        actual_length: *mut i64,
+        surface_x: *mut f32,
+        surface_y: *mut f32,
+        width: *mut f32,
+        height: *mut f32,
+    );
+}
 #[repr(C)]
 pub struct TextInputClientForwardingFT {
     pub has_marked_text: extern "C" fn(context: *mut c_void) -> u8,
@@ -111,17 +150,15 @@ pub struct TextInputClientForwardingFT {
     ),
 }
 impl TextInputClientForwardingFT {
-    pub const fn r#for<T: super::TextInputClientForwarding>() -> Self {
-        extern "C" fn has_marked_text<T: super::TextInputClientForwarding>(
-            context: *mut c_void,
-        ) -> u8 {
+    pub const fn r#for<T: TextInputClientForwarding>() -> Self {
+        extern "C" fn has_marked_text<T: TextInputClientForwarding>(context: *mut c_void) -> u8 {
             if T::has_marked_text(unsafe { &*context.cast::<T>() }) {
                 1
             } else {
                 0
             }
         }
-        extern "C" fn marked_range<T: super::TextInputClientForwarding>(
+        extern "C" fn marked_range<T: TextInputClientForwarding>(
             context: *mut c_void,
             out_location: *mut i64,
             out_length: *mut i64,
@@ -132,14 +169,14 @@ impl TextInputClientForwardingFT {
                 0
             }
         }
-        extern "C" fn selected_range<T: super::TextInputClientForwarding>(
+        extern "C" fn selected_range<T: TextInputClientForwarding>(
             context: *mut c_void,
             out_location: *mut i64,
             out_length: *mut i64,
         ) {
             T::selected_range(unsafe { &*context.cast::<T>() }, out_location, out_length);
         }
-        extern "C" fn set_marked_text<T: super::TextInputClientForwarding>(
+        extern "C" fn set_marked_text<T: TextInputClientForwarding>(
             context: *mut c_void,
             text: *const c_char,
             new_selection_location: i64,
@@ -156,7 +193,7 @@ impl TextInputClientForwardingFT {
                 replacement_length,
             );
         }
-        extern "C" fn insert_text<T: super::TextInputClientForwarding>(
+        extern "C" fn insert_text<T: TextInputClientForwarding>(
             context: *mut c_void,
             text: *const c_char,
             replacement_location: i64,
@@ -169,7 +206,7 @@ impl TextInputClientForwardingFT {
                 replacement_length,
             );
         }
-        extern "C" fn substring<T: super::TextInputClientForwarding>(
+        extern "C" fn substring<T: TextInputClientForwarding>(
             context: *mut c_void,
             location_is_not_found: u8,
             location: i64,
@@ -193,7 +230,7 @@ impl TextInputClientForwardingFT {
                 out_len,
             );
         }
-        extern "C" fn first_rect<T: super::TextInputClientForwarding>(
+        extern "C" fn first_rect<T: TextInputClientForwarding>(
             context: *mut c_void,
             location: i64,
             length: i64,

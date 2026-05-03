@@ -1,8 +1,6 @@
-use std::{cell::RefCell, sync::Mutex};
+use std::sync::Mutex;
 
 use bedrock::{InstanceChild, SurfaceCreateInfo};
-use tracing::{Level, Subscriber};
-use tracing_subscriber::{Layer, fmt::FormatFields, registry::LookupSpan};
 
 use crate::{
     ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowType,
@@ -14,6 +12,7 @@ use crate::{
             CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
     },
+    platform::mac::bridge::TextInputClientForwarding,
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
@@ -769,179 +768,11 @@ pub struct WindowState {
 unsafe impl Sync for WindowState {}
 unsafe impl Send for WindowState {}
 
-pub trait TextInputClientForwarding {
-    fn has_marked_text(&self) -> bool;
-    fn marked_range(&self, out_location: *mut i64, out_length: *mut i64) -> bool;
-    fn selected_range(&self, out_location: *mut i64, out_length: *mut i64);
-    fn set_marked_text(
-        &self,
-        text: &core::ffi::CStr,
-        new_selection_location: i64,
-        new_selection_length: i64,
-        replacement_location: i64,
-        replacement_length: i64,
-    );
-    fn insert_text(
-        &self,
-        text: &core::ffi::CStr,
-        replacement_location: i64,
-        replacement_length: i64,
-    );
-    fn substring(
-        &self,
-        location: Option<i64>,
-        length: i64,
-        actual_location: *mut i64,
-        actual_length: *mut i64,
-        out_chars: *mut *const core::ffi::c_char,
-        out_len: *mut u64,
-    );
-    fn first_rect(
-        &self,
-        location: i64,
-        length: i64,
-        actual_location: *mut i64,
-        actual_length: *mut i64,
-        surface_x: *mut f32,
-        surface_y: *mut f32,
-        width: *mut f32,
-        height: *mut f32,
-    );
-}
-
-pub struct LogLayer;
-impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for LogLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, ctx: tracing_subscriber::layer::Context<'_, S>) {
-        thread_local! {
-            static BUF: RefCell<String> = RefCell::new(String::new());
-        }
-
-        BUF.with(|buf| {
-            let mut buflock = buf.try_borrow_mut();
-            let mut tmpbuf;
-            let mut buf = match buflock.as_mut() {
-                Ok(x) => &mut *x,
-                Err(_) => {
-                    tmpbuf = String::new();
-                    &mut tmpbuf
-                }
-            };
-            let current_thread = std::thread::current();
-            let nowtime = time::OffsetDateTime::from(std::time::SystemTime::now());
-
-            struct StringIoWrite<'a>(&'a mut String);
-            impl std::io::Write for StringIoWrite<'_> {
-                #[inline(always)]
-                fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                    self.0.push_str(unsafe { str::from_utf8_unchecked(buf) });
-                    Ok(buf.len())
-                }
-
-                #[inline(always)]
-                fn flush(&mut self) -> std::io::Result<()> {
-                    Ok(())
-                }
-            }
-
-            if let Err(_) = nowtime.format_into(
-                &mut StringIoWrite(&mut buf),
-                &time::format_description::well_known::Iso8601::DEFAULT,
-            ) {
-                unsafe {
-                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
-                }
-                return;
-            }
-            let mut writer = tracing_subscriber::fmt::format::Writer::new(&mut *buf);
-            if let Err(_) = write!(
-                writer,
-                " [{}] {}: ",
-                event.metadata().level(),
-                event.metadata().target()
-            ) {
-                unsafe {
-                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
-                }
-                return;
-            }
-            if let Err(_) = tracing_subscriber::fmt::format::DefaultFields::new()
-                .format_fields(writer.by_ref(), event)
-            {
-                unsafe {
-                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
-                }
-                return;
-            }
-            if let Err(_) = write!(
-                writer,
-                "\n  at {}:{} ",
-                event.metadata().file().unwrap_or("<unknown file>"),
-                event.metadata().line().unwrap_or(0)
-            ) {
-                unsafe {
-                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
-                }
-                return;
-            }
-            if let Err(_) = match current_thread.name() {
-                Some(n) => write!(writer, "[{n}]"),
-                None => write!(writer, "[ThreadID#{:?}]", current_thread.id()),
-            } {
-                unsafe {
-                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
-                }
-                return;
-            }
-
-            if let Some(scope) = ctx.event_scope(event) {
-                for s in scope {
-                    if let Err(_) = write!(
-                        writer,
-                        "\n  in {}:{} {}",
-                        s.metadata().file().unwrap_or("<unknown file>"),
-                        s.metadata().line().unwrap_or(0),
-                        s.name()
-                    ) {
-                        unsafe {
-                            self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
-                        }
-                        return;
-                    }
-                }
-            }
-
-            if let Err(_) = write!(writer, "\0") {
-                unsafe {
-                    self::bridge::ni_log_err(c"unable to format event".as_ptr().cast());
-                }
-                return;
-            }
-
-            match event.metadata().level() {
-                &Level::ERROR => unsafe { self::bridge::ni_log_err(buf.as_ptr()) },
-                &Level::WARN => unsafe { self::bridge::ni_log_warn(buf.as_ptr()) },
-                &Level::INFO => unsafe { self::bridge::ni_log_info(buf.as_ptr()) },
-                &Level::DEBUG => unsafe { self::bridge::ni_log_debug(buf.as_ptr()) },
-                &Level::TRACE => unsafe { self::bridge::ni_log_trace(buf.as_ptr()) },
-            }
-
-            buf.clear();
-        })
-    }
-}
-
 #[inline(always)]
 pub fn ak_spacing_inline_start() -> &'static apple_sdk_port::foundation::String {
     unsafe {
         apple_sdk_port::foundation::String::from_internal_ref(
             &*self::bridge::ni_ak_spacing_inline_start(),
         )
-    }
-}
-
-#[inline(always)]
-pub fn ak_font_id() -> &'static apple_sdk_port::foundation::String {
-    unsafe {
-        apple_sdk_port::foundation::String::from_internal_ref(&*self::bridge::ni_ak_font_id())
     }
 }

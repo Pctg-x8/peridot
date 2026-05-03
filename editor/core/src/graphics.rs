@@ -554,9 +554,9 @@ impl<'fs> VulkanDevice<'fs> {
     }
 
     #[tracing::instrument(skip(self, infos, fence), err(Display))]
-    pub unsafe fn bind_sparse_raw(
+    pub unsafe fn bind_sparse(
         &self,
-        infos: &[br::vk::VkBindSparseInfo],
+        infos: &[br::BindSparseInfo],
         fence: Option<br::VkHandleRefMut<br::vk::VkFence>>,
     ) -> br::Result<()> {
         unsafe {
