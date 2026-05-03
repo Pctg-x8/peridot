@@ -440,7 +440,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
-        let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
+        let bytes = TextLayout::find_nearest_bytes(
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
@@ -482,7 +482,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
-        let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
+        let bytes = TextLayout::find_nearest_bytes(
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
@@ -523,7 +523,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
         let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
         // TextLayoutはPixels座標系なのでscaleをかけておく
-        let (_, bytes) = TextLayout::find_nearest_position_with_bytes(
+        let bytes = TextLayout::find_nearest_bytes(
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,

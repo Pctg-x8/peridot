@@ -1326,7 +1326,8 @@ impl TextLayout {
                         }
 
                         use windows::Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink;
-                        let mut current_figure_state = None;
+                        let mut vrender =
+                            VectorVertexRenderer::new(unsafe { &mut *self.vector_raster_state });
                         let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
                             translate: windows_numerics::Vector2 {
                                 X: r.left as f32
@@ -1342,8 +1343,7 @@ impl TextLayout {
                                         / design_unit as f32,
                             },
                             dip_to_pixels_scale: self.dip_to_pixels_scaling,
-                            current_figure_state: &mut current_figure_state,
-                            vector_raster_state: self.vector_raster_state,
+                            vrender: &mut vrender,
                         });
                         unsafe {
                             font_face
@@ -1359,7 +1359,6 @@ impl TextLayout {
                                 )
                                 .expect("GetGlyphRunOutline");
                         }
-                        assert!(current_figure_state.is_none());
                     }
 
                     baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) };
@@ -1407,84 +1406,47 @@ impl TextLayout {
         }
         #[cfg(windows)]
         #[implement(ID2D1SimplifiedGeometrySink)]
-        struct GlyphOutlineSink {
+        struct GlyphOutlineSink<'a> {
             translate: windows_numerics::Vector2,
             dip_to_pixels_scale: f32,
-            current_figure_state: *mut Option<(windows_numerics::Vector2, u16)>,
-            vector_raster_state: *mut VectorRasterizationState,
+            vrender: *mut VectorVertexRenderer<'a>,
         }
         #[cfg(windows)]
-        impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl {
+        impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl<'_> {
             fn BeginFigure(
                 &self,
                 startpoint: &windows_numerics::Vector2,
                 figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
             ) {
-                use windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN_FILLED;
+                assert_eq!(
+                    figurebegin,
+                    windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN_FILLED,
+                    "not filled figure"
+                );
 
-                assert_eq!(figurebegin, D2D1_FIGURE_BEGIN_FILLED, "not filled figure");
-
-                unsafe {
-                    *self.current_figure_state = Some((
-                        *startpoint,
-                        (*self.vector_raster_state).fill_tri_points.len() as _,
-                    ));
-                    (*self.vector_raster_state).fill_tri_points.push([
-                        startpoint.X * self.dip_to_pixels_scale + self.translate.X,
-                        -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y,
-                    ]);
-                }
+                unsafe { &mut *self.vrender }.move_to(Point::new_vector_texture(
+                    startpoint.X * self.dip_to_pixels_scale + self.translate.X,
+                    -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y,
+                ));
             }
 
             fn EndFigure(
                 &self,
                 figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END,
             ) {
-                use windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END_CLOSED;
-
-                let (start_point, filltri_index0) = unsafe {
-                    (*self.current_figure_state)
-                        .take()
-                        .expect("no figure started?")
-                };
-
-                if figureend == D2D1_FIGURE_END_CLOSED {
-                    // line to start
-                    unsafe {
-                        let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
-                        (*self.vector_raster_state).fill_tri_points.push([
-                            start_point.X * self.dip_to_pixels_scale + self.translate.X,
-                            -start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
-                        ]);
-                        (*self.vector_raster_state).fill_tri_indices.extend([
-                            filltri_index0,
-                            filltri_point1 as u16,
-                            (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
-                        ]);
-                    }
+                if figureend != windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END_CLOSED {
+                    tracing::warn!("figure end without D2D1_FIGURE_END_CLOSED?");
                 }
+
+                unsafe { &mut *self.vrender }.close();
             }
 
             fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
-                let &(_, filltri_index0) = unsafe {
-                    (*self.current_figure_state)
-                        .as_ref()
-                        .expect("no figure started?")
-                };
-
                 for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
-                    unsafe {
-                        let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
-                        (*self.vector_raster_state).fill_tri_points.push([
-                            p.X * self.dip_to_pixels_scale + self.translate.X,
-                            -p.Y * self.dip_to_pixels_scale + self.translate.Y,
-                        ]);
-                        (*self.vector_raster_state).fill_tri_indices.extend([
-                            filltri_index0,
-                            filltri_point1 as u16,
-                            (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
-                        ]);
-                    }
+                    unsafe { &mut *self.vrender }.line_to(Point::new_vector_texture(
+                        p.X * self.dip_to_pixels_scale + self.translate.X,
+                        -p.Y * self.dip_to_pixels_scale + self.translate.Y,
+                    ));
                 }
             }
 
@@ -1493,74 +1455,28 @@ impl TextLayout {
                 beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
                 bezierscount: u32,
             ) {
-                let &(_, filltri_index0) = unsafe {
-                    (*self.current_figure_state)
-                        .as_ref()
-                        .expect("no figure started?")
-                };
-
                 for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
-                    let from_p = unsafe {
-                        (*self.vector_raster_state)
-                            .fill_tri_points
-                            .last()
-                            .expect("no points emitted")
-                    };
-                    let bez = lyon_geom::CubicBezierSegment {
-                        from: lyon_geom::point(from_p[0], from_p[1]),
-                        ctrl1: lyon_geom::point(
+                    unsafe { &mut *self.vrender }.cubic_to(
+                        Point::new_vector_texture(
                             p.point1.X * self.dip_to_pixels_scale + self.translate.X,
                             -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y,
                         ),
-                        ctrl2: lyon_geom::point(
+                        Point::new_vector_texture(
                             p.point2.X * self.dip_to_pixels_scale + self.translate.X,
                             -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y,
                         ),
-                        to: lyon_geom::point(
+                        Point::new_vector_texture(
                             p.point3.X * self.dip_to_pixels_scale + self.translate.X,
                             -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y,
                         ),
-                    };
-
-                    bez.for_each_quadratic_bezier(0.1, &mut |q| unsafe {
-                        let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
-                        (*self.vector_raster_state)
-                            .fill_tri_points
-                            .push([q.to.x, q.to.y]);
-                        (*self.vector_raster_state).fill_tri_indices.extend([
-                            filltri_index0,
-                            filltri_point1 as u16,
-                            (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
-                        ]);
-
-                        (*self.vector_raster_state).curve_tris.extend([
-                            [q.from.x, q.from.y, 0.0, 0.0],
-                            [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
-                            [q.to.x, q.to.y, 1.0, 1.0],
-                        ]);
-                    });
+                    );
                 }
             }
 
             fn Close(&self) -> windows_core::Result<()> {
-                let &(ref start_point, filltri_index0) = unsafe {
-                    (*self.current_figure_state)
-                        .as_ref()
-                        .expect("no figure started?")
-                };
-
-                // line to start
-                unsafe {
-                    let filltri_point1 = (*self.vector_raster_state).fill_tri_points.len() - 1;
-                    (*self.vector_raster_state).fill_tri_points.push([
-                        start_point.X * self.dip_to_pixels_scale + self.translate.X,
-                        start_point.Y * self.dip_to_pixels_scale + self.translate.Y,
-                    ]);
-                    (*self.vector_raster_state).fill_tri_indices.extend([
-                        filltri_index0,
-                        filltri_point1 as u16,
-                        (*self.vector_raster_state).fill_tri_points.len() as u16 - 1,
-                    ]);
+                #[cfg(debug_assertions)]
+                if !unsafe { &mut *self.vrender }.is_figure_opening() {
+                    return Err(windows::Win32::Foundation::E_ILLEGAL_STATE_CHANGE.into());
                 }
 
                 Ok(())
@@ -1841,18 +1757,18 @@ impl TextLayout {
         };
         #[cfg(windows)]
         let left_cursor =
-            unsafe { metrics.assume_init().widthIncludingTrailingWhitespace * render_scale };
+            unsafe { metrics.assume_init() }.widthIncludingTrailingWhitespace * render_scale;
 
         left_cursor
     }
 
-    pub fn find_nearest_position_with_bytes(
+    pub fn find_nearest_bytes(
         x: f32,
         text: &str,
         font: FontID,
         font_set: &PerWindowFontSet,
         render_scale: f32,
-    ) -> (f32, usize) {
+    ) -> usize {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -1916,7 +1832,7 @@ impl TextLayout {
 
         #[cfg(feature = "harfbuzz")]
         // beyond
-        return (left_cursor, bytes);
+        return bytes;
 
         #[cfg(windows)]
         let mut is_trailing_hit = core::mem::MaybeUninit::uninit();
@@ -1944,33 +1860,27 @@ impl TextLayout {
         #[cfg(windows)]
         if is_trailing_hit {
             // trailing hitの場合は次の文字を返す（そっちのが近い）
-            (
-                metrics.left + metrics.width,
-                text.chars()
-                    .take(metrics.textPosition as usize + 1)
-                    .fold(0, |a, c| a + c.len_utf8()),
-            )
+            text.chars()
+                .take(metrics.textPosition as usize + 1)
+                .fold(0, |a, c| a + c.len_utf8())
         } else {
-            (
-                metrics.left,
-                text.chars()
-                    .take(metrics.textPosition as _)
-                    .fold(0, |a, c| a + c.len_utf8()),
-            )
+            text.chars()
+                .take(metrics.textPosition as _)
+                .fold(0, |a, c| a + c.len_utf8())
         }
 
         #[cfg(target_os = "macos")]
         if layout.frame.lines().len() == 0 {
             // no lines(empty string)
-            return (0.0, 0);
+            return 0;
         }
         #[cfg(target_os = "macos")]
         match layout.frame.lines()[0].string_index_for_position(apple_sdk_port::raw::CGPoint {
             x: (x / render_scale) as _,
             y: 0.0,
         }) {
-            Some(x) => (0.0, text.chars().take(x as _).map(|x| x.len_utf8()).sum()),
-            None => (0.0, text.len() - 1),
+            Some(x) => text.chars().take(x as _).map(|x| x.len_utf8()).sum(),
+            None => text.len() - 1,
         }
     }
 }

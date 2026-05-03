@@ -172,4 +172,8 @@ impl<'a> VectorVertexRenderer<'a> {
 
         self.pen = org;
     }
+
+    pub const fn is_figure_opening(&self) -> bool {
+        self.current_figure.is_some()
+    }
 }
