@@ -203,3 +203,6 @@ pub use self::menu::{
     MenuItemLayout, MenuItemView, SeparatorView as MenuItemSeparatorView,
     SubMenuView as MenuItemSubMenuView,
 };
+
+mod text_input;
+pub use self::text_input::TextInputView;
