@@ -1,5 +1,11 @@
 //! Non-Application related common ui kits
 
+use std::{
+    collections::BTreeSet,
+    num::NonZeroUsize,
+    rc::{Rc, Weak},
+};
+
 use crate::{
     SyncEvent, SystemLink, WindowHandle,
     input::{
@@ -18,6 +24,7 @@ pub struct MountContext<'a, 'h> {
 
 pub struct ViewInitContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
+    pub view_registry: &'a mut ViewRegistry,
     pub system_link: &'a SystemLink<'a>,
     pub ui_scale_factor: f32,
 }
@@ -34,6 +41,14 @@ impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.mount_context
     }
+}
+
+pub struct ViewUpdateContext<'a, 'h> {
+    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
+    pub ht_manager: &'a mut HitTestTreeManager<'h>,
+    pub keyboard_focus_registry: &'a KeyboardFocusTokenRegistry,
+    pub system_link: &'a SystemLink<'a>,
+    pub current_sec: f32,
 }
 
 pub trait MountTarget {
@@ -96,6 +111,82 @@ pub struct Positioning {
     pub anchor: [f32; 2],
     pub offset: [f32; 2],
 }
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ViewIdentifier(NonZeroUsize);
+impl core::fmt::Debug for ViewIdentifier {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ViewID#{}", self.0)
+    }
+}
+
+pub struct ViewRegistry {
+    last_free_identifier: NonZeroUsize,
+    free_identifier: BTreeSet<NonZeroUsize>,
+    event_handlers: Vec<Weak<dyn ViewEventHandler>>,
+}
+impl ViewRegistry {
+    pub fn new() -> Self {
+        Self {
+            last_free_identifier: unsafe { NonZeroUsize::new_unchecked(1) },
+            free_identifier: BTreeSet::new(),
+            event_handlers: Vec::new(),
+        }
+    }
+
+    pub fn alloc(&mut self) -> ViewIdentifier {
+        if let Some(id) = self.free_identifier.pop_first() {
+            return ViewIdentifier(id);
+        }
+
+        let r = ViewIdentifier(self.last_free_identifier);
+        self.last_free_identifier
+            .checked_add(1)
+            .expect("too many views!");
+        self.event_handlers
+            .push(Weak::<EmptyViewEventHandler>::new());
+        return r;
+    }
+
+    pub fn free(&mut self, id: ViewIdentifier) {
+        if id.0.get() + 1 == self.last_free_identifier.get() {
+            // returned last identifier
+            self.last_free_identifier =
+                unsafe { NonZeroUsize::new_unchecked(self.last_free_identifier.get() - 1) };
+            self.event_handlers.pop();
+            return;
+        }
+
+        self.free_identifier.insert(id.0);
+        self.event_handlers[id.0.get() - 1] = Weak::<EmptyViewEventHandler>::new();
+    }
+
+    pub fn set_event_handler(
+        &mut self,
+        id: ViewIdentifier,
+        handler: &Rc<impl ViewEventHandler + 'static>,
+    ) {
+        self.event_handlers[id.0.get() - 1] = Rc::downgrade(handler) as _;
+    }
+
+    pub fn call_update(&self, id: ViewIdentifier, context: &mut ViewUpdateContext) {
+        let Some(eh) = self.event_handlers[id.0.get() - 1].upgrade() else {
+            return;
+        };
+
+        eh.update(context);
+    }
+}
+
+pub trait ViewEventHandler {
+    #[allow(unused_variables)]
+    fn update(&self, context: &mut ViewUpdateContext) {}
+}
+
+struct EmptyViewEventHandler;
+impl ViewEventHandler for EmptyViewEventHandler {}
 
 mod popup;
 pub use self::popup::{

@@ -47,7 +47,8 @@ use crate::{
     uikit::{
         MenuItem, MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
-        SimpleButtonView, ViewInitContext,
+        SimpleButtonView, ViewEventHandler, ViewIdentifier, ViewInitContext, ViewRegistry,
+        ViewUpdateContext,
     },
     utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -765,6 +766,9 @@ pub enum Event {
     ContextMenuSelectCommand {
         id: u64,
     },
+    UpdateView {
+        id: ViewIdentifier,
+    },
     #[cfg(not(target_os = "macos"))]
     GlobalMouseClicked,
     #[cfg(windows)]
@@ -958,6 +962,7 @@ impl Popup for AlertDialogPresenter {
 }
 
 struct TextInputViewEventHandler {
+    id: ViewIdentifier,
     token: FocusTargetToken,
     ct_root: CompositeTreeRef,
     ct_text: CompositeTreeRef,
@@ -975,9 +980,26 @@ struct TextInputViewEventHandler {
     #[cfg(windows)]
     native_text_input_context: platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
-    ht_manager_ptr: *mut HitTestTreeManager<'static>,
+    ht_manager_ptr: *const HitTestTreeManager<'static>,
     #[cfg(target_os = "macos")]
-    composite_tree_ptr: *mut CompositeTree<SyncEvent>,
+    pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
+    #[cfg(target_os = "macos")]
+    event_dispatcher: *mut LogicFiberEventDispatcher,
+}
+impl ViewEventHandler for TextInputViewEventHandler {
+    fn update(&self, context: &mut ViewUpdateContext) {
+        self.update_views(
+            self.pending_update_mask
+                .replace(TextInputViewUpdateMask::empty()),
+            context.composite_tree,
+            context
+                .ht_manager
+                .query_root_window(self.ht_root)
+                .expect("not mounted"),
+            context.system_link,
+            context.ht_manager,
+        );
+    }
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
@@ -1645,6 +1667,9 @@ impl TextInputViewEventHandler {
             self.update_cursor_position(composite_tree, window, system_link, ht_manager);
             self.update_selection(composite_tree, window);
         }
+        if mask.contains(TextInputViewUpdateMask::PREEDIT) {
+            self.update_preedit_underline(composite_tree, window);
+        }
 
         if mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR) {
             // どっちにも影響する
@@ -1828,7 +1853,7 @@ impl TextInputViewEventHandler {
 
     fn move_cursor_to_left(&self, with_selection: bool) -> TextInputViewUpdateMask {
         if with_selection && !self.has_selection() {
-            // Shiftがおされており、選択範囲がない
+            // 初めて選択状態になった
             self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
         }
 
@@ -1844,7 +1869,7 @@ impl TextInputViewEventHandler {
 
     fn move_cursor_to_right(&self, with_selection: bool) -> TextInputViewUpdateMask {
         if with_selection && !self.has_selection() {
-            // Shiftがおされており、選択範囲がない
+            // 初めて選択状態になった
             self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
         }
 
@@ -2234,12 +2259,12 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
             self.cursor_pos_bytes.set(r.start + text.len());
             self.selection_begin_bytes.set(r.start + text.len());
 
-            let window = unsafe { &*self.ht_manager_ptr }
-                .query_root_window(self.ht_root)
-                .expect("not mounted");
-            self.update_text(unsafe { &mut *self.composite_tree_ptr });
-            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
-            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.pending_update_mask.update(|x| {
+                x | TextInputViewUpdateMask::TEXT
+                    | TextInputViewUpdateMask::CURSOR
+                    | TextInputViewUpdateMask::PREEDIT
+            });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -2250,12 +2275,12 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
             self.cursor_pos_bytes.set(preedit_start + text.len());
             self.selection_begin_bytes.set(preedit_start + text.len());
 
-            let window = unsafe { &*self.ht_manager_ptr }
-                .query_root_window(self.ht_root)
-                .expect("not mounted");
-            self.update_text(unsafe { &mut *self.composite_tree_ptr });
-            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
-            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.pending_update_mask.update(|x| {
+                x | TextInputViewUpdateMask::TEXT
+                    | TextInputViewUpdateMask::CURSOR
+                    | TextInputViewUpdateMask::PREEDIT
+            });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
         }
     }
 
@@ -2288,12 +2313,12 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
             self.cursor_pos_bytes.set(r.start + text.len());
             self.selection_begin_bytes.set(r.start + text.len());
 
-            let window = unsafe { &*self.ht_manager_ptr }
-                .query_root_window(self.ht_root)
-                .expect("not mounted");
-            self.update_text(unsafe { &mut *self.composite_tree_ptr });
-            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
-            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.pending_update_mask.update(|x| {
+                x | TextInputViewUpdateMask::TEXT
+                    | TextInputViewUpdateMask::CURSOR
+                    | TextInputViewUpdateMask::PREEDIT
+            });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -2304,12 +2329,12 @@ impl crate::platform::mac::TextInputClientForwarding for TextInputViewEventHandl
             self.cursor_pos_bytes.set(preedit_start + text.len());
             self.selection_begin_bytes.set(preedit_start + text.len());
 
-            let window = unsafe { &*self.ht_manager_ptr }
-                .query_root_window(self.ht_root)
-                .expect("not mounted");
-            self.update_text(unsafe { &mut *self.composite_tree_ptr });
-            self.update_selection(unsafe { &mut *self.composite_tree_ptr }, window);
-            self.update_preedit_underline(unsafe { &mut *self.composite_tree_ptr }, window);
+            self.pending_update_mask.update(|x| {
+                x | TextInputViewUpdateMask::TEXT
+                    | TextInputViewUpdateMask::CURSOR
+                    | TextInputViewUpdateMask::PREEDIT
+            });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
         }
     }
 
@@ -2417,6 +2442,7 @@ bitflags! {
     pub struct TextInputViewUpdateMask : u32 {
         const TEXT = 1 << 0;
         const CURSOR = 1 << 1;
+        const PREEDIT = 1 << 2;
     }
 }
 
@@ -2503,6 +2529,7 @@ impl TextInputView {
         ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
         let eh = Rc::new(TextInputViewEventHandler {
+            id: ctx.view_registry.alloc(),
             token: kf_token,
             ct_root,
             ct_text,
@@ -2524,10 +2551,13 @@ impl TextInputView {
             #[cfg(target_os = "macos")]
             ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
             #[cfg(target_os = "macos")]
-            composite_tree_ptr: core::ptr::from_mut(ctx.composite_tree),
+            pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
+            #[cfg(target_os = "macos")]
+            event_dispatcher: ctx.system_link.event_dispatcher,
         });
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.ht_manager.set_action_handler(ht_root, &eh);
+        ctx.view_registry.set_event_handler(eh.id, &eh);
         #[cfg(windows)]
         ctx.ht_manager
             .set_native_text_deferrable_event_handler(ht_root, &eh);
@@ -2638,6 +2668,8 @@ async fn run<'sys>(
         platform::windows::locate_non_client_hittest_managers(&pointer_input_manager, &ht_manager);
     }
 
+    let mut view_registry = ViewRegistry::new();
+
     let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
     let texture_id_set = ui::window_header::SystemCommandTextureIDSet::new(
         &mut texture_id_issuer,
@@ -2672,6 +2704,7 @@ async fn run<'sys>(
             current_sec: global_time_base.elapsed().as_secs_f32(),
             keyboard_focus_registry: &mut keyboard_focus_registry,
         },
+        view_registry: &mut view_registry,
         ui_scale_factor: main_window.ui_scale_factor(),
         system_link: &system_link,
     };
@@ -2954,6 +2987,7 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 keyboard_focus_registry,
                             },
+                            view_registry: &mut view_registry,
                             ui_scale_factor: w.ui_scale_factor(),
                             system_link,
                         };
@@ -3340,6 +3374,7 @@ async fn run<'sys>(
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
+                        view_registry: &mut view_registry,
                         ui_scale_factor: main_window.ui_scale_factor(),
                         system_link: &system_link,
                     },
@@ -3403,6 +3438,7 @@ async fn run<'sys>(
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
+                        view_registry: &mut view_registry,
                         ui_scale_factor: 1.0, // updated later
                         system_link: &system_link,
                     },
@@ -3497,6 +3533,7 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 keyboard_focus_registry: &mut keyboard_focus_registry,
                             },
+                            view_registry: &mut view_registry,
                             ui_scale_factor: 1.0, // updated later
                             system_link: &system_link,
                         },
@@ -3635,6 +3672,21 @@ async fn run<'sys>(
                             .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
+            }
+            Event::UpdateView { id } => {
+                view_registry.call_update(
+                    id,
+                    &mut ViewUpdateContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &keyboard_focus_registry,
+                        system_link: &system_link,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                    },
+                );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
