@@ -717,7 +717,7 @@ pub enum StringEncoding {
 }
 
 #[repr(transparent)]
-pub struct String(__CFString);
+pub struct String(pub(crate) __CFString);
 impl Object for String {
     #[inline(always)]
     fn as_typeref(&self) -> CFTypeRef {

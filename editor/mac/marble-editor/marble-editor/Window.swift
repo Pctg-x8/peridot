@@ -421,6 +421,10 @@ final class MainView : NSView, NSTextInputClient {
     }
     
     func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        guard let fw = self.textInputClientForwarding else {
+            return NSRect()
+        }
+        
         var x: CFloat = 0.0
         var y: CFloat = 0.0
         var width: CFloat = 0.0
@@ -430,8 +434,8 @@ final class MainView : NSView, NSTextInputClient {
             var actualLocation: Int64 = 0
             var actualLength: Int64 = 0
             
-            self.textInputClientForwarding!.ftable.pointee.firstRect(
-                self.textInputClientForwarding!.context,
+            fw.ftable.pointee.firstRect(
+                fw.context,
                 Int64(range.location),
                 Int64(range.length),
                 &actualLocation,
@@ -445,8 +449,8 @@ final class MainView : NSView, NSTextInputClient {
             actualRange.pointee.location = Int(actualLocation)
             actualRange.pointee.length = Int(actualLength)
         } else {
-            self.textInputClientForwarding!.ftable.pointee.firstRect(
-                self.textInputClientForwarding!.context,
+            fw.ftable.pointee.firstRect(
+                fw.context,
                 Int64(range.location),
                 Int64(range.length),
                 nil,

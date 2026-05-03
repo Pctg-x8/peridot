@@ -102,6 +102,12 @@ impl<T: MutableObject> core::ops::DerefMut for Owned<T> {
         unsafe { self.0.as_mut() }
     }
 }
+impl<T: Object + core::fmt::Debug> core::fmt::Debug for Owned<T> {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        T::fmt(unsafe { self.0.as_ref() }, f)
+    }
+}
 impl<T: Object> Owned<T> {
     #[inline(always)]
     pub const unsafe fn from_ptr_unchecked(ptr: *mut T) -> Self {

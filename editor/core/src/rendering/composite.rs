@@ -20,6 +20,7 @@ use crate::{
         MaskTextureAtlasManager,
         atlas::{AtlasRect, DynamicAtlasManager},
         text::{FontID, GlyphPlacementBox, PerWindowFontSet, TextLayout, TextRun},
+        vg::VectorRasterizationState,
     },
     utils::SafeF32,
 };
@@ -1490,44 +1491,6 @@ impl CompositeRectCache {
             text_width: 0.0,
             text_height: 0.0,
         }
-    }
-}
-
-pub struct VectorRasterizationState {
-    pub fill_tri_points: Vec<[f32; 2]>,
-    pub fill_tri_indices: Vec<u16>,
-    pub curve_tris: Vec<[f32; 4]>,
-    pub updated_rects: Vec<br::Rect2D>,
-    pub rounded_fill_rect_radius_requests: HashMap<SafeF32, AtlasRect>,
-    pub normalized_2d_mesh_requests: HashMap<usize, (u32, u32)>,
-}
-impl VectorRasterizationState {
-    pub fn new() -> Self {
-        Self {
-            fill_tri_points: Vec::new(),
-            fill_tri_indices: Vec::new(),
-            curve_tris: Vec::new(),
-            updated_rects: Vec::new(),
-            rounded_fill_rect_radius_requests: HashMap::new(),
-            normalized_2d_mesh_requests: HashMap::new(),
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.fill_tri_points.clear();
-        self.fill_tri_indices.clear();
-        self.curve_tris.clear();
-        self.updated_rects.clear();
-        self.rounded_fill_rect_radius_requests.clear();
-        self.normalized_2d_mesh_requests.clear();
-    }
-
-    pub fn is_empty(&self) -> bool {
-        // self.fill_tri_points.is_empty() == self.fill_tri_indices.is_empty()
-        self.fill_tri_points.is_empty()
-            && self.curve_tris.is_empty()
-            && self.rounded_fill_rect_radius_requests.is_empty()
-            && self.normalized_2d_mesh_requests.is_empty()
     }
 }
 

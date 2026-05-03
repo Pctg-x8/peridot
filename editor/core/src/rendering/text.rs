@@ -1,3 +1,5 @@
+use std::{cell::UnsafeCell, collections::HashMap};
+
 #[cfg(feature = "fontconfig")]
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
@@ -9,7 +11,10 @@ use windows::Win32::Graphics::{Direct2D::Common::*, DirectWrite::*};
 #[cfg(windows)]
 use windows_core::*;
 
-use crate::rendering::{MaskTextureAtlasManager, composite::VectorRasterizationState};
+use crate::rendering::{
+    MaskTextureAtlasManager,
+    vg::{VectorRasterizationState, VectorVertexRenderer},
+};
 
 #[cfg(feature = "freetype")]
 pub struct FreeType(ft::Library);
@@ -450,6 +455,33 @@ pub struct TextRun<'s> {
     pub spacing_inline_start: f32,
 }
 
+struct FontUniquifyStorage {
+    key_to_id: UnsafeCell<HashMap<String, usize>>,
+    last_id: UnsafeCell<usize>,
+}
+impl FontUniquifyStorage {
+    fn new() -> Self {
+        Self {
+            key_to_id: UnsafeCell::new(HashMap::new()),
+            last_id: UnsafeCell::new(0),
+        }
+    }
+
+    fn query(&self, key: String) -> usize {
+        unsafe {
+            *(*self.key_to_id.get()).entry(key).or_insert_with(|| {
+                let r = *self.last_id.get();
+                *self.last_id.get() += 1;
+                r
+            })
+        }
+    }
+}
+
+thread_local! {
+    static FONT_UNIQUIFY_STORAGE: FontUniquifyStorage = FontUniquifyStorage::new();
+}
+
 pub struct TextLayout {
     #[cfg(feature = "harfbuzz")]
     buffers: Vec<(*mut hb::ffi::hb_buffer_t, f32, FontID, usize)>,
@@ -582,23 +614,11 @@ impl TextLayout {
         }
 
         #[cfg(target_os = "macos")]
-        let ak_spacing_inline_start = unsafe {
-            apple_sdk_port::foundation::String::from_internal_ref(
-                &*crate::platform::mac::bridge::ni_ak_spacing_inline_start(),
-            )
-        };
-        #[cfg(target_os = "macos")]
-        let ak_font_id = unsafe {
-            apple_sdk_port::foundation::String::from_internal_ref(
-                &*crate::platform::mac::bridge::ni_ak_font_id(),
-            )
-        };
-        #[cfg(target_os = "macos")]
         let mut attributed_string_runs = Vec::with_capacity(ub.unwrap_or(lb));
         #[cfg(target_os = "macos")]
         let mut total_bytes = 0;
         #[cfg(target_os = "macos")]
-        for (n, r) in text_runs.enumerate() {
+        for r in text_runs {
             use apple_sdk_port::Object;
 
             let font = font_set.select(r.font);
@@ -617,13 +637,13 @@ impl TextLayout {
                 font.as_any(),
             );
             str_attr.set(
-                &ak_spacing_inline_start,
+                crate::platform::mac::ak_spacing_inline_start(),
                 apple_sdk_port::foundation::Number::new_f32(None, r.spacing_inline_start)
                     .expect("Number.create")
                     .as_any(),
             );
             str_attr.set(
-                &ak_font_id,
+                crate::platform::mac::ak_font_id(),
                 apple_sdk_port::foundation::Number::new_i64(None, r.font as usize as _)
                     .expect("Number.create")
                     .as_any(),
@@ -967,18 +987,6 @@ impl TextLayout {
         }
 
         #[cfg(target_os = "macos")]
-        let ak_spacing_inline_start = unsafe {
-            apple_sdk_port::foundation::String::from_internal_ref(
-                &*crate::platform::mac::bridge::ni_ak_spacing_inline_start(),
-            )
-        };
-        #[cfg(target_os = "macos")]
-        let ak_font_id = unsafe {
-            apple_sdk_port::foundation::String::from_internal_ref(
-                &*crate::platform::mac::bridge::ni_ak_font_id(),
-            )
-        };
-        #[cfg(target_os = "macos")]
         let lines = self.frame.lines();
         #[cfg(target_os = "macos")]
         tracing::debug!(line_count = lines.len(), "frameset lines");
@@ -1023,16 +1031,18 @@ impl TextLayout {
                     },
                     None => font_set.select(Default::default()),
                 };
-                let spacing_inline_start =
-                    match attributes.get_untyped_value(ak_spacing_inline_start) {
-                        Some(x) => unsafe {
-                            apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
-                                .f32_value()
-                                .expect("invalid attr value") as _
-                        },
-                        None => 0,
-                    };
-                let font_id = match attributes.get_untyped_value(ak_font_id) {
+                let spacing_inline_start = match attributes
+                    .get_untyped_value(crate::platform::mac::ak_spacing_inline_start())
+                {
+                    Some(x) => unsafe {
+                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
+                            .f32_value()
+                            .expect("invalid attr value") as _
+                    },
+                    None => 0,
+                };
+                let font_id = match attributes.get_untyped_value(crate::platform::mac::ak_font_id())
+                {
                     Some(x) => unsafe {
                         apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
                             .i64_value()
@@ -1042,8 +1052,16 @@ impl TextLayout {
                 };
                 x_shift += spacing_inline_start as f32;
 
+                let font_uniq_name = font
+                    .copy_name(apple_sdk_port::text::Font::unique_name_key())
+                    .or_else(|| font.copy_name(apple_sdk_port::text::Font::full_name_key()))
+                    .expect("cannot determine font unique name");
+                let font_size = font.size();
+                let font_unique_id = FONT_UNIQUIFY_STORAGE
+                    .with(|s| s.query(format!("{font_uniq_name:?}.{font_size:.2}")));
+
                 let glyph_count = run.glyph_count();
-                tracing::debug!(count = glyph_count, "run");
+                tracing::debug!(count = glyph_count, ?font_uniq_name, font_size, "run");
                 let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
                 font.bounding_rects_for_glyphs(
                     apple_sdk_port::text::FontOrientation::Horizontal,
@@ -1058,15 +1076,15 @@ impl TextLayout {
                     let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
                     let pos = unsafe { &*run.positions().add(g as usize) };
                     let bounding_rect = &glyph_bounding_rects[g as usize];
-                    tracing::debug!(glyph, ?font_id, ?pos, ?bounding_rect, "glyph");
+                    tracing::debug!(g, glyph, ?font_id, ?pos, ?bounding_rect, "glyph");
 
                     if bounding_rect.size.width == 0.0 && bounding_rect.size.height == 0.0 {
-                        // empty shape(whitespace)
+                        // empty shape(e.g. whitespace)
                         continue;
                     }
 
                     let (r, is_new) = atlas.acquire_for_glyph(
-                        (font_id as usize, glyph),
+                        (font_unique_id, glyph),
                         (bounding_rect.size.width as f32 * render_scale).ceil() as _,
                         (bounding_rect.size.height as f32 * render_scale).ceil() as _,
                     );
@@ -1081,7 +1099,6 @@ impl TextLayout {
                         width: r.width(),
                         height: r.height(),
                     };
-                    // cache.text_width = cache.text_width.max(placement_box.right());
                     boxes.push(placement_box);
 
                     if is_new {
@@ -1090,157 +1107,55 @@ impl TextLayout {
                         let path = font
                             .create_path_for_glyph(glyph, None)
                             .expect("font.create_path_for_glyph");
-                        let mut current_figure = None;
-                        let mut pen_pos = (0.0, 0.0);
                         let offset_x = r.left as f32 - bounding_rect.origin.x as f32 * render_scale;
                         let offset_y = -(r.top as f32)
                             - (bounding_rect.size.height + bounding_rect.origin.y) as f32
                                 * render_scale;
+                        let mut vrender = VectorVertexRenderer::new(vector_rasterization_state);
                         path.apply(|e| match e.r#type {
                             apple_sdk_port::raw::kCGPathElementMoveToPoint => {
                                 let to = unsafe { &*e.points };
 
-                                current_figure = Some((
-                                    to.clone(),
-                                    vector_rasterization_state.fill_tri_points.len(),
-                                ));
-                                pen_pos = (to.x, to.y);
-                                vector_rasterization_state.fill_tri_points.push([
+                                vrender.move_to(
                                     to.x as f32 * render_scale + offset_x,
                                     to.y as f32 * render_scale + offset_y,
-                                ]);
+                                );
                             }
                             apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
                                 let to = unsafe { &*e.points };
-                                let Some((_, filltri_index0)) = current_figure else {
-                                    panic!("no figure started?");
-                                };
 
-                                let filltri_index1 =
-                                    vector_rasterization_state.fill_tri_points.len() - 1;
-                                vector_rasterization_state.fill_tri_points.push([
+                                vrender.line_to(
                                     to.x as f32 * render_scale + offset_x,
                                     to.y as f32 * render_scale + offset_y,
-                                ]);
-                                vector_rasterization_state.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    vector_rasterization_state.fill_tri_points.len() as u16 - 1,
-                                ]);
-                                pen_pos = (to.x, to.y);
+                                );
                             }
                             apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
                                 let points = unsafe { core::slice::from_raw_parts(e.points, 2) };
-                                let Some((_, filltri_index0)) = current_figure else {
-                                    panic!("no figure started?");
-                                };
 
-                                let filltri_index1 =
-                                    vector_rasterization_state.fill_tri_points.len() - 1;
-                                vector_rasterization_state.fill_tri_points.push([
+                                vrender.quadratic_to(
+                                    points[0].x as f32 * render_scale + offset_x,
+                                    points[0].y as f32 * render_scale + offset_y,
                                     points[1].x as f32 * render_scale + offset_x,
                                     points[1].y as f32 * render_scale + offset_y,
-                                ]);
-                                vector_rasterization_state.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    vector_rasterization_state.fill_tri_points.len() as u16 - 1,
-                                ]);
-                                vector_rasterization_state.curve_tris.extend([
-                                    [
-                                        pen_pos.0 as f32 * render_scale + offset_x,
-                                        pen_pos.1 as f32 * render_scale + offset_y,
-                                        0.0,
-                                        0.0,
-                                    ],
-                                    [
-                                        points[0].x as f32 * render_scale + offset_x,
-                                        points[0].y as f32 * render_scale + offset_y,
-                                        0.5,
-                                        0.0,
-                                    ],
-                                    [
-                                        points[1].x as f32 * render_scale + offset_x,
-                                        points[1].y as f32 * render_scale + offset_y,
-                                        1.0,
-                                        1.0,
-                                    ],
-                                ]);
-                                pen_pos = (points[1].x, points[1].y);
+                                );
                             }
                             apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
                                 let points = unsafe { core::slice::from_raw_parts(e.points, 3) };
-                                lyon_geom::CubicBezierSegment {
-                                    from: lyon_geom::point(pen_pos.0, pen_pos.1),
-                                    ctrl1: lyon_geom::point(points[0].x, points[0].y),
-                                    ctrl2: lyon_geom::point(points[1].x, points[1].y),
-                                    to: lyon_geom::point(points[2].x, points[2].y),
-                                }
-                                .for_each_quadratic_bezier(
-                                    0.1,
-                                    &mut |q| {
-                                        let Some((_, filltri_index0)) = current_figure else {
-                                            panic!("no figure started?");
-                                        };
 
-                                        let filltri_index1 =
-                                            vector_rasterization_state.fill_tri_points.len() - 1;
-                                        vector_rasterization_state.fill_tri_points.push([
-                                            q.to.x as f32 * render_scale + offset_x,
-                                            q.to.y as f32 * render_scale + offset_y,
-                                        ]);
-                                        vector_rasterization_state.fill_tri_indices.extend([
-                                            filltri_index0 as u16,
-                                            filltri_index1 as u16,
-                                            vector_rasterization_state.fill_tri_points.len() as u16
-                                                - 1,
-                                        ]);
-                                        vector_rasterization_state.curve_tris.extend([
-                                            [
-                                                pen_pos.0 as f32 * render_scale + offset_x,
-                                                pen_pos.1 as f32 * render_scale + offset_y,
-                                                0.0,
-                                                0.0,
-                                            ],
-                                            [
-                                                q.ctrl.x as f32 * render_scale + offset_x,
-                                                q.ctrl.y as f32 * render_scale + offset_y,
-                                                0.5,
-                                                0.0,
-                                            ],
-                                            [
-                                                q.to.x as f32 * render_scale + offset_x,
-                                                q.to.y as f32 * render_scale + offset_y,
-                                                1.0,
-                                                1.0,
-                                            ],
-                                        ]);
-                                        pen_pos = (q.to.x, q.to.y);
-                                    },
-                                )
+                                vrender.cubic_to(
+                                    points[0].x as f32 * render_scale + offset_x,
+                                    points[0].y as f32 * render_scale + offset_y,
+                                    points[1].x as f32 * render_scale + offset_x,
+                                    points[1].y as f32 * render_scale + offset_y,
+                                    points[2].x as f32 * render_scale + offset_x,
+                                    points[2].y as f32 * render_scale + offset_y,
+                                );
                             }
                             apple_sdk_port::raw::kCGPathElementCloseSubpath => {
-                                // line to start point
-                                let Some((start_point, filltri_index0)) = current_figure.take()
-                                else {
-                                    panic!("no figure started?");
-                                };
-
-                                let filltri_index1 =
-                                    vector_rasterization_state.fill_tri_points.len() - 1;
-                                vector_rasterization_state.fill_tri_points.push([
-                                    start_point.x as f32 * render_scale + offset_x,
-                                    start_point.y as f32 * render_scale + offset_y,
-                                ]);
-                                vector_rasterization_state.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    vector_rasterization_state.fill_tri_points.len() as u16 - 1,
-                                ]);
-                                pen_pos = (start_point.x, start_point.y);
+                                vrender.close();
                             }
                             _ => unreachable!(),
-                        })
+                        });
                     }
                 }
             }
@@ -1766,18 +1681,6 @@ impl TextLayout {
         }
 
         #[cfg(target_os = "macos")]
-        let ak_spacing_inline_start = unsafe {
-            apple_sdk_port::foundation::String::from_internal_ref(
-                &*crate::platform::mac::bridge::ni_ak_spacing_inline_start(),
-            )
-        };
-        #[cfg(target_os = "macos")]
-        let ak_font_id = unsafe {
-            apple_sdk_port::foundation::String::from_internal_ref(
-                &*crate::platform::mac::bridge::ni_ak_font_id(),
-            )
-        };
-        #[cfg(target_os = "macos")]
         let lines = layout.frame.lines();
         #[cfg(target_os = "macos")]
         tracing::debug!(line_count = lines.len(), "frameset lines");
@@ -1793,9 +1696,9 @@ impl TextLayout {
                 let run = &runs[m];
 
                 let attributes = run.attributes();
-                attributes.apply_untyped_value(|key, value| {
-                    tracing::debug!(?key, ?value, "run attribute");
-                });
+                // attributes.apply_untyped_value(|key, value| {
+                //     tracing::debug!(?key, ?value, "run attribute");
+                // });
                 let font = match attributes
                     .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
                 {
@@ -1804,20 +1707,13 @@ impl TextLayout {
                     },
                     None => font_set.select(Default::default()),
                 };
-                let spacing_inline_start =
-                    match attributes.get_untyped_value(ak_spacing_inline_start) {
-                        Some(x) => unsafe {
-                            apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
-                                .f32_value()
-                                .expect("invalid attr value") as _
-                        },
-                        None => 0,
-                    };
-                let font_id = match attributes.get_untyped_value(ak_font_id) {
+                let spacing_inline_start = match attributes
+                    .get_untyped_value(crate::platform::mac::ak_spacing_inline_start())
+                {
                     Some(x) => unsafe {
                         apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
-                            .i64_value()
-                            .expect("invalid attr value") as usize as _
+                            .f32_value()
+                            .expect("invalid attr value") as _
                     },
                     None => 0,
                 };
@@ -1836,14 +1732,8 @@ impl TextLayout {
                 }
 
                 for g in 0..glyph_count {
-                    let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
                     let pos = unsafe { &*run.positions().add(g as usize) };
                     let bounding_rect = &glyph_bounding_rects[g as usize];
-
-                    if bounding_rect.size.width == 0.0 && bounding_rect.size.height == 0.0 {
-                        // empty shape(whitespace)
-                        continue;
-                    }
 
                     line_width = line_width.max(
                         ((pos.x + bounding_rect.origin.x) as f32 + x_shift) * render_scale
@@ -1956,14 +1846,6 @@ impl TextLayout {
                         },
                         None => 0,
                     };
-                let font_id = match attributes.get_untyped_value(ak_font_id) {
-                    Some(x) => unsafe {
-                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
-                            .i64_value()
-                            .expect("invalid attr value") as usize as _
-                    },
-                    None => 0,
-                };
                 x_shift += spacing_inline_start as f32;
 
                 let glyph_count = run.glyph_count();
@@ -1979,14 +1861,8 @@ impl TextLayout {
                 }
 
                 for g in 0..glyph_count {
-                    let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
                     let pos = unsafe { &*run.positions().add(g as usize) };
                     let bounding_rect = &glyph_bounding_rects[g as usize];
-
-                    if bounding_rect.size.width == 0.0 && bounding_rect.size.height == 0.0 {
-                        // empty shape(whitespace)
-                        continue;
-                    }
 
                     // TODO: 最後がスペースのとき正しい値にならない気がする
                     line_left_cursor = line_left_cursor.max(

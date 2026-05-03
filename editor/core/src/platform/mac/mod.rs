@@ -929,3 +929,19 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for LogLayer {
         })
     }
 }
+
+#[inline(always)]
+pub fn ak_spacing_inline_start() -> &'static apple_sdk_port::foundation::String {
+    unsafe {
+        apple_sdk_port::foundation::String::from_internal_ref(
+            &*self::bridge::ni_ak_spacing_inline_start(),
+        )
+    }
+}
+
+#[inline(always)]
+pub fn ak_font_id() -> &'static apple_sdk_port::foundation::String {
+    unsafe {
+        apple_sdk_port::foundation::String::from_internal_ref(&*self::bridge::ni_ak_font_id())
+    }
+}

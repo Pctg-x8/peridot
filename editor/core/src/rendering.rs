@@ -20,9 +20,9 @@ use crate::{
         composite::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
             CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
-            VectorRasterizationState,
         },
         text::{PerWindowFontSet, RootFontSet, ThreadLocalTypingContext},
+        vg::VectorRasterizationState,
     },
     utils::SafeF32,
 };
@@ -30,6 +30,7 @@ use crate::{
 pub mod atlas;
 pub mod composite;
 pub mod text;
+pub mod vg;
 
 #[repr(transparent)]
 pub struct NewWindowVulkanSurface(pub UnboundVulkanSurface);

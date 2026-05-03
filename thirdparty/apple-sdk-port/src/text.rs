@@ -145,6 +145,39 @@ impl Font {
     }
 
     #[inline(always)]
+    pub fn copy_name(
+        &self,
+        name_key: &crate::foundation::String,
+    ) -> Option<Owned<crate::foundation::String>> {
+        unsafe {
+            Owned::from_ptr(
+                CTFontCopyName(&self.0, &name_key.0)
+                    .cast::<crate::foundation::String>()
+                    .cast_mut(),
+            )
+        }
+    }
+
+    pub const fn unique_name_key() -> &'static crate::foundation::String {
+        unsafe { core::mem::transmute(&*kCTFontUniqueNameKey) }
+    }
+
+    pub const fn full_name_key() -> &'static crate::foundation::String {
+        unsafe { core::mem::transmute(&*kCTFontFullNameKey) }
+    }
+
+    #[inline(always)]
+    pub fn copy_glyph_name(&self, glyph: CGGlyph) -> Owned<crate::foundation::String> {
+        unsafe {
+            Owned::from_ptr_unchecked(
+                CTFontCopyNameForGlyph(&self.0, glyph)
+                    .cast::<crate::foundation::String>()
+                    .cast_mut(),
+            )
+        }
+    }
+
+    #[inline(always)]
     pub fn glyph_for_character(&self, character: UniChar) -> Option<core::num::NonZero<CGGlyph>> {
         let mut glyph = core::mem::MaybeUninit::uninit();
         let r = unsafe { CTFontGetGlyphsForCharacters(&self.0, &character, glyph.as_mut_ptr(), 1) };
