@@ -52,6 +52,15 @@ impl<U: Unit<SignedValueType: core::fmt::Debug>> core::fmt::Debug for Point<U> {
             .finish()
     }
 }
+impl<U: Unit> Point<U> {
+    pub const fn new_custom(x: U::SignedValueType, y: U::SignedValueType) -> Self {
+        Self {
+            x,
+            y,
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
 impl Point<LogicalUnit> {
     pub const fn new_logical(x: f32, y: f32) -> Self {
         Self {

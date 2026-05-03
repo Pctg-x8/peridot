@@ -11,9 +11,12 @@ use windows::Win32::Graphics::{Direct2D::Common::*, DirectWrite::*};
 #[cfg(windows)]
 use windows_core::*;
 
-use crate::rendering::{
-    MaskTextureAtlasManager,
-    vg::{VectorRasterizationState, VectorVertexRenderer},
+use crate::{
+    rendering::{
+        MaskTextureAtlasManager,
+        vg::{VectorRasterizationState, VectorVertexRenderer},
+    },
+    utils::Point,
 };
 
 #[cfg(feature = "freetype")]
@@ -1107,28 +1110,32 @@ impl TextLayout {
                                 apple_sdk_port::raw::kCGPathElementMoveToPoint => {
                                     let to = unsafe { &*e.points };
 
-                                    vrender.move_to(
+                                    vrender.move_to(Point::new_vector_texture(
                                         to.x as f32 * render_scale + offset_x,
                                         to.y as f32 * render_scale + offset_y,
-                                    );
+                                    ));
                                 }
                                 apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
                                     let to = unsafe { &*e.points };
 
-                                    vrender.line_to(
+                                    vrender.line_to(Point::new_vector_texture(
                                         to.x as f32 * render_scale + offset_x,
                                         to.y as f32 * render_scale + offset_y,
-                                    );
+                                    ));
                                 }
                                 apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
                                     let points =
                                         unsafe { core::slice::from_raw_parts(e.points, 2) };
 
                                     vrender.quadratic_to(
-                                        points[0].x as f32 * render_scale + offset_x,
-                                        points[0].y as f32 * render_scale + offset_y,
-                                        points[1].x as f32 * render_scale + offset_x,
-                                        points[1].y as f32 * render_scale + offset_y,
+                                        Point::new_vector_texture(
+                                            points[0].x as f32 * render_scale + offset_x,
+                                            points[0].y as f32 * render_scale + offset_y,
+                                        ),
+                                        Point::new_vector_texture(
+                                            points[1].x as f32 * render_scale + offset_x,
+                                            points[1].y as f32 * render_scale + offset_y,
+                                        ),
                                     );
                                 }
                                 apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
@@ -1136,12 +1143,18 @@ impl TextLayout {
                                         unsafe { core::slice::from_raw_parts(e.points, 3) };
 
                                     vrender.cubic_to(
-                                        points[0].x as f32 * render_scale + offset_x,
-                                        points[0].y as f32 * render_scale + offset_y,
-                                        points[1].x as f32 * render_scale + offset_x,
-                                        points[1].y as f32 * render_scale + offset_y,
-                                        points[2].x as f32 * render_scale + offset_x,
-                                        points[2].y as f32 * render_scale + offset_y,
+                                        Point::new_vector_texture(
+                                            points[0].x as f32 * render_scale + offset_x,
+                                            points[0].y as f32 * render_scale + offset_y,
+                                        ),
+                                        Point::new_vector_texture(
+                                            points[1].x as f32 * render_scale + offset_x,
+                                            points[1].y as f32 * render_scale + offset_y,
+                                        ),
+                                        Point::new_vector_texture(
+                                            points[2].x as f32 * render_scale + offset_x,
+                                            points[2].y as f32 * render_scale + offset_y,
+                                        ),
                                     );
                                 }
                                 apple_sdk_port::raw::kCGPathElementCloseSubpath => {

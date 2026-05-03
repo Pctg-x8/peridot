@@ -2,7 +2,29 @@ use std::collections::HashMap;
 
 use bedrock as br;
 
-use crate::{rendering::atlas::AtlasRect, utils::SafeF32};
+use crate::{
+    rendering::atlas::AtlasRect,
+    utils::{Point, SafeF32},
+};
+
+#[derive(Clone, Copy)]
+pub enum VectorTextureUnit {}
+impl crate::utils::Unit for VectorTextureUnit {
+    const DBG_NAME: &'static str = "VectorTextureUnit";
+
+    type SignedValueType = f32;
+    type UnsignedValueType = f32;
+}
+impl Point<VectorTextureUnit> {
+    pub const fn new_vector_texture(x: f32, y: f32) -> Self {
+        Self::new_custom(x, y)
+    }
+
+    #[inline(always)]
+    pub fn to_lyon(&self) -> lyon_geom::Point<f32> {
+        lyon_geom::point(self.x, self.y)
+    }
+}
 
 pub struct VectorRasterizationState {
     pub fill_tri_points: Vec<[f32; 2]>,
@@ -44,77 +66,77 @@ impl VectorRasterizationState {
 
 pub struct VectorVertexRenderer<'a> {
     state: &'a mut VectorRasterizationState,
-    pen_x: f32,
-    pen_y: f32,
-    current_figure: Option<(f32, f32, usize)>,
+    pen: Point<VectorTextureUnit>,
+    current_figure: Option<(Point<VectorTextureUnit>, usize)>,
 }
 impl<'a> VectorVertexRenderer<'a> {
     pub fn new(state: &'a mut VectorRasterizationState) -> Self {
         Self {
             state,
-            pen_x: 0.0,
-            pen_y: 0.0,
+            pen: Point::new_vector_texture(0.0, 0.0),
             current_figure: None,
         }
     }
 
-    pub fn move_to(&mut self, x: f32, y: f32) {
-        self.state.fill_tri_points.push([x, y]);
+    pub fn move_to(&mut self, p: Point<VectorTextureUnit>) {
+        self.state.fill_tri_points.push([p.x, p.y]);
 
-        self.current_figure = Some((x, y, self.state.fill_tri_points.len() - 1));
-        self.pen_x = x;
-        self.pen_y = y;
+        self.current_figure = Some((p, self.state.fill_tri_points.len() - 1));
+        self.pen = p;
     }
 
-    pub fn line_to(&mut self, x: f32, y: f32) {
-        let Some((_, _, filltri_index0)) = self.current_figure else {
+    pub fn line_to(&mut self, p: Point<VectorTextureUnit>) {
+        let Some((_, filltri_index0)) = self.current_figure else {
             panic!("no figure started?");
         };
 
         let filltri_index1 = self.state.fill_tri_points.len() - 1;
-        self.state.fill_tri_points.push([x, y]);
+        self.state.fill_tri_points.push([p.x, p.y]);
         self.state.fill_tri_indices.extend([
             filltri_index0 as u16,
             filltri_index1 as u16,
             self.state.fill_tri_points.len() as u16 - 1,
         ]);
 
-        self.pen_x = x;
-        self.pen_y = y;
+        self.pen = p;
     }
 
-    pub fn quadratic_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let Some((_, _, filltri_index0)) = self.current_figure else {
+    pub fn quadratic_to(&mut self, ctrl: Point<VectorTextureUnit>, to: Point<VectorTextureUnit>) {
+        let Some((_, filltri_index0)) = self.current_figure else {
             panic!("no figure started?");
         };
 
         let filltri_index1 = self.state.fill_tri_points.len() - 1;
-        self.state.fill_tri_points.push([x, y]);
+        self.state.fill_tri_points.push([to.x, to.y]);
         self.state.fill_tri_indices.extend([
             filltri_index0 as u16,
             filltri_index1 as u16,
             self.state.fill_tri_points.len() as u16 - 1,
         ]);
         self.state.curve_tris.extend([
-            [self.pen_x, self.pen_y, 0.0, 0.0],
-            [cx, cy, 0.5, 0.0],
-            [x, y, 1.0, 1.0],
+            [self.pen.x, self.pen.y, 0.0, 0.0],
+            [ctrl.x, ctrl.y, 0.5, 0.0],
+            [to.x, to.y, 1.0, 1.0],
         ]);
 
-        self.pen_x = x;
-        self.pen_y = y;
+        self.pen = to;
     }
 
-    pub fn cubic_to(&mut self, c1x: f32, c1y: f32, c2x: f32, c2y: f32, x: f32, y: f32) {
-        let Some((_, _, filltri_index0)) = self.current_figure else {
+    pub fn cubic_to(
+        &mut self,
+        ctrl1: Point<VectorTextureUnit>,
+        ctrl2: Point<VectorTextureUnit>,
+        to: Point<VectorTextureUnit>,
+    ) {
+        let Some((_, filltri_index0)) = self.current_figure else {
             panic!("no figure started?");
         };
 
         lyon_geom::CubicBezierSegment {
-            from: lyon_geom::point(self.pen_x, self.pen_y),
-            ctrl1: lyon_geom::point(c1x, c1y),
-            ctrl2: lyon_geom::point(c2x, c2y),
-            to: lyon_geom::point(x, y),
+            from: self.pen.to_lyon(),
+            ctrl1: ctrl1.to_lyon(),
+            ctrl2: ctrl2.to_lyon(),
+            to: to.to_lyon(),
         }
         .for_each_quadratic_bezier(0.1, &mut |q| {
             let filltri_index1 = self.state.fill_tri_points.len() - 1;
@@ -131,25 +153,23 @@ impl<'a> VectorVertexRenderer<'a> {
             ]);
         });
 
-        self.pen_x = x;
-        self.pen_y = y;
+        self.pen = to;
     }
 
     pub fn close(&mut self) {
         // line to figure origin
-        let Some((ox, oy, filltri_index0)) = self.current_figure.take() else {
+        let Some((org, filltri_index0)) = self.current_figure.take() else {
             panic!("no figure started?");
         };
 
         let filltri_index1 = self.state.fill_tri_points.len() - 1;
-        self.state.fill_tri_points.push([ox, oy]);
+        self.state.fill_tri_points.push([org.x, org.y]);
         self.state.fill_tri_indices.extend([
             filltri_index0 as u16,
             filltri_index1 as u16,
             self.state.fill_tri_points.len() as u16 - 1,
         ]);
 
-        self.pen_x = ox;
-        self.pen_y = oy;
+        self.pen = org;
     }
 }
