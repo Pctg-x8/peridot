@@ -685,9 +685,9 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 impl HitTestTreeScreenRepositionHandler for TextInputViewEventHandler {
     fn on_screen_reposition_required(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        window_screen_pos: Point<PointerInputUnit>,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _window_screen_pos: Point<PointerInputUnit>,
     ) {
         #[cfg(windows)]
         {
