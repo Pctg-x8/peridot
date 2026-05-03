@@ -1884,6 +1884,10 @@ impl TextInputViewEventHandler {
     }
 
     fn select_word_at(&self, content: &str, cursor_pos_bytes: usize) -> core::ops::Range<usize> {
+        if content.is_empty() {
+            return 0..0;
+        }
+
         #[cfg(windows)]
         {
             let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
