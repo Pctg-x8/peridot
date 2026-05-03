@@ -204,6 +204,11 @@ impl<T> Array<T> {
     pub fn len(&self) -> Index {
         unsafe { CFArrayGetCount(&self.0) }
     }
+
+    #[inline(always)]
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        (0..self.len()).map(move |n| &self[n])
+    }
 }
 
 #[repr(transparent)]

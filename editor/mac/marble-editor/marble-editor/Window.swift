@@ -88,6 +88,11 @@ final class WindowLink : NSWindow {
     }
     
     override func mouseUp(with event: NSEvent) {
+        if event.clickCount == 2 && isOnTitleBar(event.locationInWindow) {
+            self.performZoom(self)
+            return
+        }
+        
         self.callbacks?.notifyPointerUp(MouseButtonLeft)
     }
     
@@ -109,6 +114,16 @@ final class WindowLink : NSWindow {
     
     override func keyUp(with event: NSEvent) {
         self.callbacks?.notifyKeyUp(event.keyCode, event.modifierFlags)
+    }
+    
+    private func isOnTitleBar(_ point: NSPoint) -> Bool {
+        // https://stackoverflow.com/a/61712229
+        NSRect(
+            x: self.contentLayoutRect.minX,
+            y: self.contentLayoutRect.minY + self.contentLayoutRect.height,
+            width: self.contentLayoutRect.width,
+            height: self.frame.height - self.contentLayoutRect.height
+        ).contains(point)
     }
     
     struct CreationFlags : OptionSet {
