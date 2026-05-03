@@ -460,7 +460,8 @@ final class MainView : NSView, NSTextInputClient {
         
         return self.window!.convertToScreen(NSRect(
             x: CGFloat(x),
-            y: self.window!.frame.height - CGFloat(y),
+            // bottomである必要がある
+            y: self.window!.frame.height - CGFloat(y + height),
             width: CGFloat(width),
             height: CGFloat(height)
         ))
