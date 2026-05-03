@@ -2715,7 +2715,8 @@ impl FileSystem {
             )
             .to_str()
             .expect("fs.cache_base_path.invalid_str")
-        });
+        })
+        .join("peridot/.editor");
         #[cfg(windows)]
         let cache_base_path = {
             let base =
@@ -2728,6 +2729,12 @@ impl FileSystem {
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
             tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");
         }
+
+        tracing::info!(
+            resources_base_path = %resources_base_path.display(),
+            cache_base_path = %cache_base_path.display(),
+            "filesystem initialized"
+        );
 
         Self {
             resources_base_path,
