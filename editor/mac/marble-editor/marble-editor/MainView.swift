@@ -48,6 +48,12 @@ final class MainView : NSView, NSTextInputClient {
     }
     
     override func keyDown(with event: NSEvent) {
+        if self.textInputClientForwarding == nil {
+            // no text input context available
+            super.keyDown(with: event)
+            return
+        }
+        
         self.inputContext!.handleEvent(event)
     }
     

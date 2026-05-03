@@ -698,13 +698,12 @@ impl WindowDispatcher {
             // Macの場合はいくつか文字コードで入ってくる
             code: match char {
                 '\r' => KeyInputCode::Enter,
+                '\x08' => KeyInputCode::Backspace,
                 self::bridge::NS_LEFT_ARROW_FUNCTION_KEY => KeyInputCode::LeftArrow,
                 self::bridge::NS_RIGHT_ARROW_FUNCTION_KEY => KeyInputCode::RightArrow,
                 self::bridge::NS_HOME_FUNCTION_KEY => KeyInputCode::Home,
                 self::bridge::NS_END_FUNCTION_KEY => KeyInputCode::End,
-                // macはbksp/deleteの文字の割り振りが違う
-                '\x7f' => KeyInputCode::Character('\x08'),
-                self::bridge::NS_DELETE_FUNCTION_KEY => KeyInputCode::Character('\x7f'),
+                self::bridge::NS_DELETE_FUNCTION_KEY => KeyInputCode::Delete,
                 c => KeyInputCode::Character(c),
             },
             modifier,

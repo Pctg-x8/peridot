@@ -1,5 +1,6 @@
 import Cocoa
 import os
+import NaturalLanguage
 
 let app = NSApplication.shared
 let delegate = AppMainDelegate()
@@ -685,6 +686,27 @@ func contextMenuUnobserveGlobalClick() {
         NSEvent.removeMonitor(m)
         contextMenuLocalMonitor = nil
     }
+}
+
+@_cdecl("ni_query_range_for_word_at")
+func queryRangeForWordAt(
+    _ charptr: UnsafePointer<UInt8>,
+    _ charlen: UInt64,
+    _ at: UInt64,
+    _ retStart: UnsafeMutablePointer<UInt64>,
+    _ retEnd: UnsafeMutablePointer<UInt64>
+) {
+    let text = String(bytes: UnsafeBufferPointer(start: charptr, count: Int(charlen)), encoding: .utf8)!
+    let recognizer = NLLanguageRecognizer()
+    recognizer.processString(text)
+    let language = recognizer.dominantLanguage ?? recognizer.languageHypotheses(withMaximum: 1).first!.key
+    let tokenizer = NLTokenizer(unit: .word)
+    tokenizer.setLanguage(language)
+    tokenizer.string = text
+    let tokenRange = tokenizer.tokenRange(at: String.Index(utf16Offset: Int(at), in: text))
+    
+    retStart.pointee = UInt64(tokenRange.lowerBound.utf16Offset(in: text))
+    retEnd.pointee = UInt64(tokenRange.upperBound.utf16Offset(in: text))
 }
 
 enum CustomAttributeKey: NSString {

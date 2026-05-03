@@ -356,6 +356,14 @@ unsafe extern "C" {
     pub fn manual_capture_begin(window_link: *mut WindowLink);
     pub fn manual_capture_end();
 
+    pub fn ni_query_range_for_word_at(
+        charptr: *const u8,
+        charlen: u64,
+        at: u64,
+        ret_start: *mut u64,
+        ret_end: *mut u64,
+    );
+
     pub fn ni_ak_spacing_inline_start() -> CFStringRef;
     pub fn ni_ak_font_id() -> CFStringRef;
 

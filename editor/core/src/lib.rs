@@ -1286,13 +1286,11 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         context: &mut InputEventContext,
         args: &PointerButtonActionArgs,
     ) -> input::EventContinueControl {
-        #[cfg(windows)]
         let selection_range =
             self.select_word_at(&*self.content.borrow(), self.cursor_pos_bytes.get());
-        #[cfg(windows)]
         let update_mask = self.select_range(selection_range);
 
-        #[cfg(not(windows))]
+        /*#[cfg(not(windows))]
         use unicode_segmentation::UnicodeSegmentation;
         #[cfg(not(windows))]
         let mut words = Vec::new();
@@ -1402,7 +1400,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         }
 
         #[cfg(not(windows))]
-        let update_mask = self.select_range(select_range);
+        let update_mask = self.select_range(select_range);*/
 
         let mounted_window = context
             .ht_manager
@@ -1907,6 +1905,39 @@ impl TextInputViewEventHandler {
                 .sum();
 
             start..end
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut start = core::mem::MaybeUninit::uninit();
+            let mut end = core::mem::MaybeUninit::uninit();
+
+            let at_utf16 = content[..cursor_pos_bytes]
+                .encode_utf16()
+                .count()
+                .min(content.encode_utf16().count() - 1);
+            unsafe {
+                crate::platform::mac::bridge::ni_query_range_for_word_at(
+                    content.as_ptr(),
+                    content.len() as _,
+                    at_utf16 as _,
+                    start.as_mut_ptr(),
+                    end.as_mut_ptr(),
+                );
+            }
+
+            let start_bytes = unsafe {
+                std::char::decode_utf16(content.encode_utf16().take(start.assume_init() as _))
+                    .map(|x| x.expect("invalid char?").len_utf8())
+                    .sum()
+            };
+            let end_bytes = unsafe {
+                std::char::decode_utf16(content.encode_utf16().take(end.assume_init() as _))
+                    .map(|x| x.expect("invalid char?").len_utf8())
+                    .sum()
+            };
+
+            start_bytes..end_bytes
         }
     }
 }
