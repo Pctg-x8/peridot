@@ -200,9 +200,14 @@ impl TextInputView {
         ct.get_mut(self.eh.ct_selection_bg).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_selection_bg);
 
-        self.eh
-            .update_cursor_position(ct, window, syslink, ht_manager);
-        self.eh.update_preedit_underline(ct, window);
+        // update for cursors
+        self.eh.update_views(
+            TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT,
+            ct,
+            window,
+            syslink,
+            ht_manager,
+        );
     }
 }
 
@@ -273,15 +278,17 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .end_text_input();
 
         // clear selection
-        self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-        self.update_selection(
+        let update_mask = self.deselect();
+        self.update_views(
+            update_mask,
             context.composite_tree,
             context
                 .ht_manager
                 .query_root_window(self.ht_root)
                 .expect("not mounted"),
+            context.system_link,
+            context.ht_manager,
         );
-        self.sync_selection_native();
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
@@ -442,7 +449,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            context.system_link.font_set(),
             mounted_window.ui_scale_factor(),
         );
 
@@ -484,7 +491,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            context.system_link.font_set(),
             mounted_window.ui_scale_factor(),
         );
 
@@ -525,7 +532,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            context.system_link.font_set(),
             mounted_window.ui_scale_factor(),
         );
 
@@ -647,7 +654,7 @@ impl TextInputViewEventHandler {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
 
@@ -702,14 +709,15 @@ impl TextInputViewEventHandler {
             composite_tree.get_mut(self.ct_text).offset[0] =
                 AnimatableFloat::Value(self.content_h_offset.get());
             composite_tree.mark_dirty(self.ct_text);
-            self.update_preedit_underline(composite_tree, window);
-            self.update_selection(composite_tree, window);
+            self.update_preedit_underline(composite_tree, system_link, window);
+            self.update_selection(composite_tree, system_link, window);
         }
     }
 
     fn update_preedit_underline<E>(
         &self,
         composite_tree: &mut CompositeTree<E>,
+        system_link: &SystemLink,
         window: WindowHandle,
     ) {
         let preedit_range =
@@ -724,13 +732,13 @@ impl TextInputViewEventHandler {
         let o = TextLayout::measure_total_advances(
             &self.content.borrow()[..preedit_range.start],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[preedit_range],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
 
@@ -744,7 +752,12 @@ impl TextInputViewEventHandler {
         composite_tree.mark_dirty(self.ct_preedit_underline);
     }
 
-    fn update_selection<E>(&self, composite_tree: &mut CompositeTree<E>, window: WindowHandle) {
+    fn update_selection<E>(
+        &self,
+        composite_tree: &mut CompositeTree<E>,
+        system_link: &SystemLink,
+        window: WindowHandle,
+    ) {
         let selection_range = self.selection_range();
         if selection_range.is_empty() {
             // no selection
@@ -756,13 +769,13 @@ impl TextInputViewEventHandler {
         let o = TextLayout::measure_total_advances(
             &self.content.borrow()[..selection_range.start],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..selection_range.end],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
 
@@ -789,10 +802,10 @@ impl TextInputViewEventHandler {
         if mask.contains(TextInputViewUpdateMask::CURSOR) {
             // needs update cursor position and selection highlight
             self.update_cursor_position(composite_tree, window, system_link, ht_manager);
-            self.update_selection(composite_tree, window);
+            self.update_selection(composite_tree, system_link, window);
         }
         if mask.contains(TextInputViewUpdateMask::PREEDIT) {
-            self.update_preedit_underline(composite_tree, window);
+            self.update_preedit_underline(composite_tree, system_link, window);
         }
 
         if mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR) {

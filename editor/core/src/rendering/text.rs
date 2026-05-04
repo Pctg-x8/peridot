@@ -14,7 +14,7 @@ use windows_core::*;
 use crate::{
     rendering::{
         MaskTextureAtlasManager,
-        vg::{VectorRasterizationState, VectorVertexRenderer},
+        vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
     },
     utils::Point,
 };
@@ -93,14 +93,6 @@ pub struct PerWindowFontSet<'d> {
     #[cfg(windows)]
     ui_title_project_name: &'d windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
     #[cfg(feature = "freetype")]
-    ui_default: FaceSet,
-    #[cfg(feature = "freetype")]
-    ui_title_project_name: FaceSet,
-    #[cfg(feature = "harfbuzz")]
-    ui_default_shaping: FaceShapingSet,
-    #[cfg(feature = "harfbuzz")]
-    ui_title_project_name_shaping: FaceShapingSet,
-    #[cfg(feature = "freetype")]
     _marker: core::marker::PhantomData<&'d [ft::raw::FT_Byte]>,
     #[cfg(target_os = "macos")]
     ui_default: &'d apple_sdk_port::text::Font,
@@ -109,49 +101,9 @@ pub struct PerWindowFontSet<'d> {
 }
 impl<'d> PerWindowFontSet<'d> {
     pub fn new(
-        root_set: &'d RootFontSet,
+        root_set: &'d FontSet,
         #[allow(unused_variables)] ctx: &ThreadLocalTypingContext,
     ) -> Self {
-        #[cfg(feature = "freetype")]
-        let ui_default = root_set
-            .ui_common_font_data
-            .iter()
-            .map(|&(f, ix)| unsafe {
-                ft::new_memory_face(ctx.ft_lib.0, &root_set.font_binaries[f], ix as _)
-                    .expect("FreeType.new_face.ui_default")
-            })
-            .collect::<Vec<_>>();
-        #[cfg(feature = "freetype")]
-        let ui_title_project_name = root_set
-            .ui_common_font_data
-            .iter()
-            .map(|&(f, ix)| unsafe {
-                ft::new_memory_face(ctx.ft_lib.0, &root_set.font_binaries[f], ix as _)
-                    .expect("FreeType.new_face.ui_title_project_name")
-            })
-            .collect::<Vec<_>>();
-
-        #[cfg(feature = "harfbuzz")]
-        let ui_default_shaping = ui_default
-            .iter()
-            .map(|&f| {
-                core::ptr::NonNull::new(unsafe {
-                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
-                })
-                .expect("hb_ft_font_create_referenced.ui_default")
-            })
-            .collect::<Vec<_>>();
-        #[cfg(feature = "harfbuzz")]
-        let ui_title_project_name_shaping = ui_title_project_name
-            .iter()
-            .map(|&f| {
-                core::ptr::NonNull::new(unsafe {
-                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
-                })
-                .expect("hb_ft_font_create_referenced.ui_title_project_name")
-            })
-            .collect::<Vec<_>>();
-
         Self {
             #[cfg(windows)]
             dw_factory: &root_set.dw_factory,
@@ -159,20 +111,6 @@ impl<'d> PerWindowFontSet<'d> {
             ui_default: &root_set.ui_default,
             #[cfg(windows)]
             ui_title_project_name: &root_set.ui_title_project_name,
-            #[cfg(feature = "freetype")]
-            ui_default: FaceSet { faces: ui_default },
-            #[cfg(feature = "freetype")]
-            ui_title_project_name: FaceSet {
-                faces: ui_title_project_name,
-            },
-            #[cfg(feature = "harfbuzz")]
-            ui_default_shaping: FaceShapingSet {
-                faces: ui_default_shaping,
-            },
-            #[cfg(feature = "harfbuzz")]
-            ui_title_project_name_shaping: FaceShapingSet {
-                faces: ui_title_project_name_shaping,
-            },
             #[cfg(feature = "freetype")]
             _marker: core::marker::PhantomData,
             #[cfg(target_os = "macos")]
@@ -186,57 +124,12 @@ impl<'d> PerWindowFontSet<'d> {
         unsafe { core::mem::transmute(self) }
     }
 
-    #[cfg(feature = "freetype")]
-    #[tracing::instrument(skip(self))]
-    pub fn rescale(&mut self, dpi: u32) {
-        use ft::FractionalExt;
-
-        for &x in &self.ui_default.faces {
-            if let Err(e) = unsafe { ft::set_char_size(x, 0, 12.0f32.to_f26dot6_lossy(), 0, dpi) } {
-                tracing::error!(reason = %e, "FreeType.set_char_size.ui_default");
-            }
-        }
-        for &x in &self.ui_title_project_name.faces {
-            if let Err(e) = unsafe { ft::set_char_size(x, 0, 10.0f32.to_f26dot6_lossy(), 0, dpi) } {
-                tracing::error!(reason = %e, "FreeType.set_char_size.ui_title_project_name");
-            }
-        }
-
-        #[cfg(feature = "harfbuzz")]
-        unsafe {
-            for &x in &self.ui_default_shaping.faces {
-                hb::ffi::hb_ft_font_changed(x.as_ptr());
-            }
-            for &x in &self.ui_title_project_name_shaping.faces {
-                hb::ffi::hb_ft_font_changed(x.as_ptr());
-            }
-        }
-    }
-
     #[cfg(target_os = "macos")]
     #[inline]
     pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
         match category {
             FontID::UIDefault => &self.ui_default,
             FontID::UITitleProjectName => &self.ui_title_project_name,
-        }
-    }
-
-    #[cfg(feature = "freetype")]
-    #[inline]
-    pub fn select(&self, category: FontID) -> &FaceSet {
-        match category {
-            FontID::UIDefault => &self.ui_default,
-            FontID::UITitleProjectName => &self.ui_title_project_name,
-        }
-    }
-
-    #[cfg(feature = "harfbuzz")]
-    #[inline]
-    pub fn select_shaping(&self, category: FontID) -> &FaceShapingSet {
-        match category {
-            FontID::UIDefault => &self.ui_default_shaping,
-            FontID::UITitleProjectName => &self.ui_title_project_name_shaping,
         }
     }
 
@@ -261,15 +154,19 @@ impl<'d> PerWindowFontSet<'d> {
     }
 }
 
-pub struct RootFontSet {
+pub struct FontSet {
     #[cfg(target_os = "macos")]
     ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
     #[cfg(target_os = "macos")]
     ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
     #[cfg(feature = "freetype")]
-    font_binaries: Vec<Vec<ft::raw::FT_Byte>>,
+    ui_default: FaceSet,
     #[cfg(feature = "freetype")]
-    ui_common_font_data: Vec<(usize, core::ffi::c_int)>,
+    ui_title_project_name: FaceSet,
+    #[cfg(feature = "harfbuzz")]
+    ui_default_shaping: FaceShapingSet,
+    #[cfg(feature = "harfbuzz")]
+    ui_title_project_name_shaping: FaceShapingSet,
     #[cfg(windows)]
     dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     #[cfg(windows)]
@@ -277,11 +174,11 @@ pub struct RootFontSet {
     #[cfg(windows)]
     ui_title_project_name: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
 }
-#[cfg(target_os = "macos")]
-unsafe impl Sync for RootFontSet {}
-#[cfg(target_os = "macos")]
-unsafe impl Send for RootFontSet {}
-impl RootFontSet {
+#[cfg(any(target_os = "macos", feature = "freetype"))]
+unsafe impl Sync for FontSet {}
+#[cfg(any(target_os = "macos", feature = "freetype"))]
+unsafe impl Send for FontSet {}
+impl FontSet {
     #[cfg(windows)]
     pub fn new() -> Self {
         use windows::Win32::{
@@ -350,8 +247,8 @@ impl RootFontSet {
     }
 
     #[cfg(feature = "freetype")]
-    pub fn new() -> Self {
-        let mut font_binaries = Vec::new();
+    pub fn new(ft_lib: &FreeType) -> Self {
+        let mut font_binary_paths = Vec::new();
         #[cfg(feature = "fontconfig")]
         let ui_common_font_data = unsafe {
             use std::collections::{HashMap, HashSet};
@@ -399,11 +296,8 @@ impl RootFontSet {
                 let font_binary_index = match loaded_fonts.entry(file) {
                     std::collections::hash_map::Entry::Occupied(x) => *x.get(),
                     std::collections::hash_map::Entry::Vacant(x) => {
-                        font_binaries.push(
-                            std::fs::read(x.key().to_str().expect("cstr.to_str"))
-                                .expect("font.readfile"),
-                        );
-                        *x.insert(font_binaries.len() - 1)
+                        font_binary_paths.push(x.key().clone());
+                        *x.insert(font_binary_paths.len() - 1)
                     }
                 };
 
@@ -416,19 +310,66 @@ impl RootFontSet {
             fonts_ordered
         };
 
-        tracing::info!(
-            total_data_bytes = %crate::utils::ByteLengthFormatter(
-                font_binaries
-                    .iter()
-                    .map(|b| b.len())
-                    .sum::<usize>()
-            ),
-            "RootFontSet stats"
-        );
+        use ft::FractionalExt;
+
+        let ui_default = ui_common_font_data
+            .iter()
+            .map(|&(f, ix)| unsafe {
+                ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
+                    .expect("FreeType.new_face.ui_default")
+            })
+            .collect::<Vec<_>>();
+        let ui_title_project_name = ui_common_font_data
+            .iter()
+            .map(|&(f, ix)| unsafe {
+                ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
+                    .expect("FreeType.new_face.ui_title_project_name")
+            })
+            .collect::<Vec<_>>();
+
+        for &x in &ui_default {
+            if let Err(e) = unsafe { ft::set_char_size(x, 0, 12.0f32.to_f26dot6_lossy(), 0, 72) } {
+                tracing::error!(reason = %e, "FreeType.set_char_size.ui_default");
+            }
+        }
+        for &x in &ui_title_project_name {
+            if let Err(e) = unsafe { ft::set_char_size(x, 0, 10.0f32.to_f26dot6_lossy(), 0, 72) } {
+                tracing::error!(reason = %e, "FreeType.set_char_size.ui_title_project_name");
+            }
+        }
+
+        #[cfg(feature = "harfbuzz")]
+        let ui_default_shaping = ui_default
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe {
+                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
+                })
+                .expect("hb_ft_font_create_referenced.ui_default")
+            })
+            .collect::<Vec<_>>();
+        #[cfg(feature = "harfbuzz")]
+        let ui_title_project_name_shaping = ui_title_project_name
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe {
+                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
+                })
+                .expect("hb_ft_font_create_referenced.ui_title_project_name")
+            })
+            .collect::<Vec<_>>();
 
         Self {
-            font_binaries,
-            ui_common_font_data,
+            ui_default: FaceSet { faces: ui_default },
+            ui_title_project_name: FaceSet {
+                faces: ui_title_project_name,
+            },
+            ui_default_shaping: FaceShapingSet {
+                faces: ui_default_shaping,
+            },
+            ui_title_project_name_shaping: FaceShapingSet {
+                faces: ui_title_project_name_shaping,
+            },
         }
     }
 
@@ -448,6 +389,24 @@ impl RootFontSet {
         Self {
             ui_default,
             ui_title_project_name,
+        }
+    }
+
+    #[cfg(feature = "freetype")]
+    #[inline]
+    pub fn select(&self, category: FontID) -> &FaceSet {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+        }
+    }
+
+    #[cfg(feature = "harfbuzz")]
+    #[inline]
+    pub fn select_shaping(&self, category: FontID) -> &FaceShapingSet {
+        match category {
+            FontID::UIDefault => &self.ui_default_shaping,
+            FontID::UITitleProjectName => &self.ui_title_project_name_shaping,
         }
     }
 }
@@ -496,7 +455,6 @@ pub struct TextLayout {
     frame: apple_sdk_port::Owned<apple_sdk_port::text::Frame>,
     #[cfg(windows)]
     layout: windows::Win32::Graphics::DirectWrite::IDWriteTextLayout,
-    render_scale: f32,
 }
 impl Drop for TextLayout {
     fn drop(&mut self) {
@@ -509,11 +467,7 @@ impl Drop for TextLayout {
     }
 }
 impl TextLayout {
-    pub fn new<'s>(
-        text_runs: impl Iterator<Item = TextRun<'s>>,
-        font_set: &PerWindowFontSet,
-        render_scale: f32,
-    ) -> Self {
+    pub fn new<'s>(text_runs: impl Iterator<Item = TextRun<'s>>, font_set: &FontSet) -> Self {
         let (lb, ub) = text_runs.size_hint();
         #[cfg(feature = "harfbuzz")]
         let mut buffers = Vec::with_capacity(ub.unwrap_or(lb));
@@ -525,7 +479,7 @@ impl TextLayout {
         let mut height = 0.0f32;
         #[cfg(feature = "freetype")]
         for x in text_runs {
-            left_offset += x.spacing_inline_start * render_scale;
+            left_offset += x.spacing_inline_start;
 
             #[cfg(feature = "freetype")]
             let font = font_set.select(x.font);
@@ -777,13 +731,12 @@ impl TextLayout {
             frame,
             #[cfg(windows)]
             layout,
-            render_scale,
         }
     }
 
     pub fn rasterize_and_place_glyphs(
         &self,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         vector_rasterization_state: &mut VectorRasterizationState,
         atlas: &mut MaskTextureAtlasManager,
         render_scale: f32,
@@ -801,162 +754,90 @@ impl TextLayout {
             let glyph_positions = unsafe {
                 hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
             };
-            assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-                glyph_positions_len.assume_init()
-            });
+            let glyph_infos = unsafe {
+                core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
+            };
+            let glyph_positions = unsafe {
+                core::slice::from_raw_parts(glyph_positions, glyph_positions_len.assume_init() as _)
+            };
+            assert_eq!(glyph_infos.len(), glyph_positions.len());
+
             let baseline_y = self.baseline_y_offset;
             let mut left_cursor = left_base;
-            for n in 0..unsafe { glyph_positions_len.assume_init() } {
-                let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
-                let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
-
+            for (glyph_info, glyph_position) in
+                glyph_infos.into_iter().zip(glyph_positions.into_iter())
+            {
                 unsafe {
                     ft::load_glyph(font, glyph_info.codepoint, ft::LoadFlags::DEFAULT)
                         .expect("face.load_glyph")
                 };
                 let metrics = unsafe { &(*(*font).glyph).metrics };
-                let glyph_width = metrics.width as f32 / 64.0;
-                let glyph_height = metrics.height as f32 / 64.0;
+                let glyph_width = metrics.width as f32 / 64.0 * render_scale;
+                let glyph_height = metrics.height as f32 / 64.0 * render_scale;
 
                 let (r, is_new) = atlas.acquire_for_glyph(
                     (font as _, glyph_info.codepoint as _),
                     glyph_width.ceil() as _,
                     glyph_height.ceil() as _,
                 );
-                let placement_box = GlyphPlacementBox {
-                    left: left_cursor
-                        + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32) / 64.0,
-                    top: baseline_y - metrics.horiBearingY as f32 / 64.0,
+                boxes.push(GlyphPlacementBox {
+                    left: (left_cursor
+                        + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32) / 64.0)
+                        * render_scale,
+                    top: (baseline_y - metrics.horiBearingY as f32 / 64.0) * render_scale,
                     tex_left: r.left,
                     tex_top: r.top,
                     width: r.width(),
                     height: r.height(),
-                };
-                boxes.push(placement_box);
+                });
 
                 if is_new {
                     vector_rasterization_state.updated_rects.push(r.vk_rect());
 
                     struct OutlineReceiver<'r> {
-                        current_figure: Option<(ft::Vector, usize)>,
-                        pen_pos: ft::Vector,
-                        sink: &'r mut VectorRasterizationState,
+                        vrender: VectorVertexRenderer<'r>,
+                        render_scale: f32,
                         offset_x: f32,
                         offset_y: f32,
                     }
+                    impl OutlineReceiver<'_> {
+                        #[inline(always)]
+                        const fn make_point(&self, v: &ft::Vector) -> Point<VectorTextureUnit> {
+                            Point::new_vector_texture(
+                                v.x as f32 / 64.0 * self.render_scale + self.offset_x,
+                                v.y as f32 / 64.0 * self.render_scale + self.offset_y,
+                            )
+                        }
+                    }
                     impl ft::OutlineFuncs for OutlineReceiver<'_> {
+                        #[inline(always)]
                         fn move_to(&mut self, to: &ft::Vector) {
-                            self.current_figure =
-                                Some((to.clone(), self.sink.fill_tri_points.len()));
-                            self.pen_pos = to.clone();
-                            self.sink.fill_tri_points.push([
-                                to.x as f32 / 64.0 + self.offset_x,
-                                to.y as f32 / 64.0 + self.offset_y,
-                            ]);
+                            self.vrender.move_to(self.make_point(to));
                         }
 
+                        #[inline(always)]
                         fn line_to(&mut self, to: &ft::Vector) {
-                            let Some((_, filltri_index0)) = self.current_figure else {
-                                panic!("no figure started?");
-                            };
-
-                            let filltri_index1 = self.sink.fill_tri_points.len() - 1;
-                            let filltri_index2 = self.sink.fill_tri_points.len();
-                            self.sink.fill_tri_points.push([
-                                to.x as f32 / 64.0 + self.offset_x,
-                                to.y as f32 / 64.0 + self.offset_y,
-                            ]);
-                            self.sink.fill_tri_indices.extend([
-                                filltri_index0 as u16,
-                                filltri_index1 as u16,
-                                filltri_index2 as u16,
-                            ]);
-                            self.pen_pos = to.clone();
+                            self.vrender.line_to(self.make_point(to));
                         }
 
+                        #[inline(always)]
                         fn conic_to(&mut self, control: &ft::Vector, to: &ft::Vector) {
-                            let Some((_, filltri_index0)) = self.current_figure else {
-                                panic!("no figure started?");
-                            };
-
-                            let filltri_index1 = self.sink.fill_tri_points.len() - 1;
-                            let filltri_index2 = self.sink.fill_tri_points.len();
-                            self.sink.fill_tri_points.push([
-                                to.x as f32 / 64.0 + self.offset_x,
-                                to.y as f32 / 64.0 + self.offset_y,
-                            ]);
-                            self.sink.fill_tri_indices.extend([
-                                filltri_index0 as u16,
-                                filltri_index1 as u16,
-                                filltri_index2 as u16,
-                            ]);
-                            self.sink.curve_tris.extend([
-                                [
-                                    self.pen_pos.x as f32 / 64.0 + self.offset_x,
-                                    self.pen_pos.y as f32 / 64.0 + self.offset_y,
-                                    0.0,
-                                    0.0,
-                                ],
-                                [
-                                    control.x as f32 / 64.0 + self.offset_x,
-                                    control.y as f32 / 64.0 + self.offset_y,
-                                    0.5,
-                                    0.0,
-                                ],
-                                [
-                                    to.x as f32 / 64.0 + self.offset_x,
-                                    to.y as f32 / 64.0 + self.offset_y,
-                                    1.0,
-                                    1.0,
-                                ],
-                            ]);
-                            self.pen_pos = to.clone();
+                            self.vrender
+                                .quadratic_to(self.make_point(control), self.make_point(to));
                         }
 
+                        #[inline(always)]
                         fn cubic_to(
                             &mut self,
                             control1: &ft::Vector,
                             control2: &ft::Vector,
                             to: &ft::Vector,
                         ) {
-                            lyon_geom::CubicBezierSegment {
-                                from: lyon_geom::point(
-                                    self.pen_pos.x as f32 / 64.0 + self.offset_x,
-                                    self.pen_pos.y as f32 / 64.0 + self.offset_y,
-                                ),
-                                ctrl1: lyon_geom::point(
-                                    control1.x as f32 / 64.0 + self.offset_x,
-                                    control1.y as f32 / 64.0 + self.offset_y,
-                                ),
-                                ctrl2: lyon_geom::point(
-                                    control2.x as f32 / 64.0 + self.offset_x,
-                                    control2.y as f32 / 64.0 + self.offset_y,
-                                ),
-                                to: lyon_geom::point(
-                                    to.x as f32 / 64.0 + self.offset_x,
-                                    to.y as f32 / 64.0 + self.offset_y,
-                                ),
-                            }
-                            .for_each_quadratic_bezier(0.1, &mut |q| {
-                                let Some((_, filltri_index0)) = self.current_figure else {
-                                    panic!("no figure started?");
-                                };
-
-                                let filltri_index1 = self.sink.fill_tri_points.len() - 1;
-                                let filltri_index2 = self.sink.fill_tri_points.len();
-                                self.sink.fill_tri_points.push([q.to.x, q.to.y]);
-                                self.sink.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    filltri_index2 as u16,
-                                ]);
-                                self.sink.curve_tris.extend([
-                                    [q.from.x, q.from.y, 0.0, 0.0],
-                                    [q.ctrl.x, q.ctrl.y, 0.5, 0.0],
-                                    [q.to.x, q.to.y, 1.0, 1.0],
-                                ]);
-                            });
-                            self.pen_pos = to.clone();
+                            self.vrender.cubic_to(
+                                self.make_point(control1),
+                                self.make_point(control2),
+                                self.make_point(to),
+                            );
                         }
                     }
 
@@ -964,11 +845,12 @@ impl TextLayout {
                         ft::outline_decompose(
                             &mut (*(*font).glyph).outline,
                             &mut OutlineReceiver {
-                                current_figure: None,
-                                pen_pos: ft::Vector { x: 0, y: 0 },
-                                sink: vector_rasterization_state,
-                                offset_x: r.left as f32 - metrics.horiBearingX as f32 / 64.0,
-                                offset_y: -(r.top as f32) - metrics.horiBearingY as f32 / 64.0,
+                                vrender: VectorVertexRenderer::new(vector_rasterization_state),
+                                render_scale,
+                                offset_x: r.left as f32
+                                    - metrics.horiBearingX as f32 / 64.0 * render_scale,
+                                offset_y: -(r.top as f32)
+                                    - metrics.horiBearingY as f32 / 64.0 * render_scale,
                             },
                             0,
                             0,
@@ -1505,13 +1387,13 @@ impl TextLayout {
     #[cfg(not(windows))]
     #[inline(always)]
     #[cfg(feature = "harfbuzz")]
-    pub fn height(&self) -> f32 {
+    pub fn height_unscaled(&self) -> f32 {
         self.height
     }
 
     #[cfg(target_os = "macos")]
     #[inline(always)]
-    pub fn height(&self) -> f32 {
+    pub fn height_unscaled(&self) -> f32 {
         if self.frame.lines().len() == 0 {
             // no lines(empty string)
             return 0.0;
@@ -1523,24 +1405,24 @@ impl TextLayout {
         let l = &self.frame.lines()[0];
         l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
 
-        unsafe { (ascender.assume_init() + descender.assume_init()) as f32 * self.render_scale }
+        unsafe { (ascender.assume_init() + descender.assume_init()) as f32 }
     }
 
     #[cfg(windows)]
-    pub fn height(&self) -> f32 {
+    pub fn height_unscaled(&self) -> f32 {
         let mut metrics = core::mem::MaybeUninit::uninit();
         unsafe {
             self.layout
                 .GetMetrics(metrics.as_mut_ptr())
                 .expect("layout.GetMetrics")
         };
-        unsafe { metrics.assume_init().height * self.render_scale }
+        unsafe { metrics.assume_init().height }
     }
 
     pub fn measure_visual_width(
         text: &str,
         font: FontID,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         render_scale: f32,
     ) -> f32 {
         // TODO: 最適化はあとで
@@ -1551,7 +1433,6 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
-            render_scale,
         );
 
         #[cfg(feature = "harfbuzz")]
@@ -1578,7 +1459,7 @@ impl TextLayout {
         #[cfg(feature = "harfbuzz")]
         let font = font_set.select(font).faces[fallback_index];
         #[cfg(feature = "harfbuzz")]
-        let mut left_cursor = left_base;
+        let mut left_cursor = left_base * render_scale;
         #[cfg(feature = "harfbuzz")]
         let mut width = 0.0f32;
         #[cfg(feature = "harfbuzz")]
@@ -1600,6 +1481,11 @@ impl TextLayout {
             );
 
             left_cursor += glyph_position.x_advance as f32 / 64.0;
+        }
+
+        #[cfg(feature = "harfbuzz")]
+        {
+            width = width * render_scale;
         }
 
         #[cfg(target_os = "macos")]
@@ -1664,7 +1550,7 @@ impl TextLayout {
     pub fn measure_total_advances(
         text: &str,
         font: FontID,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         render_scale: f32,
     ) -> f32 {
         // TODO: 最適化はあとで
@@ -1675,7 +1561,6 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
-            render_scale,
         );
 
         #[cfg(feature = "harfbuzz")]
@@ -1689,15 +1574,18 @@ impl TextLayout {
         let glyph_positions = unsafe {
             hb::ffi::hb_buffer_get_glyph_positions(last_buf, glyph_positions_len.as_mut_ptr())
         };
+        #[cfg(feature = "harfbuzz")]
+        let glyph_positions = unsafe {
+            core::slice::from_raw_parts(glyph_positions, glyph_positions_len.assume_init() as _)
+        };
 
         #[cfg(feature = "harfbuzz")]
-        let mut left_cursor = left_base;
-        #[cfg(feature = "harfbuzz")]
-        for n in 0..unsafe { glyph_positions_len.assume_init() } {
-            let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
-
-            left_cursor += glyph_position.x_advance as f32 / 64.0;
-        }
+        let left_cursor = left_base * render_scale
+            + glyph_positions
+                .into_iter()
+                .map(|x| x.x_advance as f32 / 64.0)
+                .sum::<f32>()
+                * render_scale;
 
         #[cfg(target_os = "macos")]
         let mut left_cursor = 0.0 as f32;
@@ -1766,7 +1654,7 @@ impl TextLayout {
         x: f32,
         text: &str,
         font: FontID,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         render_scale: f32,
     ) -> usize {
         // TODO: 最適化はあとで
@@ -1777,12 +1665,11 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
-            1.0,
         );
 
         // TODO: LTR前提
         #[cfg(feature = "harfbuzz")]
-        let mut left_cursor = 0.0;
+        let mut left_cursor;
         #[cfg(feature = "harfbuzz")]
         let mut bytes = 0;
         #[cfg(feature = "harfbuzz")]
@@ -1791,12 +1678,12 @@ impl TextLayout {
             let glyph_positions = unsafe {
                 hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
             };
-            left_cursor = left_base;
+            left_cursor = left_base * render_scale;
             for n in 0..unsafe { glyph_positions_len.assume_init() } {
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
 
                 let left = left_cursor;
-                let right = left + glyph_position.x_advance as f32 / 64.0;
+                let right = left + glyph_position.x_advance as f32 / 64.0 * render_scale;
                 let mid = (left + right) / 2.0;
 
                 if x < left {
@@ -1821,7 +1708,7 @@ impl TextLayout {
                     return next_boundary_bytes;
                 }
 
-                left_cursor += glyph_position.x_advance as f32 / 64.0;
+                left_cursor += glyph_position.x_advance as f32 / 64.0 * render_scale;
                 bytes += text[bytes..]
                     .chars()
                     .next()

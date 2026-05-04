@@ -21,7 +21,7 @@ use crate::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
             CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
         },
-        text::{PerWindowFontSet, RootFontSet, ThreadLocalTypingContext},
+        text::{FontSet, PerWindowFontSet, ThreadLocalTypingContext},
         vg::VectorRasterizationState,
     },
     utils::SafeF32,
@@ -98,7 +98,7 @@ pub struct RenderThread<'main> {
     pub global_time_base: &'main std::time::Instant,
     pub event_bus: &'main SyncEventBus,
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
-    pub root_font_set: &'main RootFontSet,
+    pub font_set: &'main FontSet,
     #[cfg(windows)]
     pub dx_context: &'main crate::platform::windows::DxContext,
     #[cfg(windows)]
@@ -226,7 +226,7 @@ impl<'main> RenderThread<'main> {
                                 wd,
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
-                                self.root_font_set,
+                                self.font_set,
                                 &typing_context,
                             ),
                         );
@@ -277,7 +277,7 @@ impl<'main> RenderThread<'main> {
                                 create_data,
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
-                                self.root_font_set,
+                                self.font_set,
                                 &typing_context,
                                 #[cfg(windows)]
                                 self.dx_context,
@@ -546,6 +546,7 @@ impl<'main> RenderThread<'main> {
                     &mut glyph_atlas_mgr.atlas_rects,
                     &mut glyph_atlas_mgr.vector_raster_state,
                     self.event_bus,
+                    self.font_set,
                 );
 
                 let mut render_wait_semaphores = Vec::with_capacity(1);
@@ -691,6 +692,7 @@ impl<'main> RenderThread<'main> {
                     &mut glyph_atlas_mgr.atlas_rects,
                     &mut glyph_atlas_mgr.vector_raster_state,
                     self.event_bus,
+                    self.font_set,
                 );
 
                 let mut render_wait_semaphores = Vec::with_capacity(1);
@@ -922,14 +924,12 @@ impl<'d> ContextMenuRenderer<'d> {
         create_data: NewContextMenuData,
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
-        root_font_set: &'d RootFontSet,
+        root_font_set: &'d FontSet,
         typing_context: &ThreadLocalTypingContext,
         #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
     ) -> Self {
         #[allow(unused_mut)]
         let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
-        #[cfg(feature = "wayland")]
-        font_set.rescale((init_scale.value() * 72.0) as _);
 
         #[cfg(not(windows))]
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
@@ -1194,9 +1194,6 @@ impl<'d> ContextMenuRenderer<'d> {
     #[cfg(not(windows))]
     pub fn rescale(&mut self, scale: SafeF32) {
         self.active_scale = scale;
-
-        #[cfg(feature = "freetype")]
-        self.font_set.rescale((scale.value() * 72.0) as _);
     }
 
     pub fn update(
@@ -1207,6 +1204,7 @@ impl<'d> ContextMenuRenderer<'d> {
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
         events: &SyncEventBus,
+        font_set: &FontSet,
     ) -> bool {
         let composite_render_data = self.composite_renderer.update(
             self.vk_device,
@@ -1216,7 +1214,7 @@ impl<'d> ContextMenuRenderer<'d> {
             self.swapchain.size(),
             #[cfg(windows)]
             self.presentation_size,
-            &self.font_set,
+            font_set,
             glyph_atlas,
             mask_atlas_rects,
             vector_raster_state,
@@ -1479,13 +1477,11 @@ impl<'d> WindowRenderer<'d> {
         create_data: NewWindowData,
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
-        root_font_set: &'d RootFontSet,
+        root_font_set: &'d FontSet,
         typing_context: &ThreadLocalTypingContext,
     ) -> Self {
         #[allow(unused_mut)]
         let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
-        #[cfg(feature = "wayland")]
-        font_set.rescale((init_scale.value() * 72.0) as _);
 
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.key.pixels_client_size());
@@ -1604,9 +1600,6 @@ impl<'d> WindowRenderer<'d> {
 
     pub fn rescale(&mut self, scale: SafeF32) {
         self.active_scale = scale;
-
-        #[cfg(feature = "freetype")]
-        self.font_set.rescale((scale.value() * 72.0) as _);
     }
 
     pub fn update(
@@ -1617,13 +1610,14 @@ impl<'d> WindowRenderer<'d> {
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
         events: &SyncEventBus,
+        font_set: &FontSet,
     ) -> bool {
         let composite_render_data = self.composite_renderer.update(
             self.vk_device,
             composite_tree,
             self.composite_root,
             self.swapchain.size(),
-            &self.font_set,
+            font_set,
             glyph_atlas,
             mask_atlas_rects,
             vector_raster_state,
