@@ -1801,12 +1801,12 @@ impl TextLayout {
 
                 if x < left {
                     // overshoot
-                    return (left, bytes);
+                    return bytes;
                 }
 
                 if x <= mid {
                     // left
-                    return (left, bytes);
+                    return bytes;
                 }
 
                 if x <= right {
@@ -1818,7 +1818,7 @@ impl TextLayout {
                         next_boundary_bytes += 1;
                     }
 
-                    return (right, next_boundary_bytes);
+                    return next_boundary_bytes;
                 }
 
                 left_cursor += glyph_position.x_advance as f32 / 64.0;

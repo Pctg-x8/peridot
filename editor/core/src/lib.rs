@@ -1420,6 +1420,13 @@ async fn run<'sys>(
                         &ht_manager,
                         new_scale,
                     );
+                    text_input_view2.rescale(
+                        &mut composite_tree,
+                        window,
+                        &system_link,
+                        &ht_manager,
+                        new_scale,
+                    );
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
