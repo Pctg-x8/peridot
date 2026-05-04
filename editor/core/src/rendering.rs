@@ -21,7 +21,7 @@ use crate::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
             CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
         },
-        text::{FontSet, PerWindowFontSet, ThreadLocalTypingContext},
+        text::FontSet,
         vg::VectorRasterizationState,
     },
     utils::SafeF32,
@@ -142,10 +142,6 @@ impl<'main> RenderThread<'main> {
             ref_count: u64,
         }
         let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
-        let typing_context = ThreadLocalTypingContext {
-            #[cfg(feature = "freetype")]
-            ft_lib: self::text::FreeType::init().expect("freetype.init"),
-        };
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
         let mut context_menus: HashMap<ContextMenuHandle, ContextMenuRenderer> = HashMap::new();
         let mut normalized_2d_static_mesh_textures: HashMap<
@@ -227,7 +223,6 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 self.font_set,
-                                &typing_context,
                             ),
                         );
                     }
@@ -278,7 +273,6 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 self.font_set,
-                                &typing_context,
                                 #[cfg(windows)]
                                 self.dx_context,
                             ),
@@ -915,7 +909,6 @@ struct ContextMenuRenderer<'d> {
     presentation_buffers: Vec<CompositionSwapchainBuffer<'d>>,
     #[cfg(windows)]
     presentation_size: br::Extent2D,
-    font_set: PerWindowFontSet<'d>,
 }
 impl<'d> ContextMenuRenderer<'d> {
     fn new(
@@ -925,12 +918,8 @@ impl<'d> ContextMenuRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         root_font_set: &'d FontSet,
-        typing_context: &ThreadLocalTypingContext,
         #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
     ) -> Self {
-        #[allow(unused_mut)]
-        let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
-
         #[cfg(not(windows))]
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         #[cfg(not(windows))]
@@ -1123,7 +1112,7 @@ impl<'d> ContextMenuRenderer<'d> {
         Self {
             w: create_data.w,
             active_scale: init_scale,
-            font_set,
+
             vk_device: device,
             composite_root: create_data.composite_root,
             composite_renderer,
@@ -1468,7 +1457,6 @@ struct WindowRenderer<'d> {
     backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
     swapchain: VulkanSwapchain<'d, 'd>,
     surface: VulkanSurface<'d, 'd>,
-    font_set: PerWindowFontSet<'d>,
 }
 impl<'d> WindowRenderer<'d> {
     fn new(
@@ -1478,11 +1466,7 @@ impl<'d> WindowRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         root_font_set: &'d FontSet,
-        typing_context: &ThreadLocalTypingContext,
     ) -> Self {
-        #[allow(unused_mut)]
-        let mut font_set = PerWindowFontSet::new(root_font_set, typing_context);
-
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.key.pixels_client_size());
 
@@ -1551,7 +1535,7 @@ impl<'d> WindowRenderer<'d> {
             w: create_data.key,
             active_scale: init_scale,
             latest_ui_scale_changes: &create_data.key.state().latest_ui_scale_changes,
-            font_set,
+
             vk_device: device,
             composite_root: create_data.key.composite_root(),
             composite_renderer,

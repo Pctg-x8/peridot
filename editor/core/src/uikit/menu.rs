@@ -11,7 +11,7 @@ use crate::{
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, Gradient,
             GradientRef,
         },
-        text::{FontID, FontSet, PerWindowFontSet, TextLayout},
+        text::{FontID, FontSet, TextLayout},
     },
     uikit::{MountContext, MountTarget, ViewInitContext},
     utils::{LogicalUnit, SafeF32, Size},

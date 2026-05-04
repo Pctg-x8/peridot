@@ -19,7 +19,7 @@ use crate::{
     rendering::{
         MaskTextureAtlasManager,
         atlas::{AtlasRect, DynamicAtlasManager},
-        text::{FontID, FontSet, GlyphPlacementBox, PerWindowFontSet, TextLayout, TextRun},
+        text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
         vg::VectorRasterizationState,
     },
     utils::SafeF32,

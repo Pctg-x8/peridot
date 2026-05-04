@@ -38,7 +38,7 @@ use crate::{
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
             CompositeTreeSyncBuffer, Gradient,
         },
-        text::{FontID, FontSet, PerWindowFontSet, ThreadLocalTypingContext},
+        text::{FontID, FontSet},
     },
     uikit::{
         MenuItem, MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
@@ -957,7 +957,6 @@ impl Popup for AlertDialogPresenter {
 }
 
 struct PerWindowData {
-    font_set: PerWindowFontSet<'static>,
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
 }
@@ -984,10 +983,6 @@ async fn run<'sys>(
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
 
-    let typing_context = ThreadLocalTypingContext {
-        #[cfg(feature = "freetype")]
-        ft_lib: rendering::text::FreeType::init().expect("freetype.init"),
-    };
     let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
     let mut pointer_input_manager = PointerInputManager::new();
 
@@ -1048,9 +1043,6 @@ async fn run<'sys>(
     window_header_view.mount(&mut view_init_ctx, &main_window);
 
     main_window.associate_extra_data(Box::new(PerWindowData {
-        font_set: unsafe {
-            PerWindowFontSet::new(system_link.font_set(), &typing_context).lifetime_unbound()
-        },
         screen_reposition_interests: HashSet::new(),
         header: window_header_view,
     }));
@@ -1336,10 +1328,6 @@ async fn run<'sys>(
                         window_header_view.mount(&mut view_init_ctx, &w);
 
                         w.associate_extra_data(Box::new(PerWindowData {
-                            font_set: unsafe {
-                                PerWindowFontSet::new(system_link.font_set(), &typing_context)
-                                    .lifetime_unbound()
-                            },
                             screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
                         }));
@@ -1784,7 +1772,6 @@ async fn run<'sys>(
                         system_link: &system_link,
                     },
                     &context_menu_common_resources,
-                    &typing_context,
                 ));
 
                 composite_tree
@@ -1879,7 +1866,6 @@ async fn run<'sys>(
                             system_link: &system_link,
                         },
                         &context_menu_common_resources,
-                        &typing_context,
                     );
 
                     composite_tree
@@ -2212,7 +2198,6 @@ impl ContextMenuSession {
         surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
-        typing_context: &ThreadLocalTypingContext,
     ) -> Self {
         #[cfg(target_os = "macos")]
         system_link.context_menu.observe_global_click();
@@ -2269,7 +2254,6 @@ impl ContextMenuSession {
         system_link: &SystemLink,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
-        typing_context: &ThreadLocalTypingContext,
     ) {
         match self.active_selection {
             Some((depth, index)) => {
@@ -2353,7 +2337,6 @@ impl ContextMenuSession {
         system_link: &SystemLink,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
-        typing_context: &ThreadLocalTypingContext,
     ) {
         while self.opening_surfaces.len() > depth + 1 {
             self.opening_surfaces.pop().expect("empty?").handle.close(

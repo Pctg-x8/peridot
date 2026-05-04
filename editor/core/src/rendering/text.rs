@@ -80,80 +80,6 @@ impl Drop for FaceShapingSet {
     }
 }
 
-pub struct ThreadLocalTypingContext {
-    #[cfg(feature = "freetype")]
-    pub ft_lib: FreeType,
-}
-
-pub struct PerWindowFontSet<'d> {
-    #[cfg(windows)]
-    dw_factory: &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory,
-    #[cfg(windows)]
-    ui_default: &'d windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
-    #[cfg(windows)]
-    ui_title_project_name: &'d windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
-    #[cfg(feature = "freetype")]
-    _marker: core::marker::PhantomData<&'d [ft::raw::FT_Byte]>,
-    #[cfg(target_os = "macos")]
-    ui_default: &'d apple_sdk_port::text::Font,
-    #[cfg(target_os = "macos")]
-    ui_title_project_name: &'d apple_sdk_port::text::Font,
-}
-impl<'d> PerWindowFontSet<'d> {
-    pub fn new(
-        root_set: &'d FontSet,
-        #[allow(unused_variables)] ctx: &ThreadLocalTypingContext,
-    ) -> Self {
-        Self {
-            #[cfg(windows)]
-            dw_factory: &root_set.dw_factory,
-            #[cfg(windows)]
-            ui_default: &root_set.ui_default,
-            #[cfg(windows)]
-            ui_title_project_name: &root_set.ui_title_project_name,
-            #[cfg(feature = "freetype")]
-            _marker: core::marker::PhantomData,
-            #[cfg(target_os = "macos")]
-            ui_default: &root_set.ui_default,
-            #[cfg(target_os = "macos")]
-            ui_title_project_name: &root_set.ui_title_project_name,
-        }
-    }
-
-    pub const unsafe fn lifetime_unbound(self) -> PerWindowFontSet<'static> {
-        unsafe { core::mem::transmute(self) }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[inline]
-    pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
-        match category {
-            FontID::UIDefault => &self.ui_default,
-            FontID::UITitleProjectName => &self.ui_title_project_name,
-        }
-    }
-
-    #[cfg(windows)]
-    #[inline(always)]
-    pub const fn native_factory(
-        &self,
-    ) -> &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory {
-        self.dw_factory
-    }
-
-    #[cfg(windows)]
-    #[inline]
-    pub fn select(
-        &self,
-        category: FontID,
-    ) -> &windows::Win32::Graphics::DirectWrite::IDWriteTextFormat {
-        match category {
-            FontID::UIDefault => &self.ui_default,
-            FontID::UITitleProjectName => &self.ui_title_project_name,
-        }
-    }
-}
-
 pub struct FontSet {
     #[cfg(target_os = "macos")]
     ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
@@ -314,29 +240,36 @@ impl FontSet {
 
         let ui_default = ui_common_font_data
             .iter()
-            .map(|&(f, ix)| unsafe {
-                ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
-                    .expect("FreeType.new_face.ui_default")
+            .map(|&(f, ix)| {
+                let face = unsafe {
+                    ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
+                        .expect("FreeType.new_face.ui_default")
+                };
+                if let Err(e) =
+                    unsafe { ft::set_char_size(face, 0, 12.0f32.to_f26dot6_lossy(), 0, 72) }
+                {
+                    tracing::error!(reason = %e, "FreeType.set_char_size.ui_default");
+                }
+
+                face
             })
             .collect::<Vec<_>>();
         let ui_title_project_name = ui_common_font_data
             .iter()
-            .map(|&(f, ix)| unsafe {
-                ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
-                    .expect("FreeType.new_face.ui_title_project_name")
+            .map(|&(f, ix)| {
+                let face = unsafe {
+                    ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
+                        .expect("FreeType.new_face.ui_title_project_name")
+                };
+                if let Err(e) =
+                    unsafe { ft::set_char_size(face, 0, 10.0f32.to_f26dot6_lossy(), 0, 72) }
+                {
+                    tracing::error!(reason = %e, "FreeType.set_char_size.ui_title_project_name");
+                }
+
+                face
             })
             .collect::<Vec<_>>();
-
-        for &x in &ui_default {
-            if let Err(e) = unsafe { ft::set_char_size(x, 0, 12.0f32.to_f26dot6_lossy(), 0, 72) } {
-                tracing::error!(reason = %e, "FreeType.set_char_size.ui_default");
-            }
-        }
-        for &x in &ui_title_project_name {
-            if let Err(e) = unsafe { ft::set_char_size(x, 0, 10.0f32.to_f26dot6_lossy(), 0, 72) } {
-                tracing::error!(reason = %e, "FreeType.set_char_size.ui_title_project_name");
-            }
-        }
 
         #[cfg(feature = "harfbuzz")]
         let ui_default_shaping = ui_default
@@ -407,6 +340,35 @@ impl FontSet {
         match category {
             FontID::UIDefault => &self.ui_default_shaping,
             FontID::UITitleProjectName => &self.ui_title_project_name_shaping,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[inline]
+    pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+        }
+    }
+
+    #[cfg(windows)]
+    #[inline(always)]
+    pub const fn native_factory(
+        &self,
+    ) -> &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory {
+        self.dw_factory
+    }
+
+    #[cfg(windows)]
+    #[inline]
+    pub fn select(
+        &self,
+        category: FontID,
+    ) -> &windows::Win32::Graphics::DirectWrite::IDWriteTextFormat {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
         }
     }
 }

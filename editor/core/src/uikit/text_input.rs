@@ -5,7 +5,7 @@ use bitflags::bitflags;
 #[cfg(target_os = "macos")]
 use crate::{Event, LogicFiberEventDispatcher, input::hittest::HitTestTreeManager};
 use crate::{
-    LogicFiberEventDispatcher, PerWindowData, SystemLink, WindowHandle,
+    LogicFiberEventDispatcher, SystemLink, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
