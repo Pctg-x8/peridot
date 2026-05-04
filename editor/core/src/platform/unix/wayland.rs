@@ -2253,14 +2253,30 @@ impl wl::PointerEventListener for GlobalMessaging {
         }
     }
 
-    #[tracing::instrument(skip(self, _pointer, _surface))]
-    fn leave(
-        &mut self,
-        _pointer: &mut wl::Pointer,
-        serial: u32,
-        _surface: Option<&mut wl::Surface>,
-    ) {
+    #[tracing::instrument(skip(self, pointer, surface))]
+    fn leave(&mut self, pointer: &mut wl::Pointer, serial: u32, surface: Option<&mut wl::Surface>) {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
+
+        if let Some(surface) = surface {
+            let surface_state = unsafe { &*surface.user_data().cast::<SurfaceStateUntyped>() };
+            match surface_state.tag {
+                SurfaceStateTag::ToplevelWindow => {
+                    self.event_dispatcher.dispatch(Event::PointerLeaveWindow {
+                        pointer_id: PointerID(pointer),
+                        window: WindowHandle(NonNull::from_mut(surface)),
+                    });
+                }
+                SurfaceStateTag::ContextMenu => {
+                    self.event_dispatcher
+                        .dispatch(Event::ContextMenuPointerLeave {
+                            pointer_id: PointerID(pointer),
+                            target: context_menu::Handle(NonNull::from_mut(surface)),
+                        });
+                }
+                _ => (),
+            }
+        }
+
         state.enter_state = None;
     }
 
