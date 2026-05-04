@@ -585,6 +585,7 @@ impl<'main> RenderThread<'main> {
                 let new_ui_scale = x.take_latest_ui_scale_changes();
                 #[cfg(feature = "wayland")]
                 if let Some(scale) = new_ui_scale {
+                    tracing::debug!(scale, "ContextMenuRescaleRender");
                     let scale = SafeF32::new(scale).expect("scale.invalid");
 
                     let current = glyph_atlas_per_scale

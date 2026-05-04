@@ -202,6 +202,7 @@ struct InstanceData {
     scaling: WindowScaling,
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_popup: wl::Owned<wl::XdgPopup>,
+    _blur: Option<wl::Owned<wl::OrgKdeKwinBlur>>,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     keyboard_focus_state: PerWindowKeyboardFocusState,
@@ -215,6 +216,7 @@ struct InstanceData {
     event_dispatcher: LogicFiberEventDispatcher,
     _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
     views: Vec<MenuItemView>,
+    _pinned: core::marker::PhantomPinned,
 }
 
 #[repr(transparent)]
@@ -423,6 +425,17 @@ pub fn pop(
     } else {
         WindowScaling::Automatic
     };
+    let blur = if let Some(ref bm) = unsafe { &*syslink.display_server.context }
+        .global_interfaces
+        .kde_blur_manager
+    {
+        let b = bm.create(&surface).expect("blur_manager.create");
+        b.commit().expect("blur.commit");
+
+        Some(b)
+    } else {
+        None
+    };
 
     let pos = unsafe { &*syslink.display_server.context }
         .global_interfaces
@@ -464,6 +477,7 @@ pub fn pop(
             scaling,
             xdg_surface,
             xdg_popup,
+            _blur: blur,
             ct_root,
             ht_root,
             keyboard_focus_state: PerWindowKeyboardFocusState::new(kf_root_group),
@@ -482,6 +496,7 @@ pub fn pop(
             event_dispatcher: unsafe { &*syslink.event_dispatcher }.clone(),
             _base_surface_event_handler: base_surface_event_handler,
             views: vec![],
+            _pinned: core::marker::PhantomPinned,
         },
     }));
     surface
