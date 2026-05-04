@@ -2582,8 +2582,8 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                 modifier |= ModifierKey::SUPER;
             }
 
-            let code = if text.is_empty() {
-                match key {
+            let code = match text {
+                "" => match key {
                     k if k == Key::LeftControl as u32 => KeyInputCode::LeftControl,
                     k if k == Key::RightControl as u32 => KeyInputCode::RightControl,
                     k if k == Key::LeftShift as u32 => KeyInputCode::LeftShift,
@@ -2603,12 +2603,12 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                     k if k == Key::Insert as u32 => KeyInputCode::Insert,
                     k if k == Key::Tab as u32 => KeyInputCode::Tab,
                     _ => KeyInputCode::UnknownNativeCode(key),
-                }
-            } else if text == "\r" {
-                // これできちゃうのでEnterに強制する
-                KeyInputCode::Enter
-            } else {
-                KeyInputCode::Character(text.chars().next().expect("empty"))
+                },
+                // 文字でくるキーの一部
+                "\r" => KeyInputCode::Enter,
+                "\x08" => KeyInputCode::Backspace,
+                "\x7f" => KeyInputCode::Delete,
+                c => KeyInputCode::Character(c.chars().next().expect("empty")),
             };
             match state {
                 wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
