@@ -1274,7 +1274,6 @@ impl WindowEventListener {
 
                     if let Some(ref d) = self.decoration {
                         d.adjust_for_frame(logical_size.width as _, logical_size.height as _);
-                        d.commit_all();
                     }
 
                     committed_state_ref.active_size = pixels_size;
