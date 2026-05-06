@@ -1031,8 +1031,16 @@ impl PointerInputManager {
         }
     }
 
-    pub fn handle_scroll_wheel(&self, amount: f32, action_context: &mut InputEventContext) {
-        let args = ScrollWheelActionArgs { amount };
+    pub fn handle_scroll_wheel(
+        &self,
+        amount: f32,
+        key_modifier: ModifierKey,
+        action_context: &mut InputEventContext,
+    ) {
+        let args = ScrollWheelActionArgs {
+            amount,
+            key_modifier,
+        };
 
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref) => {

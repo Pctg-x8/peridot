@@ -51,6 +51,7 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_System_WinRT",
+    "Win32_System_SystemServices",
     "Win32_Graphics_DirectWrite",
     "Win32_Graphics_Direct2D_Common",
     "Win32_Graphics_Direct3D",

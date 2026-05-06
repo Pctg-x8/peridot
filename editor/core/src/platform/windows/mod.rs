@@ -33,10 +33,13 @@ use windows::{
                 MonitorFromWindow,
             },
         },
-        System::WinRT::{
-            Composition::{ICompositorDesktopInterop, ICompositorInterop},
-            CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
-            DispatcherQueueOptions,
+        System::{
+            SystemServices::{MK_CONTROL, MK_SHIFT},
+            WinRT::{
+                Composition::{ICompositorDesktopInterop, ICompositorInterop},
+                CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
+                DispatcherQueueOptions,
+            },
         },
         UI::{
             Controls::{MARGINS, WM_MOUSELEAVE},
@@ -1151,10 +1154,20 @@ impl WindowEventHandler {
         }
 
         if msg == WM_MOUSEWHEEL {
+            let mut key_modifier = ModifierKey::empty();
+            let mks = wparam.0 as u16 as u32;
+            if mks & MK_CONTROL.0 != 0 {
+                key_modifier |= ModifierKey::CONTROL;
+            }
+            if mks & MK_SHIFT.0 != 0 {
+                key_modifier |= ModifierKey::SHIFT;
+            }
+
             Self::dispatch_event(
                 hwnd,
                 Event::ScrollWheel {
                     amount: (wparam.0 >> 16) as i16 as f32 / WHEEL_DELTA as f32,
+                    key_modifier,
                 },
             );
 

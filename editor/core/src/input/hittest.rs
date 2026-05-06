@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 
 use crate::{
     PointerID, WindowHandle,
-    input::{EventContinueControl, FocusTargetToken, InputEventContext, PointerInputUnit},
+    input::{
+        EventContinueControl, FocusTargetToken, InputEventContext, ModifierKey, PointerInputUnit,
+    },
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
@@ -543,6 +545,7 @@ pub struct PointerButtonActionArgs {
 
 pub struct ScrollWheelActionArgs {
     pub amount: f32,
+    pub key_modifier: ModifierKey,
 }
 pub struct ScrollWheelActionResponse {
     pub continue_flags: EventContinueControl,

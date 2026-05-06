@@ -671,6 +671,7 @@ pub enum Event {
     PointerHover,
     ScrollWheel {
         amount: f32,
+        key_modifier: ModifierKey,
     },
     KeyDown {
         window: WindowHandle,
@@ -969,7 +970,7 @@ const SCROLL_FADEOUT_DELAY_SECS: f32 = 0.625;
 const SCROLL_FADEOUT_DURATION_SECS: f32 = 0.375;
 const SCROLL_AMOUNT_MULTIPLIER: f32 = 8.0;
 
-struct ScrollContainer {
+pub struct ScrollContainer {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     eh: Rc<ScrollContainerEventHandler>,
@@ -1019,6 +1020,7 @@ impl ScrollContainer {
             height: rect.height,
             ..Default::default()
         });
+
         let ct_scroll_bar_vert = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [
@@ -1071,6 +1073,58 @@ impl ScrollContainer {
             ..Default::default()
         });
 
+        let ct_scroll_bar_horz = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(-ACTIVE_SCROLL_BAR_THICKNESS),
+            ],
+            relative_offset_adjustment: [0.0, 1.0],
+            size: [
+                AnimatableFloat::Value(rect.height),
+                AnimatableFloat::Value(ACTIVE_SCROLL_BAR_THICKNESS),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                0.75, 0.75, 0.75, 0.5,
+            ])),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ct_scroll_thumb_horz = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(SCROLL_THUMB_SPACING),
+                AnimatableFloat::Value(-SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS),
+            ],
+            relative_offset_adjustment: [0.0, 1.0],
+            size: [
+                AnimatableFloat::Value(rect.height - SCROLL_THUMB_SPACING * 2.0),
+                AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.5])),
+            corner_radius: CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ht_scroll_bar_horz = ctx.ht_manager.create(HitTestTreeData {
+            left: 0.0,
+            top: -ACTIVE_SCROLL_BAR_THICKNESS,
+            top_adjustment_factor: 1.0,
+            width: rect.height,
+            height: ACTIVE_SCROLL_BAR_THICKNESS,
+            ..Default::default()
+        });
+        let ht_scroll_thumb_horz = ctx.ht_manager.create(HitTestTreeData {
+            left: 0.0,
+            top: -ACTIVE_SCROLL_BAR_THICKNESS,
+            top_adjustment_factor: 1.0,
+            width: rect.height,
+            height: ACTIVE_SCROLL_BAR_THICKNESS,
+            ..Default::default()
+        });
+
         ctx.composite_tree.add_child(ct_root, ct_content_root);
         ctx.ht_manager.add_child(ht_root, ht_content_root);
 
@@ -1078,6 +1132,11 @@ impl ScrollContainer {
         ctx.composite_tree.add_child(ct_root, ct_scroll_thumb_vert);
         ctx.ht_manager.add_child(ht_root, ht_scroll_bar_vert);
         ctx.ht_manager.add_child(ht_root, ht_scroll_thumb_vert);
+
+        ctx.composite_tree.add_child(ct_root, ct_scroll_bar_horz);
+        ctx.composite_tree.add_child(ct_root, ct_scroll_thumb_horz);
+        ctx.ht_manager.add_child(ht_root, ht_scroll_bar_horz);
+        ctx.ht_manager.add_child(ht_root, ht_scroll_thumb_horz);
 
         let view_id = ctx.view_registry.alloc();
         let eh = Rc::new(ScrollContainerEventHandler {
@@ -1088,15 +1147,22 @@ impl ScrollContainer {
             ht_scroll_thumb_vert,
             ht_scroll_bar_vert,
             ct_scroll_bar_vert,
+            ct_scroll_thumb_horz,
+            ht_scroll_thumb_horz,
+            ht_scroll_bar_horz,
+            ct_scroll_bar_horz,
             viewport_size: Size::new_logical_interior_mutable(rect.width, rect.height),
             content_size: Size::new_logical_interior_mutable(0.0, 0.0),
             content_offset: Point::new_logical_interior_mutable(0.0, 0.0),
             pointer_grab_state: core::cell::Cell::new(ScrollContainerPointerGrabState::None),
             bar_active: core::cell::Cell::new(false),
+            bar_active_horz: core::cell::Cell::new(false),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
         ctx.ht_manager.set_action_handler(ht_scroll_bar_vert, &eh);
         ctx.ht_manager.set_action_handler(ht_scroll_thumb_vert, &eh);
+        ctx.ht_manager.set_action_handler(ht_scroll_bar_horz, &eh);
+        ctx.ht_manager.set_action_handler(ht_scroll_thumb_horz, &eh);
         ctx.view_registry.set_event_handler(view_id, &eh);
 
         Self {
@@ -1142,11 +1208,16 @@ struct ScrollContainerEventHandler {
     ct_scroll_thumb_vert: CompositeTreeRef,
     ht_scroll_bar_vert: HitTestTreeRef,
     ct_scroll_bar_vert: CompositeTreeRef,
+    ht_scroll_thumb_horz: HitTestTreeRef,
+    ct_scroll_thumb_horz: CompositeTreeRef,
+    ht_scroll_bar_horz: HitTestTreeRef,
+    ct_scroll_bar_horz: CompositeTreeRef,
     viewport_size: Size<InteriorMutableLogicalUnit>,
     content_size: Size<InteriorMutableLogicalUnit>,
     content_offset: Point<InteriorMutableLogicalUnit>,
     pointer_grab_state: core::cell::Cell<ScrollContainerPointerGrabState>,
     bar_active: core::cell::Cell<bool>,
+    bar_active_horz: core::cell::Cell<bool>,
 }
 impl HitTestTreeActionHandler for ScrollContainerEventHandler {
     fn on_pointer_enter(
@@ -1158,7 +1229,8 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
         if sender == self.ht_scroll_bar_vert {
             self.activate_bar(context.composite_tree, context.current_sec);
             return EventContinueControl::STOP_PROPAGATION;
-        } else if sender == self.ht_scroll_thumb_vert {
+        }
+        if sender == self.ht_scroll_thumb_vert {
             self.activate_bar(context.composite_tree, context.current_sec);
             // override
             context
@@ -1167,6 +1239,23 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 .composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]));
             context.composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        if sender == self.ht_scroll_bar_horz {
+            self.activate_bar_horz(context.composite_tree, context.current_sec);
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+        if sender == self.ht_scroll_thumb_horz {
+            self.activate_bar_horz(context.composite_tree, context.current_sec);
+            // override
+            context
+                .composite_tree
+                .get_mut(self.ct_scroll_thumb_horz)
+                .composite_mode =
+                CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]));
+            context.composite_tree.mark_dirty(self.ct_scroll_thumb_horz);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -1183,7 +1272,8 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
         if sender == self.ht_scroll_bar_vert {
             self.deactivate_bar(context.composite_tree, context.current_sec);
             return EventContinueControl::STOP_PROPAGATION;
-        } else if sender == self.ht_scroll_thumb_vert {
+        }
+        if sender == self.ht_scroll_thumb_vert {
             self.deactivate_bar(context.composite_tree, context.current_sec);
             context
                 .composite_tree
@@ -1191,6 +1281,22 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 .composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75]));
             context.composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        if sender == self.ht_scroll_bar_horz {
+            self.deactivate_bar_horz(context.composite_tree, context.current_sec);
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+        if sender == self.ht_scroll_thumb_horz {
+            self.deactivate_bar_horz(context.composite_tree, context.current_sec);
+            context
+                .composite_tree
+                .get_mut(self.ct_scroll_thumb_horz)
+                .composite_mode =
+                CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75]));
+            context.composite_tree.mark_dirty(self.ct_scroll_thumb_horz);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -1216,9 +1322,30 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 .set(ScrollContainerPointerGrabState::ThumbVert { base_offset_y });
 
             return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
-        } else if sender == self.ht_scroll_bar_vert {
+        }
+        if sender == self.ht_scroll_bar_vert {
             self.pointer_grab_state
                 .set(ScrollContainerPointerGrabState::BarVert);
+
+            return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
+        }
+
+        if sender == self.ht_scroll_thumb_horz {
+            let (base_offset_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+                sender,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            self.pointer_grab_state
+                .set(ScrollContainerPointerGrabState::ThumbHorz { base_offset_x });
+
+            return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
+        }
+        if sender == self.ht_scroll_bar_horz {
+            self.pointer_grab_state
+                .set(ScrollContainerPointerGrabState::BarHorz);
 
             return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
         }
@@ -1268,6 +1395,46 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_y =
                     ((vp_offset_y - base_offset_y) * content_h / vp_h).clamp(0.0, content_h - vp_h);
                 self.content_offset.y.set(offset_y);
+                context
+                    .system_link
+                    .dispatch_event(Event::UpdateView { id: self.view_id });
+
+                EventContinueControl::STOP_PROPAGATION
+            }
+            ScrollContainerPointerGrabState::BarHorz => {
+                let (vp_offset_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+                    sender,
+                    args.client_pos.x,
+                    args.client_pos.y,
+                    args.client_size.width,
+                    args.client_size.height,
+                );
+
+                let content_w = self.content_size.width.get();
+                let vp_w = self.viewport_size.width.get();
+                let offset_x = ((vp_offset_x - 0.5 * vp_w * vp_w / content_w) * content_w / vp_w)
+                    .clamp(0.0, content_w - vp_w);
+                self.content_offset.x.set(offset_x);
+                context
+                    .system_link
+                    .dispatch_event(Event::UpdateView { id: self.view_id });
+
+                EventContinueControl::STOP_PROPAGATION
+            }
+            ScrollContainerPointerGrabState::ThumbHorz { base_offset_x } => {
+                let (vp_offset_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+                    self.ht_scroll_bar_horz,
+                    args.client_pos.x,
+                    args.client_pos.y,
+                    args.client_size.width,
+                    args.client_size.height,
+                );
+
+                let content_w = self.content_size.width.get();
+                let vp_w = self.viewport_size.width.get();
+                let offset_x =
+                    ((vp_offset_x - base_offset_x) * content_w / vp_w).clamp(0.0, content_w - vp_w);
+                self.content_offset.x.set(offset_x);
                 context
                     .system_link
                     .dispatch_event(Event::UpdateView { id: self.view_id });
@@ -1325,6 +1492,46 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
 
                 EventContinueControl::STOP_PROPAGATION
             }
+            ScrollContainerPointerGrabState::BarHorz => {
+                let (vp_offset_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+                    sender,
+                    args.client_pos.x,
+                    args.client_pos.y,
+                    args.client_size.width,
+                    args.client_size.height,
+                );
+
+                let content_w = self.content_size.width.get();
+                let vp_w = self.viewport_size.width.get();
+                let offset_x = ((vp_offset_x - 0.5 * vp_w * vp_w / content_w) * content_w / vp_w)
+                    .clamp(0.0, content_w - vp_w);
+                self.content_offset.x.set(offset_x);
+                context
+                    .system_link
+                    .dispatch_event(Event::UpdateView { id: self.view_id });
+
+                EventContinueControl::STOP_PROPAGATION
+            }
+            ScrollContainerPointerGrabState::ThumbHorz { base_offset_x } => {
+                let (vp_offset_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
+                    self.ht_scroll_bar_horz,
+                    args.client_pos.x,
+                    args.client_pos.y,
+                    args.client_size.width,
+                    args.client_size.height,
+                );
+
+                let content_w = self.content_size.width.get();
+                let vp_w = self.viewport_size.width.get();
+                let offset_x =
+                    ((vp_offset_x - base_offset_x) * content_w / vp_w).clamp(0.0, content_w - vp_w);
+                self.content_offset.x.set(offset_x);
+                context
+                    .system_link
+                    .dispatch_event(Event::UpdateView { id: self.view_id });
+
+                EventContinueControl::STOP_PROPAGATION
+            }
         }
     }
 
@@ -1339,7 +1546,9 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
             .replace(ScrollContainerPointerGrabState::None)
         {
             ScrollContainerPointerGrabState::BarVert
-            | ScrollContainerPointerGrabState::ThumbVert { .. } => {
+            | ScrollContainerPointerGrabState::ThumbVert { .. }
+            | ScrollContainerPointerGrabState::BarHorz
+            | ScrollContainerPointerGrabState::ThumbHorz { .. } => {
                 EventContinueControl::STOP_PROPAGATION
                     | EventContinueControl::RELEASE_CAPTURE_ELEMENT
             }
@@ -1354,6 +1563,51 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
         args: &ScrollWheelActionArgs,
     ) -> ScrollWheelActionResponse {
         tracing::debug!(amount = args.amount, "scroll wheel");
+
+        if args.key_modifier.contains(ModifierKey::SHIFT) {
+            // horizontal mode
+            let content_w = self.content_size.width.get();
+            let viewport_w = self.viewport_size.width.get();
+            let max_overflow = content_w - viewport_w;
+            if max_overflow <= 0.0 {
+                // nothing to be scrolled
+                return ScrollWheelActionResponse {
+                    continue_flags: EventContinueControl::STOP_PROPAGATION,
+                    left_amount: args.amount,
+                };
+            }
+
+            context
+                .composite_tree
+                .get_mut(self.ct_scroll_thumb_horz)
+                .opacity = AnimatableFloat::Animated {
+                // ちょっと遅らせる
+                start_sec: context.current_sec + SCROLL_FADEOUT_DELAY_SECS,
+                end_sec: context.current_sec
+                    + SCROLL_FADEOUT_DELAY_SECS
+                    + SCROLL_FADEOUT_DURATION_SECS,
+                from_value: 1.0,
+                to_value: 0.0,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+            context.composite_tree.mark_dirty(self.ct_scroll_thumb_horz);
+
+            let offset_x = self.content_offset.x.get();
+            let new_offset_x =
+                (offset_x - args.amount * SCROLL_AMOUNT_MULTIPLIER).clamp(0.0, max_overflow);
+            let left_amount = args.amount - (new_offset_x - offset_x);
+            self.content_offset.x.set(new_offset_x);
+            // HitTestTreeの更新が必要なので入力イベント処理完了後に遅延させる
+            context
+                .system_link
+                .dispatch_event(Event::UpdateView { id: self.view_id });
+
+            return ScrollWheelActionResponse {
+                continue_flags: EventContinueControl::STOP_PROPAGATION,
+                left_amount,
+            };
+        }
 
         let content_h = self.content_size.height.get();
         let viewport_h = self.viewport_size.height.get();
@@ -1398,8 +1652,12 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
 }
 impl ViewEventHandler for ScrollContainerEventHandler {
     fn update(&self, context: &mut ViewUpdateContext) {
+        let offset_x = self.content_offset.x.get();
         let offset_y = self.content_offset.y.get();
 
+        context.composite_tree.get_mut(self.ct_content_root).offset[0] =
+            AnimatableFloat::Value(-offset_x);
+        context.ht_manager.get_data_mut(self.ht_content_root).left = -offset_x;
         context.composite_tree.get_mut(self.ct_content_root).offset[1] =
             AnimatableFloat::Value(-offset_y);
         context.ht_manager.get_data_mut(self.ht_content_root).top = -offset_y;
@@ -1413,7 +1671,6 @@ impl ScrollContainerEventHandler {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        // TODO: horizontal
         let h_vp = self.viewport_size.height.get();
         let h_content = self.content_size.height.get();
         let h_offset = self.content_offset.y.get();
@@ -1427,6 +1684,20 @@ impl ScrollContainerEventHandler {
         ht_manager.get_data_mut(self.ht_scroll_thumb_vert).top = thumb_real_y;
         ht_manager.get_data_mut(self.ht_scroll_thumb_vert).height = thumb_real_h;
         composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
+
+        let w_vp = self.viewport_size.width.get();
+        let w_content = self.content_size.width.get();
+        let w_offset = self.content_offset.x.get();
+
+        let thumb_real_x = w_offset * w_vp / w_content;
+        let thumb_real_w = w_vp * w_vp / w_content;
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).offset[0] =
+            AnimatableFloat::Value(thumb_real_x + SCROLL_THUMB_SPACING);
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).size[0] =
+            AnimatableFloat::Value(thumb_real_w - SCROLL_THUMB_SPACING * 2.0);
+        ht_manager.get_data_mut(self.ht_scroll_thumb_horz).left = thumb_real_x;
+        ht_manager.get_data_mut(self.ht_scroll_thumb_horz).width = thumb_real_w;
+        composite_tree.mark_dirty(self.ct_scroll_thumb_horz);
     }
 
     fn activate_bar<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
@@ -1525,6 +1796,103 @@ impl ScrollContainerEventHandler {
         composite_tree.mark_dirty(self.ct_scroll_bar_vert);
         composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
     }
+
+    fn activate_bar_horz<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if self.bar_active_horz.replace(true) {
+            // already activated
+            return;
+        }
+
+        composite_tree.get_mut(self.ct_scroll_bar_horz).opacity = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: 0.0,
+            to_value: 1.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).size[1] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: DEFAULT_SCROLL_BAR_THICKNESS,
+            to_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).offset[1] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
+            to_value: -SCROLL_THUMB_SPACING
+                - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_horz)
+            .composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75]));
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).opacity = AnimatableFloat::Value(1.0);
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_horz)
+            .corner_radius =
+            CornerRadius::all((ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0) * 0.5);
+
+        composite_tree.mark_dirty(self.ct_scroll_bar_horz);
+        composite_tree.mark_dirty(self.ct_scroll_thumb_horz);
+    }
+
+    fn deactivate_bar_horz<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if !self.bar_active_horz.replace(false) {
+            // already deactivated
+            return;
+        }
+
+        composite_tree.get_mut(self.ct_scroll_bar_horz).opacity = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: 1.0,
+            to_value: 0.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).size[1] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
+            to_value: DEFAULT_SCROLL_BAR_THICKNESS,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).offset[1] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: -SCROLL_THUMB_SPACING
+                - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
+            to_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_horz).opacity = AnimatableFloat::Animated {
+            // ちょっと遅らせる
+            start_sec: current_sec + SCROLL_FADEOUT_DELAY_SECS,
+            end_sec: current_sec + SCROLL_FADEOUT_DELAY_SECS + SCROLL_FADEOUT_DURATION_SECS,
+            from_value: 1.0,
+            to_value: 0.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_horz)
+            .composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.5]));
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_horz)
+            .corner_radius = CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5);
+
+        composite_tree.mark_dirty(self.ct_scroll_bar_horz);
+        composite_tree.mark_dirty(self.ct_scroll_thumb_horz);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1532,6 +1900,8 @@ pub enum ScrollContainerPointerGrabState {
     None,
     BarVert,
     ThumbVert { base_offset_y: f32 },
+    BarHorz,
+    ThumbHorz { base_offset_x: f32 },
 }
 
 struct PerWindowData {
@@ -2202,9 +2572,13 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::ScrollWheel { amount } => {
+            Event::ScrollWheel {
+                amount,
+                key_modifier,
+            } => {
                 pointer_input_manager.handle_scroll_wheel(
                     amount,
+                    key_modifier,
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
