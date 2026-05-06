@@ -89,7 +89,7 @@ use crate::{
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
-        text::RootFontSet,
+        text::FontSet,
     },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
@@ -1487,7 +1487,7 @@ impl DxContext {
 }
 
 pub struct SystemLink<'sys> {
-    pub root_font_set: *const RootFontSet,
+    pub font_set: *const FontSet,
     pub vk_device: *const VulkanDevice<'sys>,
     pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
@@ -1507,8 +1507,8 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
-    pub fn root_font_set(&self) -> &RootFontSet {
-        unsafe { &*self.root_font_set }
+    pub fn font_set(&self) -> &FontSet {
+        unsafe { &*self.font_set }
     }
 
     pub fn create_main_window(

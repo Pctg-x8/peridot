@@ -210,7 +210,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         },
         #[cfg(windows)]
         SystemLink {
-            root_font_set: &root_font_set,
+            font_set: &root_font_set,
             rt_sender: rt_sender.clone(),
             vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),

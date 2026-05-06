@@ -354,10 +354,8 @@ impl FontSet {
 
     #[cfg(windows)]
     #[inline(always)]
-    pub const fn native_factory(
-        &self,
-    ) -> &'d windows::Win32::Graphics::DirectWrite::IDWriteFactory {
-        self.dw_factory
+    pub const fn native_factory(&self) -> &windows::Win32::Graphics::DirectWrite::IDWriteFactory {
+        &self.dw_factory
     }
 
     #[cfg(windows)]

@@ -165,7 +165,7 @@ impl TextInputView {
             ctx.ht_manager
                 .query_root_window(parent.ht_root())
                 .expect("no root window")
-                .extra_data_mut::<PerWindowData>()
+                .extra_data_mut::<crate::PerWindowData>()
                 .screen_reposition_interests
                 .insert(self.eh.ht_root);
         }
@@ -1274,13 +1274,13 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
         let o = TextLayout::measure_total_advances(
             &self.content.borrow()[..start_bytes],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            ctx.system_link.font_set(),
             window.ui_scale_factor(),
         ) + self.content_h_offset.get() * window.ui_scale_factor();
         let w = TextLayout::measure_total_advances(
             &self.content.borrow()[start_bytes..end_bytes],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            ctx.system_link.font_set(),
             window.ui_scale_factor(),
         );
 
@@ -1403,7 +1403,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
             .ht_manager
             .query_root_window(self.ht_root)
             .expect("no root window");
-        self.update_preedit_underline(ctx.composite_tree, window);
+        self.update_preedit_underline(ctx.composite_tree, ctx.system_link, window);
 
         Ok(())
     }
