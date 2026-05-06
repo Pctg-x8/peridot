@@ -1128,16 +1128,6 @@ impl ScrollContainer {
         ctx.composite_tree.add_child(ct_root, ct_content_root);
         ctx.ht_manager.add_child(ht_root, ht_content_root);
 
-        ctx.composite_tree.add_child(ct_root, ct_scroll_bar_vert);
-        ctx.composite_tree.add_child(ct_root, ct_scroll_thumb_vert);
-        ctx.ht_manager.add_child(ht_root, ht_scroll_bar_vert);
-        ctx.ht_manager.add_child(ht_root, ht_scroll_thumb_vert);
-
-        ctx.composite_tree.add_child(ct_root, ct_scroll_bar_horz);
-        ctx.composite_tree.add_child(ct_root, ct_scroll_thumb_horz);
-        ctx.ht_manager.add_child(ht_root, ht_scroll_bar_horz);
-        ctx.ht_manager.add_child(ht_root, ht_scroll_thumb_horz);
-
         let view_id = ctx.view_registry.alloc();
         let eh = Rc::new(ScrollContainerEventHandler {
             view_id,
@@ -1157,6 +1147,8 @@ impl ScrollContainer {
             pointer_grab_state: core::cell::Cell::new(ScrollContainerPointerGrabState::None),
             bar_active: core::cell::Cell::new(false),
             bar_active_horz: core::cell::Cell::new(false),
+            should_scroll_vert: core::cell::Cell::new(false),
+            should_scroll_horz: core::cell::Cell::new(false),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
         ctx.ht_manager.set_action_handler(ht_scroll_bar_vert, &eh);
@@ -1185,6 +1177,36 @@ impl ScrollContainer {
     ) {
         self.eh.content_size.width.set(size.width);
         self.eh.content_size.height.set(size.height);
+
+        // mount/dismount scroll bars only if needed
+        let should_scroll_vert = self.eh.viewport_size.height.get() < size.height;
+        let should_scroll_horz = self.eh.viewport_size.width.get() < size.width;
+        if self.eh.should_scroll_vert.replace(should_scroll_vert) != should_scroll_vert {
+            if should_scroll_vert {
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_vert);
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_vert);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_vert);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_vert);
+            } else {
+                composite_tree.remove_child(self.eh.ct_scroll_bar_vert);
+                composite_tree.remove_child(self.eh.ct_scroll_thumb_vert);
+                ht_manager.remove_child(self.eh.ht_scroll_bar_vert);
+                ht_manager.remove_child(self.eh.ht_scroll_thumb_vert);
+            }
+        }
+        if self.eh.should_scroll_horz.replace(should_scroll_horz) != should_scroll_horz {
+            if should_scroll_horz {
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_horz);
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_horz);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_horz);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_horz);
+            } else {
+                composite_tree.remove_child(self.eh.ct_scroll_bar_horz);
+                composite_tree.remove_child(self.eh.ct_scroll_thumb_horz);
+                ht_manager.remove_child(self.eh.ht_scroll_bar_horz);
+                ht_manager.remove_child(self.eh.ht_scroll_thumb_horz);
+            }
+        }
 
         self.eh.update_thumb_position(composite_tree, ht_manager);
     }
@@ -1218,6 +1240,8 @@ struct ScrollContainerEventHandler {
     pointer_grab_state: core::cell::Cell<ScrollContainerPointerGrabState>,
     bar_active: core::cell::Cell<bool>,
     bar_active_horz: core::cell::Cell<bool>,
+    should_scroll_vert: core::cell::Cell<bool>,
+    should_scroll_horz: core::cell::Cell<bool>,
 }
 impl HitTestTreeActionHandler for ScrollContainerEventHandler {
     fn on_pointer_enter(
@@ -2251,7 +2275,7 @@ async fn run<'sys>(
     );
 
     scroll_container.set_content_size(
-        Size::new_logical(400.0, 400.0),
+        Size::new_logical(100.0, 400.0),
         view_init_ctx.mount_context.composite_tree,
         view_init_ctx.mount_context.ht_manager,
     );
