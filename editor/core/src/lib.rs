@@ -1092,6 +1092,7 @@ impl ScrollContainer {
             content_size: Size::new_logical_interior_mutable(0.0, 0.0),
             content_offset: Point::new_logical_interior_mutable(0.0, 0.0),
             pointer_grab_state: core::cell::Cell::new(ScrollContainerPointerGrabState::None),
+            bar_active: core::cell::Cell::new(false),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
         ctx.ht_manager.set_action_handler(ht_scroll_bar_vert, &eh);
@@ -1145,6 +1146,7 @@ struct ScrollContainerEventHandler {
     content_size: Size<InteriorMutableLogicalUnit>,
     content_offset: Point<InteriorMutableLogicalUnit>,
     pointer_grab_state: core::cell::Cell<ScrollContainerPointerGrabState>,
+    bar_active: core::cell::Cell<bool>,
 }
 impl HitTestTreeActionHandler for ScrollContainerEventHandler {
     fn on_pointer_enter(
@@ -1154,109 +1156,16 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         if sender == self.ht_scroll_bar_vert {
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_bar_vert)
-                .opacity = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: 0.0,
-                to_value: 1.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .size[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: DEFAULT_SCROLL_BAR_THICKNESS,
-                to_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .offset[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
-                to_value: -SCROLL_THUMB_SPACING
-                    - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75]));
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .opacity = AnimatableFloat::Value(1.0);
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .corner_radius =
-                CornerRadius::all((ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0) * 0.5);
-            context.composite_tree.mark_dirty(self.ct_scroll_bar_vert);
-            context.composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
-
+            self.activate_bar(context.composite_tree, context.current_sec);
             return EventContinueControl::STOP_PROPAGATION;
         } else if sender == self.ht_scroll_thumb_vert {
-            // なんかうまく共通化したい（スクロールバーのアクティブ化は共通の動きで、thumbの色変化だけ違う）
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_bar_vert)
-                .opacity = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: 0.0,
-                to_value: 1.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .size[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: DEFAULT_SCROLL_BAR_THICKNESS,
-                to_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .offset[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
-                to_value: -SCROLL_THUMB_SPACING
-                    - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
+            self.activate_bar(context.composite_tree, context.current_sec);
+            // override
             context
                 .composite_tree
                 .get_mut(self.ct_scroll_thumb_vert)
                 .composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]));
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .opacity = AnimatableFloat::Value(1.0);
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .corner_radius =
-                CornerRadius::all((ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0) * 0.5);
-            context.composite_tree.mark_dirty(self.ct_scroll_bar_vert);
             context.composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
 
             return EventContinueControl::STOP_PROPAGATION;
@@ -1272,127 +1181,15 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
         args: &PointerActionArgs,
     ) -> EventContinueControl {
         if sender == self.ht_scroll_bar_vert {
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_bar_vert)
-                .opacity = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: 1.0,
-                to_value: 0.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .size[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
-                to_value: DEFAULT_SCROLL_BAR_THICKNESS,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .offset[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: -SCROLL_THUMB_SPACING
-                    - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
-                to_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .opacity = AnimatableFloat::Animated {
-                // ちょっと遅らせる
-                start_sec: context.current_sec + SCROLL_FADEOUT_DELAY_SECS,
-                end_sec: context.current_sec
-                    + SCROLL_FADEOUT_DELAY_SECS
-                    + SCROLL_FADEOUT_DURATION_SECS,
-                from_value: 1.0,
-                to_value: 0.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.5]));
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .corner_radius = CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5);
-            context.composite_tree.mark_dirty(self.ct_scroll_bar_vert);
-            context.composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
-
+            self.deactivate_bar(context.composite_tree, context.current_sec);
             return EventContinueControl::STOP_PROPAGATION;
         } else if sender == self.ht_scroll_thumb_vert {
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_bar_vert)
-                .opacity = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: 1.0,
-                to_value: 0.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .size[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
-                to_value: DEFAULT_SCROLL_BAR_THICKNESS,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .offset[0] = AnimatableFloat::Animated {
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                from_value: -SCROLL_THUMB_SPACING
-                    - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
-                to_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .opacity = AnimatableFloat::Animated {
-                // ちょっと遅らせる
-                start_sec: context.current_sec + SCROLL_FADEOUT_DELAY_SECS,
-                end_sec: context.current_sec
-                    + SCROLL_FADEOUT_DELAY_SECS
-                    + SCROLL_FADEOUT_DURATION_SECS,
-                from_value: 1.0,
-                to_value: 0.0,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            // どの色に変わるべきか？
+            self.deactivate_bar(context.composite_tree, context.current_sec);
             context
                 .composite_tree
                 .get_mut(self.ct_scroll_thumb_vert)
                 .composite_mode =
                 CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75]));
-            context
-                .composite_tree
-                .get_mut(self.ct_scroll_thumb_vert)
-                .corner_radius = CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5);
-            context.composite_tree.mark_dirty(self.ct_scroll_bar_vert);
             context.composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
 
             return EventContinueControl::STOP_PROPAGATION;
@@ -1629,6 +1426,103 @@ impl ScrollContainerEventHandler {
             AnimatableFloat::Value(thumb_real_h - SCROLL_THUMB_SPACING * 2.0);
         ht_manager.get_data_mut(self.ht_scroll_thumb_vert).top = thumb_real_y;
         ht_manager.get_data_mut(self.ht_scroll_thumb_vert).height = thumb_real_h;
+        composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
+    }
+
+    fn activate_bar<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if self.bar_active.replace(true) {
+            // already activated
+            return;
+        }
+
+        composite_tree.get_mut(self.ct_scroll_bar_vert).opacity = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: 0.0,
+            to_value: 1.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_vert).size[0] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: DEFAULT_SCROLL_BAR_THICKNESS,
+            to_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_vert).offset[0] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
+            to_value: -SCROLL_THUMB_SPACING
+                - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_vert)
+            .composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75]));
+        composite_tree.get_mut(self.ct_scroll_thumb_vert).opacity = AnimatableFloat::Value(1.0);
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_vert)
+            .corner_radius =
+            CornerRadius::all((ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0) * 0.5);
+
+        composite_tree.mark_dirty(self.ct_scroll_bar_vert);
+        composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
+    }
+
+    fn deactivate_bar<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if !self.bar_active.replace(false) {
+            // already deactivated
+            return;
+        }
+
+        composite_tree.get_mut(self.ct_scroll_bar_vert).opacity = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: 1.0,
+            to_value: 0.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_vert).size[0] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0,
+            to_value: DEFAULT_SCROLL_BAR_THICKNESS,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_vert).offset[0] = AnimatableFloat::Animated {
+            start_sec: current_sec,
+            end_sec: current_sec + 0.1,
+            from_value: -SCROLL_THUMB_SPACING
+                - (ACTIVE_SCROLL_BAR_THICKNESS - SCROLL_THUMB_SPACING * 2.0),
+            to_value: -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree.get_mut(self.ct_scroll_thumb_vert).opacity = AnimatableFloat::Animated {
+            // ちょっと遅らせる
+            start_sec: current_sec + SCROLL_FADEOUT_DELAY_SECS,
+            end_sec: current_sec + SCROLL_FADEOUT_DELAY_SECS + SCROLL_FADEOUT_DURATION_SECS,
+            from_value: 1.0,
+            to_value: 0.0,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_vert)
+            .composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.5]));
+        composite_tree
+            .get_mut(self.ct_scroll_thumb_vert)
+            .corner_radius = CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5);
+
+        composite_tree.mark_dirty(self.ct_scroll_bar_vert);
         composite_tree.mark_dirty(self.ct_scroll_thumb_vert);
     }
 }
