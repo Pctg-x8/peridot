@@ -155,14 +155,31 @@ impl WindowHandle {
         self.state().kf_root_group
     }
 
-    // TODO: impl them
-    pub fn on_click_sys_close_button(&self) {}
+    pub fn on_click_sys_close_button(&self) {
+        // TODO: 自身がMainかSubかでやることが変わる
+        tracing::warn!("TODO: on_click_sys_close_button");
+    }
 
-    pub fn on_click_sys_maximize_button(&self) {}
+    pub fn on_click_sys_maximize_button(&self) {
+        self.state()
+            .xdg_toplevel
+            .set_maximized()
+            .expect("xdg_toplevel.set_maximized");
+    }
 
-    pub fn on_click_sys_minimize_button(&self) {}
+    pub fn on_click_sys_minimize_button(&self) {
+        self.state()
+            .xdg_toplevel
+            .set_minimized()
+            .expect("xdg_toplevel.set_maximized");
+    }
 
-    pub fn on_click_sys_restore_button(&self) {}
+    pub fn on_click_sys_restore_button(&self) {
+        self.state()
+            .xdg_toplevel
+            .unset_maximized()
+            .expect("xdg_toplevel.set_maximized");
+    }
 
     pub fn begin_drag(&self, event_id: PointerEventID) {
         self.state()
@@ -759,6 +776,7 @@ pub struct WindowCommittedState {
     pub active_buffer_scale: f32,
     pub active_size: Size<PixelsUnit>,
     pub active_size_logical: Size<LogicalUnit>,
+    pub maximized: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -950,6 +968,7 @@ impl Window {
                         active_buffer_scale: 1.0,
                         active_size: Size::new_pixels(640, 480),
                         active_size_logical: Size::new_logical(640.0, 480.0),
+                        maximized: false,
                     }),
                     swapchain_externally_invalidation_signal: std::sync::atomic::AtomicBool::new(
                         false,
@@ -966,6 +985,7 @@ impl Window {
             pending_configure_size: (None, None),
             pending_configure_buffer_scale: None,
             pending_activated_changes: None,
+            pending_maximized_changes: None,
             event_dispatcher,
         });
         surface
@@ -1066,6 +1086,7 @@ pub struct WindowEventListener {
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
     pending_activated_changes: Option<bool>,
+    pending_maximized_changes: Option<bool>,
     event_dispatcher: LogicFiberEventDispatcher,
 }
 impl wl::SurfaceEventListener for WindowEventListener {
@@ -1162,6 +1183,7 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
         }
 
         self.pending_activated_changes = Some(states.contains(&wl::XdgToplevelState::Activated));
+        self.pending_maximized_changes = Some(states.contains(&wl::XdgToplevelState::Maximized));
     }
 
     fn configure_bounds(&mut self, _sender: &mut wl::XdgToplevel, _width: i32, _height: i32) {}
@@ -1252,7 +1274,6 @@ impl WindowEventListener {
 
                     if let Some(ref d) = self.decoration {
                         d.adjust_for_frame(logical_size.width as _, logical_size.height as _);
-                        d.commit_all();
                     }
 
                     committed_state_ref.active_size = pixels_size;
@@ -1267,6 +1288,16 @@ impl WindowEventListener {
                         size: logical_size,
                     });
                 }
+            }
+
+            if let Some(new_maximized) = self.pending_maximized_changes.take()
+                && new_maximized != committed_state_ref.maximized
+            {
+                committed_state_ref.maximized = new_maximized;
+                delayed_event_queue.push(Event::WindowMaximizeStateChanged {
+                    window: WindowHandle(self.state.data.surface_ptr),
+                    is_maximized: new_maximized,
+                });
             }
         }
 
@@ -2253,14 +2284,30 @@ impl wl::PointerEventListener for GlobalMessaging {
         }
     }
 
-    #[tracing::instrument(skip(self, _pointer, _surface))]
-    fn leave(
-        &mut self,
-        _pointer: &mut wl::Pointer,
-        serial: u32,
-        _surface: Option<&mut wl::Surface>,
-    ) {
+    #[tracing::instrument(skip(self, pointer, surface))]
+    fn leave(&mut self, pointer: &mut wl::Pointer, serial: u32, surface: Option<&mut wl::Surface>) {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
+
+        if let Some(surface) = surface {
+            let surface_state = unsafe { &*surface.user_data().cast::<SurfaceStateUntyped>() };
+            match surface_state.tag {
+                SurfaceStateTag::ToplevelWindow => {
+                    self.event_dispatcher.dispatch(Event::PointerLeaveWindow {
+                        pointer_id: PointerID(pointer),
+                        window: WindowHandle(NonNull::from_mut(surface)),
+                    });
+                }
+                SurfaceStateTag::ContextMenu => {
+                    self.event_dispatcher
+                        .dispatch(Event::ContextMenuPointerLeave {
+                            pointer_id: PointerID(pointer),
+                            target: context_menu::Handle(NonNull::from_mut(surface)),
+                        });
+                }
+                _ => (),
+            }
+        }
+
         state.enter_state = None;
     }
 
@@ -2582,8 +2629,8 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                 modifier |= ModifierKey::SUPER;
             }
 
-            let code = if text.is_empty() {
-                match key {
+            let code = match text {
+                "" => match key {
                     k if k == Key::LeftControl as u32 => KeyInputCode::LeftControl,
                     k if k == Key::RightControl as u32 => KeyInputCode::RightControl,
                     k if k == Key::LeftShift as u32 => KeyInputCode::LeftShift,
@@ -2603,12 +2650,12 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                     k if k == Key::Insert as u32 => KeyInputCode::Insert,
                     k if k == Key::Tab as u32 => KeyInputCode::Tab,
                     _ => KeyInputCode::UnknownNativeCode(key),
-                }
-            } else if text == "\r" {
-                // これできちゃうのでEnterに強制する
-                KeyInputCode::Enter
-            } else {
-                KeyInputCode::Character(text.chars().next().expect("empty"))
+                },
+                // 文字でくるキーの一部
+                "\r" => KeyInputCode::Enter,
+                "\x08" => KeyInputCode::Backspace,
+                "\x7f" => KeyInputCode::Delete,
+                c => KeyInputCode::Character(c.chars().next().expect("empty")),
             };
             match state {
                 wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {

@@ -41,7 +41,7 @@ use crate::{
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
         },
-        text::{FontID, PerWindowFontSet, RootFontSet, ThreadLocalTypingContext},
+        text::{FontID, FontSet},
     },
     uikit::{
         MenuItem, MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
@@ -109,7 +109,12 @@ pub fn launch() {
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
-    let root_font_set = RootFontSet::new();
+    #[cfg(feature = "freetype")]
+    let ft = crate::rendering::text::FreeType::init().expect("freetype.init");
+    let root_font_set = FontSet::new(
+        #[cfg(feature = "freetype")]
+        &ft,
+    );
 
     let vk_device = VulkanDevice::new(&fs);
     #[cfg(windows)]
@@ -158,7 +163,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     vk_device: &'sys VulkanDevice,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
-    root_font_set: RootFontSet,
+    root_font_set: FontSet,
     #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
     #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
@@ -220,7 +225,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         SystemLink {
             rt_sender: rt_sender.clone(),
             vk_device,
-            root_font_set: &root_font_set,
+            font_set: &root_font_set,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
             dbus,
@@ -274,7 +279,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             global_time_base,
             event_bus: &sync_event_bus,
             message_receiver: rt_receiver,
-            root_font_set: &root_font_set,
+            font_set: &root_font_set,
             #[cfg(windows)]
             dx_context,
             #[cfg(windows)]
@@ -1636,7 +1641,6 @@ pub enum ScrollContainerPointerGrabState {
 }
 
 struct PerWindowData {
-    font_set: PerWindowFontSet<'static>,
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
 }
@@ -1663,10 +1667,6 @@ async fn run<'sys>(
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
 
-    let typing_context = ThreadLocalTypingContext {
-        #[cfg(feature = "freetype")]
-        ft_lib: rendering::text::FreeType::init().expect("freetype.init"),
-    };
     let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
     let mut pointer_input_manager = PointerInputManager::new();
 
@@ -1727,9 +1727,6 @@ async fn run<'sys>(
     window_header_view.mount(&mut view_init_ctx, &main_window);
 
     main_window.associate_extra_data(Box::new(PerWindowData {
-        font_set: unsafe {
-            PerWindowFontSet::new(system_link.root_font_set(), &typing_context).lifetime_unbound()
-        },
         screen_reposition_interests: HashSet::new(),
         header: window_header_view,
     }));
@@ -2037,10 +2034,6 @@ async fn run<'sys>(
                         window_header_view.mount(&mut view_init_ctx, &w);
 
                         w.associate_extra_data(Box::new(PerWindowData {
-                            font_set: unsafe {
-                                PerWindowFontSet::new(system_link.root_font_set(), &typing_context)
-                                    .lifetime_unbound()
-                            },
                             screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
                         }));
@@ -2108,8 +2101,6 @@ async fn run<'sys>(
                 new_scale,
             } => {
                 let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
-                #[cfg(feature = "freetype")]
-                wd.font_set.rescale((new_scale * 72.0) as _);
                 wd.header
                     .rescale(new_scale, &mut composite_tree, &texture_id_set);
 
@@ -2120,6 +2111,13 @@ async fn run<'sys>(
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
                     text_input_view.rescale(
+                        &mut composite_tree,
+                        window,
+                        &system_link,
+                        &ht_manager,
+                        new_scale,
+                    );
+                    text_input_view2.rescale(
                         &mut composite_tree,
                         window,
                         &system_link,
@@ -2495,7 +2493,6 @@ async fn run<'sys>(
                         system_link: &system_link,
                     },
                     &context_menu_common_resources,
-                    &typing_context,
                 ));
 
                 composite_tree
@@ -2590,7 +2587,6 @@ async fn run<'sys>(
                             system_link: &system_link,
                         },
                         &context_menu_common_resources,
-                        &typing_context,
                     );
 
                     composite_tree
@@ -2923,7 +2919,6 @@ impl ContextMenuSession {
         surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
-        typing_context: &ThreadLocalTypingContext,
     ) -> Self {
         #[cfg(target_os = "macos")]
         system_link.context_menu.observe_global_click();
@@ -2934,11 +2929,11 @@ impl ContextMenuSession {
             0,
             surface_pos,
             |render_scale| {
-                #[allow(unused_mut)]
-                let mut fs = PerWindowFontSet::new(system_link.root_font_set(), typing_context);
-                #[cfg(feature = "wayland")]
-                fs.rescale((render_scale * 72.0) as _);
-                crate::uikit::MenuItemLayout::build(items.iter().cloned(), &fs, render_scale)
+                crate::uikit::MenuItemLayout::build(
+                    items.iter().cloned(),
+                    system_link.font_set(),
+                    render_scale,
+                )
             },
             |layout, h, view_init_ctx| {
                 view_init_ctx.ui_scale_factor = h.render_scale();
@@ -2980,7 +2975,6 @@ impl ContextMenuSession {
         system_link: &SystemLink,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
-        typing_context: &ThreadLocalTypingContext,
     ) {
         match self.active_selection {
             Some((depth, index)) => {
@@ -3014,14 +3008,9 @@ impl ContextMenuSession {
                         depth + 1,
                         display_pos,
                         |render_scale| {
-                            #[allow(unused_mut)]
-                            let mut fs =
-                                PerWindowFontSet::new(system_link.root_font_set(), typing_context);
-                            #[cfg(feature = "wayland")]
-                            fs.rescale((render_scale * 72.0) as _);
                             crate::uikit::MenuItemLayout::build(
                                 items.into_iter().cloned(),
-                                &fs,
+                                system_link.font_set(),
                                 render_scale,
                             )
                         },
@@ -3069,7 +3058,6 @@ impl ContextMenuSession {
         system_link: &SystemLink,
         view_init_context: &mut ViewInitContext,
         common_res: &MenuItemCommonResources,
-        typing_context: &ThreadLocalTypingContext,
     ) {
         while self.opening_surfaces.len() > depth + 1 {
             self.opening_surfaces.pop().expect("empty?").handle.close(
@@ -3109,11 +3097,11 @@ impl ContextMenuSession {
             depth + 1,
             display_pos,
             |render_scale| {
-                #[allow(unused_mut)]
-                let mut fs = PerWindowFontSet::new(system_link.root_font_set(), typing_context);
-                #[cfg(feature = "wayland")]
-                fs.rescale((render_scale * 72.0) as _);
-                crate::uikit::MenuItemLayout::build(items.into_iter().cloned(), &fs, render_scale)
+                crate::uikit::MenuItemLayout::build(
+                    items.into_iter().cloned(),
+                    system_link.font_set(),
+                    render_scale,
+                )
             },
             |layout, h, view_init_ctx| {
                 view_init_ctx.ui_scale_factor = h.render_scale();
@@ -3202,7 +3190,7 @@ pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
 pub struct SystemLink<'sys> {
     vk_device: *const VulkanDevice<'sys>,
     rt_sender: std::sync::mpsc::Sender<RenderMessage>,
-    root_font_set: *const RootFontSet,
+    font_set: *const FontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,
     #[cfg(all(unix, not(target_os = "macos")))]
     display_server: platform::unix::DisplayServerLink,
@@ -3225,8 +3213,8 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
-    pub const fn root_font_set(&self) -> &RootFontSet {
-        unsafe { &*self.root_font_set }
+    pub const fn font_set(&self) -> &FontSet {
+        unsafe { &*self.font_set }
     }
 
     #[inline(always)]

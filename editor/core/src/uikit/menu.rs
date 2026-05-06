@@ -11,7 +11,7 @@ use crate::{
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, Gradient,
             GradientRef,
         },
-        text::{FontID, PerWindowFontSet, TextLayout},
+        text::{FontID, FontSet, TextLayout},
     },
     uikit::{MountContext, MountTarget, ViewInitContext},
     utils::{LogicalUnit, SafeF32, Size},
@@ -76,7 +76,7 @@ pub struct MenuItemLayout {
 impl MenuItemLayout {
     pub fn build(
         items: impl Iterator<Item = MenuItem>,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         render_scale: f32,
     ) -> Vec<Self> {
         items

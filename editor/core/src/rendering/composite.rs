@@ -19,7 +19,7 @@ use crate::{
     rendering::{
         MaskTextureAtlasManager,
         atlas::{AtlasRect, DynamicAtlasManager},
-        text::{FontID, GlyphPlacementBox, PerWindowFontSet, TextLayout, TextRun},
+        text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
         vg::VectorRasterizationState,
     },
     utils::SafeF32,
@@ -1613,7 +1613,7 @@ impl<Event> CompositeTreeRender<Event> {
         size: br::Extent2D,
         current_sec: f32,
         mapped_head: *mut core::ffi::c_void,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
@@ -1993,7 +1993,7 @@ impl<Event> CompositeTreeRender<Event> {
         cache: &mut CompositeRectCache,
         text_layout: &CompositeRectText<Event>,
         scale_factor: f32,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         glyph_atlas: &mut MaskTextureAtlasManager,
         vector_raster_state: &mut VectorRasterizationState,
     ) {
@@ -2006,7 +2006,6 @@ impl<Event> CompositeTreeRender<Event> {
                 spacing_inline_start: r.spacing_inline_start,
             }),
             font_set,
-            scale_factor,
         );
         cache.text_rects.clear();
         cache
@@ -2019,7 +2018,7 @@ impl<Event> CompositeTreeRender<Event> {
             ));
         // TODO: LTR前提 RTLサポートもするなら最大値をとる必要がある
         cache.text_width = cache.text_rects.last().map_or(0.0, |r| r.right());
-        cache.text_height = text_layout.height();
+        cache.text_height = text_layout.height_unscaled() * scale_factor;
 
         /*#[cfg(target_os = "macos")]
         let framesetter = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
@@ -3205,7 +3204,7 @@ impl CompositeRenderer {
         tree: &mut CompositeTreeRender<Event>,
         root: CompositeTreeRef,
         rt_size: br::Extent2D,
-        font_set: &PerWindowFontSet,
+        font_set: &FontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,

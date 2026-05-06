@@ -5,7 +5,7 @@ use bitflags::bitflags;
 #[cfg(target_os = "macos")]
 use crate::{Event, LogicFiberEventDispatcher, input::hittest::HitTestTreeManager};
 use crate::{
-    LogicFiberEventDispatcher, PerWindowData, SystemLink, WindowHandle,
+    LogicFiberEventDispatcher, SystemLink, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
@@ -200,9 +200,14 @@ impl TextInputView {
         ct.get_mut(self.eh.ct_selection_bg).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_selection_bg);
 
-        self.eh
-            .update_cursor_position(ct, window, syslink, ht_manager);
-        self.eh.update_preedit_underline(ct, window);
+        // update for cursors
+        self.eh.update_views(
+            TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT,
+            ct,
+            window,
+            syslink,
+            ht_manager,
+        );
     }
 }
 
@@ -273,15 +278,17 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .end_text_input();
 
         // clear selection
-        self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-        self.update_selection(
+        let update_mask = self.deselect();
+        self.update_views(
+            update_mask,
             context.composite_tree,
             context
                 .ht_manager
                 .query_root_window(self.ht_root)
                 .expect("not mounted"),
+            context.system_link,
+            context.ht_manager,
         );
-        self.sync_selection_native();
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
@@ -406,17 +413,15 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .ht_manager
             .query_root_window(self.ht_root)
             .expect("not mounted");
-        self.update_text(context.composite_tree);
-        self.update_preedit_underline(context.composite_tree, mounted_window);
-        self.update_cursor_position(
+        self.update_views(
+            TextInputViewUpdateMask::TEXT
+                | TextInputViewUpdateMask::CURSOR
+                | TextInputViewUpdateMask::PREEDIT,
             context.composite_tree,
             mounted_window,
             context.system_link,
             context.ht_manager,
-            mounted_window.client_size(),
         );
-        self.update_selection(context.composite_tree, mounted_window);
-        self.sync_selection_native();
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
@@ -444,7 +449,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            context.system_link.font_set(),
             mounted_window.ui_scale_factor(),
         );
 
@@ -486,7 +491,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            context.system_link.font_set(),
             mounted_window.ui_scale_factor(),
         );
 
@@ -527,7 +532,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
             &self.content.borrow(),
             FontID::UIDefault,
-            unsafe { &mounted_window.extra_data_ref::<PerWindowData>().font_set },
+            context.system_link.font_set(),
             mounted_window.ui_scale_factor(),
         );
 
@@ -553,118 +558,6 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         let selection_range =
             self.select_word_at(&*self.content.borrow(), self.cursor_pos_bytes.get());
         let update_mask = self.select_range(selection_range);
-
-        /*#[cfg(not(windows))]
-        use unicode_segmentation::UnicodeSegmentation;
-        #[cfg(not(windows))]
-        let mut words = Vec::new();
-        #[cfg(not(windows))]
-        let content = self.content.borrow();
-        #[cfg(not(windows))]
-        let mut chars = content.chars();
-        #[cfg(not(windows))]
-        let mut is_budou_cluster = false;
-        #[cfg(not(windows))]
-        let mut same_cluster_range = 0..0;
-        #[cfg(not(windows))]
-        let mut cb = 0;
-        #[cfg(not(windows))]
-        while let Some(c) = chars.next() {
-            let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
-                || peridot_tp_unicode_properties::script::is_katakana(c)
-                || peridot_tp_unicode_properties::script::is_han(c)
-                || peridot_tp_unicode_properties::script::is_thai(c)
-                // 一部Commonにあるらしいので特別対応
-                || c as u32 == 0x30fc || c as u32 == 0xff70;
-            if is_budou_cluster_c != is_budou_cluster {
-                if !same_cluster_range.is_empty() {
-                    if !is_budou_cluster {
-                        words.extend(
-                            content[same_cluster_range.clone()]
-                                .split_word_bounds()
-                                .map(|x| x.to_owned()),
-                        )
-                    } else {
-                        words.extend(
-                            peridot_tp_budoux::parse(
-                                &peridot_tp_budoux::embedded::ja_knbc::MODEL,
-                                &content[same_cluster_range.clone()],
-                            )
-                            .into_iter()
-                            .map(|x| x.to_owned()),
-                        )
-                    }
-                }
-
-                is_budou_cluster = is_budou_cluster_c;
-                same_cluster_range = cb..cb;
-            }
-
-            same_cluster_range.end += c.len_utf8();
-            cb += c.len_utf8();
-        }
-        #[cfg(not(windows))]
-        if !same_cluster_range.is_empty() {
-            if !is_budou_cluster {
-                words.extend(
-                    content[same_cluster_range.clone()]
-                        .split_word_bounds()
-                        .map(|x| x.to_owned()),
-                )
-            } else {
-                words.extend(
-                    peridot_tp_budoux::parse(
-                        &peridot_tp_budoux::embedded::ja_knbc::MODEL,
-                        &content[same_cluster_range.clone()],
-                    )
-                    .into_iter()
-                    .map(|x| x.to_owned()),
-                )
-            }
-        }
-
-        #[cfg(not(windows))]
-        tracing::debug!(?words, "double click");
-
-        // TODO: LTR前提 最適化はあとで
-        #[cfg(not(windows))]
-        let window = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
-        #[cfg(not(windows))]
-        let (sx, _, _, _) = context.ht_manager.translate_client_to_tree_local(
-            sender,
-            args.client_pos.x - 2.0 - self.content_h_offset.get(),
-            args.client_pos.y,
-            args.client_size.width,
-            args.client_size.height,
-        );
-        #[cfg(not(windows))]
-        let target_x_pixels = sx * context.composite_tree.get(self.ct_text).base_scale_factor;
-        #[cfg(not(windows))]
-        let mut measure_range = 0..0;
-        #[cfg(not(windows))]
-        let mut select_range = 0..content.len();
-        #[cfg(not(windows))]
-        for w in words {
-            let starting_byte = measure_range.end;
-            measure_range.end += w.len();
-            let tw = TextLayout::measure_total_advances(
-                &content[measure_range.clone()],
-                FontID::UIDefault,
-                unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
-                window.ui_scale_factor(),
-            );
-
-            if target_x_pixels <= tw {
-                select_range = starting_byte..measure_range.end;
-                break;
-            }
-        }
-
-        #[cfg(not(windows))]
-        let update_mask = self.select_range(select_range);*/
 
         let mounted_window = context
             .ht_manager
@@ -761,7 +654,7 @@ impl TextInputViewEventHandler {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
 
@@ -797,9 +690,9 @@ impl TextInputViewEventHandler {
             client_size.height,
         );
         #[cfg(feature = "wayland")]
-        system_link.set_ime_cursor_rect(Rect::from_lt_size(
+        system_link.set_ime_cursor_rect(crate::utils::Rect::from_lt_size(
             Point::new_logical(sx, sy),
-            Size::new_logical(2.0, 16.0),
+            crate::utils::Size::new_logical(2.0, 16.0),
         ));
         #[cfg(feature = "wayland")]
         system_link.ime_set_surrounding_text(
@@ -816,14 +709,15 @@ impl TextInputViewEventHandler {
             composite_tree.get_mut(self.ct_text).offset[0] =
                 AnimatableFloat::Value(self.content_h_offset.get());
             composite_tree.mark_dirty(self.ct_text);
-            self.update_preedit_underline(composite_tree, window);
-            self.update_selection(composite_tree, window);
+            self.update_preedit_underline(composite_tree, system_link, window);
+            self.update_selection(composite_tree, system_link, window);
         }
     }
 
     fn update_preedit_underline<E>(
         &self,
         composite_tree: &mut CompositeTree<E>,
+        system_link: &SystemLink,
         window: WindowHandle,
     ) {
         let preedit_range =
@@ -838,13 +732,13 @@ impl TextInputViewEventHandler {
         let o = TextLayout::measure_total_advances(
             &self.content.borrow()[..preedit_range.start],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[preedit_range],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
 
@@ -858,7 +752,12 @@ impl TextInputViewEventHandler {
         composite_tree.mark_dirty(self.ct_preedit_underline);
     }
 
-    fn update_selection<E>(&self, composite_tree: &mut CompositeTree<E>, window: WindowHandle) {
+    fn update_selection<E>(
+        &self,
+        composite_tree: &mut CompositeTree<E>,
+        system_link: &SystemLink,
+        window: WindowHandle,
+    ) {
         let selection_range = self.selection_range();
         if selection_range.is_empty() {
             // no selection
@@ -870,13 +769,13 @@ impl TextInputViewEventHandler {
         let o = TextLayout::measure_total_advances(
             &self.content.borrow()[..selection_range.start],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..selection_range.end],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
+            system_link.font_set(),
             window.ui_scale_factor(),
         );
 
@@ -903,10 +802,10 @@ impl TextInputViewEventHandler {
         if mask.contains(TextInputViewUpdateMask::CURSOR) {
             // needs update cursor position and selection highlight
             self.update_cursor_position(composite_tree, window, system_link, ht_manager);
-            self.update_selection(composite_tree, window);
+            self.update_selection(composite_tree, system_link, window);
         }
         if mask.contains(TextInputViewUpdateMask::PREEDIT) {
-            self.update_preedit_underline(composite_tree, window);
+            self.update_preedit_underline(composite_tree, system_link, window);
         }
 
         if mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR) {
@@ -1205,6 +1104,89 @@ impl TextInputViewEventHandler {
             };
 
             start_bytes..end_bytes
+        }
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            // UnicodeSegmentation+BudouX fallback
+            use unicode_segmentation::UnicodeSegmentation;
+
+            let mut words = Vec::new();
+            let content = self.content.borrow();
+            let mut chars = content.chars();
+            let mut is_budou_cluster = false;
+            let mut same_cluster_range = 0..0;
+            let mut cb = 0;
+            while let Some(c) = chars.next() {
+                let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
+                    || peridot_tp_unicode_properties::script::is_katakana(c)
+                    || peridot_tp_unicode_properties::script::is_han(c)
+                    || peridot_tp_unicode_properties::script::is_thai(c)
+                    // 一部Commonにあるらしいので特別対応
+                    || c as u32 == 0x30fc || c as u32 == 0xff70;
+                if is_budou_cluster_c != is_budou_cluster {
+                    if !same_cluster_range.is_empty() {
+                        if !is_budou_cluster {
+                            words.extend(
+                                content[same_cluster_range.clone()]
+                                    .split_word_bounds()
+                                    .map(|x| x.to_owned()),
+                            )
+                        } else {
+                            words.extend(
+                                peridot_tp_budoux::parse(
+                                    &peridot_tp_budoux::embedded::ja_knbc::MODEL,
+                                    &content[same_cluster_range.clone()],
+                                )
+                                .into_iter()
+                                .map(|x| x.to_owned()),
+                            )
+                        }
+                    }
+
+                    is_budou_cluster = is_budou_cluster_c;
+                    same_cluster_range = cb..cb;
+                }
+
+                same_cluster_range.end += c.len_utf8();
+                cb += c.len_utf8();
+            }
+            if !same_cluster_range.is_empty() {
+                if !is_budou_cluster {
+                    words.extend(
+                        content[same_cluster_range.clone()]
+                            .split_word_bounds()
+                            .map(|x| x.to_owned()),
+                    )
+                } else {
+                    words.extend(
+                        peridot_tp_budoux::parse(
+                            &peridot_tp_budoux::embedded::ja_knbc::MODEL,
+                            &content[same_cluster_range.clone()],
+                        )
+                        .into_iter()
+                        .map(|x| x.to_owned()),
+                    )
+                }
+            }
+
+            tracing::debug!(?words, "double click");
+
+            // TODO: LTR前提 最適化はあとで
+            let mut measure_range = 0..0;
+            let mut select_range = 0..content.len();
+            for w in words {
+                let starting_byte = measure_range.end;
+                measure_range.end += w.len();
+
+                select_range = starting_byte..measure_range.end;
+                if select_range.contains(&cursor_pos_bytes) {
+                    // ここで確定
+                    break;
+                }
+            }
+
+            select_range
         }
     }
 }
