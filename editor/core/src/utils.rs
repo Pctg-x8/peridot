@@ -35,6 +35,8 @@ impl core::ops::Add for SafeF32 {
     }
 }
 impl SafeF32 {
+    pub const ZERO: Self = Self(0.0);
+
     pub const fn new(v: f32) -> Option<Self> {
         if v.is_nan() { None } else { Some(Self(v)) }
     }

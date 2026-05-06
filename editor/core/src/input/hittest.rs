@@ -22,6 +22,8 @@ pub struct HitTestTreeData<'h> {
     pub keyboard_focus: Option<FocusTargetToken>,
     pub root_of_window: Option<WindowHandle>,
     pub action_handler: Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>>,
+    /// 子要素以降をこのRectでクリップする
+    pub clip_children: bool,
     #[cfg(windows)]
     pub native_text_deferrable_event_handler:
         Option<std::rc::Weak<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'h>>,
@@ -47,6 +49,7 @@ impl Default for HitTestTreeData<'_> {
             keyboard_focus: None,
             root_of_window: None,
             action_handler: None,
+            clip_children: false,
             #[cfg(windows)]
             native_text_deferrable_event_handler: None,
             screen_reposition_handler: None,
@@ -444,6 +447,10 @@ impl<'h> HitTestTreeManager<'h> {
                 parent_effective_global_rect.height * d.height_adjustment_factor + d.height,
             ),
         );
+        if d.clip_children && !effective_global_rect.point_in_inclusive(global_pos) {
+            // clipped but not hit to self
+            return None;
+        }
 
         // 後ろにあるほうが上なので優先して見る
         if let Some(t) = self.relations[root.0]
@@ -532,6 +539,14 @@ pub struct PointerButtonActionArgs {
     pub pointer_id: PointerID,
     pub client_pos: Point<LogicalUnit>,
     pub client_size: Size<LogicalUnit>,
+}
+
+pub struct ScrollWheelActionArgs {
+    pub amount: f32,
+}
+pub struct ScrollWheelActionResponse {
+    pub continue_flags: EventContinueControl,
+    pub left_amount: f32,
 }
 
 pub trait HitTestTreeActionHandler {
@@ -643,6 +658,19 @@ pub trait HitTestTreeActionHandler {
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
+    }
+
+    #[allow(unused_variables)]
+    fn on_scroll_wheel(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &ScrollWheelActionArgs,
+    ) -> ScrollWheelActionResponse {
+        ScrollWheelActionResponse {
+            continue_flags: EventContinueControl::empty(),
+            left_amount: args.amount,
+        }
     }
 }
 

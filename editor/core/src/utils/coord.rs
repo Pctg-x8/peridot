@@ -1,10 +1,10 @@
-use std::marker::PhantomData;
+use core::{cell::Cell, marker::PhantomData};
 
 pub trait Unit {
     const DBG_NAME: &'static str;
 
-    type UnsignedValueType: Copy;
-    type SignedValueType: Copy;
+    type UnsignedValueType;
+    type SignedValueType;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -14,6 +14,15 @@ impl Unit for LogicalUnit {
 
     type UnsignedValueType = f32;
     type SignedValueType = f32;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum InteriorMutableLogicalUnit {}
+impl Unit for InteriorMutableLogicalUnit {
+    const DBG_NAME: &'static str = "InteriorMutableLogicalUnit";
+
+    type UnsignedValueType = Cell<f32>;
+    type SignedValueType = Cell<f32>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -127,6 +136,16 @@ impl Point<PixelsUnit> {
         }
     }
 }
+impl Point<InteriorMutableLogicalUnit> {
+    #[inline(always)]
+    pub const fn new_logical_interior_mutable(x: f32, y: f32) -> Self {
+        Self {
+            x: Cell::new(x),
+            y: Cell::new(y),
+            _marker: PhantomData,
+        }
+    }
+}
 impl<U: Unit> Point<U>
 where
     U::SignedValueType: core::ops::Add<U::SignedValueType, Output = U::SignedValueType>,
@@ -211,6 +230,16 @@ impl Size<PixelsUnit> {
         }
     }
 }
+impl Size<InteriorMutableLogicalUnit> {
+    #[inline(always)]
+    pub const fn new_logical_interior_mutable(width: f32, height: f32) -> Self {
+        Self {
+            width: Cell::new(width),
+            height: Cell::new(height),
+            _marker: PhantomData,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Rect<U: Unit> {
@@ -221,7 +250,8 @@ pub struct Rect<U: Unit> {
     _marker: PhantomData<U>,
 }
 impl<U: Unit> Rect<U> {
-    pub const fn from_lt_size(lt: Point<U>, size: Size<U>) -> Self {
+    #[inline(always)]
+    pub fn from_lt_size(lt: Point<U>, size: Size<U>) -> Self {
         Self {
             left: lt.x,
             top: lt.y,
@@ -234,7 +264,8 @@ impl<U: Unit> Rect<U> {
     #[inline(always)]
     pub fn right(&self) -> <U::SignedValueType as core::ops::Add<U::UnsignedValueType>>::Output
     where
-        U::SignedValueType: core::ops::Add<U::UnsignedValueType>,
+        U::SignedValueType: Copy + core::ops::Add<U::UnsignedValueType>,
+        U::UnsignedValueType: Copy,
     {
         self.left + self.width
     }
@@ -242,7 +273,8 @@ impl<U: Unit> Rect<U> {
     #[inline(always)]
     pub fn bottom(&self) -> <U::SignedValueType as core::ops::Add<U::UnsignedValueType>>::Output
     where
-        U::SignedValueType: core::ops::Add<U::UnsignedValueType>,
+        U::SignedValueType: Copy + core::ops::Add<U::UnsignedValueType>,
+        U::UnsignedValueType: Copy,
     {
         self.top + self.height
     }
@@ -251,18 +283,38 @@ impl<U: Unit> Rect<U> {
     pub fn point_in_inclusive(&self, p: &Point<U>) -> bool
     where
         U::SignedValueType: core::ops::Add<U::UnsignedValueType, Output = U::SignedValueType>
-            + core::cmp::PartialOrd,
+            + core::cmp::PartialOrd
+            + Copy,
+        U::UnsignedValueType: Copy,
     {
         self.left <= p.x && p.x <= self.right() && self.top <= p.y && p.y <= self.bottom()
+    }
+
+    #[inline(always)]
+    pub const fn size(&self) -> Size<U>
+    where
+        U::UnsignedValueType: Copy,
+    {
+        Size {
+            width: self.width,
+            height: self.height,
+            _marker: PhantomData,
+        }
     }
 }
 impl<U: Unit<SignedValueType: Zero>> From<Size<U>> for Rect<U> {
     #[inline(always)]
     fn from(size: Size<U>) -> Self {
-        Self::from(&size)
+        Self {
+            left: <U::SignedValueType as Zero>::ZERO,
+            top: <U::SignedValueType as Zero>::ZERO,
+            width: size.width,
+            height: size.height,
+            _marker: PhantomData,
+        }
     }
 }
-impl<U: Unit<SignedValueType: Zero>> From<&'_ Size<U>> for Rect<U> {
+impl<U: Unit<SignedValueType: Zero, UnsignedValueType: Copy>> From<&'_ Size<U>> for Rect<U> {
     #[inline(always)]
     fn from(size: &Size<U>) -> Self {
         Self {

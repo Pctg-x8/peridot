@@ -142,12 +142,13 @@ impl ViewRegistry {
         }
 
         let r = ViewIdentifier(self.last_free_identifier);
-        self.last_free_identifier
+        self.last_free_identifier = self
+            .last_free_identifier
             .checked_add(1)
             .expect("too many views!");
         self.event_handlers
             .push(Weak::<EmptyViewEventHandler>::new());
-        return r;
+        r
     }
 
     pub fn free(&mut self, id: ViewIdentifier) {

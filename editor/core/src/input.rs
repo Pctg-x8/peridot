@@ -10,7 +10,7 @@ use crate::{
     ContextMenuHandle, DragPreviewPopoverHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButton,
-        PointerButtonActionArgs, Role,
+        PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     rendering::composite::CompositeTree,
     utils::{LogicalUnit, Point, Rect, Size},
@@ -1025,6 +1025,39 @@ impl PointerInputManager {
                         action_context,
                         ht_root,
                     );
+                }
+            }
+            PointerFocusState::None => (),
+        }
+    }
+
+    pub fn handle_scroll_wheel(&self, amount: f32, action_context: &mut InputEventContext) {
+        let args = ScrollWheelActionArgs { amount };
+
+        match self.pointer_focus {
+            PointerFocusState::Capturing(ht_ref) => {
+                let _resp = action_context
+                    .ht_manager
+                    .get_data(ht_ref)
+                    .action_handler()
+                    .map(|h| h.on_scroll_wheel(ht_ref, action_context, &args));
+            }
+            PointerFocusState::Entering(ht_ref) => {
+                for ht in action_context.ht_manager.iter_ascending_from(ht_ref) {
+                    let Some(resp) = action_context
+                        .ht_manager
+                        .get_data(ht)
+                        .action_handler()
+                        .map(|h| h.on_scroll_wheel(ht_ref, action_context, &args))
+                    else {
+                        // no action occured
+                        continue;
+                    };
+
+                    if resp.left_amount == 0.0 {
+                        // no bubbling left event
+                        break;
+                    }
                 }
             }
             PointerFocusState::None => (),

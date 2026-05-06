@@ -1954,17 +1954,31 @@ impl<Event> CompositeTreeRender<Event> {
                         h,
                         opacity,
                         matrix.clone(),
-                        r.clip_child.map(|cc| {
-                            (
+                        match (r.clip_child.as_ref(), active_clip.as_ref()) {
+                            (None, None) => None,
+                            (Some(c), None) => Some((
                                 [
                                     SafeF32::new(left).expect("invalid left"),
                                     SafeF32::new(top).expect("invalid top"),
                                     SafeF32::new(left + w).expect("invalid right"),
                                     SafeF32::new(top + h).expect("invalid bottom"),
                                 ],
-                                cc,
-                            )
-                        }),
+                                c.clone(),
+                            )),
+                            (None, Some(a)) => Some(a.clone()),
+                            (Some(c), Some(a)) => {
+                                // TODO: softedgeの再クリップどうするか......
+                                Some((
+                                    [
+                                        SafeF32::new(left).expect("invalid left").max(a.0[0]),
+                                        SafeF32::new(top).expect("invalid top").max(a.0[1]),
+                                        SafeF32::new(left + w).expect("invalid right").min(a.0[2]),
+                                        SafeF32::new(top + h).expect("invalid bottom").min(a.0[3]),
+                                    ],
+                                    c.clone(),
+                                ))
+                            }
+                        },
                     ),
                 )
             }));
