@@ -32,7 +32,7 @@ members = [
     "modules/sprite-atlas",
     "editor/core",
     "editor/core/bindgen"
-]
+, "editor/prof-reader"]
 
 [workspace.dependencies]
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }

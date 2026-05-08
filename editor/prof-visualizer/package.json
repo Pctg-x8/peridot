@@ -1,0 +1,12 @@
+{
+  "name": "prof-visualizer",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "oxfmt": "^0.48.0"
+  },
+  "peerDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

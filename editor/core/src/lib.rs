@@ -56,6 +56,7 @@ use crate::{
 mod bindgen;
 mod graphics;
 mod input;
+mod perf;
 mod platform;
 mod proto;
 mod rendering;
@@ -91,6 +92,8 @@ pub fn launch() {
         .pretty()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    crate::perf::init_profiler();
 
     let mut event_store = VecDeque::new();
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
@@ -152,6 +155,8 @@ pub fn launch() {
         #[cfg(target_os = "linux")]
         &dbus,
     );
+
+    crate::perf::fini_profiler();
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
@@ -974,6 +979,8 @@ struct LaunchArgs<'sys> {
     pub renderer_sync: &'sys Mutex<RendererSync>,
 }
 
+crate::perf_section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
+
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
 async fn run<'sys>(
     LaunchArgs {
@@ -1322,6 +1329,7 @@ async fn run<'sys>(
     loop {
         let e = event_queue.next_event().await;
         tracing::trace!(target: "event-trace", event = ?e);
+        crate::perf_scope!(PROCESS_EVENT);
         match e {
             Event::Quit => break,
             Event::SubWindowOpen => {

@@ -91,6 +91,16 @@ struct Normalized2DStaticMeshTextureEntry {
     indices: &'static [u16],
 }
 
+crate::perf_event!(RENDERLOOP_BEGIN = "RenderLoop.Begin");
+crate::perf_section!(PROCESS_MESSAGE = "RenderLoop.ProcessMessage");
+crate::perf_section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
+crate::perf_section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
+crate::perf_section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
+crate::perf_section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
+crate::perf_section!(POST_QUEUE = "RenderLoop.PostQueue");
+#[cfg(windows)]
+crate::perf_section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
+
 pub struct RenderThread<'main> {
     pub vk_device: &'main VulkanDevice<'main>,
     pub shutdown_signal: &'main AtomicBool,
@@ -107,6 +117,8 @@ pub struct RenderThread<'main> {
 impl<'main> RenderThread<'main> {
     pub fn run(mut self) {
         tracing::info!("Starting RenderThread...");
+        let ts_freq = *crate::perf::TIMESTAMP_FREQUENCY;
+        let init_start_ts = crate::perf::timestamp();
         let mut render_queue = self
             .vk_device
             .queue(self.vk_device.present_queue_family_index(), 0);
@@ -170,16 +182,25 @@ impl<'main> RenderThread<'main> {
                 .expect("shared_update_commands.end");
         }
 
+        let init_end_ts = crate::perf::timestamp();
+        tracing::info!(
+            elapsed = init_end_ts - init_start_ts,
+            ts_freq,
+            "RenderThread initialized"
+        );
+
         let mut any_swapchain_invalidated = false;
         'lp: while !self
             .shutdown_signal
             .load(std::sync::atomic::Ordering::Acquire)
         {
+            crate::perf_emit!(RENDERLOOP_BEGIN);
             // unsafe {
             //     w.manual_capture_begin();
             // }
 
             loop {
+                crate::perf_scope!(PROCESS_MESSAGE);
                 match self.message_receiver.try_recv() {
                     Ok(RenderMessage::NewWindow(wd)) => {
                         #[cfg(feature = "wayland")]
@@ -322,6 +343,7 @@ impl<'main> RenderThread<'main> {
             }
 
             // TODO: 必要なら後で最適化する
+            crate::perf_begin!(perf = UPDATE_GRADIENT);
             composite_tree.update_gradients(self.vk_device, &composite_shared_buffers);
             unsafe {
                 shared_update_cp
@@ -350,6 +372,7 @@ impl<'main> RenderThread<'main> {
                     .expect("shared_update.submit");
             }
             render_queue.wait().expect("shared_update.wait");
+            crate::perf_end!(perf);
 
             for x in windows.values_mut() {
                 if x.take_swapchain_externally_invalidation_signal() {
@@ -426,6 +449,8 @@ impl<'main> RenderThread<'main> {
             #[cfg(windows)]
             let mut present_swapchains = Vec::with_capacity(context_menus.len());
             for (k, x) in windows.iter_mut() {
+                crate::perf_scope!(UPDATE_WINDOW);
+
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
                     Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -571,6 +596,8 @@ impl<'main> RenderThread<'main> {
                 });
             }
             for (k, x) in context_menus.iter_mut() {
+                crate::perf_scope!(UPDATE_CONTEXT_MENU);
+
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
                     Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
@@ -729,6 +756,8 @@ impl<'main> RenderThread<'main> {
             }
 
             for (s, x) in glyph_atlas_per_scale.iter() {
+                crate::perf_scope!(RENDER_VG_MASK);
+
                 if x.vector_raster_state.is_empty() {
                     // no vector rasterization required
                     continue;
@@ -744,6 +773,7 @@ impl<'main> RenderThread<'main> {
                 );
             }
 
+            crate::perf_begin!(perf = POST_QUEUE);
             if !submit_parameters.is_empty() {
                 unsafe {
                     render_queue
@@ -812,7 +842,10 @@ impl<'main> RenderThread<'main> {
             }
 
             render_queue.wait().expect("render_queue.wait");
+            crate::perf_end!(perf);
 
+            #[cfg(windows)]
+            crate::perf_begin!(perf = WIN32_DX_PRESENT);
             #[cfg(windows)]
             if !present_swapchains.is_empty() {
                 for x in present_swapchains {
@@ -839,6 +872,8 @@ impl<'main> RenderThread<'main> {
                     );
                 }
             }
+            #[cfg(windows)]
+            crate::perf_end!(perf);
 
             // unsafe {
             //     manual_capture_end();
