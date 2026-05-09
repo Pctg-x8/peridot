@@ -42,12 +42,12 @@ class HeaderPresenter {
                 sectionRanges,
                 events,
                 binMetadata.timestampFrequency,
-                binMetadata.markerAddrToName
+                binMetadata.markerAddrToName,
             );
             console.log(timelineChartModel);
 
             const chartContentHeight = Math.max(
-                ...timelineChartModel.barRects.map(x => TIMELINE_CHART_TOP_MARGIN + x.top + x.height)
+                ...timelineChartModel.barRects.map(x => TIMELINE_CHART_TOP_MARGIN + x.top + x.height),
             );
 
             const d = new DocumentFragment();
@@ -65,7 +65,7 @@ class HeaderPresenter {
                 const hue =
                     r.labelText
                         .split("")
-                        .map(c => c.charCodeAt(0) * 7 * 7)
+                        .map(c => c.charCodeAt(0) * 7)
                         .reduce((a, b) => a + b, 0) % 360;
                 const top = TIMELINE_CHART_TOP_MARGIN + r.top;
 
@@ -85,7 +85,7 @@ class HeaderPresenter {
                 e.setAttribute("y", top.toString());
                 e.setAttribute("width", r.width.toString());
                 e.setAttribute("height", r.height.toString());
-                e.style.fill = `oklch(100% 0.5 ${hue})`;
+                e.style.fill = `oklch(100% 0.25 ${hue})`;
                 e.setAttribute("stroke", "transparent");
                 e.setAttribute("stroke-width", "0");
                 const tx = document.createElementNS("http://www.w3.org/2000/svg", "text");
@@ -142,12 +142,13 @@ type Range<T> = {
 
 type SectionRange = {
     readonly markerName: string;
+    readonly auxData: unknown[];
     readonly timestamp: Range<bigint>;
 };
 
 function buildSectionRanges(
     markers: (SectionBeginMarker | SectionEndMarker)[],
-    markerAddrToName: Map<bigint, string>
+    markerAddrToName: Map<bigint, string>,
 ): SectionRange[] {
     const sectionById = new Map<bigint, { readonly begin?: SectionBeginMarker; readonly end?: SectionEndMarker }>();
     let maxTimestamp = 0n;
@@ -190,6 +191,7 @@ function buildSectionRanges(
 
             return {
                 markerName,
+                auxData: v.begin?.auxData ?? [],
                 timestamp: {
                     begin: v.begin?.timestamp ?? 0n,
                     end: v.end?.timestamp ?? maxTimestamp,
@@ -227,7 +229,7 @@ function buildTimelineChartModel(
     sectionRanges: SectionRange[],
     events: EventMarker[],
     timestampFrequency: bigint,
-    markerAddrToName: Map<bigint, string>
+    markerAddrToName: Map<bigint, string>,
 ): TimelineChartModel {
     const sortedRanges = sectionRanges.toSorted((a, b) => Number(a.timestamp.begin - b.timestamp.begin));
     const rects: BarRect[] = [];
@@ -244,7 +246,7 @@ function buildTimelineChartModel(
         }
 
         const durationNs = ((r.timestamp.end - r.timestamp.begin) * 1_000_000_000n) / timestampFrequency;
-        const labelText = r.markerName;
+        const labelText = formatSectionText(r);
         const tooltipText = `${labelText} (${displayNanos(durationNs)})`;
         const left =
             timestampToSecs(r.timestamp.begin - baseTimestamp, timestampFrequency) * TIMELINE_CHART_WIDTH_PER_SEC;
@@ -272,6 +274,15 @@ function buildTimelineChartModel(
         });
 
     return { barRects: rects, eventLines };
+}
+
+function formatSectionText(section: SectionRange): string {
+    let text = section.markerName;
+    if (section.auxData.length > 0) {
+        text += `: ${section.auxData.join(", ")}`;
+    }
+
+    return text;
 }
 
 function displayNanos(ns: bigint): string {

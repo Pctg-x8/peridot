@@ -183,9 +183,11 @@ impl Profiler {
     #[inline(always)]
     pub fn emit_event(&self, marker: &Event) {
         let ts = timestamp().to_ne_bytes();
+
+        let marker_tag = MarkerTag::Event.to_ne_bytes();
         let marker_ident = core::ptr::from_ref(marker).addr().to_ne_bytes();
         let mut iovs = [
-            IoSlice::new(&[MarkerTag::Event as _]),
+            IoSlice::new(&marker_tag),
             IoSlice::new(&ts),
             IoSlice::new(&marker_ident),
         ];
@@ -202,16 +204,20 @@ impl Profiler {
     #[inline(always)]
     pub fn emit_section_begin(&self, marker: &Section) -> u64 {
         let ts = timestamp().to_ne_bytes();
+
+        let marker_tag = MarkerTag::SectionBegin.to_ne_bytes();
         let marker_ident = core::ptr::from_ref(marker).addr().to_ne_bytes();
         let section_id = self
             .section_last_id
             .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let section_id_bytes = section_id.to_ne_bytes();
+        let data_type_tag = AuxDataTypeTag::None.to_ne_bytes();
         let mut iovs = [
-            IoSlice::new(&[MarkerTag::SectionBegin as _]),
+            IoSlice::new(&marker_tag),
             IoSlice::new(&ts),
             IoSlice::new(&marker_ident),
             IoSlice::new(&section_id_bytes),
+            IoSlice::new(&data_type_tag),
         ];
 
         self.marker_addr_to_name
@@ -226,11 +232,47 @@ impl Profiler {
     }
 
     #[inline(always)]
+    pub fn emit_section_begin_with_str(&self, marker: &Section, s: &str) -> u64 {
+        let ts = timestamp().to_ne_bytes();
+
+        let marker_tag = MarkerTag::SectionBegin.to_ne_bytes();
+        let marker_ident = core::ptr::from_ref(marker).addr().to_ne_bytes();
+        let section_id = self
+            .section_last_id
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let section_id_bytes = section_id.to_ne_bytes();
+        let data_type_tag = AuxDataTypeTag::String.to_ne_bytes();
+        let data_type_tag2 = AuxDataTypeTag::None.to_ne_bytes();
+        let mut iovs = [
+            IoSlice::new(&marker_tag),
+            IoSlice::new(&ts),
+            IoSlice::new(&marker_ident),
+            IoSlice::new(&section_id_bytes),
+            IoSlice::new(&data_type_tag),
+            IoSlice::new(s.as_bytes()),
+            IoSlice::new(&[0]),
+            IoSlice::new(&data_type_tag2),
+        ];
+
+        self.marker_addr_to_name
+            .lock()
+            .insert(core::ptr::from_ref(marker).addr(), marker.name);
+        let r = Self::writeva(&mut *self.writer.lock(), &mut iovs);
+        if let Err(e) = r {
+            tracing::warn!(reason = %e, "emit_section_begin_with_fmt fail");
+        }
+
+        section_id
+    }
+
+    #[inline(always)]
     pub fn emit_section_end(&self, section_id: u64) {
         let ts = timestamp().to_ne_bytes();
+
+        let marker_tag = MarkerTag::SectionEnd.to_ne_bytes();
         let section_id_bytes = section_id.to_ne_bytes();
         let mut iovs = [
-            IoSlice::new(&[MarkerTag::SectionEnd as _]),
+            IoSlice::new(&marker_tag),
             IoSlice::new(&ts),
             IoSlice::new(&section_id_bytes),
         ];
@@ -254,10 +296,28 @@ impl Profiler {
 
 #[repr(u8)]
 enum MarkerTag {
-    Terminal = 0x00,
-    Event = 0x01,
-    SectionBegin = 0x02,
-    SectionEnd = 0x03,
+    Terminal = 0,
+    Event = 1,
+    SectionBegin = 2,
+    SectionEnd = 3,
+}
+impl MarkerTag {
+    #[inline(always)]
+    const fn to_ne_bytes(self) -> [u8; 1] {
+        [self as _]
+    }
+}
+
+#[repr(u16)]
+enum AuxDataTypeTag {
+    None = 0,
+    String = 1,
+}
+impl AuxDataTypeTag {
+    #[inline(always)]
+    const fn to_ne_bytes(self) -> [u8; 2] {
+        (self as u16).to_ne_bytes()
+    }
 }
 
 #[cfg(feature = "enable-profiling")]
@@ -398,6 +458,10 @@ macro_rules! perf_begin {
         #[cfg(feature = "enable-profiling")]
         let $section_id = $crate::perf::profiler().emit_section_begin(&$marker);
     };
+    ($section_id: ident = $marker: expr, str $s: expr) => {
+        #[cfg(feature = "enable-profiling")]
+        let $section_id = $crate::perf::profiler().emit_section_begin_with_str(&$marker, $s);
+    };
 }
 
 #[macro_export]
@@ -409,7 +473,7 @@ macro_rules! perf_end {
 }
 
 #[repr(transparent)]
-pub struct SectionScope(#[cfg(feature = "enable-profiling")] u64);
+pub struct SectionScope(#[cfg(feature = "enable-profiling")] pub u64);
 impl Drop for SectionScope {
     #[inline(always)]
     fn drop(&mut self) {
@@ -419,25 +483,19 @@ impl Drop for SectionScope {
         }
     }
 }
-impl SectionScope {
-    #[inline(always)]
-    pub fn begin(marker: &Section) -> Self {
-        #[cfg(feature = "enable-profiling")]
-        {
-            Self(profiler().emit_section_begin(marker))
-        }
-        #[cfg(not(feature = "enable-profiling"))]
-        {
-            Self()
-        }
-    }
-}
 
 #[macro_export]
 macro_rules! perf_scope {
     ($name: ident = $marker: expr) => {
         #[cfg(feature = "enable-profiling")]
-        let $name = $crate::perf::SectionScope::begin(&$marker);
+        let $name =
+            $crate::perf::SectionScope($crate::perf::profiler().emit_section_begin(&$marker));
+    };
+    ($name: ident = $marker: expr, str $s: expr) => {
+        #[cfg(feature = "enable-profiling")]
+        let $name = $crate::perf::SectionScope(
+            $crate::perf::profiler().emit_section_begin_with_str(&$marker, $s),
+        );
     };
     (drop $name: ident) => {
         #[cfg(feature = "enable-profiling")]
@@ -445,6 +503,13 @@ macro_rules! perf_scope {
     };
     ($marker: expr) => {
         #[cfg(feature = "enable-profiling")]
-        let _scope = $crate::perf::SectionScope::begin(&$marker);
+        let _scope =
+            $crate::perf::SectionScope($crate::perf::profiler().emit_section_begin(&$marker));
+    };
+    ($marker: expr, str $s: expr) => {
+        #[cfg(feature = "enable-profiling")]
+        let _scope = $crate::perf::SectionScope(
+            $crate::perf::profiler().emit_section_begin_with_str(&$marker, $s),
+        );
     };
 }

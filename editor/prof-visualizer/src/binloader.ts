@@ -69,13 +69,13 @@ abstract class MarkerTransformStep {
     /** returns null causing break loop(no state transition could not be made) */
     abstract execute(
         controller: TransformStreamDefaultController<Marker>,
-        state: TransformerState
+        state: TransformerState,
     ): MarkerTransformStep | null;
 
     static readonly MarkerTag = new (class extends MarkerTransformStep {
         override execute(
             controller: TransformStreamDefaultController<Marker>,
-            state: TransformerState
+            state: TransformerState,
         ): MarkerTransformStep | null {
             switch (state.tryNextMarkerTag()) {
                 case null:
@@ -97,7 +97,7 @@ abstract class MarkerTransformStep {
         Timestamp: new (class extends MarkerTransformStep {
             override execute(
                 controller: TransformStreamDefaultController<Marker>,
-                state: TransformerState
+                state: TransformerState,
             ): MarkerTransformStep | null {
                 const timestamp = state.tryNextU64();
                 if (timestamp === null) {
@@ -115,7 +115,7 @@ abstract class MarkerTransformStep {
 
             override execute(
                 controller: TransformStreamDefaultController<Marker>,
-                state: TransformerState
+                state: TransformerState,
             ): MarkerTransformStep | null {
                 const markerAddr = state.tryNextUsize();
                 if (markerAddr === null) {
@@ -138,7 +138,7 @@ abstract class MarkerTransformStep {
             Timestamp: new (class extends MarkerTransformStep {
                 override execute(
                     controller: TransformStreamDefaultController<Marker>,
-                    state: TransformerState
+                    state: TransformerState,
                 ): MarkerTransformStep | null {
                     const timestamp = state.tryNextU64();
                     if (timestamp === null) {
@@ -156,7 +156,7 @@ abstract class MarkerTransformStep {
 
                 override execute(
                     controller: TransformStreamDefaultController<Marker>,
-                    state: TransformerState
+                    state: TransformerState,
                 ): MarkerTransformStep | null {
                     const markerAddr = state.tryNextUsize();
                     if (markerAddr === null) {
@@ -170,14 +170,14 @@ abstract class MarkerTransformStep {
             SectionID: class extends MarkerTransformStep {
                 constructor(
                     private readonly timestamp: bigint,
-                    private readonly markerAddr: bigint
+                    private readonly markerAddr: bigint,
                 ) {
                     super();
                 }
 
                 override execute(
                     controller: TransformStreamDefaultController<Marker>,
-                    state: TransformerState
+                    state: TransformerState,
                 ): MarkerTransformStep | null {
                     const sectionId = state.tryNextU64();
                     if (sectionId === null) {
@@ -185,13 +185,78 @@ abstract class MarkerTransformStep {
                         return null;
                     }
 
-                    controller.enqueue({
-                        type: "Section.Begin",
-                        timestamp: this.timestamp,
-                        markerAddr: this.markerAddr,
+                    return new MarkerTransformStep.Section.Begin.AuxDataTag(
+                        this.timestamp,
+                        this.markerAddr,
                         sectionId,
-                    });
-                    return MarkerTransformStep.MarkerTag;
+                        [],
+                    );
+                }
+            },
+            AuxDataTag: class extends MarkerTransformStep {
+                constructor(
+                    private readonly timestamp: bigint,
+                    private readonly markerAddr: bigint,
+                    private readonly sectionId: bigint,
+                    private readonly collectedAuxData: unknown[],
+                ) {
+                    super();
+                }
+
+                override execute(
+                    controller: TransformStreamDefaultController<Marker>,
+                    state: TransformerState,
+                ): MarkerTransformStep | null {
+                    switch (state.tryNextAuxDataTypeTag()) {
+                        case null:
+                            // cannot read
+                            return null;
+                        case "None":
+                            // done here
+                            controller.enqueue({
+                                type: "Section.Begin",
+                                timestamp: this.timestamp,
+                                markerAddr: this.markerAddr,
+                                sectionId: this.sectionId,
+                                auxData: this.collectedAuxData,
+                            });
+                            return MarkerTransformStep.MarkerTag;
+                        case "String":
+                            return new MarkerTransformStep.Section.Begin.AuxDataString(
+                                this.timestamp,
+                                this.markerAddr,
+                                this.sectionId,
+                                this.collectedAuxData,
+                            );
+                    }
+                }
+            },
+            AuxDataString: class extends MarkerTransformStep {
+                constructor(
+                    private readonly timestamp: bigint,
+                    private readonly markerAddr: bigint,
+                    private readonly sectionId: bigint,
+                    private readonly collectedAuxData: unknown[],
+                ) {
+                    super();
+                }
+
+                override execute(
+                    controller: TransformStreamDefaultController<Marker>,
+                    state: TransformerState,
+                ): MarkerTransformStep | null {
+                    const text = state.readText();
+                    if (text === null) {
+                        // still reading
+                        return null;
+                    }
+
+                    return new MarkerTransformStep.Section.Begin.AuxDataTag(
+                        this.timestamp,
+                        this.markerAddr,
+                        this.sectionId,
+                        [...this.collectedAuxData, text],
+                    );
                 }
             },
         },
@@ -199,7 +264,7 @@ abstract class MarkerTransformStep {
             Timestamp: new (class extends MarkerTransformStep {
                 override execute(
                     controller: TransformStreamDefaultController<Marker>,
-                    state: TransformerState
+                    state: TransformerState,
                 ): MarkerTransformStep | null {
                     const timestamp = state.tryNextU64();
                     if (timestamp === null) {
@@ -217,7 +282,7 @@ abstract class MarkerTransformStep {
 
                 override execute(
                     controller: TransformStreamDefaultController<Marker>,
-                    state: TransformerState
+                    state: TransformerState,
                 ): MarkerTransformStep | null {
                     const sectionId = state.tryNextU64();
                     if (sectionId === null) {
@@ -239,7 +304,7 @@ abstract class MarkerTransformStep {
     static readonly Terminated = new (class extends MarkerTransformStep {
         override execute(
             controller: TransformStreamDefaultController<Marker>,
-            state: TransformerState
+            state: TransformerState,
         ): MarkerTransformStep | null {
             controller.terminate();
             return null;
@@ -253,6 +318,7 @@ class TransformerState {
     #readptr: number;
     readonly #isLittleEndian: boolean;
     readonly #targetPointerSize: number;
+    readonly #textReader = new TextDecoder("utf-8");
 
     constructor(isLittleEndian: boolean, targetPointerSize: number) {
         this.#leftChunk = EMPTY_UINT8_ARRAY;
@@ -280,7 +346,6 @@ class TransformerState {
     }
 
     tryNextMarkerTag(): MarkerTag | null {
-        // should not read from leftChunk
         assertEq(this.#leftChunk.length, 0);
 
         if (!this.canRead(1)) {
@@ -291,6 +356,43 @@ class TransformerState {
         const r = getMarkerTag(this.#currentChunk[this.#readptr]);
         this.#readptr += 1;
         return r;
+    }
+
+    tryNextAuxDataTypeTag(): AuxDataTypeTag | null {
+        const n = this.tryNextU16();
+        if (n === null) {
+            // cannot read
+            return null;
+        }
+
+        return getAuxDataTypeTag(n);
+    }
+
+    tryNextU16(): number | null {
+        if (!this.canRead(2)) {
+            // cannot read
+            return null;
+        }
+
+        if (this.#leftChunk.length > 0) {
+            // join
+            assertEq(this.#readptr, 0);
+
+            const buf = new Uint8Array(2);
+            buf.set(this.#leftChunk, 0);
+            buf.set(this.#currentChunk.slice(0, 2 - this.#leftChunk.length), this.#leftChunk.length);
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            this.#readptr = 2 - this.#leftChunk.length;
+            this.#leftChunk = EMPTY_UINT8_ARRAY;
+
+            return dv.getUint16(0, this.#isLittleEndian);
+        } else {
+            // straight read
+            const dv = new DataView(this.#currentChunk.buffer, this.#currentChunk.byteOffset + this.#readptr, 2);
+            this.#readptr += 2;
+
+            return dv.getUint16(0, this.#isLittleEndian);
+        }
     }
 
     tryNextU64(): bigint | null {
@@ -344,18 +446,51 @@ class TransformerState {
             const dv = new DataView(
                 this.#currentChunk.buffer,
                 this.#currentChunk.byteOffset + this.#readptr,
-                this.#targetPointerSize
+                this.#targetPointerSize,
             );
             this.#readptr += this.#targetPointerSize;
 
             return readUsize(dv, 0, this.#targetPointerSize, this.#isLittleEndian);
         }
     }
+
+    readText(): string | null {
+        if (this.#leftChunk.length > 0) {
+            // read from leftChunk(must not be consumed any bytes from currentChunk)
+            assertEq(this.#readptr, 0);
+
+            const zeroBytePoint = this.#leftChunk.indexOf(0);
+            if (zeroBytePoint >= 0) {
+                // terminal point found in this chunk
+                const text = this.#textReader.decode(this.#leftChunk.slice(0, zeroBytePoint));
+                this.#leftChunk = this.#leftChunk.slice(zeroBytePoint + 1);
+                return text;
+            }
+
+            this.#textReader.decode(this.#leftChunk, { stream: true });
+            this.#leftChunk = EMPTY_UINT8_ARRAY;
+        }
+
+        const zeroBytePoint = this.#currentChunk.slice(this.#readptr).indexOf(0);
+        if (zeroBytePoint >= 0) {
+            // terminal point found in this chunk
+            const text = this.#textReader.decode(
+                this.#currentChunk.slice(this.#readptr, zeroBytePoint + this.#readptr),
+            );
+            this.#readptr += zeroBytePoint + 1;
+            return text;
+        }
+
+        // consume entire buf and return null(= reading not completed)
+        this.#textReader.decode(this.#currentChunk.slice(this.#readptr), { stream: true });
+        this.#readptr = this.#currentChunk.length;
+        return null;
+    }
 }
 
 function newMarkerTransformStream(
     targetPointerSize: number,
-    isLittleEndian: boolean
+    isLittleEndian: boolean,
 ): TransformStream<Uint8Array, Marker> {
     const state = new TransformerState(isLittleEndian, targetPointerSize);
     let step: MarkerTransformStep = MarkerTransformStep.MarkerTag;
@@ -383,24 +518,39 @@ function newMarkerTransformStream(
     });
 }
 
-type MarkerTagByte = number;
-const MARKER_TAG_BYTE_TERMINAL: MarkerTagByte = 0x00;
-const MARKER_TAG_BYTE_EVENT: MarkerTagByte = 0x01;
-const MARKER_TAG_BYTE_SECTION_BEGIN: MarkerTagByte = 0x02;
-const MARKER_TAG_BYTE_SECTION_END: MarkerTagByte = 0x03;
+type MarkerTagNum = number;
+const MARKER_TAG_NUM_TERMINAL: MarkerTagNum = 0;
+const MARKER_TAG_NUM_EVENT: MarkerTagNum = 1;
+const MARKER_TAG_NUM_SECTION_BEGIN: MarkerTagNum = 2;
+const MARKER_TAG_NUM_SECTION_END: MarkerTagNum = 3;
 type MarkerTag = "Terminal" | "Event" | "Section.Begin" | "Section.End";
-export function getMarkerTag(byte: number): MarkerTag {
-    switch (byte) {
-        case MARKER_TAG_BYTE_TERMINAL:
+export function getMarkerTag(num: number): MarkerTag {
+    switch (num) {
+        case MARKER_TAG_NUM_TERMINAL:
             return "Terminal";
-        case MARKER_TAG_BYTE_EVENT:
+        case MARKER_TAG_NUM_EVENT:
             return "Event";
-        case MARKER_TAG_BYTE_SECTION_BEGIN:
+        case MARKER_TAG_NUM_SECTION_BEGIN:
             return "Section.Begin";
-        case MARKER_TAG_BYTE_SECTION_END:
+        case MARKER_TAG_NUM_SECTION_END:
             return "Section.End";
         default:
-            throw new InvalidBinError(`unknown marker tag: ${byte}`);
+            throw new InvalidBinError(`unknown marker tag: ${num}`);
+    }
+}
+
+type AuxDataTypeTagNum = number;
+const AUX_DATA_TYPE_TAG_NUM_NONE: AuxDataTypeTagNum = 0;
+const AUX_DATA_TYPE_TAG_NUM_STRING: AuxDataTypeTagNum = 1;
+type AuxDataTypeTag = "None" | "String";
+export function getAuxDataTypeTag(num: number): AuxDataTypeTag {
+    switch (num) {
+        case AUX_DATA_TYPE_TAG_NUM_NONE:
+            return "None";
+        case AUX_DATA_TYPE_TAG_NUM_STRING:
+            return "String";
+        default:
+            throw new InvalidBinError(`unknown aux data type tag: ${num}`);
     }
 }
 
@@ -415,6 +565,7 @@ export type SectionBeginMarker = {
     readonly timestamp: bigint;
     readonly markerAddr: bigint;
     readonly sectionId: bigint;
+    readonly auxData: unknown[];
 };
 export type SectionEndMarker = {
     readonly type: "Section.End";

@@ -647,6 +647,17 @@ pub enum SyncEvent {
     ContextMenuPostResizeRenderBuffer { target: ContextMenuHandle },
     PopupUnmount { id: PopupID },
 }
+impl SyncEvent {
+    pub const fn p_name(&self) -> &'static str {
+        match self {
+            Self::WindowPostResizeRenderBuffer { .. } => "Sync(WindowPostResizeRenderBuffer)",
+            Self::ContextMenuPostResizeRenderBuffer { .. } => {
+                "Sync(ContextMenuPostResizeRenderBuffer)"
+            }
+            Self::PopupUnmount { .. } => "Sync(PopupUnmount)",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum Event {
@@ -796,6 +807,55 @@ pub enum Event {
         e: windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
         deferral: Option<windows::Foundation::Deferral>,
     },
+}
+impl Event {
+    #[cfg(feature = "enable-profiling")]
+    pub const fn p_name(&self) -> &'static str {
+        match self {
+            Self::Sync(e) => e.p_name(),
+            Self::Quit => "Quit",
+            Self::PointerDown { .. } => "PointerDown",
+            Self::PointerMove { .. } => "PointerMove",
+            Self::PointerUp { .. } => "PointerUp",
+            Self::PointerLeaveWindow { .. } => "PointerLeaveWindow",
+            Self::PointerHover => "PointerHover",
+            Self::ScrollWheel { .. } => "ScrollWheel",
+            Self::KeyDown { .. } => "KeyDown",
+            Self::KeyUp { .. } => "KeyUp",
+            Self::IMEStateChanges { .. } => "IMEStateChanges",
+            Self::WindowMove { .. } => "WindowMove",
+            Self::WindowResize { .. } => "WindowResize",
+            Self::WindowRescaleUI { .. } => "WindowRescaleUI",
+            Self::WindowMaximizeStateChanged { .. } => "WindowMaximizeStateChanged",
+            Self::WindowFocusChanged { .. } => "WindowFocusChanged",
+            Self::WindowActivatingStateChanged { .. } => "WindowActivatingStateChanged",
+            Self::SubWindowOpen => "SubWindowOpen",
+            Self::SubWindowClose { .. } => "SubWindowClose",
+            Self::OpenAlertDialog { .. } => "OpenAlertDialog",
+            Self::PopupClose { .. } => "PopupClose",
+            Self::ContextMenuOpen { .. } => "ContextMenuOpen",
+            Self::ContextMenuCloseAll => "ContextMenuCloseAll",
+            Self::ContextMenuRescale { .. } => "ContextMenuRescale",
+            Self::ContextMenuSelectItem { .. } => "ContextMenuSelectItem",
+            Self::ContextMenuDeselectItem { .. } => "ContextMenuDeselectItem",
+            Self::ContextMenuOpenSubmenu { .. } => "ContextMenuOpenSubmenu",
+            Self::ContextMenuPerformDelayedAction => "ContextMenuPerformDelayedAction",
+            Self::ContextMenuPointerDown { .. } => "ContextMenuPointerDown",
+            Self::ContextMenuPointerMove { .. } => "ContextMenuPointerMove",
+            Self::ContextMenuPointerUp { .. } => "ContextMenuPointerUp",
+            Self::ContextMenuPointerLeave { .. } => "ContextMenuPointerLeave",
+            Self::ContextMenuSelectCommand { .. } => "ContextMenuSelectCommand",
+            Self::UpdateView { .. } => "UpdateView",
+            #[cfg(not(target_os = "macos"))]
+            Self::GlobalMouseClicked => "GlobalMouseClicked",
+            #[cfg(windows)]
+            Self::CoreTextLayoutRequested { .. } => "CoreTextLayoutRequested",
+            #[cfg(windows)]
+            Self::CoreTextTextUpdating { .. } => "CoreTextTextUpdating",
+            #[cfg(windows)]
+            Self::CoreTextFormatUpdating { .. } => "CoreTextFormatUpdating",
+        }
+    }
 }
 
 struct EventQueue {
@@ -979,6 +1039,7 @@ struct LaunchArgs<'sys> {
     pub renderer_sync: &'sys Mutex<RendererSync>,
 }
 
+crate::perf_section!(INITIALIZE = "LogicFiber.Initialize");
 crate::perf_section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
@@ -991,6 +1052,7 @@ async fn run<'sys>(
     mut system_link: SystemLink<'sys>,
 ) {
     tracing::info!("app start");
+    crate::perf_begin!(perf = INITIALIZE);
 
     let drag_preview_popover = DragPreviewPopoverHandle::new(&system_link);
 
@@ -1326,10 +1388,11 @@ async fn run<'sys>(
     ht_manager.dump(main_window.ht_root());
 
     system_link.prelaunch(main_window);
+    crate::perf_end!(perf);
     loop {
         let e = event_queue.next_event().await;
         tracing::trace!(target: "event-trace", event = ?e);
-        crate::perf_scope!(PROCESS_EVENT);
+        crate::perf_scope!(PROCESS_EVENT, str e.p_name());
         match e {
             Event::Quit => break,
             Event::SubWindowOpen => {

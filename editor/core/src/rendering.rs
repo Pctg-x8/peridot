@@ -91,7 +91,8 @@ struct Normalized2DStaticMeshTextureEntry {
     indices: &'static [u16],
 }
 
-crate::perf_event!(RENDERLOOP_BEGIN = "RenderLoop.Begin");
+crate::perf_event!(SYNCPOINT = "RenderSyncPoint");
+crate::perf_section!(RENDERLOOP = "RenderLoop");
 crate::perf_section!(PROCESS_MESSAGE = "RenderLoop.ProcessMessage");
 crate::perf_section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
 crate::perf_section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
@@ -195,7 +196,7 @@ impl<'main> RenderThread<'main> {
             .shutdown_signal
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            crate::perf_emit!(RENDERLOOP_BEGIN);
+            crate::perf_scope!(RENDERLOOP);
             // unsafe {
             //     w.manual_capture_begin();
             // }
@@ -416,6 +417,7 @@ impl<'main> RenderThread<'main> {
             }
 
             // flush synchronizing buffers
+            crate::perf_emit!(SYNCPOINT);
             {
                 let mut renderer_sync = self.renderer_sync.lock().expect("poisoned");
                 renderer_sync.composite_buffer.clean(&mut composite_tree);
