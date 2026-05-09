@@ -8,16 +8,39 @@ html,
 body {
     font-family: "Inter Display", system-ui, sans-serif;
     font-size: 10pt;
-    width: 100%;
+    width: max-content;
     height: 100%;
     color: #eee;
     background: #111;
 }
 
 header {
+    position: sticky;
+    top: 0;
+    left: 0;
+    width: 100vw;
     padding: 0.4rem;
     & > form {
         display: grid;
+        gap: 0.4rem;
         grid-template-columns: auto 1fr;
+        align-items: baseline;
+    }
+
+    & button {
+        background: rgb(255 255 255 / 0%);
+        border: solid 1px #ccc;
+        border-radius: 8px;
+        color: #eee;
+        padding: 4px;
+        cursor: pointer;
+        transition: background 0.1s ease;
+
+        &:hover {
+            background: rgb(255 255 255 / 20%);
+        }
+        &:active {
+            background: rgb(255 255 255 / 40%);
+        }
     }
 }
