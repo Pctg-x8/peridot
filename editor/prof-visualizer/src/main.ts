@@ -1,6 +1,6 @@
-import { loadBin, type EventMarker, type SectionBeginMarker, type SectionEndMarker } from "./src/binloader";
-import { bnMin, hasValue } from "./src/utils";
-import { PrefixedViewGroup, ViewElement } from "./src/viewHelper";
+import { loadBin, type EventMarker, type SectionBeginMarker, type SectionEndMarker } from "./binloader";
+import { bnMin, hasValue } from "./utils";
+import { PrefixedViewGroup, ViewElement } from "./viewHelper";
 
 document.addEventListener("DOMContentLoaded", () => {
     new HeaderPresenter().launch();
@@ -46,33 +46,86 @@ class HeaderPresenter {
             );
             console.log(timelineChartModel);
 
+            const chartContentHeight = Math.max(
+                ...timelineChartModel.barRects.map(x => TIMELINE_CHART_TOP_MARGIN + x.top + x.height)
+            );
+
             const d = new DocumentFragment();
+
+            const timelineTopLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            timelineTopLine.setAttribute("x1", "0");
+            timelineTopLine.setAttribute("y1", TIMELINE_CHART_TOP_MARGIN.toString());
+            timelineTopLine.setAttribute("x2", "100%");
+            timelineTopLine.setAttribute("y2", TIMELINE_CHART_TOP_MARGIN.toString());
+            timelineTopLine.setAttribute("stroke", "#666");
+            timelineTopLine.setAttribute("stroke-width", "1");
+            d.appendChild(timelineTopLine);
+            let barRectId = 0;
             for (const r of timelineChartModel.barRects) {
                 const hue =
                     r.labelText
                         .split("")
-                        .map((c) => c.charCodeAt(0) * 7 * 7)
+                        .map(c => c.charCodeAt(0) * 7 * 7)
                         .reduce((a, b) => a + b, 0) % 360;
+                const top = TIMELINE_CHART_TOP_MARGIN + r.top;
+
+                const clip = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
+                const clipId = (clip.id = `barRectClip-${barRectId}`);
+                const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                rect.setAttribute("x", r.left.toString());
+                rect.setAttribute("y", top.toString());
+                rect.setAttribute("width", r.width.toString());
+                rect.setAttribute("height", r.height.toString());
+                clip.appendChild(rect);
+                d.appendChild(clip);
 
                 const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
                 const e = document.createElementNS("http://www.w3.org/2000/svg", "rect");
                 e.setAttribute("x", r.left.toString());
-                e.setAttribute("y", r.top.toString());
+                e.setAttribute("y", top.toString());
                 e.setAttribute("width", r.width.toString());
                 e.setAttribute("height", r.height.toString());
                 e.style.fill = `oklch(100% 0.5 ${hue})`;
                 e.setAttribute("stroke", "transparent");
                 e.setAttribute("stroke-width", "0");
+                const tx = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                tx.textContent = r.labelText;
+                tx.setAttribute("x", r.left.toString());
+                tx.setAttribute("y", (top + r.height * 0.5).toString());
+                tx.setAttribute("clip-path", `url(#${clipId})`);
+                tx.setAttribute("dominant-baseline", "middle");
                 const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
-                t.textContent = r.labelText;
+                t.textContent = r.tooltipText;
 
                 g.appendChild(e);
+                g.appendChild(tx);
                 g.appendChild(t);
                 d.appendChild(g);
+                barRectId += 1;
+            }
+
+            for (const l of timelineChartModel.eventLines) {
+                const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                text.textContent = l.labelText;
+                text.setAttribute("x", l.left.toString());
+                text.setAttribute("y", "0");
+                text.setAttribute("dominant-baseline", "text-top");
+                text.classList.add("eventLine");
+
+                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                line.setAttribute("x1", l.left.toString());
+                line.setAttribute("x2", l.left.toString());
+                line.setAttribute("y1", "0");
+                line.setAttribute("y2", "100%");
+                line.setAttribute("stroke-width", "1");
+                line.setAttribute("stroke", "#999");
+
+                d.appendChild(text);
+                d.appendChild(line);
             }
 
             const w = timelineChartModel.barRects.reduce((a, b) => Math.max(a, b.left + b.width), 0);
-            const h = timelineChartModel.barRects.reduce((a, b) => Math.max(a, b.top + b.height), 0);
+            const h = chartContentHeight;
             this.#chartSurface.ref.setAttribute("width", w.toString());
             this.#chartSurface.ref.setAttribute("height", h.toString());
             this.#chartSurface.ref.setAttribute("viewBox", `0 0 ${w} ${h}`);
@@ -147,7 +200,8 @@ function buildSectionRanges(
 }
 
 const TIMELINE_CHART_BAR_THICKNESS: number = 12.0;
-const TIMELINE_CHART_WIDTH_PER_SEC: number = 128.0 * 10.0;
+const TIMELINE_CHART_WIDTH_PER_SEC: number = 128.0 * 100.0;
+const TIMELINE_CHART_TOP_MARGIN: number = 120.0;
 
 export function timestampToSecs(timestamp: bigint, freq: bigint): number {
     return Number(timestamp) / Number(freq);
@@ -189,8 +243,9 @@ function buildTimelineChartModel(
             endTimestampStack.pop();
         }
 
+        const durationNs = ((r.timestamp.end - r.timestamp.begin) * 1_000_000_000n) / timestampFrequency;
         const labelText = r.markerName;
-        const tooltipText = labelText;
+        const tooltipText = `${labelText} (${displayNanos(durationNs)})`;
         const left =
             timestampToSecs(r.timestamp.begin - baseTimestamp, timestampFrequency) * TIMELINE_CHART_WIDTH_PER_SEC;
         const right =
@@ -208,7 +263,7 @@ function buildTimelineChartModel(
 
     const eventLines = events
         .toSorted((a, b) => Number(a.timestamp - b.timestamp))
-        .map((e) => {
+        .map(e => {
             const labelText = markerAddrToName.get(e.markerAddr)!;
             const left =
                 timestampToSecs(e.timestamp - baseTimestamp, timestampFrequency) * TIMELINE_CHART_WIDTH_PER_SEC;
@@ -217,4 +272,24 @@ function buildTimelineChartModel(
         });
 
     return { barRects: rects, eventLines };
+}
+
+function displayNanos(ns: bigint): string {
+    let unit = "ns";
+    let val = Number(ns);
+    if (val >= 1000) {
+        unit = "us";
+        val /= 1000;
+    }
+    if (val >= 1000) {
+        unit = "ms";
+        val /= 1000;
+    }
+
+    if (unit === "ns") {
+        // no conversion occured
+        return `${ns} ns`;
+    }
+
+    return `${val.toFixed(2)} ${unit}`;
 }

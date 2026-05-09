@@ -445,6 +445,6 @@ macro_rules! perf_scope {
     };
     ($marker: expr) => {
         #[cfg(feature = "enable-profiling")]
-        let _ = $crate::perf::SectionScope::begin(&$marker);
+        let _scope = $crate::perf::SectionScope::begin(&$marker);
     };
 }

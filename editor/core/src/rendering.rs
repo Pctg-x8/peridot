@@ -98,6 +98,7 @@ crate::perf_section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
 crate::perf_section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
 crate::perf_section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
 crate::perf_section!(POST_QUEUE = "RenderLoop.PostQueue");
+crate::perf_section!(WAIT_QUEUE = "RenderLoop.WaitQueue");
 #[cfg(windows)]
 crate::perf_section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 
@@ -840,7 +841,9 @@ impl<'main> RenderThread<'main> {
                     }
                 }
             }
+            crate::perf_end!(perf);
 
+            crate::perf_begin!(perf = WAIT_QUEUE);
             render_queue.wait().expect("render_queue.wait");
             crate::perf_end!(perf);
 

@@ -13,8 +13,17 @@
             </form>
         </header>
         <svg id="ChartSurface" xmlns="http://www.w3.org/2000/svg">
+            <style id="ChartStyleBox">
+                text {
+                    font-size: 7pt;
+                    pointer-events: none;
+                    &.eventLine {
+                        fill: #eee;
+                    }
+                }
+            </style>
             <g id="ChartContainer"></g>
         </svg>
-        <script src="./index.ts" type="module"></script>
+        <script src="./src/main.ts" type="module"></script>
     </body>
 </html>

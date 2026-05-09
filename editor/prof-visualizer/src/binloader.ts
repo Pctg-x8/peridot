@@ -1,3 +1,5 @@
+import { assert, assertEq } from "./utils";
+
 export class InvalidBinError extends Error {
     constructor(message: string) {
         super(`invalid bin: ${message}`);
@@ -61,312 +63,321 @@ export async function loadBin(blob: Blob): Promise<[BinMetadata, ReadableStream<
     ];
 }
 
-type MarkerTransformStep =
-    | { readonly step: "MarkerTag" }
-    | { readonly step: "Event.Timestamp" }
-    | { readonly step: "Event.MarkerAddr"; readonly timestamp: bigint }
-    | { readonly step: "Section.Begin.Timestamp" }
-    | { readonly step: "Section.Begin.MarkerAddr"; readonly timestamp: bigint }
-    | { readonly step: "Section.Begin.SectionID"; readonly timestamp: bigint; readonly markerAddr: bigint }
-    | { readonly step: "Section.End.Timestamp" }
-    | { readonly step: "Section.End.SectionID"; readonly timestamp: bigint }
-    | { readonly step: "Terminated" };
-type TransformerState = {
-    leftChunk: Uint8Array;
-    step: MarkerTransformStep;
-    readptr: number;
-};
 const EMPTY_UINT8_ARRAY = new Uint8Array();
+
+abstract class MarkerTransformStep {
+    /** returns null causing break loop(no state transition could not be made) */
+    abstract execute(
+        controller: TransformStreamDefaultController<Marker>,
+        state: TransformerState
+    ): MarkerTransformStep | null;
+
+    static readonly MarkerTag = new (class extends MarkerTransformStep {
+        override execute(
+            controller: TransformStreamDefaultController<Marker>,
+            state: TransformerState
+        ): MarkerTransformStep | null {
+            switch (state.tryNextMarkerTag()) {
+                case null:
+                    // cannot read
+                    return null;
+                case "Terminal":
+                    return MarkerTransformStep.Terminated;
+                case "Event":
+                    return MarkerTransformStep.Event.Timestamp;
+                case "Section.Begin":
+                    return MarkerTransformStep.Section.Begin.Timestamp;
+                case "Section.End":
+                    return MarkerTransformStep.Section.End.Timestamp;
+            }
+        }
+    })();
+
+    static readonly Event = {
+        Timestamp: new (class extends MarkerTransformStep {
+            override execute(
+                controller: TransformStreamDefaultController<Marker>,
+                state: TransformerState
+            ): MarkerTransformStep | null {
+                const timestamp = state.tryNextU64();
+                if (timestamp === null) {
+                    // cannot read
+                    return null;
+                }
+
+                return new MarkerTransformStep.Event.MarkerAddr(timestamp);
+            }
+        })(),
+        MarkerAddr: class extends MarkerTransformStep {
+            constructor(private readonly timestamp: bigint) {
+                super();
+            }
+
+            override execute(
+                controller: TransformStreamDefaultController<Marker>,
+                state: TransformerState
+            ): MarkerTransformStep | null {
+                const markerAddr = state.tryNextUsize();
+                if (markerAddr === null) {
+                    // cannot read
+                    return null;
+                }
+
+                controller.enqueue({
+                    type: "Event",
+                    timestamp: this.timestamp,
+                    markerAddr,
+                });
+                return MarkerTransformStep.MarkerTag;
+            }
+        },
+    } as const;
+
+    static readonly Section = {
+        Begin: {
+            Timestamp: new (class extends MarkerTransformStep {
+                override execute(
+                    controller: TransformStreamDefaultController<Marker>,
+                    state: TransformerState
+                ): MarkerTransformStep | null {
+                    const timestamp = state.tryNextU64();
+                    if (timestamp === null) {
+                        // cannot read
+                        return null;
+                    }
+
+                    return new MarkerTransformStep.Section.Begin.MarkerAddr(timestamp);
+                }
+            })(),
+            MarkerAddr: class extends MarkerTransformStep {
+                constructor(private readonly timestamp: bigint) {
+                    super();
+                }
+
+                override execute(
+                    controller: TransformStreamDefaultController<Marker>,
+                    state: TransformerState
+                ): MarkerTransformStep | null {
+                    const markerAddr = state.tryNextUsize();
+                    if (markerAddr === null) {
+                        // cannot read
+                        return null;
+                    }
+
+                    return new MarkerTransformStep.Section.Begin.SectionID(this.timestamp, markerAddr);
+                }
+            },
+            SectionID: class extends MarkerTransformStep {
+                constructor(
+                    private readonly timestamp: bigint,
+                    private readonly markerAddr: bigint
+                ) {
+                    super();
+                }
+
+                override execute(
+                    controller: TransformStreamDefaultController<Marker>,
+                    state: TransformerState
+                ): MarkerTransformStep | null {
+                    const sectionId = state.tryNextU64();
+                    if (sectionId === null) {
+                        // cannot read
+                        return null;
+                    }
+
+                    controller.enqueue({
+                        type: "Section.Begin",
+                        timestamp: this.timestamp,
+                        markerAddr: this.markerAddr,
+                        sectionId,
+                    });
+                    return MarkerTransformStep.MarkerTag;
+                }
+            },
+        },
+        End: {
+            Timestamp: new (class extends MarkerTransformStep {
+                override execute(
+                    controller: TransformStreamDefaultController<Marker>,
+                    state: TransformerState
+                ): MarkerTransformStep | null {
+                    const timestamp = state.tryNextU64();
+                    if (timestamp === null) {
+                        // cannot read
+                        return null;
+                    }
+
+                    return new MarkerTransformStep.Section.End.SectionID(timestamp);
+                }
+            })(),
+            SectionID: class extends MarkerTransformStep {
+                constructor(private readonly timestamp: bigint) {
+                    super();
+                }
+
+                override execute(
+                    controller: TransformStreamDefaultController<Marker>,
+                    state: TransformerState
+                ): MarkerTransformStep | null {
+                    const sectionId = state.tryNextU64();
+                    if (sectionId === null) {
+                        // cannot read
+                        return null;
+                    }
+
+                    controller.enqueue({
+                        type: "Section.End",
+                        timestamp: this.timestamp,
+                        sectionId,
+                    });
+                    return MarkerTransformStep.MarkerTag;
+                }
+            },
+        },
+    } as const;
+
+    static readonly Terminated = new (class extends MarkerTransformStep {
+        override execute(
+            controller: TransformStreamDefaultController<Marker>,
+            state: TransformerState
+        ): MarkerTransformStep | null {
+            controller.terminate();
+            return null;
+        }
+    })();
+}
+
+class TransformerState {
+    #leftChunk: Uint8Array;
+    #currentChunk: Uint8Array;
+    #readptr: number;
+    readonly #isLittleEndian: boolean;
+    readonly #targetPointerSize: number;
+
+    constructor(isLittleEndian: boolean, targetPointerSize: number) {
+        this.#leftChunk = EMPTY_UINT8_ARRAY;
+        this.#currentChunk = EMPTY_UINT8_ARRAY;
+        this.#readptr = 0;
+        this.#isLittleEndian = isLittleEndian;
+        this.#targetPointerSize = targetPointerSize;
+    }
+
+    clear() {
+        this.#leftChunk = EMPTY_UINT8_ARRAY;
+    }
+
+    beginTransformChunk(chunk: Uint8Array) {
+        this.#currentChunk = chunk;
+        this.#readptr = 0;
+    }
+
+    canRead(byteLength: number): boolean {
+        return this.#readptr + byteLength <= this.#currentChunk.length + this.#leftChunk.length;
+    }
+
+    setLeftChunk(): void {
+        this.#leftChunk = this.#currentChunk.slice(this.#readptr);
+    }
+
+    tryNextMarkerTag(): MarkerTag | null {
+        // should not read from leftChunk
+        assertEq(this.#leftChunk.length, 0);
+
+        if (!this.canRead(1)) {
+            // cannot read
+            return null;
+        }
+
+        const r = getMarkerTag(this.#currentChunk[this.#readptr]);
+        this.#readptr += 1;
+        return r;
+    }
+
+    tryNextU64(): bigint | null {
+        if (!this.canRead(8)) {
+            // cannot read
+            return null;
+        }
+
+        if (this.#leftChunk.length > 0) {
+            // join
+            assertEq(this.#readptr, 0);
+
+            const buf = new Uint8Array(8);
+            buf.set(this.#leftChunk, 0);
+            buf.set(this.#currentChunk.slice(0, 8 - this.#leftChunk.length), this.#leftChunk.length);
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            this.#readptr = 8 - this.#leftChunk.length;
+            this.#leftChunk = EMPTY_UINT8_ARRAY;
+
+            return dv.getBigUint64(0, this.#isLittleEndian);
+        } else {
+            // straight read
+            const dv = new DataView(this.#currentChunk.buffer, this.#currentChunk.byteOffset + this.#readptr, 8);
+            this.#readptr += 8;
+
+            return dv.getBigUint64(0, this.#isLittleEndian);
+        }
+    }
+
+    tryNextUsize(): bigint | null {
+        if (!this.canRead(this.#targetPointerSize)) {
+            // cannot read
+            return null;
+        }
+
+        if (this.#leftChunk.length > 0) {
+            // join
+            assertEq(this.#readptr, 0);
+            const leftChunkSize = this.#leftChunk.length;
+
+            const buf = new Uint8Array(this.#targetPointerSize);
+            buf.set(this.#leftChunk, 0);
+            buf.set(this.#currentChunk.slice(0, this.#targetPointerSize - leftChunkSize), leftChunkSize);
+            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+            this.#readptr = this.#targetPointerSize - leftChunkSize;
+            this.#leftChunk = EMPTY_UINT8_ARRAY;
+
+            return readUsize(dv, 0, this.#targetPointerSize, this.#isLittleEndian);
+        } else {
+            // straight read
+            const dv = new DataView(
+                this.#currentChunk.buffer,
+                this.#currentChunk.byteOffset + this.#readptr,
+                this.#targetPointerSize
+            );
+            this.#readptr += this.#targetPointerSize;
+
+            return readUsize(dv, 0, this.#targetPointerSize, this.#isLittleEndian);
+        }
+    }
+}
 
 function newMarkerTransformStream(
     targetPointerSize: number,
     isLittleEndian: boolean
 ): TransformStream<Uint8Array, Marker> {
-    const state: TransformerState = {
-        leftChunk: EMPTY_UINT8_ARRAY,
-        step: { step: "MarkerTag" },
-        readptr: 0,
-    };
+    const state = new TransformerState(isLittleEndian, targetPointerSize);
+    let step: MarkerTransformStep = MarkerTransformStep.MarkerTag;
 
     return new TransformStream({
         start() {
-            state.leftChunk = EMPTY_UINT8_ARRAY;
-            state.step = { step: "MarkerTag" };
+            state.clear();
+            step = MarkerTransformStep.MarkerTag;
         },
         async transform(chunk, controller) {
-            state.readptr = 0;
+            state.beginTransformChunk(chunk);
             while (true) {
-                switch (state.step.step) {
-                    case "MarkerTag":
-                        if (state.readptr + 1 > chunk.length) {
-                            // cannot read
-                            return;
-                        } else {
-                            switch (getMarkerTag(chunk[state.readptr])) {
-                                case "Terminal":
-                                    state.step = { step: "Terminated" };
-                                    break;
-                                case "Event":
-                                    state.step = { step: "Event.Timestamp" };
-                                    break;
-                                case "Section.Begin":
-                                    state.step = { step: "Section.Begin.Timestamp" };
-                                    break;
-                                case "Section.End":
-                                    state.step = { step: "Section.End.Timestamp" };
-                                    break;
-                            }
-
-                            state.readptr += 1;
-                        }
-                        break;
-                    case "Event.Timestamp":
-                        if (state.readptr + 8 > chunk.length) {
-                            // cannot read
-                            state.leftChunk = chunk.slice(state.readptr);
-                            return;
-                        } else {
-                            let timestamp: bigint;
-                            if (state.leftChunk.length > 0) {
-                                // join
-                                const buf = new Uint8Array(8);
-                                buf.set(state.leftChunk, 0);
-                                buf.set(chunk.slice(0, 8 - state.leftChunk.length), state.leftChunk.length);
-                                timestamp = new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getBigInt64(
-                                    0,
-                                    isLittleEndian
-                                );
-                                state.readptr = 8 - state.leftChunk.length;
-                                state.leftChunk = new Uint8Array();
-                            } else {
-                                // straight read
-                                timestamp = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength).getBigInt64(
-                                    state.readptr,
-                                    isLittleEndian
-                                );
-                                state.readptr += 8;
-                            }
-
-                            state.step = { step: "Event.MarkerAddr", timestamp };
-                        }
-                        break;
-                    case "Event.MarkerAddr":
-                        if (state.readptr + targetPointerSize > chunk.length) {
-                            // cannot read
-                            state.leftChunk = chunk.slice(state.readptr);
-                            return;
-                        } else {
-                            let markerAddr: bigint;
-                            if (state.leftChunk.length > 0) {
-                                // join
-                                const buf = new Uint8Array(targetPointerSize);
-                                buf.set(state.leftChunk, 0);
-                                buf.set(
-                                    chunk.slice(0, targetPointerSize - state.leftChunk.length),
-                                    state.leftChunk.length
-                                );
-                                markerAddr = readUsize(
-                                    new DataView(buf.buffer, buf.byteOffset, buf.byteLength),
-                                    0,
-                                    targetPointerSize,
-                                    isLittleEndian
-                                );
-                                state.readptr = targetPointerSize - state.leftChunk.length;
-                                state.leftChunk = new Uint8Array();
-                            } else {
-                                // straight read
-                                markerAddr = readUsize(
-                                    new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength),
-                                    state.readptr,
-                                    targetPointerSize,
-                                    isLittleEndian
-                                );
-                                state.readptr += targetPointerSize;
-                            }
-                            controller.enqueue({
-                                type: "Event",
-                                timestamp: state.step.timestamp,
-                                markerAddr,
-                            });
-                            state.step = { step: "MarkerTag" };
-                        }
-                        break;
-                    case "Section.Begin.Timestamp":
-                        if (state.readptr + 8 > chunk.length) {
-                            // cannot read
-                            state.leftChunk = chunk.slice(state.readptr);
-                            return;
-                        } else {
-                            let timestamp: bigint;
-                            if (state.leftChunk.length > 0) {
-                                // join
-                                const buf = new Uint8Array(8);
-                                buf.set(state.leftChunk, 0);
-                                buf.set(chunk.slice(0, 8 - state.leftChunk.length), state.leftChunk.length);
-                                timestamp = new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getBigInt64(
-                                    0,
-                                    isLittleEndian
-                                );
-                                state.readptr = 8 - state.leftChunk.length;
-                                state.leftChunk = new Uint8Array();
-                            } else {
-                                // straight read
-                                timestamp = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength).getBigInt64(
-                                    state.readptr,
-                                    isLittleEndian
-                                );
-                                state.readptr += 8;
-                            }
-
-                            state.step = { step: "Section.Begin.MarkerAddr", timestamp };
-                        }
-                        break;
-                    case "Section.Begin.MarkerAddr":
-                        if (state.readptr + targetPointerSize > chunk.length) {
-                            // cannot read
-                            state.leftChunk = chunk.slice(state.readptr);
-                            return;
-                        } else {
-                            let markerAddr: bigint;
-                            if (state.leftChunk.length > 0) {
-                                // join
-                                const buf = new Uint8Array(targetPointerSize);
-                                buf.set(state.leftChunk, 0);
-                                buf.set(
-                                    chunk.slice(0, targetPointerSize - state.leftChunk.length),
-                                    state.leftChunk.length
-                                );
-                                markerAddr = readUsize(
-                                    new DataView(buf.buffer, buf.byteOffset, buf.byteLength),
-                                    0,
-                                    targetPointerSize,
-                                    isLittleEndian
-                                );
-                                state.readptr = targetPointerSize - state.leftChunk.length;
-                                state.leftChunk = new Uint8Array();
-                            } else {
-                                // straight read
-                                markerAddr = readUsize(
-                                    new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength),
-                                    state.readptr,
-                                    targetPointerSize,
-                                    isLittleEndian
-                                );
-                                state.readptr += targetPointerSize;
-                            }
-                            state.step = {
-                                step: "Section.Begin.SectionID",
-                                timestamp: state.step.timestamp,
-                                markerAddr,
-                            };
-                        }
-                        break;
-                    case "Section.Begin.SectionID":
-                        if (state.readptr + 8 > chunk.length) {
-                            // cannot read
-                            state.leftChunk = chunk.slice(state.readptr);
-                            return;
-                        } else {
-                            let sectionId: bigint;
-                            if (state.leftChunk.length > 0) {
-                                // join
-                                const buf = new Uint8Array(8);
-                                buf.set(state.leftChunk, 0);
-                                buf.set(chunk.slice(0, 8 - state.leftChunk.length), state.leftChunk.length);
-                                sectionId = new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getBigUint64(
-                                    0,
-                                    isLittleEndian
-                                );
-                                state.readptr = 8 - state.leftChunk.length;
-                                state.leftChunk = new Uint8Array();
-                            } else {
-                                // straight read
-                                sectionId = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength).getBigUint64(
-                                    state.readptr,
-                                    isLittleEndian
-                                );
-                                state.readptr += 8;
-                            }
-
-                            controller.enqueue({
-                                type: "Section.Begin",
-                                timestamp: state.step.timestamp,
-                                markerAddr: state.step.markerAddr,
-                                sectionId,
-                            });
-                            state.step = { step: "MarkerTag" };
-                        }
-                        break;
-                    case "Section.End.Timestamp":
-                        if (state.readptr + 8 > chunk.length) {
-                            // cannot read
-                            state.leftChunk = chunk.slice(state.readptr);
-                            return;
-                        } else {
-                            let timestamp: bigint;
-                            if (state.leftChunk.length > 0) {
-                                // join
-                                const buf = new Uint8Array(8);
-                                buf.set(state.leftChunk, 0);
-                                buf.set(chunk.slice(0, 8 - state.leftChunk.length), state.leftChunk.length);
-                                timestamp = new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getBigInt64(
-                                    0,
-                                    isLittleEndian
-                                );
-                                state.readptr = 8 - state.leftChunk.length;
-                                state.leftChunk = new Uint8Array();
-                            } else {
-                                // straight read
-                                timestamp = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength).getBigInt64(
-                                    state.readptr,
-                                    isLittleEndian
-                                );
-                                state.readptr += 8;
-                            }
-
-                            state.step = { step: "Section.End.SectionID", timestamp };
-                        }
-                        break;
-                    case "Section.End.SectionID":
-                        if (state.readptr + 8 > chunk.length) {
-                            // cannot read
-                            state.leftChunk = chunk.slice(state.readptr);
-                            return;
-                        } else {
-                            let sectionId: bigint;
-                            if (state.leftChunk.length > 0) {
-                                // join
-                                const buf = new Uint8Array(8);
-                                buf.set(state.leftChunk, 0);
-                                buf.set(chunk.slice(0, 8 - state.leftChunk.length), state.leftChunk.length);
-                                sectionId = new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getBigUint64(
-                                    0,
-                                    isLittleEndian
-                                );
-                                state.readptr = 8 - state.leftChunk.length;
-                                state.leftChunk = new Uint8Array();
-                            } else {
-                                // straight read
-                                sectionId = new DataView(chunk.buffer, chunk.byteOffset, chunk.byteLength).getBigUint64(
-                                    state.readptr,
-                                    isLittleEndian
-                                );
-                                state.readptr += 8;
-                            }
-
-                            controller.enqueue({
-                                type: "Section.End",
-                                timestamp: state.step.timestamp,
-                                sectionId,
-                            });
-                            state.step = { step: "MarkerTag" };
-                        }
-                        break;
-                    case "Terminated":
-                        controller.terminate();
-                        return;
+                const nextStep = step.execute(controller, state);
+                if (nextStep === null) {
+                    break;
                 }
+
+                step = nextStep;
             }
+
+            // save leftChunk for boundary-crossing read
+            state.setLeftChunk();
         },
         flush() {},
     });
