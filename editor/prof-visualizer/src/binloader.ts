@@ -13,33 +13,111 @@ export type BinMetadata = {
 };
 
 export async function loadBin(blob: Blob): Promise<[BinMetadata, ReadableStream<Marker>]> {
-    const bom = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
-    let isLittleEndian: boolean;
+    const isLittleEndian = await readSignature(sliceBlobByRange(blob, FIXED_CONTENT_LAYOUT.signature));
+    const [header, fixedFooter] = await Promise.all([
+        readHeader(sliceBlobByRange(blob, FIXED_CONTENT_LAYOUT.header), isLittleEndian),
+        readFixedFooter(sliceBlobByRange(blob, FIXED_CONTENT_LAYOUT.footer), isLittleEndian),
+    ]);
+    const contentLayout = buildContentLayout(fixedFooter);
+
+    const markerAddrToName = await readMarkerAddrToNameTable(
+        sliceBlobByRange(blob, contentLayout.markerAddrToNameTable),
+        isLittleEndian,
+        header.targetPointerSize,
+    );
+    const markerStream = sliceBlobByRange(blob, contentLayout.markers)
+        .stream()
+        .pipeThrough<Marker>(newMarkerTransformStream(header.targetPointerSize, isLittleEndian));
+
+    return [
+        {
+            targetPointerSize: header.targetPointerSize,
+            timestampFrequency: header.timestampFrequency,
+            markerAddrToName,
+        },
+        markerStream,
+    ];
+}
+
+type SliceRange = {
+    readonly start: number;
+    readonly end?: number;
+};
+function sliceBlobByRange(blob: Blob, range: SliceRange): Blob {
+    return blob.slice(range.start, range.end);
+}
+
+const SIGNATURE_BYTE_LENGTH: number = 2;
+async function readSignature(blob: Blob): Promise<boolean> {
+    const bom = new Uint8Array(await blob.arrayBuffer());
     if (bom[0] == 0x01 && bom[1] == 0x02) {
-        isLittleEndian = false;
-    } else if (bom[0] == 0x02 && bom[1] == 0x01) {
-        isLittleEndian = true;
-    } else {
-        throw new InvalidBinError("invalid heading bom");
+        return false;
+    }
+    if (bom[0] == 0x02 && bom[1] == 0x01) {
+        return true;
     }
 
-    const headerBytes = new DataView(await blob.slice(2, 11).arrayBuffer());
-    const targetPointerSize = headerBytes.getUint8(0);
-    const timestampFrequency = headerBytes.getBigInt64(1, isLittleEndian);
-    console.log(targetPointerSize, timestampFrequency);
+    throw new InvalidBinError("invalid heading bom");
+}
 
-    const fixedFooterBytes = new DataView(await blob.slice(-8).arrayBuffer());
-    const markerAddrToNameStart = fixedFooterBytes.getBigUint64(0, isLittleEndian);
+const HEADER_BYTE_LENGTH: number = 9;
+type Header = {
+    readonly targetPointerSize: number;
+    readonly timestampFrequency: bigint;
+};
+async function readHeader(blob: Blob, isLittleEndian: boolean): Promise<Header> {
+    const dv = new DataView(await blob.arrayBuffer());
 
-    const markerAddrToNameBlob = blob.slice(Number(markerAddrToNameStart), -8);
+    return {
+        targetPointerSize: dv.getUint8(0),
+        timestampFrequency: dv.getBigInt64(1, isLittleEndian),
+    };
+}
+
+const FIXED_FOOTER_BYTE_LENGTH: number = 8;
+type FixedFooter = {
+    readonly markerAddrToNameStart: bigint;
+};
+async function readFixedFooter(blob: Blob, isLittleEndian: boolean): Promise<FixedFooter> {
+    const dv = new DataView(await blob.arrayBuffer());
+
+    return { markerAddrToNameStart: dv.getBigUint64(0, isLittleEndian) };
+}
+
+type FixedContentLayout = {
+    readonly signature: SliceRange;
+    readonly header: SliceRange;
+    readonly footer: SliceRange;
+};
+const FIXED_CONTENT_LAYOUT: FixedContentLayout = {
+    signature: { start: 0, end: SIGNATURE_BYTE_LENGTH },
+    header: { start: SIGNATURE_BYTE_LENGTH, end: SIGNATURE_BYTE_LENGTH + HEADER_BYTE_LENGTH },
+    footer: { start: -FIXED_FOOTER_BYTE_LENGTH },
+};
+
+type ContentLayout = {
+    readonly markers: SliceRange;
+    readonly markerAddrToNameTable: SliceRange;
+};
+function buildContentLayout(footer: FixedFooter): ContentLayout {
+    return {
+        markers: { start: CONTENT_START_BYTE_OFFSET, end: Number(footer.markerAddrToNameStart) },
+        markerAddrToNameTable: { start: Number(footer.markerAddrToNameStart), end: -FIXED_FOOTER_BYTE_LENGTH },
+    };
+}
+
+async function readMarkerAddrToNameTable(
+    blob: Blob,
+    isLittleEndian: boolean,
+    targetPointerSize: number,
+): Promise<Map<bigint, string>> {
     const entryCount = readUsize(
-        new DataView(await markerAddrToNameBlob.slice(0, targetPointerSize).arrayBuffer()),
+        new DataView(await blob.slice(0, targetPointerSize).arrayBuffer()),
         0,
         targetPointerSize,
         isLittleEndian,
     );
-    const markerAddrToName = new Map();
-    for await (const [addr, name] of markerAddrToNameBlob
+    const stream = blob
         .slice(targetPointerSize)
         .stream()
         .pipeThrough(
@@ -48,25 +126,14 @@ export async function loadBin(blob: Blob): Promise<[BinMetadata, ReadableStream<
                 isLittleEndian,
                 Number(entryCount),
             ),
-        )) {
-        markerAddrToName.set(addr, name);
+        );
+
+    const sink = new Map();
+    for await (const [addr, name] of stream) {
+        sink.set(addr, name);
     }
 
-    console.log(markerAddrToName);
-
-    const markerStream = blob
-        .slice(11, Number(markerAddrToNameStart))
-        .stream()
-        .pipeThrough<Marker>(newMarkerTransformStream(targetPointerSize, isLittleEndian));
-
-    return [
-        {
-            targetPointerSize,
-            timestampFrequency,
-            markerAddrToName,
-        },
-        markerStream,
-    ];
+    return sink;
 }
 
 abstract class MarkerAddrToNameTableTransformStep {
@@ -147,6 +214,8 @@ abstract class MarkerAddrToNameTableTransformStep {
     };
 }
 
+const CONTENT_START_BYTE_OFFSET: number = SIGNATURE_BYTE_LENGTH + HEADER_BYTE_LENGTH;
+
 abstract class MarkerTransformStep {
     /** returns null causing break loop(no state transition could not be made) */
     abstract execute(
@@ -182,12 +251,7 @@ abstract class MarkerTransformStep {
                 state: TransformerState,
             ): MarkerTransformStep | null {
                 const timestamp = state.tryNextU64();
-                if (timestamp === null) {
-                    // cannot read
-                    return null;
-                }
-
-                return new MarkerTransformStep.Event.MarkerAddr(timestamp);
+                return timestamp === null ? null : new MarkerTransformStep.Event.MarkerAddr(timestamp);
             }
         })(),
         MarkerAddr: class extends MarkerTransformStep {
@@ -223,12 +287,7 @@ abstract class MarkerTransformStep {
                     state: TransformerState,
                 ): MarkerTransformStep | null {
                     const timestamp = state.tryNextU64();
-                    if (timestamp === null) {
-                        // cannot read
-                        return null;
-                    }
-
-                    return new MarkerTransformStep.Section.Begin.MarkerAddr(timestamp);
+                    return timestamp === null ? null : new MarkerTransformStep.Section.Begin.MarkerAddr(timestamp);
                 }
             })(),
             MarkerAddr: class extends MarkerTransformStep {
@@ -241,12 +300,9 @@ abstract class MarkerTransformStep {
                     state: TransformerState,
                 ): MarkerTransformStep | null {
                     const markerAddr = state.tryNextUsize();
-                    if (markerAddr === null) {
-                        // cannot read
-                        return null;
-                    }
-
-                    return new MarkerTransformStep.Section.Begin.SectionID(this.timestamp, markerAddr);
+                    return markerAddr === null
+                        ? null
+                        : new MarkerTransformStep.Section.Begin.SectionID(this.timestamp, markerAddr);
                 }
             },
             SectionID: class extends MarkerTransformStep {
@@ -262,17 +318,14 @@ abstract class MarkerTransformStep {
                     state: TransformerState,
                 ): MarkerTransformStep | null {
                     const sectionId = state.tryNextU64();
-                    if (sectionId === null) {
-                        // cannot read
-                        return null;
-                    }
-
-                    return new MarkerTransformStep.Section.Begin.AuxDataTag(
-                        this.timestamp,
-                        this.markerAddr,
-                        sectionId,
-                        [],
-                    );
+                    return sectionId === null
+                        ? null
+                        : new MarkerTransformStep.Section.Begin.AuxDataTag(
+                              this.timestamp,
+                              this.markerAddr,
+                              sectionId,
+                              [],
+                          );
                 }
             },
             AuxDataTag: class extends MarkerTransformStep {
@@ -328,17 +381,14 @@ abstract class MarkerTransformStep {
                     state: TransformerState,
                 ): MarkerTransformStep | null {
                     const text = state.readText();
-                    if (text === null) {
-                        // still reading
-                        return null;
-                    }
-
-                    return new MarkerTransformStep.Section.Begin.AuxDataTag(
-                        this.timestamp,
-                        this.markerAddr,
-                        this.sectionId,
-                        [...this.collectedAuxData, text],
-                    );
+                    return text === null
+                        ? null
+                        : new MarkerTransformStep.Section.Begin.AuxDataTag(
+                              this.timestamp,
+                              this.markerAddr,
+                              this.sectionId,
+                              [...this.collectedAuxData, text],
+                          );
                 }
             },
         },
@@ -349,12 +399,7 @@ abstract class MarkerTransformStep {
                     state: TransformerState,
                 ): MarkerTransformStep | null {
                     const timestamp = state.tryNextU64();
-                    if (timestamp === null) {
-                        // cannot read
-                        return null;
-                    }
-
-                    return new MarkerTransformStep.Section.End.SectionID(timestamp);
+                    return timestamp === null ? null : new MarkerTransformStep.Section.End.SectionID(timestamp);
                 }
             })(),
             SectionID: class extends MarkerTransformStep {
