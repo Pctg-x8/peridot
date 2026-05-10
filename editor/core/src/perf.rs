@@ -4,30 +4,50 @@ use std::{
     io::{IoSlice, Seek, Write},
 };
 
-#[cfg(windows)]
 #[inline(always)]
+#[cfg(feature = "enable-profiling")]
 pub fn timestamp() -> i64 {
+    #[cfg(windows)]
     let mut x = core::mem::MaybeUninit::uninit();
+    #[cfg(windows)]
     unsafe {
         // never fails on winxp or later
         let _ = windows::Win32::System::Performance::QueryPerformanceCounter(x.as_mut_ptr());
-    }
-    unsafe { x.assume_init() }
-}
-
-pub static TIMESTAMP_FREQUENCY: std::sync::LazyLock<i64> = std::sync::LazyLock::new(|| {
-    #[cfg(windows)]
-    let mut x = core::mem::MaybeUninit::uninit();
-    #[cfg(windows)]
-    unsafe {
-        // never fails on winxp or later
-        let _ = windows::Win32::System::Performance::QueryPerformanceFrequency(x.as_mut_ptr());
     }
     #[cfg(windows)]
     unsafe {
         x.assume_init()
     }
+
+    #[cfg(unix)]
+    let mut x = core::mem::MaybeUninit::uninit();
+    #[cfg(unix)]
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC_RAW, x.as_mut_ptr()) } < 0 {
+        tracing::error!(reason = %std::io::Error::last_os_error(), "clock_gettime failed");
+        return 0;
+    }
+    #[cfg(unix)]
+    unsafe {
+        let x = x.assume_init();
+        x.tv_nsec + x.tv_sec * 1_000_000_000
+    }
+}
+
+#[cfg(feature = "enable-profiling")]
+#[cfg(windows)]
+pub static TIMESTAMP_FREQUENCY: std::sync::LazyLock<i64> = std::sync::LazyLock::new(|| {
+    let mut x = core::mem::MaybeUninit::uninit();
+    unsafe {
+        // never fails on winxp or later
+        let _ = windows::Win32::System::Performance::QueryPerformanceFrequency(x.as_mut_ptr());
+    }
+    unsafe { x.assume_init() }
 });
+
+// always const value(clock_gettime returns in nanosecs)
+#[cfg(feature = "enable-profiling")]
+#[cfg(unix)]
+pub const TIMESTAMP_FREQUENCY: i64 = 1_000_000_000;
 
 /// Simple spin-lock based mutex
 #[cfg(feature = "enable-profiling")]
@@ -321,8 +341,8 @@ impl AuxDataTypeTag {
 }
 
 #[cfg(feature = "enable-profiling")]
-static mut PROFILER_INSTANCE: [u8; core::mem::size_of::<Profiler>()] =
-    [0u8; core::mem::size_of::<Profiler>()];
+static mut PROFILER_INSTANCE: [u64; core::mem::size_of::<Profiler>() / 8] =
+    [0u64; core::mem::size_of::<Profiler>() / 8];
 #[cfg(feature = "enable-profiling")]
 pub fn profiler() -> &'static Profiler {
     unsafe { &*(core::ptr::addr_of!(PROFILER_INSTANCE) as *const Profiler) }

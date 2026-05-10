@@ -92,6 +92,7 @@ struct Normalized2DStaticMeshTextureEntry {
 }
 
 crate::perf_event!(SYNCPOINT = "RenderSyncPoint");
+crate::perf_section!(INITIALIZATION = "RenderThread.Initialize");
 crate::perf_section!(RENDERLOOP = "RenderLoop");
 crate::perf_section!(PROCESS_MESSAGE = "RenderLoop.ProcessMessage");
 crate::perf_section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
@@ -119,8 +120,9 @@ pub struct RenderThread<'main> {
 impl<'main> RenderThread<'main> {
     pub fn run(mut self) {
         tracing::info!("Starting RenderThread...");
-        let ts_freq = *crate::perf::TIMESTAMP_FREQUENCY;
-        let init_start_ts = crate::perf::timestamp();
+
+        crate::perf_begin!(perf = INITIALIZATION);
+
         let mut render_queue = self
             .vk_device
             .queue(self.vk_device.present_queue_family_index(), 0);
@@ -184,12 +186,7 @@ impl<'main> RenderThread<'main> {
                 .expect("shared_update_commands.end");
         }
 
-        let init_end_ts = crate::perf::timestamp();
-        tracing::info!(
-            elapsed = init_end_ts - init_start_ts,
-            ts_freq,
-            "RenderThread initialized"
-        );
+        crate::perf_end!(perf);
 
         let mut any_swapchain_invalidated = false;
         'lp: while !self

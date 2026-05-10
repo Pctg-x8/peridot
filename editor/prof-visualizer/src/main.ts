@@ -26,7 +26,6 @@ class HeaderPresenter {
             const sectionMarkers = [];
             const events = [];
             for await (const m of markerStream) {
-                console.log(m);
                 if (m.type === "Section.Begin" || m.type === "Section.End") {
                     sectionMarkers.push(m);
                 }
@@ -34,7 +33,7 @@ class HeaderPresenter {
                     events.push(m);
                 }
             }
-            console.log("finish", binMetadata);
+            console.log("finish", binMetadata, events, sectionMarkers);
 
             const sectionRanges = buildSectionRanges(sectionMarkers, binMetadata.markerAddrToName);
             console.log(sectionRanges);
@@ -180,8 +179,8 @@ function buildSectionRanges(
     }
 
     return sectionById
-        .entries()
-        .map(([k, v]) => {
+        .values()
+        .map(v => {
             let markerName: string;
             if (hasValue(v.begin)) {
                 markerName = markerAddrToName.get(v.begin.markerAddr) ?? "<Unknown Section>";

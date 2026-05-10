@@ -1,4 +1,4 @@
-import { assert, assertEq } from "./utils";
+import { assertEq } from "./utils";
 
 export class InvalidBinError extends Error {
     constructor(message: string) {
@@ -30,20 +30,26 @@ export async function loadBin(blob: Blob): Promise<[BinMetadata, ReadableStream<
 
     const fixedFooterBytes = new DataView(await blob.slice(-8).arrayBuffer());
     const markerAddrToNameStart = fixedFooterBytes.getBigUint64(0, isLittleEndian);
-    const markerAddrToNameBytes = new DataView(await blob.slice(Number(markerAddrToNameStart), -8).arrayBuffer());
+
+    const markerAddrToNameBlob = blob.slice(Number(markerAddrToNameStart), -8);
+    const entryCount = readUsize(
+        new DataView(await markerAddrToNameBlob.slice(0, targetPointerSize).arrayBuffer()),
+        0,
+        targetPointerSize,
+        isLittleEndian,
+    );
     const markerAddrToName = new Map();
-    const entryCount = readUsize(markerAddrToNameBytes, 0, targetPointerSize, isLittleEndian);
-    let readptr = targetPointerSize;
-    for (let i = 0; i < entryCount; i++) {
-        const addr = readUsize(markerAddrToNameBytes, readptr, targetPointerSize, isLittleEndian);
-        readptr += targetPointerSize;
-        let namelen = 0;
-        while (markerAddrToNameBytes.getUint8(readptr + namelen) !== 0) {
-            namelen++;
-        }
-        const name = new TextDecoder().decode(markerAddrToNameBytes.buffer.slice(readptr, readptr + namelen));
+    for await (const [addr, name] of markerAddrToNameBlob
+        .slice(targetPointerSize)
+        .stream()
+        .pipeThrough(
+            MarkerAddrToNameTableTransformStep.createTransformStream(
+                targetPointerSize,
+                isLittleEndian,
+                Number(entryCount),
+            ),
+        )) {
         markerAddrToName.set(addr, name);
-        readptr += namelen + 1;
     }
 
     console.log(markerAddrToName);
@@ -63,7 +69,83 @@ export async function loadBin(blob: Blob): Promise<[BinMetadata, ReadableStream<
     ];
 }
 
-const EMPTY_UINT8_ARRAY = new Uint8Array();
+abstract class MarkerAddrToNameTableTransformStep {
+    static createTransformStream(
+        targetPointerSize: number,
+        isLittleEndian: boolean,
+        count: number,
+    ): TransformStream<Uint8Array, [bigint, string]> {
+        const reader = new StreamingDataReader(isLittleEndian, targetPointerSize);
+        let step: MarkerAddrToNameTableTransformStep = new MarkerAddrToNameTableTransformStep.Addr(count);
+
+        return new TransformStream({
+            start() {
+                reader.clear();
+                step = new MarkerAddrToNameTableTransformStep.Addr(count);
+            },
+            async transform(chunk, controller) {
+                reader.pushChunk(chunk);
+                while (true) {
+                    const nextStep = step.execute(controller, reader);
+                    if (nextStep === null) {
+                        break;
+                    }
+
+                    step = nextStep;
+                }
+            },
+            flush() {},
+        });
+    }
+
+    /** returns null causing break loop(no state transition could not be made) */
+    abstract execute(
+        controller: TransformStreamDefaultController<[bigint, string]>,
+        reader: StreamingDataReader,
+    ): MarkerAddrToNameTableTransformStep | null;
+
+    static readonly Addr = class extends MarkerAddrToNameTableTransformStep {
+        constructor(private readonly leftCount: number) {
+            super();
+        }
+
+        override execute(
+            controller: TransformStreamDefaultController<[bigint, string]>,
+            reader: StreamingDataReader,
+        ): MarkerAddrToNameTableTransformStep | null {
+            if (this.leftCount <= 0) {
+                // read all
+                controller.terminate();
+                return null;
+            }
+
+            const addr = reader.tryNextUsize();
+            return addr === null ? null : new MarkerAddrToNameTableTransformStep.Name(this.leftCount, addr);
+        }
+    };
+
+    static readonly Name = class extends MarkerAddrToNameTableTransformStep {
+        constructor(
+            private readonly leftCount: number,
+            private readonly addr: bigint,
+        ) {
+            super();
+        }
+
+        override execute(
+            controller: TransformStreamDefaultController<[bigint, string]>,
+            reader: StreamingDataReader,
+        ): MarkerAddrToNameTableTransformStep | null {
+            const name = reader.readText();
+            if (name === null) {
+                return null;
+            }
+
+            controller.enqueue([this.addr, name]);
+            return new MarkerAddrToNameTableTransformStep.Addr(this.leftCount - 1);
+        }
+    };
+}
 
 abstract class MarkerTransformStep {
     /** returns null causing break loop(no state transition could not be made) */
@@ -312,60 +394,83 @@ abstract class MarkerTransformStep {
     })();
 }
 
-class TransformerState {
-    #leftChunk: Uint8Array;
-    #currentChunk: Uint8Array;
-    #readptr: number;
+const EMPTY_UINT8_ARRAY = new Uint8Array();
+
+function uint8ArrayToDataView<TArrayBuffer extends ArrayBufferLike>(
+    buf: Uint8Array<TArrayBuffer>,
+): DataView<TArrayBuffer> {
+    return new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+}
+
+class StreamingDataReader {
+    readonly #chunk: { left: Uint8Array; current: Uint8Array } = {
+        left: EMPTY_UINT8_ARRAY,
+        current: EMPTY_UINT8_ARRAY,
+    };
+    #readptr = 0;
     readonly #isLittleEndian: boolean;
-    readonly #targetPointerSize: number;
+    readonly #nativeIntSize: number;
     readonly #textReader = new TextDecoder("utf-8");
 
     constructor(isLittleEndian: boolean, targetPointerSize: number) {
-        this.#leftChunk = EMPTY_UINT8_ARRAY;
-        this.#currentChunk = EMPTY_UINT8_ARRAY;
-        this.#readptr = 0;
         this.#isLittleEndian = isLittleEndian;
-        this.#targetPointerSize = targetPointerSize;
+        this.#nativeIntSize = targetPointerSize;
     }
 
     clear() {
-        this.#leftChunk = EMPTY_UINT8_ARRAY;
+        this.#chunk.left = EMPTY_UINT8_ARRAY;
     }
 
-    beginTransformChunk(chunk: Uint8Array) {
-        this.#currentChunk = chunk;
+    pushChunk(chunk: Uint8Array) {
+        // save left(not read) data
+        this.#chunk.left = this.#chunk.current.slice(this.#readptr);
+
+        this.#chunk.current = chunk;
         this.#readptr = 0;
     }
 
+    get availableSize(): number {
+        return this.#chunk.current.length + this.#chunk.left.length;
+    }
+
     canRead(byteLength: number): boolean {
-        return this.#readptr + byteLength <= this.#currentChunk.length + this.#leftChunk.length;
+        return this.#readptr + byteLength <= this.availableSize;
     }
 
-    setLeftChunk(): void {
-        this.#leftChunk = this.#currentChunk.slice(this.#readptr);
+    #sliceContiguousBuffer(length: number): Uint8Array {
+        if (this.#chunk.left.length > 0) {
+            // needs join
+            assertEq(this.#readptr, 0);
+
+            const buf = new Uint8Array(length);
+            buf.set(this.#chunk.left, 0);
+            buf.set(this.#chunk.current.slice(0, length - this.#chunk.left.length), this.#chunk.left.length);
+            this.#readptr = length - this.#chunk.left.length;
+            this.#chunk.left = EMPTY_UINT8_ARRAY;
+            return buf;
+        }
+
+        const buf = this.#chunk.current.slice(this.#readptr, this.#readptr + length);
+        this.#readptr += length;
+        return buf;
     }
 
-    tryNextMarkerTag(): MarkerTag | null {
-        assertEq(this.#leftChunk.length, 0);
-
+    tryNextU8(): number | null {
         if (!this.canRead(1)) {
             // cannot read
             return null;
         }
 
-        const r = getMarkerTag(this.#currentChunk[this.#readptr]);
-        this.#readptr += 1;
-        return r;
-    }
-
-    tryNextAuxDataTypeTag(): AuxDataTypeTag | null {
-        const n = this.tryNextU16();
-        if (n === null) {
-            // cannot read
-            return null;
+        if (this.#chunk.left.length > 0) {
+            // pop first byte from left chunk
+            const v = this.#chunk.left[0];
+            this.#chunk.left = this.#chunk.left.slice(1);
+            return v;
         }
 
-        return getAuxDataTypeTag(n);
+        const v = this.#chunk.current[this.#readptr];
+        this.#readptr += 1;
+        return v;
     }
 
     tryNextU16(): number | null {
@@ -374,25 +479,7 @@ class TransformerState {
             return null;
         }
 
-        if (this.#leftChunk.length > 0) {
-            // join
-            assertEq(this.#readptr, 0);
-
-            const buf = new Uint8Array(2);
-            buf.set(this.#leftChunk, 0);
-            buf.set(this.#currentChunk.slice(0, 2 - this.#leftChunk.length), this.#leftChunk.length);
-            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-            this.#readptr = 2 - this.#leftChunk.length;
-            this.#leftChunk = EMPTY_UINT8_ARRAY;
-
-            return dv.getUint16(0, this.#isLittleEndian);
-        } else {
-            // straight read
-            const dv = new DataView(this.#currentChunk.buffer, this.#currentChunk.byteOffset + this.#readptr, 2);
-            this.#readptr += 2;
-
-            return dv.getUint16(0, this.#isLittleEndian);
-        }
+        return uint8ArrayToDataView(this.#sliceContiguousBuffer(2)).getUint16(0, this.#isLittleEndian);
     }
 
     tryNextU64(): bigint | null {
@@ -401,90 +488,102 @@ class TransformerState {
             return null;
         }
 
-        if (this.#leftChunk.length > 0) {
-            // join
-            assertEq(this.#readptr, 0);
-
-            const buf = new Uint8Array(8);
-            buf.set(this.#leftChunk, 0);
-            buf.set(this.#currentChunk.slice(0, 8 - this.#leftChunk.length), this.#leftChunk.length);
-            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-            this.#readptr = 8 - this.#leftChunk.length;
-            this.#leftChunk = EMPTY_UINT8_ARRAY;
-
-            return dv.getBigUint64(0, this.#isLittleEndian);
-        } else {
-            // straight read
-            const dv = new DataView(this.#currentChunk.buffer, this.#currentChunk.byteOffset + this.#readptr, 8);
-            this.#readptr += 8;
-
-            return dv.getBigUint64(0, this.#isLittleEndian);
-        }
+        return uint8ArrayToDataView(this.#sliceContiguousBuffer(8)).getBigUint64(0, this.#isLittleEndian);
     }
 
     tryNextUsize(): bigint | null {
-        if (!this.canRead(this.#targetPointerSize)) {
+        if (!this.canRead(this.#nativeIntSize)) {
             // cannot read
             return null;
         }
 
-        if (this.#leftChunk.length > 0) {
-            // join
-            assertEq(this.#readptr, 0);
-            const leftChunkSize = this.#leftChunk.length;
-
-            const buf = new Uint8Array(this.#targetPointerSize);
-            buf.set(this.#leftChunk, 0);
-            buf.set(this.#currentChunk.slice(0, this.#targetPointerSize - leftChunkSize), leftChunkSize);
-            const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-            this.#readptr = this.#targetPointerSize - leftChunkSize;
-            this.#leftChunk = EMPTY_UINT8_ARRAY;
-
-            return readUsize(dv, 0, this.#targetPointerSize, this.#isLittleEndian);
-        } else {
-            // straight read
-            const dv = new DataView(
-                this.#currentChunk.buffer,
-                this.#currentChunk.byteOffset + this.#readptr,
-                this.#targetPointerSize,
-            );
-            this.#readptr += this.#targetPointerSize;
-
-            return readUsize(dv, 0, this.#targetPointerSize, this.#isLittleEndian);
-        }
+        return readUsize(
+            uint8ArrayToDataView(this.#sliceContiguousBuffer(this.#nativeIntSize)),
+            0,
+            this.#nativeIntSize,
+            this.#isLittleEndian,
+        );
     }
 
     readText(): string | null {
-        if (this.#leftChunk.length > 0) {
+        if (this.#chunk.left.length > 0) {
             // read from leftChunk(must not be consumed any bytes from currentChunk)
             assertEq(this.#readptr, 0);
 
-            const zeroBytePoint = this.#leftChunk.indexOf(0);
+            const zeroBytePoint = this.#chunk.left.indexOf(0);
             if (zeroBytePoint >= 0) {
                 // terminal point found in this chunk
-                const text = this.#textReader.decode(this.#leftChunk.slice(0, zeroBytePoint));
-                this.#leftChunk = this.#leftChunk.slice(zeroBytePoint + 1);
+                const text = this.#textReader.decode(this.#chunk.left.slice(0, zeroBytePoint));
+                this.#chunk.left = this.#chunk.left.slice(zeroBytePoint + 1);
                 return text;
             }
 
-            this.#textReader.decode(this.#leftChunk, { stream: true });
-            this.#leftChunk = EMPTY_UINT8_ARRAY;
+            this.#textReader.decode(this.#chunk.left, { stream: true });
+            this.#chunk.left = EMPTY_UINT8_ARRAY;
         }
 
-        const zeroBytePoint = this.#currentChunk.slice(this.#readptr).indexOf(0);
+        const zeroBytePoint = this.#chunk.current.slice(this.#readptr).indexOf(0);
         if (zeroBytePoint >= 0) {
             // terminal point found in this chunk
             const text = this.#textReader.decode(
-                this.#currentChunk.slice(this.#readptr, zeroBytePoint + this.#readptr),
+                this.#chunk.current.slice(this.#readptr, zeroBytePoint + this.#readptr),
             );
             this.#readptr += zeroBytePoint + 1;
             return text;
         }
 
         // consume entire buf and return null(= reading not completed)
-        this.#textReader.decode(this.#currentChunk.slice(this.#readptr), { stream: true });
-        this.#readptr = this.#currentChunk.length;
+        this.#textReader.decode(this.#chunk.current.slice(this.#readptr), { stream: true });
+        this.#readptr = this.#chunk.current.length;
         return null;
+    }
+}
+
+class TransformerState {
+    readonly #reader: StreamingDataReader;
+
+    constructor(isLittleEndian: boolean, targetPointerSize: number) {
+        this.#reader = new StreamingDataReader(isLittleEndian, targetPointerSize);
+    }
+
+    clear() {
+        this.#reader.clear();
+    }
+
+    beginTransformChunk(chunk: Uint8Array) {
+        this.#reader.pushChunk(chunk);
+    }
+
+    tryNextMarkerTag(): MarkerTag | null {
+        const v = this.#reader.tryNextU8();
+        if (v === null) {
+            // cannot read
+            return null;
+        }
+
+        return getMarkerTag(v);
+    }
+
+    tryNextAuxDataTypeTag(): AuxDataTypeTag | null {
+        const v = this.#reader.tryNextU16();
+        if (v === null) {
+            // cannot read
+            return null;
+        }
+
+        return getAuxDataTypeTag(v);
+    }
+
+    tryNextU64(): bigint | null {
+        return this.#reader.tryNextU64();
+    }
+
+    tryNextUsize(): bigint | null {
+        return this.#reader.tryNextUsize();
+    }
+
+    readText(): string | null {
+        return this.#reader.readText();
     }
 }
 
@@ -510,9 +609,6 @@ function newMarkerTransformStream(
 
                 step = nextStep;
             }
-
-            // save leftChunk for boundary-crossing read
-            state.setLeftChunk();
         },
         flush() {},
     });

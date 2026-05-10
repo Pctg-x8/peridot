@@ -3,6 +3,9 @@ name = "peridot-marble-editor-linux"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+enable-profiling = ["peridot-marble-editor-core/enable-profiling"]
+
 [[bin]]
 name = "peridot-marble-editor"
 path = "src/main.rs"
