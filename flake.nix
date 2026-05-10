@@ -43,6 +43,8 @@
         pkgs.shader-slang
         # required for workflow generator(also included in githooks)
         pkgs.stack
+        # building browser-based tools
+        pkgs.bun
         # helper scripts
         build-tools
         # debugging
