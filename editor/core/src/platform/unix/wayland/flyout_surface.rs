@@ -1,14 +1,11 @@
 use core::ptr::NonNull;
-use std::{
-    rc::Rc,
-    sync::{Mutex, atomic::AtomicBool},
-};
+use std::sync::{Mutex, atomic::AtomicBool};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use peridot_tp_wayland as wl;
 
 use crate::{
-    Event, FlyoutSurfaceHandle, LogicFiberEventDispatcher, SyncEvent, SystemLink,
+    Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -21,9 +18,7 @@ use crate::{
             AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
         },
     },
-    uikit::{
-        MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView, MountTarget, ViewInitContext,
-    },
+    uikit::{MenuItemSubMenuView, MountTarget},
     utils::{LogicalUnit, PixelsUnit, Point, Size, platform::linux::TimerFD},
 };
 
@@ -113,23 +108,11 @@ impl Handle {
             .buffer_scale
     }
 
-    #[inline(always)]
-    pub fn view(&self, index: usize) -> Option<&MenuItemView> {
-        self.data().views.get(index)
-    }
+    pub fn submenu_pop_position(&self, view: &MenuItemSubMenuView) -> Point<LogicalUnit> {
+        let base = self.data().spawned_position;
+        let size = self.data().committed_state.lock().expect("poisoned").size;
 
-    pub fn submenu_pop_position(&self, index: usize) -> Option<Point<LogicalUnit>> {
-        match self.data().views.get(index)? {
-            MenuItemView::SubMenu(x) => {
-                let base = self.data().spawned_position;
-                let size = self.data().committed_state.lock().expect("poisoned").size;
-                Some(Point::new_logical(
-                    base.x + size.width,
-                    base.y + x.placement_y,
-                ))
-            }
-            _ => None,
-        }
+        Point::new_logical(base.x + size.width, base.y + view.placement_y)
     }
 
     pub fn take_latest_ui_scale_change(&self) -> Option<f32> {
@@ -150,12 +133,6 @@ impl Handle {
                 std::sync::atomic::Ordering::Relaxed,
             )
             == Ok(true)
-    }
-
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        for v in self.data().views.iter() {
-            v.rescale(scale, composite_tree);
-        }
     }
 
     pub fn update_manual_scaling(&self) {
@@ -214,8 +191,6 @@ struct InstanceData {
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
     event_dispatcher: LogicFiberEventDispatcher,
-    _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
-    views: Vec<MenuItemView>,
     _pinned: core::marker::PhantomPinned,
 }
 
@@ -377,24 +352,16 @@ impl SharedState {
     }
 }
 
-pub fn pop(
+pub fn new_surface<E>(
     parent: super::WindowHandle,
+    pos: Point<LogicalUnit>,
+    size: Size<LogicalUnit>,
     syslink: &SystemLink,
-    view_init_context: &mut ViewInitContext,
-    depth: usize,
-    surface_pos: Point<LogicalUnit>,
-    layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
-    setup_contents: impl FnOnce(
-        Vec<MenuItemLayout>,
-        FlyoutSurfaceHandle,
-        &mut ViewInitContext,
-    ) -> Vec<MenuItemView>,
+    composite_tree: &mut CompositeTree<E>,
+    ht_manager: &mut HitTestTreeManager,
+    keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ref_scale_factor: f32,
 ) -> Handle {
-    let layouted_items = layouted_items(view_init_context.ui_scale_factor);
-    let width = MenuItemLayout::min_width(layouted_items.iter());
-    let height = MenuItemLayout::height(layouted_items.iter());
-    tracing::debug!(%width, %height, "pop context menu");
-
     let mut surface = unsafe { &*syslink.display_server.context }
         .global_interfaces
         .compositor
@@ -437,39 +404,34 @@ pub fn pop(
         None
     };
 
-    let pos = unsafe { &*syslink.display_server.context }
+    let p = unsafe { &*syslink.display_server.context }
         .global_interfaces
         .xdg_wm_base
         .create_positioner()
         .expect("create_positioner");
-    pos.set_offset(surface_pos.x.round() as _, surface_pos.y.round() as _)
+    p.set_offset(pos.x.round() as _, pos.y.round() as _)
         .expect("pos.set_offset");
-    pos.set_size(width.value().ceil() as _, height.value().ceil() as _)
+    p.set_size(size.width.ceil() as _, size.height.ceil() as _)
         .expect("pos.set_size");
-    pos.set_anchor_rect(0, 0, 1, 1)
-        .expect("pos.set_anchor_rect");
-    pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
+    p.set_anchor_rect(0, 0, 1, 1).expect("pos.set_anchor_rect");
+    p.set_gravity(wl::XdgPositionerGravity::BottomRight)
         .expect("pos.set_gravity");
     let xdg_popup = xdg_surface
-        .get_popup(Some(&parent.event_listener().state.data.xdg_surface), &pos)
+        .get_popup(Some(&parent.event_listener().state.data.xdg_surface), &p)
         .expect("xdg_surface.get_popup");
 
-    let ct_root = view_init_context.composite_tree.create(CompositeRect {
+    let ct_root = composite_tree.create(CompositeRect {
         relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.375])),
         ..Default::default()
     });
-    let ht_root = view_init_context.ht_manager.create(HitTestTreeData {
+    let ht_root = ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
         height_adjustment_factor: 1.0,
         ..Default::default()
     });
-    let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
-    view_init_context
-        .ht_manager
-        .set_action_handler(ht_root, &base_surface_event_handler);
-    let kf_root_group = view_init_context.keyboard_focus_registry.acquire_group();
+    let kf_root_group = keyboard_focus_registry.acquire_group();
     let mut eh = Box::new(EventHandler(SurfaceState {
         tag: SurfaceStateTag::FlyoutSurface,
         data: InstanceData {
@@ -482,20 +444,17 @@ pub fn pop(
             ht_root,
             keyboard_focus_state: PerWindowKeyboardFocusState::new(kf_root_group),
             kf_root_group,
-            spawned_position: surface_pos,
+            spawned_position: pos,
             committed_state: Mutex::new(CommittedState {
-                size: Size::new_logical(width.value(), height.value()),
-                size_pixels: Size::new_logical(width.value(), height.value())
-                    .to_pixels_ceil(view_init_context.ui_scale_factor),
-                buffer_scale: view_init_context.ui_scale_factor,
+                size: size,
+                size_pixels: size.to_pixels_ceil(ref_scale_factor),
+                buffer_scale: ref_scale_factor,
             }),
             swapchain_externally_invalidation_signal: AtomicBool::new(false),
             latest_ui_scale_changes: Mutex::new(None),
             pending_configure_buffer_scale: None,
             pending_configure_size: (None, None),
             event_dispatcher: unsafe { &*syslink.event_dispatcher }.clone(),
-            _base_surface_event_handler: base_surface_event_handler,
-            views: vec![],
             _pinned: core::marker::PhantomPinned,
         },
     }));
@@ -544,14 +503,5 @@ pub fn pop(
         .expect("rt_sender.send");
 
     surface.commit().expect("surface.commit");
-    let views = setup_contents(
-        layouted_items,
-        Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
-        view_init_context,
-    );
-    unsafe { &mut *surface.user_data().cast::<SurfaceState<InstanceData>>() }
-        .data
-        .views = views;
-
     Handle(surface.unwrap())
 }

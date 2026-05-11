@@ -20,7 +20,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[cfg(not(windows))]
 #[cfg(feature = "wayland")]
-use crate::uikit::{MenuItemLayout, MenuItemView};
+use crate::uikit::{MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView};
 use crate::{
     graphics::VulkanDevice,
     input::{
@@ -2376,6 +2376,8 @@ async fn run<'sys>(
 
 pub struct ContextMenuSurface {
     handle: FlyoutSurfaceHandle,
+    item_views: Vec<MenuItemView>,
+    _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
     parent_path: Vec<usize>,
     current_selecting: Option<usize>,
 }
@@ -2392,30 +2394,37 @@ impl ContextMenuSurface {
         }
 
         if let Some(x) = self.current_selecting {
-            self.handle
-                .view(x)
-                .expect("out of range")
-                .unlit(composite_tree, current_sec);
+            self.item_views[x].unlit(composite_tree, current_sec);
         }
 
         self.current_selecting = Some(new_index);
-        self.handle
-            .view(new_index)
-            .expect("out of range")
-            .lit(composite_tree, current_sec);
+        self.item_views[new_index].lit(composite_tree, current_sec);
     }
 
     pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
         if let Some(x) = self.current_selecting {
-            self.handle
-                .view(x)
-                .expect("out of range")
-                .unlit(composite_tree, current_sec);
+            self.item_views[x].unlit(composite_tree, current_sec);
         }
 
         self.current_selecting = None;
     }
 }
+
+/*pub struct DropdownMenuSurface {
+    native_surface: FlyoutSurfaceHandle
+}
+
+pub struct DropdownMenuSession {
+    parent: WindowHandle,
+    opening_surfaces: Vec<DropdownMenuSurface>,
+}
+impl DropdownMenuSession {
+    pub fn new(parent: WindowHandle) -> Self {
+        Self {
+            parent,
+        }
+    }
+}*/
 
 pub struct ContextMenuSession {
     parent: WindowHandle,
@@ -2435,7 +2444,7 @@ impl ContextMenuSession {
         #[cfg(target_os = "macos")]
         system_link.context_menu.observe_global_click();
 
-        let root_surface = system_link.pop_context_menu(
+        let (root_surface, base_event_handler, item_views) = system_link.pop_context_menu(
             parent,
             view_init_context,
             0,
@@ -2468,6 +2477,8 @@ impl ContextMenuSession {
             items,
             opening_surfaces: vec![ContextMenuSurface {
                 handle: root_surface,
+                item_views,
+                _base_event_handler: base_event_handler,
                 parent_path: Vec::new(),
                 current_selecting: None,
             }],
@@ -2478,7 +2489,9 @@ impl ContextMenuSession {
     pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
         #[cfg(not(target_os = "macos"))]
         for s in self.opening_surfaces.iter() {
-            s.handle.rescale(scale, composite_tree);
+            for v in s.item_views.iter() {
+                v.rescale(scale, composite_tree);
+            }
         }
     }
 
@@ -2500,7 +2513,8 @@ impl ContextMenuSession {
                 }
                 let latest_surface = self.opening_surfaces.last().expect("root?");
 
-                if let Some(display_pos) = latest_surface.handle.submenu_pop_position(index) {
+                if let MenuItemView::SubMenu(ref submenu) = latest_surface.item_views[index] {
+                    let pos = latest_surface.handle.submenu_pop_position(submenu);
                     let parent_path = latest_surface
                         .parent_path
                         .iter()
@@ -2514,11 +2528,11 @@ impl ContextMenuSession {
                         }
                     });
 
-                    let surface = system_link.pop_context_menu(
+                    let (surface, base_event_handler, item_views) = system_link.pop_context_menu(
                         self.parent,
                         view_init_context,
                         depth + 1,
-                        display_pos,
+                        pos,
                         |render_scale| {
                             crate::uikit::MenuItemLayout::build(
                                 items.into_iter().cloned(),
@@ -2544,6 +2558,8 @@ impl ContextMenuSession {
 
                     self.opening_surfaces.push(ContextMenuSurface {
                         handle: surface,
+                        item_views,
+                        _base_event_handler: base_event_handler,
                         parent_path,
                         current_selecting: None,
                     });
@@ -2580,17 +2596,12 @@ impl ContextMenuSession {
             );
         }
 
-        let display_pos = self
-            .opening_surfaces
-            .last()
-            .expect("root?")
-            .handle
-            .submenu_pop_position(index)
-            .expect("not a submenu or out of range");
-        let parent_path = self
-            .opening_surfaces
-            .last()
-            .expect("root?")
+        let target_surface = self.opening_surfaces.last().expect("root?");
+        let MenuItemView::SubMenu(ref view) = target_surface.item_views[index] else {
+            panic!("not a submenu");
+        };
+        let display_pos = target_surface.handle.submenu_pop_position(view);
+        let parent_path = target_surface
             .parent_path
             .iter()
             .copied()
@@ -2603,7 +2614,7 @@ impl ContextMenuSession {
                 _ => unreachable!("invalid nesting"),
             });
 
-        let surface = system_link.pop_context_menu(
+        let (surface, base_event_handler, item_views) = system_link.pop_context_menu(
             self.parent,
             view_init_context,
             depth + 1,
@@ -2633,6 +2644,8 @@ impl ContextMenuSession {
 
         self.opening_surfaces.push(ContextMenuSurface {
             handle: surface,
+            item_views,
+            _base_event_handler: base_event_handler,
             parent_path,
             current_selecting: None,
         });
@@ -2735,6 +2748,30 @@ impl SystemLink<'_> {
     }
 
     #[cfg(feature = "wayland")]
+    #[inline(always)]
+    pub fn new_flyout_surface<E>(
+        &self,
+        parent: WindowHandle,
+        pos: Point<LogicalUnit>,
+        size: Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        ref_scale_factor: f32,
+    ) -> FlyoutSurfaceHandle {
+        platform::unix::wayland::flyout_surface::new_surface(
+            parent,
+            pos,
+            size,
+            self,
+            composite_tree,
+            ht_manager,
+            keyboard_focus_registry,
+            ref_scale_factor,
+        )
+    }
+
+    #[cfg(feature = "wayland")]
     pub fn pop_context_menu(
         &self,
         parent: WindowHandle,
@@ -2747,16 +2784,33 @@ impl SystemLink<'_> {
             FlyoutSurfaceHandle,
             &mut ViewInitContext,
         ) -> Vec<MenuItemView>,
-    ) -> FlyoutSurfaceHandle {
-        platform::unix::wayland::flyout_surface::pop(
+    ) -> (
+        FlyoutSurfaceHandle,
+        Rc<MenuBaseSurfaceEventHandler>,
+        Vec<MenuItemView>,
+    ) {
+        let layouted_items = layouted_items(view_init_context.ui_scale_factor);
+        let width = MenuItemLayout::min_width(layouted_items.iter());
+        let height = MenuItemLayout::height(layouted_items.iter());
+        tracing::debug!(%width, %height, "pop context menu");
+
+        let handle = self.new_flyout_surface(
             parent,
-            self,
-            view_init_context,
-            depth,
             surface_pos,
-            layouted_items,
-            setup_contents,
-        )
+            Size::new_logical(width.value(), height.value()),
+            view_init_context.mount_context.composite_tree,
+            view_init_context.mount_context.ht_manager,
+            view_init_context.mount_context.keyboard_focus_registry,
+            view_init_context.ui_scale_factor,
+        );
+
+        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
+        view_init_context
+            .ht_manager
+            .set_action_handler(handle.ht_root(), &base_surface_event_handler);
+        let views = setup_contents(layouted_items, handle, view_init_context);
+
+        (handle, base_surface_event_handler, views)
     }
 }
 
