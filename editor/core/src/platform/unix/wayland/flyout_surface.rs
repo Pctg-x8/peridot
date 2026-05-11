@@ -5,7 +5,7 @@ use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use peridot_tp_wayland as wl;
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
+    Event, LogicFiberEventDispatcher, SystemLink,
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -52,10 +52,10 @@ impl Handle {
         .data
     }
 
-    pub fn close(
+    pub fn close<E>(
         mut self,
         syslink: &SystemLink,
-        composite_tree: &mut CompositeTree<SyncEvent>,
+        composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {

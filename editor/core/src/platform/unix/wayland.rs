@@ -662,6 +662,20 @@ impl crate::SystemLink<'_> {
         unsafe { &*p.surface.as_ref().user_data().cast::<SurfaceStateUntyped>() }.tag
             == SurfaceStateTag::FlyoutSurface
     }
+
+    pub fn any_pointer_on_dropdown_menu(&self) -> bool {
+        let Some(PointerState {
+            enter_state: Some(ref p),
+            ..
+        }) = unsafe { &*self.display_server.global_messaging_ptr }.pointer
+        else {
+            return false;
+        };
+
+        // TODO: ContextMenuと区別ができてないのでなんとかしたい(でもしなくてもいいか......？)
+        unsafe { &*p.surface.as_ref().user_data().cast::<SurfaceStateUntyped>() }.tag
+            == SurfaceStateTag::FlyoutSurface
+    }
 }
 
 pub struct StaticPixbufs {
