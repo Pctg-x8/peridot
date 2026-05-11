@@ -36,7 +36,7 @@ use crate::{
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
         composite::{
-            AnimatableColor, AnimatableFloat, AnimationCurve, ClipConfig, CompositeMode,
+            AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
@@ -1028,6 +1028,113 @@ impl Popup for AlertDialogPresenter {
     }
 }
 
+pub struct DropdownBoxViewSharedResources {
+    down_arrow_tex: usize,
+}
+impl DropdownBoxViewSharedResources {
+    const DOWN_ARROW_TEX_SIZE: f32 = 16.0;
+    const DOWN_ARROW_TEX_VERTICES: &'static [[f32; 2]] =
+        &[[0.25, 0.375], [0.75, 0.375], [0.5, 0.625]];
+    const DOWN_ARROW_TEX_INDICES: &'static [u16] = &[0, 1, 2];
+
+    pub fn new(
+        id_issuer: &mut MainThreadTextureIDIssuer,
+        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
+    ) -> Self {
+        let down_arrow_tex = id_issuer.issue();
+        rt_sender
+            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
+                id: down_arrow_tex,
+                vertices: Self::DOWN_ARROW_TEX_VERTICES,
+                indices: Self::DOWN_ARROW_TEX_INDICES,
+                width: Self::DOWN_ARROW_TEX_SIZE,
+                height: Self::DOWN_ARROW_TEX_SIZE,
+            })
+            .expect("rt_sender.send");
+
+        Self { down_arrow_tex }
+    }
+}
+
+pub struct DropdownBoxView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    ct_down_arrow: CompositeTreeRef,
+}
+impl DropdownBoxView {
+    pub fn new(ctx: &mut ViewInitContext, shared_res: &DropdownBoxViewSharedResources) -> Self {
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(200.0), AnimatableFloat::Value(24.0)],
+            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(24.0)],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            corner_radius: CornerRadius::all(4.0),
+            border: Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }),
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Dropdown Box".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+                offset: [4.0, 0.0],
+                ..Default::default()
+            }),
+            clip_child: Some(ClipConfig {
+                left_softness: SafeF32::ZERO,
+                right_softness: SafeF32::ZERO,
+                top_softness: SafeF32::ZERO,
+                bottom_softness: SafeF32::ZERO,
+            }),
+            ..Default::default()
+        });
+        let ct_down_arrow = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
+            relative_offset_adjustment: [1.0, 0.5],
+            size: [AnimatableFloat::Value(16.0), AnimatableFloat::Value(16.0)],
+            has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            texatlas_rect_id: Some(shared_res.down_arrow_tex),
+            ..Default::default()
+        });
+        ctx.composite_tree.add_child(ct_root, ct_down_arrow);
+
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left: 200.0,
+            top: 24.0,
+            width: 128.0,
+            height: 24.0,
+            ..Default::default()
+        });
+
+        Self {
+            ct_root,
+            ht_root,
+            ct_down_arrow,
+        }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
+        composite_tree.get_mut(self.ct_down_arrow).base_scale_factor = new_scale;
+
+        composite_tree.mark_dirty_all(self.ct_root);
+        composite_tree.mark_dirty(self.ct_down_arrow);
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -1384,6 +1491,11 @@ async fn run<'sys>(
         view_init_ctx.mount_context.ht_manager,
     );
 
+    let dropdown_box_view_shared_res =
+        DropdownBoxViewSharedResources::new(&mut texture_id_issuer, system_link.rt_sender());
+    let dropdown_box = DropdownBoxView::new(&mut view_init_ctx, &dropdown_box_view_shared_res);
+    dropdown_box.mount(&mut view_init_ctx, &main_window);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
@@ -1501,6 +1613,7 @@ async fn run<'sys>(
                 popup_manager.rescale(window, new_scale, &mut composite_tree);
 
                 if window == main_window {
+                    // TODO: このへんそろそろいい感じに自動でやりたい スクロールコンテナとかは子Viewを含むのでまた木構造を組む必要がある
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
@@ -1518,6 +1631,7 @@ async fn run<'sys>(
                         &ht_manager,
                         new_scale,
                     );
+                    dropdown_box.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
