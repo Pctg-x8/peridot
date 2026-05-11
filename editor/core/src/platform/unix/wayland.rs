@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-pub mod context_menu;
+pub mod flyout_surface;
 
 pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 
@@ -660,7 +660,7 @@ impl crate::SystemLink<'_> {
         };
 
         unsafe { &*p.surface.as_ref().user_data().cast::<SurfaceStateUntyped>() }.tag
-            == SurfaceStateTag::ContextMenu
+            == SurfaceStateTag::FlyoutSurface
     }
 }
 
@@ -779,13 +779,6 @@ pub struct WindowCommittedState {
     pub maximized: bool,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SurfaceStateTag {
-    ToplevelWindow,
-    ResizeEdge,
-    ContextMenu,
-}
-
 pub struct WindowState {
     surface_ptr: NonNull<wl::Surface>,
     pub(self) xdg_surface: wl::Owned<wl::XdgSurface>,
@@ -807,6 +800,13 @@ unsafe impl Send for WindowState {}
 struct ResizeEdgeSurfaceData {
     edge: wl::XdgToplevelResizeEdge,
     target_toplevel: *const wl::XdgToplevel,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SurfaceStateTag {
+    ToplevelWindow,
+    ResizeEdge,
+    FlyoutSurface,
 }
 
 #[repr(C)]
@@ -2273,11 +2273,11 @@ impl wl::PointerEventListener for GlobalMessaging {
                     client_pos: state.pos,
                 });
             }
-            SurfaceStateTag::ContextMenu => {
+            SurfaceStateTag::FlyoutSurface => {
                 self.event_dispatcher
                     .dispatch(Event::ContextMenuPointerMove {
                         pointer_id: PointerID(pointer),
-                        target: context_menu::Handle(NonNull::from_mut(surface)),
+                        target: flyout_surface::Handle(NonNull::from_mut(surface)),
                         client_pos: state.pos,
                     });
             }
@@ -2297,11 +2297,11 @@ impl wl::PointerEventListener for GlobalMessaging {
                         window: WindowHandle(NonNull::from_mut(surface)),
                     });
                 }
-                SurfaceStateTag::ContextMenu => {
+                SurfaceStateTag::FlyoutSurface => {
                     self.event_dispatcher
                         .dispatch(Event::ContextMenuPointerLeave {
                             pointer_id: PointerID(pointer),
-                            target: context_menu::Handle(NonNull::from_mut(surface)),
+                            target: flyout_surface::Handle(NonNull::from_mut(surface)),
                         });
                 }
                 _ => (),
@@ -2341,11 +2341,11 @@ impl wl::PointerEventListener for GlobalMessaging {
                     client_pos: state.pos,
                 });
             }
-            SurfaceStateTag::ContextMenu => {
+            SurfaceStateTag::FlyoutSurface => {
                 self.event_dispatcher
                     .dispatch(Event::ContextMenuPointerMove {
                         pointer_id: PointerID(pointer),
-                        target: context_menu::Handle(enter_state.surface),
+                        target: flyout_surface::Handle(enter_state.surface),
                         client_pos: state.pos,
                     });
             }
@@ -2402,11 +2402,11 @@ impl wl::PointerEventListener for GlobalMessaging {
                         },
                     });
                 }
-                SurfaceStateTag::ContextMenu => {
+                SurfaceStateTag::FlyoutSurface => {
                     self.event_dispatcher
                         .dispatch(Event::ContextMenuPointerDown {
                             pointer_id: PointerID(pointer),
-                            target: context_menu::Handle(enter_state.surface),
+                            target: flyout_surface::Handle(enter_state.surface),
                             button: if button == linux_input::Key::MouseLeft as u32 {
                                 PointerButton::Primary
                             } else {
@@ -2440,9 +2440,9 @@ impl wl::PointerEventListener for GlobalMessaging {
                         },
                     });
                 }
-                SurfaceStateTag::ContextMenu => {
+                SurfaceStateTag::FlyoutSurface => {
                     self.event_dispatcher.dispatch(Event::ContextMenuPointerUp {
-                        target: context_menu::Handle(enter_state.surface),
+                        target: flyout_surface::Handle(enter_state.surface),
                         pointer_id: PointerID(pointer),
                         button: if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary

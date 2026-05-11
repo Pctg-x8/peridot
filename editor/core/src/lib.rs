@@ -245,7 +245,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             #[cfg(target_os = "linux")]
             pointer_hovering_timer: &pointer_hovering_timer,
             #[cfg(feature = "wayland")]
-            context_menu: platform::unix::wayland::context_menu::SharedState {
+            context_menu: platform::unix::wayland::flyout_surface::SharedState {
                 delayed_action_timer,
             },
             #[cfg(target_os = "macos")]
@@ -644,7 +644,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 #[derive(Clone, Debug)]
 pub enum SyncEvent {
     WindowPostResizeRenderBuffer { window: WindowHandle },
-    ContextMenuPostResizeRenderBuffer { target: ContextMenuHandle },
+    ContextMenuPostResizeRenderBuffer { target: FlyoutSurfaceHandle },
     PopupUnmount { id: PopupID },
 }
 impl SyncEvent {
@@ -762,24 +762,24 @@ pub enum Event {
     ContextMenuPerformDelayedAction,
     ContextMenuPointerDown {
         pointer_id: PointerID,
-        target: ContextMenuHandle,
+        target: FlyoutSurfaceHandle,
         button: PointerButton,
         #[cfg(feature = "wayland")]
         event_id: platform::unix::wayland::PointerEventID,
     },
     ContextMenuPointerMove {
         pointer_id: PointerID,
-        target: ContextMenuHandle,
+        target: FlyoutSurfaceHandle,
         client_pos: Point<PointerInputUnit>,
     },
     ContextMenuPointerUp {
         pointer_id: PointerID,
-        target: ContextMenuHandle,
+        target: FlyoutSurfaceHandle,
         button: PointerButton,
     },
     ContextMenuPointerLeave {
         pointer_id: PointerID,
-        target: ContextMenuHandle,
+        target: FlyoutSurfaceHandle,
     },
     ContextMenuSelectCommand {
         id: u64,
@@ -2375,7 +2375,7 @@ async fn run<'sys>(
 }
 
 pub struct ContextMenuSurface {
-    handle: ContextMenuHandle,
+    handle: FlyoutSurfaceHandle,
     parent_path: Vec<usize>,
     current_selecting: Option<usize>,
 }
@@ -2713,7 +2713,7 @@ pub struct SystemLink<'sys> {
     #[cfg(target_os = "linux")]
     pointer_hovering_timer: *const utils::platform::linux::TimerFD,
     #[cfg(feature = "wayland")]
-    pub context_menu: platform::unix::wayland::context_menu::SharedState,
+    pub context_menu: platform::unix::wayland::flyout_surface::SharedState,
     #[cfg(target_os = "macos")]
     pub context_menu: platform::mac::context_menu::SharedState,
 }
@@ -2744,11 +2744,11 @@ impl SystemLink<'_> {
         layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
-            ContextMenuHandle,
+            FlyoutSurfaceHandle,
             &mut ViewInitContext,
         ) -> Vec<MenuItemView>,
-    ) -> ContextMenuHandle {
-        platform::unix::wayland::context_menu::pop(
+    ) -> FlyoutSurfaceHandle {
+        platform::unix::wayland::flyout_surface::pop(
             parent,
             self,
             view_init_context,
@@ -2794,7 +2794,7 @@ pub type ContextMenuHandle = platform::windows::context_menu::Handle;
 #[cfg(target_os = "macos")]
 pub type ContextMenuHandle = platform::mac::context_menu::Handle;
 #[cfg(feature = "wayland")]
-pub type ContextMenuHandle = platform::unix::wayland::context_menu::Handle;
+pub type FlyoutSurfaceHandle = platform::unix::wayland::flyout_surface::Handle;
 
 pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,

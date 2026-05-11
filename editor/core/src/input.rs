@@ -7,7 +7,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    ContextMenuHandle, DragPreviewPopoverHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
+    DragPreviewPopoverHandle, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButton,
         PointerButtonActionArgs, Role, ScrollWheelActionArgs,
@@ -96,7 +96,7 @@ struct LastClickState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NativeDesktopSurface {
     Window(WindowHandle),
-    ContextMenu(ContextMenuHandle),
+    ContextMenu(FlyoutSurfaceHandle),
 }
 impl ShellPointerActions for NativeDesktopSurface {
     #[inline(always)]

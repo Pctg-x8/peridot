@@ -9,7 +9,7 @@ use bedrock::{
 };
 
 use crate::{
-    ContextMenuHandle, SyncEvent, SyncEventBus, WindowHandle,
+    FlyoutSurfaceHandle, SyncEvent, SyncEventBus, WindowHandle,
     graphics::{
         BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP,
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
@@ -43,7 +43,7 @@ pub struct NewWindowData {
 }
 
 pub struct NewContextMenuData {
-    pub w: ContextMenuHandle,
+    pub w: FlyoutSurfaceHandle,
     #[cfg(not(windows))]
     pub vk_surface: NewWindowVulkanSurface,
     #[cfg(windows)]
@@ -55,7 +55,7 @@ pub enum RenderMessage {
     NewWindow(NewWindowData),
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
     NewContextMenu(NewContextMenuData),
-    DestroyContextMenu(ContextMenuHandle, std::sync::mpsc::Sender<()>),
+    DestroyContextMenu(FlyoutSurfaceHandle, std::sync::mpsc::Sender<()>),
     RegisterNormalized2DStaticMeshTexture {
         id: usize,
         vertices: &'static [[f32; 2]],
@@ -159,7 +159,7 @@ impl<'main> RenderThread<'main> {
         }
         let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
-        let mut context_menus: HashMap<ContextMenuHandle, ContextMenuRenderer> = HashMap::new();
+        let mut context_menus: HashMap<FlyoutSurfaceHandle, ContextMenuRenderer> = HashMap::new();
         let mut normalized_2d_static_mesh_textures: HashMap<
             usize,
             Normalized2DStaticMeshTextureEntry,
@@ -436,7 +436,7 @@ impl<'main> RenderThread<'main> {
             }
             enum PresentKey {
                 Window(WindowHandle),
-                ContextMenu(ContextMenuHandle),
+                ContextMenu(FlyoutSurfaceHandle),
             }
             struct VkPresentParameters<'x> {
                 key: PresentKey,
@@ -920,7 +920,7 @@ impl<'d> Drop for CompositionSwapchainBuffer<'d> {
 }
 
 struct ContextMenuRenderer<'d> {
-    w: ContextMenuHandle,
+    w: FlyoutSurfaceHandle,
     active_scale: SafeF32,
     vk_device: &'d VulkanDevice<'d>,
     composite_root: CompositeTreeRef,

@@ -8,7 +8,7 @@ use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use peridot_tp_wayland as wl;
 
 use crate::{
-    ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
+    Event, FlyoutSurfaceHandle, LogicFiberEventDispatcher, SyncEvent, SystemLink,
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -386,7 +386,7 @@ pub fn pop(
     layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
     setup_contents: impl FnOnce(
         Vec<MenuItemLayout>,
-        ContextMenuHandle,
+        FlyoutSurfaceHandle,
         &mut ViewInitContext,
     ) -> Vec<MenuItemView>,
 ) -> Handle {
@@ -471,7 +471,7 @@ pub fn pop(
         .set_action_handler(ht_root, &base_surface_event_handler);
     let kf_root_group = view_init_context.keyboard_focus_registry.acquire_group();
     let mut eh = Box::new(EventHandler(SurfaceState {
-        tag: SurfaceStateTag::ContextMenu,
+        tag: SurfaceStateTag::FlyoutSurface,
         data: InstanceData {
             surface_ptr: surface.as_ptr(),
             scaling,
