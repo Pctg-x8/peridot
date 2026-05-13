@@ -2676,42 +2676,6 @@ async fn run<'sys>(
     }
 }
 
-pub struct ContextMenuSurface {
-    handle: FlyoutSurfaceHandle,
-    item_views: Vec<MenuItemView>,
-    _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
-    parent_path: Vec<usize>,
-    current_selecting: Option<usize>,
-}
-impl ContextMenuSurface {
-    pub fn set_current_selecting(
-        &mut self,
-        new_index: usize,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-    ) {
-        if self.current_selecting == Some(new_index) {
-            // no changes
-            return;
-        }
-
-        if let Some(x) = self.current_selecting {
-            self.item_views[x].unlit(composite_tree, current_sec);
-        }
-
-        self.current_selecting = Some(new_index);
-        self.item_views[new_index].lit(composite_tree, current_sec);
-    }
-
-    pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
-        if let Some(x) = self.current_selecting {
-            self.item_views[x].unlit(composite_tree, current_sec);
-        }
-
-        self.current_selecting = None;
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct DropdownMenuItem {
     pub content: String,
@@ -2931,6 +2895,42 @@ impl DropdownMenuSession {
             v.native_surface
                 .close(syslink, composite_tree, ht_manager, keyboard_focus_registry);
         }
+    }
+}
+
+pub struct ContextMenuSurface {
+    handle: FlyoutSurfaceHandle,
+    item_views: Vec<MenuItemView>,
+    _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
+    parent_path: Vec<usize>,
+    current_selecting: Option<usize>,
+}
+impl ContextMenuSurface {
+    pub fn set_current_selecting(
+        &mut self,
+        new_index: usize,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
+        if self.current_selecting == Some(new_index) {
+            // no changes
+            return;
+        }
+
+        if let Some(x) = self.current_selecting {
+            self.item_views[x].unlit(composite_tree, current_sec);
+        }
+
+        self.current_selecting = Some(new_index);
+        self.item_views[new_index].lit(composite_tree, current_sec);
+    }
+
+    pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
+        if let Some(x) = self.current_selecting {
+            self.item_views[x].unlit(composite_tree, current_sec);
+        }
+
+        self.current_selecting = None;
     }
 }
 
