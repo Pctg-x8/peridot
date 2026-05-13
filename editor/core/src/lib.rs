@@ -18,9 +18,6 @@ use std::{
 #[cfg(target_os = "macos")]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[cfg(not(windows))]
-#[cfg(feature = "wayland")]
-use crate::uikit::{MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView};
 use crate::{
     graphics::VulkanDevice,
     input::{
@@ -44,7 +41,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MenuItem, MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
+        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
+        MenuItemView, MountContext, MountTarget, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
         ScrollContainer, SimpleButtonView, TextInputView, ViewEventHandler, ViewIdentifier,
         ViewInitContext, ViewRegistry, ViewUpdateContext,
@@ -221,7 +219,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context_ptr: app_context,
             pointer_hovering_timer_id: &mut pointer_hovering_timer_id,
-            context_menu: platform::windows::context_menu::SharedState::new(
+            flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
+                app_context,
                 &dx_context,
                 context_menu_delayed_action_timer_id.as_mut(),
             )
@@ -1802,10 +1801,21 @@ async fn run<'sys>(
                         &mut ht_manager,
                         &mut keyboard_focus_registry,
                     );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
+
+                if let Some(mut c) =
+                    current_active_dropdown_menu_session.take_if(|x| x.parent == window)
+                {
+                    c.close_all(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
+                }
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::WindowRescaleUI {
                 mut window,
@@ -2287,7 +2297,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    system_link.context_menu.reserve_delayed_action();
+                    system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
             Event::ContextMenuDeselectItem { depth } => {
@@ -2300,7 +2310,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    system_link.context_menu.reserve_delayed_action();
+                    system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
             Event::ContextMenuOpenSubmenu { depth, index } => {
@@ -2328,7 +2338,9 @@ async fn run<'sys>(
                 }*/
             }
             Event::ContextMenuPerformDelayedAction => {
-                system_link.context_menu.unreserve_delayed_action();
+                system_link
+                    .flyout_surface_context
+                    .unreserve_delayed_action();
 
                 if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.perform_delayed_action(
@@ -2853,9 +2865,8 @@ impl DropdownMenuSession {
         min_width: f32,
         items: Vec<DropdownMenuItem>,
     ) -> Self {
-        let mut item_views = Vec::with_capacity(items.len());
         let mut width = min_width;
-        for (n, v) in items.into_iter().enumerate() {
+        for v in items.iter() {
             width = width.max(
                 TextLayout::measure_visual_width(
                     &v.content,
@@ -2865,12 +2876,6 @@ impl DropdownMenuSession {
                 ) + 4.0
                     + 4.0,
             );
-            item_views.push(DropdownMenuItemView::new(
-                view_init_context,
-                selection_receiver.clone(),
-                v,
-                n as f32 * DropdownMenuItemView::ITEM_HEIGHT,
-            ));
         }
 
         let root_surface = syslink.new_flyout_surface(
@@ -2878,15 +2883,24 @@ impl DropdownMenuSession {
             pos,
             Size::new_logical(
                 width,
-                item_views.len() as f32 * DropdownMenuItemView::ITEM_HEIGHT,
+                items.len() as f32 * DropdownMenuItemView::ITEM_HEIGHT,
             ),
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
-            view_init_context.ui_scale_factor,
         );
-        for v in item_views.iter() {
+        view_init_context.ui_scale_factor = root_surface.render_scale();
+
+        let mut item_views = Vec::with_capacity(items.len());
+        for (n, v) in items.into_iter().enumerate() {
+            let v = DropdownMenuItemView::new(
+                view_init_context,
+                selection_receiver.clone(),
+                v,
+                n as f32 * DropdownMenuItemView::ITEM_HEIGHT,
+            );
             v.mount(view_init_context, &root_surface);
+            item_views.push(v);
         }
 
         Self {
@@ -3152,6 +3166,7 @@ impl ContextMenuSession {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
+        tracing::debug!("context menu terminate");
         while let Some(c) = self.opening_surfaces.pop() {
             c.handle.close(
                 system_link,
@@ -3338,9 +3353,9 @@ pub type WindowHandle = platform::mac::WindowHandle;
 pub type WindowHandle = platform::unix::wayland::WindowHandle;
 
 #[cfg(windows)]
-pub type ContextMenuHandle = platform::windows::context_menu::Handle;
+pub type FlyoutSurfaceHandle = platform::windows::flyout_surface::Handle;
 #[cfg(target_os = "macos")]
-pub type ContextMenuHandle = platform::mac::context_menu::Handle;
+pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
 #[cfg(feature = "wayland")]
 pub type FlyoutSurfaceHandle = platform::unix::wayland::flyout_surface::Handle;
 

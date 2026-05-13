@@ -3,7 +3,7 @@ use std::rc::Rc;
 use windows::{
     UI::Composition::{CompositionEffectSourceParameter, Desktop::DesktopWindowTarget},
     Win32::{
-        Foundation::{FALSE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{FALSE, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
             Direct3D12::ID3D12CommandQueue,
             Dxgi::{
@@ -23,11 +23,11 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
                 GetWindowLongPtrW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
                 HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT,
-                HTTOPRIGHT, HTTRANSPARENT, KillTimer, SW_SHOWNOACTIVATE, SetTimer,
+                HTTOPRIGHT, HTTRANSPARENT, KillTimer, MA_NOACTIVATE, SW_SHOWNOACTIVATE, SetTimer,
                 SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
-                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW,
-                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
+                WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
                 WindowFromPoint,
             },
         },
@@ -37,12 +37,13 @@ use windows_core::{Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
 use crate::{
-    ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowHandle,
+    Event, LogicFiberEventDispatcher, SystemLink, WindowHandle,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
+    platform::windows::ApplicationContext,
     rendering::{
         NewContextMenuData, RenderMessage,
         composite::{
@@ -50,11 +51,12 @@ use crate::{
         },
     },
     uikit::{
-        MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView, MountTarget, ViewInitContext,
+        MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemSubMenuView, MenuItemView,
+        MountTarget, ViewInitContext,
     },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
-        platform::windows::{WindowByClassIter, current_instance_handle},
+        platform::windows::{WindowByClassIter, register_class},
     },
 };
 
@@ -86,10 +88,10 @@ impl Handle {
         self.0
     }
 
-    pub fn close(
+    pub fn close<E>(
         self,
         syslink: &SystemLink,
-        composite_tree: &mut CompositeTree<SyncEvent>,
+        composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
@@ -131,12 +133,6 @@ impl Handle {
         unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
     }
 
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        for v in state(self.0).views.iter() {
-            v.rescale(scale, composite_tree);
-        }
-    }
-
     #[inline(always)]
     pub fn ht_root(&self) -> HitTestTreeRef {
         state(self.0).ht_root
@@ -153,31 +149,19 @@ impl Handle {
     }
 
     #[inline(always)]
-    pub fn view(&self, index: usize) -> Option<&MenuItemView> {
-        state(self.0).views.get(index)
-    }
-
-    #[inline(always)]
-    pub fn submenu_pop_position(&self, index: usize) -> Option<Point<LogicalUnit>> {
-        match state(self.0).views.get(index)? {
-            MenuItemView::SubMenu(x) => {
-                let mut window_rect = core::mem::MaybeUninit::uninit();
-                unsafe {
-                    GetClientRect(self.0, window_rect.as_mut_ptr()).expect("GetClientRect");
-                }
-                let window_rect = unsafe { window_rect.assume_init() };
-
-                Some(
-                    Point::new_pixels(
-                        window_rect.right - (SHADOW_SIZE * 2.0).round() as i32,
-                        window_rect.top + (x.placement_y * self.render_scale()).round() as i32,
-                    )
-                    .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
-                    .with_offset(state(self.0).spawned_surface_pos),
-                )
-            }
-            _ => None,
+    pub fn submenu_pop_position(&self, view: &MenuItemSubMenuView) -> Point<LogicalUnit> {
+        let mut window_rect = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetClientRect(self.0, window_rect.as_mut_ptr()).expect("GetClientRect");
         }
+        let window_rect = unsafe { window_rect.assume_init() };
+
+        Point::new_pixels(
+            window_rect.right - (SHADOW_SIZE * 2.0).round() as i32,
+            window_rect.top + (view.placement_y * self.render_scale()).round() as i32,
+        )
+        .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
+        .with_offset(state(self.0).spawned_surface_pos)
     }
 }
 
@@ -188,16 +172,13 @@ pub struct InstanceState {
     _c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
     kf_root_group: KeyboardFocusGroupRef,
-    depth: usize,
     spawned_surface_pos: Point<LogicalUnit>,
     pointer_focus: bool,
-    views: Vec<MenuItemView>,
-    _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
 }
 impl InstanceState {
-    fn done(
+    fn done<E>(
         self,
-        composite_tree: &mut CompositeTree<SyncEvent>,
+        composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
@@ -214,20 +195,6 @@ const SHADOW_OFFSET: Vector3 = Vector3 {
     Y: 4.0,
     Z: 0.0,
 };
-
-fn register_class(hinstance: HINSTANCE) -> u16 {
-    unsafe {
-        crate::utils::platform::windows::register_class(&WNDCLASSEXW {
-            cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
-            cbWndExtra: core::mem::size_of::<usize>() as _,
-            lpfnWndProc: Some(wndproc),
-            hInstance: hinstance,
-            lpszClassName: w!("ContextMenu"),
-            ..core::mem::MaybeUninit::zeroed().assume_init()
-        })
-        .expect("context_menu.register_class")
-    }
-}
 
 #[inline(always)]
 fn set_state(hwnd: HWND, state: Box<InstanceState>) {
@@ -275,6 +242,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     #[inline(always)]
     const fn is_application_handled_hittest(ht: u32) -> bool {
         ht == HTCLOSE || ht == HTMAXBUTTON || ht == HTMINBUTTON
+    }
+
+    if msg == WM_MOUSEACTIVATE {
+        return LRESULT(MA_NOACTIVATE as _);
     }
 
     if msg == WM_NCHITTEST {
@@ -500,10 +471,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             .expect("TrackMouseEvent");
         }
 
-        if !state(hwnd).pointer_focus {
-            state_mut(hwnd).pointer_focus = true;
-            tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus");
-        }
+        state_mut(hwnd).pointer_focus = true;
 
         state(hwnd)
             .event_dispatcher
@@ -531,10 +499,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             .expect("TrackMouseEvent");
         }
 
-        if !state(hwnd).pointer_focus {
-            state_mut(hwnd).pointer_focus = true;
-            tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus");
-        }
+        state_mut(hwnd).pointer_focus = true;
 
         // NonClientイベントはスクリーン座標で来る
         let mut p = [POINT {
@@ -566,13 +531,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
         if state(hwnd).pointer_focus {
             state_mut(hwnd).pointer_focus = false;
-            tracing::debug!(depth = state(hwnd).depth, "context menu pointer focus lost");
             // leaveしたのでdeselectも発行
-            state(hwnd)
-                .event_dispatcher
-                .dispatch(Event::ContextMenuDeselectItem {
-                    depth: state(hwnd).depth,
-                });
+            // state(hwnd)
+            //     .event_dispatcher
+            //     .dispatch(Event::ContextMenuDeselectItem {
+            //         depth: state(hwnd).depth,
+            //     });
         }
 
         state(hwnd)
@@ -595,11 +559,24 @@ pub struct SharedState {
     delayed_action_timer_id: *mut usize,
 }
 impl SharedState {
+    pub(super) const CLASS_NAME: PCWSTR = w!("ContextMenu");
+
     pub fn new(
+        app_context: &ApplicationContext,
         dx_context: &super::DxContext,
         delayed_action_timer_id: core::pin::Pin<&mut usize>,
     ) -> Self {
-        let window_class = register_class(current_instance_handle());
+        let window_class = unsafe {
+            register_class(&WNDCLASSEXW {
+                cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
+                cbWndExtra: core::mem::size_of::<usize>() as _,
+                lpfnWndProc: Some(wndproc),
+                hInstance: app_context.hinstance,
+                lpszClassName: Self::CLASS_NAME,
+                ..core::mem::MaybeUninit::zeroed().assume_init()
+            })
+            .expect("context_menu.register_class")
+        };
 
         Self {
             window_class,
@@ -607,6 +584,11 @@ impl SharedState {
             d3d12_cq: dx_context.d3d12_cq.clone(),
             delayed_action_timer_id: delayed_action_timer_id.get_mut(),
         }
+    }
+
+    #[inline(always)]
+    const fn window_class(&self) -> PCWSTR {
+        PCWSTR(self.window_class as _)
     }
 
     pub fn reserve_delayed_action(&self) {
@@ -625,52 +607,45 @@ impl SharedState {
 }
 
 impl super::SystemLink<'_> {
-    pub fn pop_context_menu(
+    #[tracing::instrument(skip(self, parent, composite_tree, ht_manager, keyboard_focus_registry))]
+    pub fn new_flyout_surface<E>(
         &self,
         parent: WindowHandle,
-        view_init_context: &mut ViewInitContext,
-        depth: usize,
-        surface_pos: Point<LogicalUnit>,
-        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
-        setup_contents: impl FnOnce(
-            Vec<MenuItemLayout>,
-            ContextMenuHandle,
-            &mut ViewInitContext,
-        ) -> Vec<MenuItemView>,
-    ) -> ContextMenuHandle {
+        pos: Point<LogicalUnit>,
+        size: Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) -> Handle {
         let render_scale = parent.ui_scale_factor();
-        let mut ps = [surface_pos.to_pixels_round(render_scale).to_win32()];
+        let mut ps = [pos.to_pixels_round(render_scale).to_win32()];
         unsafe {
             MapWindowPoints(Some(parent.0), None, &mut ps);
         }
         let screen_pos = Point::from_win32(ps[0]);
+        let pixels_size = size.to_pixels_ceil(render_scale);
 
-        let layouted_items = layouted_items(render_scale);
-        let width = MenuItemLayout::min_width(layouted_items.iter());
-        let height = MenuItemLayout::height(layouted_items.iter());
-        let pixels_size =
-            Size::new_logical(width.value(), height.value()).to_pixels_ceil(render_scale);
+        tracing::debug!(?screen_pos, ?pixels_size, "new_flyout_surface");
 
-        let hinstance = current_instance_handle();
         let h = unsafe {
-            // Note: ウィンドウの親子関係にしちゃうとcropされちゃうので独立させる
+            // Note: 子ウィンドウにしちゃうとcropされちゃうので独立させる
             CreateWindowExW(
                 WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
-                PCWSTR(self.context_menu.window_class as _),
+                self.flyout_surface_context.window_class(),
                 w!(""),
                 WS_POPUP,
                 screen_pos.x - SHADOW_SIZE.ceil() as i32,
                 screen_pos.y - SHADOW_SIZE.ceil() as i32,
                 pixels_size.width as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
                 pixels_size.height as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
+                Some(parent.0),
                 None,
-                None,
-                Some(hinstance),
+                Some((&*self.app_context_ptr).hinstance),
                 None,
             )
             .expect("context_menu.create_window")
         };
-        let composite_root = view_init_context.composite_tree.create(CompositeRect {
+        let composite_root = composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -678,7 +653,7 @@ impl super::SystemLink<'_> {
             ])),
             ..Default::default()
         });
-        let ht_root = view_init_context.ht_manager.create(HitTestTreeData {
+        let ht_root = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
             // shadowの分を開ける
@@ -688,10 +663,6 @@ impl super::SystemLink<'_> {
             // width, heightはいじらなくていい（渡される基本サイズがすでに影を抜いた分になっている）
             ..Default::default()
         });
-        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
-        view_init_context
-            .ht_manager
-            .set_action_handler(ht_root, &base_surface_event_handler);
         let c_target = unsafe {
             (*self.app_context_ptr)
                 .native_compositor_desktop_interop
@@ -705,10 +676,10 @@ impl super::SystemLink<'_> {
         c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
 
         let swapchain = unsafe {
-            self.context_menu
+            self.flyout_surface_context
                 .dxgi_factory
                 .CreateSwapChainForComposition(
-                    &self.context_menu.d3d12_cq,
+                    &self.flyout_surface_context.d3d12_cq,
                     &DXGI_SWAP_CHAIN_DESC1 {
                         Width: pixels_size.width as _,
                         Height: pixels_size.height as _,
@@ -812,7 +783,7 @@ impl super::SystemLink<'_> {
             .InsertAtTop(&cv_composited)
             .expect("drag.visual.add_child");
 
-        let root_kf_group = view_init_context.keyboard_focus_registry.acquire_group();
+        let root_kf_group = keyboard_focus_registry.acquire_group();
         set_state(
             h,
             Box::new(InstanceState {
@@ -822,11 +793,8 @@ impl super::SystemLink<'_> {
                 _c_target: c_target,
                 keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
                 kf_root_group: root_kf_group,
-                depth,
-                spawned_surface_pos: surface_pos,
+                spawned_surface_pos: pos,
                 pointer_focus: false,
-                views: Vec::new(),
-                _base_surface_event_handler: base_surface_event_handler,
             }),
         );
         self.rt_sender
@@ -838,11 +806,44 @@ impl super::SystemLink<'_> {
             }))
             .expect("rt_sender.send");
 
-        let views = setup_contents(layouted_items, Handle(h), view_init_context);
-        state_mut(h).views = views;
-
         let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
         Handle(h)
+    }
+
+    pub fn pop_context_menu(
+        &self,
+        parent: WindowHandle,
+        view_init_context: &mut ViewInitContext,
+        depth: usize,
+        surface_pos: Point<LogicalUnit>,
+        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        setup_contents: impl FnOnce(
+            Vec<MenuItemLayout>,
+            Handle,
+            &mut ViewInitContext,
+        ) -> Vec<MenuItemView>,
+    ) -> (Handle, Rc<MenuBaseSurfaceEventHandler>, Vec<MenuItemView>) {
+        let render_scale = parent.ui_scale_factor();
+        let layouted_items = layouted_items(render_scale);
+        let width = MenuItemLayout::min_width(layouted_items.iter());
+        let height = MenuItemLayout::height(layouted_items.iter());
+
+        let h = self.new_flyout_surface(
+            parent,
+            surface_pos,
+            Size::new_logical(width.value(), height.value()),
+            view_init_context.mount_context.composite_tree,
+            view_init_context.mount_context.ht_manager,
+            view_init_context.mount_context.keyboard_focus_registry,
+        );
+
+        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
+        view_init_context
+            .ht_manager
+            .set_action_handler(h.ht_root(), &base_surface_event_handler);
+        let views = setup_contents(layouted_items, h, view_init_context);
+
+        (h, base_surface_event_handler, views)
     }
 
     pub fn any_pointer_on_context_menu(&self) -> bool {
@@ -853,9 +854,20 @@ impl super::SystemLink<'_> {
         let p = unsafe { p.assume_init() };
 
         let w_pointing = unsafe { WindowFromPoint(p) };
-        let has_pointing_menu = WindowByClassIter::new(PCWSTR(self.context_menu.window_class as _))
-            .any(|x| x == w_pointing);
+        WindowByClassIter::new(self.flyout_surface_context.window_class())
+            .any(|x| x.expect("FindWindowExW failed") == w_pointing)
+    }
 
-        has_pointing_menu
+    pub fn any_pointer_on_dropdown_menu(&self) -> bool {
+        // TODO: ContextMenuと区別できてない（でも区別する必要もないか？）
+        let mut p = core::mem::MaybeUninit::<POINT>::uninit();
+        unsafe {
+            GetCursorPos(p.as_mut_ptr()).expect("Failed to get cursor pos");
+        }
+        let p = unsafe { p.assume_init() };
+
+        let w_pointing = unsafe { WindowFromPoint(p) };
+        WindowByClassIter::new(self.flyout_surface_context.window_class())
+            .any(|x| x.expect("FindWindowExW failed") == w_pointing)
     }
 }
