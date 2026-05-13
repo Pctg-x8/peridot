@@ -30,7 +30,6 @@ use crate::{
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
             HitTestTreeRef, PointerActionArgs, PointerButton, PointerButtonActionArgs,
-            ScrollWheelActionArgs, ScrollWheelActionResponse,
         },
     },
     rendering::{
@@ -46,10 +45,10 @@ use crate::{
     uikit::{
         MenuItem, MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
-        ScrollContainer, SimpleButtonView, TextInputView, ViewEventHandler, ViewIdentifier,
-        ViewInitContext, ViewRegistry, ViewUpdateContext,
+        ScrollContainer, SimpleButtonView, TextInputView, ViewIdentifier, ViewInitContext,
+        ViewRegistry, ViewUpdateContext,
     },
-    utils::{Color32, InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
+    utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
 };
 
 #[cfg(windows)]
@@ -197,6 +196,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     dp_context.bind_global_messaging(wl_global_msg.as_mut());
 
+    let memory_sample_timer_fd = utils::platform::linux::TimerFD::new().expect("timerfd.new");
+    memory_sample_timer_fd
+        .set(0, 50_000_000)
+        .expect("timerfd.set");
+
     #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
     #[cfg(windows)]
@@ -317,6 +321,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         epoll
             .add(&delayed_action_timer_fd, EpollEventBits::IN, 4)
             .expect("epoll.add");
+        #[cfg(feature = "wayland")]
+        epoll
+            .add(&memory_sample_timer_fd, EpollEventBits::IN, 5)
+            .expect("epoll.add");
         #[cfg(target_os = "linux")]
         let evdevs = (0..32)
             .filter_map(|x| {
@@ -402,6 +410,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         tracing::error!(?flags, "dbus.watch.handle");
                     }
                     dbus_signal = true;
+                } else if e.value() == 5 {
+                    perf::memory_stats();
                 }
             }
 

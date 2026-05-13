@@ -49,6 +49,51 @@ pub static TIMESTAMP_FREQUENCY: std::sync::LazyLock<i64> = std::sync::LazyLock::
 #[cfg(unix)]
 pub const TIMESTAMP_FREQUENCY: i64 = 1_000_000_000;
 
+#[cfg(feature = "enable-profiling")]
+#[cfg(unix)]
+static mut SELF_STATM_FD: core::ffi::c_int = -1;
+
+#[cfg(feature = "enable-profiling")]
+pub fn memory_stats() {
+    const BUFSIZE: usize = 64;
+    let mut buf = [core::mem::MaybeUninit::<u8>::uninit(); BUFSIZE];
+    let nread = unsafe { libc::pread(SELF_STATM_FD, buf.as_mut_ptr().cast(), BUFSIZE as _, 0) };
+    if nread < 0 {
+        tracing::error!(reason = %std::io::Error::last_os_error(), "cannot read statm");
+        return;
+    }
+
+    let mut buf: &[u8] =
+        unsafe { &core::mem::transmute::<&[_; BUFSIZE], &[_; BUFSIZE]>(&buf)[..nread as usize] };
+    let mut size = 0u64;
+    while let &[c, ref rest @ ..] = buf
+        && c != b' '
+    {
+        size = size * 10 + (c - b'0') as u64;
+        buf = rest;
+    }
+    while let &[b' ', ref rest @ ..] = buf {
+        buf = rest;
+    }
+    let mut resident = 0u64;
+    while let &[c, ref rest @ ..] = buf
+        && c != b' '
+    {
+        resident = resident * 10 + (c - b'0') as u64;
+        buf = rest;
+    }
+
+    let pagesize = unsafe { getpagesize() };
+
+    tracing::debug!(size, resident, pagesize, "memory stats");
+}
+
+#[cfg(feature = "enable-profiling")]
+#[cfg(unix)]
+unsafe extern "C" {
+    fn getpagesize() -> core::ffi::c_int;
+}
+
 /// Simple spin-lock based mutex
 #[cfg(feature = "enable-profiling")]
 pub struct Spinlocked<T> {
@@ -137,6 +182,8 @@ pub struct Profiler {
     writer: Spinlocked<std::io::BufWriter<std::fs::File>>,
     marker_addr_to_name: Spinlocked<HashMap<usize, &'static str>>,
     section_last_id: core::sync::atomic::AtomicU64,
+    #[cfg(target_os = "linux")]
+    pub memory_collection_interval_timer: crate::utils::platform::linux::TimerFD,
 }
 #[cfg(feature = "enable-profiling")]
 impl Drop for Profiler {
@@ -193,10 +240,22 @@ impl Profiler {
         )
         .expect("write");
 
+        #[cfg(target_os = "linux")]
+        let memory_collection_interval_timer =
+            crate::utils::platform::linux::TimerFD::new().expect("timerfd.create");
+        #[cfg(target_os = "linux")]
+        {
+            memory_collection_interval_timer
+                .set(0, 500 * 1_000_000)
+                .expect("timerfd.set");
+        }
+
         Self {
             writer: Spinlocked::new(target),
             marker_addr_to_name: Spinlocked::new(HashMap::new()),
             section_last_id: core::sync::atomic::AtomicU64::new(0),
+            #[cfg(target_os = "linux")]
+            memory_collection_interval_timer,
         }
     }
 
@@ -320,6 +379,7 @@ enum MarkerTag {
     Event = 1,
     SectionBegin = 2,
     SectionEnd = 3,
+    MemoryUsage = 4,
 }
 impl MarkerTag {
     #[inline(always)]
@@ -406,6 +466,19 @@ pub fn init_profiler() {
     .expect("file.create");
 
     #[cfg(feature = "enable-profiling")]
+    #[cfg(unix)]
+    {
+        let fd = unsafe { libc::open(c"/proc/self/statm".as_ptr(), libc::O_RDONLY) };
+        if fd < 0 {
+            panic!("cannot open statm: {}", std::io::Error::last_os_error());
+        }
+
+        unsafe {
+            SELF_STATM_FD = fd;
+        }
+    }
+
+    #[cfg(feature = "enable-profiling")]
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(PROFILER_INSTANCE).cast(),
@@ -415,6 +488,12 @@ pub fn init_profiler() {
 }
 
 pub fn fini_profiler() {
+    #[cfg(feature = "enable-profiling")]
+    #[cfg(unix)]
+    if unsafe { libc::close(SELF_STATM_FD) } < 0 {
+        panic!("failed close statm: {}", std::io::Error::last_os_error());
+    }
+
     #[cfg(feature = "enable-profiling")]
     unsafe {
         core::ptr::drop_in_place(core::ptr::addr_of_mut!(PROFILER_INSTANCE).cast::<Profiler>());
