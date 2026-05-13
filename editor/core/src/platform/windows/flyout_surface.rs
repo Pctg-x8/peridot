@@ -83,11 +83,6 @@ impl MountTarget for Handle {
     }
 }
 impl Handle {
-    #[deprecated]
-    pub const fn internal(&self) -> HWND {
-        self.0
-    }
-
     pub fn close<E>(
         self,
         syslink: &SystemLink,
@@ -168,7 +163,7 @@ impl Handle {
 pub struct InstanceState {
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    event_dispatcher: LogicFiberEventDispatcher,
+    event_dispatcher: *const LogicFiberEventDispatcher,
     _c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
     kf_root_group: KeyboardFocusGroupRef,
@@ -185,6 +180,11 @@ impl InstanceState {
         composite_tree.free_all(self.composite_root);
         ht_manager.free_all(self.ht_root);
         keyboard_focus_registry.release_group(self.kf_root_group);
+    }
+
+    #[inline(always)]
+    fn dispatch_event(&self, event: Event) {
+        unsafe { &*self.event_dispatcher }.dispatch(event);
     }
 }
 
@@ -326,24 +326,20 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
     if msg == WM_LBUTTONDOWN {
         // move then down
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerMove {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                client_pos: Point::new_pixels(
-                    (lparam.0 & 0xffff) as i16 as _,
-                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                )
-                .to_logical(Handle(hwnd).render_scale()),
-            });
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerDown {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                button: PointerButton::Primary,
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            client_pos: Point::new_pixels(
+                (lparam.0 & 0xffff) as i16 as _,
+                ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            )
+            .to_logical(Handle(hwnd).render_scale()),
+        });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            button: PointerButton::Primary,
+        });
 
         return LRESULT(0);
     }
@@ -360,21 +356,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerMove {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                client_pos: Point::new_pixels(p[0].x, p[0].y)
-                    .to_logical(Handle(hwnd).render_scale()),
-            });
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerDown {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                button: PointerButton::Primary,
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+        });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            button: PointerButton::Primary,
+        });
 
         return LRESULT(0);
     }
@@ -382,36 +373,30 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_LBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerUp {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                button: PointerButton::Primary,
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerUp {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            button: PointerButton::Primary,
+        });
         return LRESULT(0);
     }
 
     if msg == WM_RBUTTONDOWN {
         // move then down
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerMove {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                client_pos: Point::new_pixels(
-                    (lparam.0 & 0xffff) as i16 as _,
-                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                )
-                .to_logical(Handle(hwnd).render_scale()),
-            });
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerDown {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                button: PointerButton::Secondary,
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            client_pos: Point::new_pixels(
+                (lparam.0 & 0xffff) as i16 as _,
+                ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            )
+            .to_logical(Handle(hwnd).render_scale()),
+        });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            button: PointerButton::Secondary,
+        });
 
         return LRESULT(0);
     }
@@ -428,21 +413,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerMove {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                client_pos: Point::new_pixels(p[0].x, p[0].y)
-                    .to_logical(Handle(hwnd).render_scale()),
-            });
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerDown {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                button: PointerButton::Secondary,
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+        });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            button: PointerButton::Secondary,
+        });
 
         return LRESULT(0);
     }
@@ -450,13 +430,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_RBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerUp {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                button: PointerButton::Secondary,
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerUp {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            button: PointerButton::Secondary,
+        });
         return LRESULT(0);
     }
 
@@ -473,17 +451,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
         state_mut(hwnd).pointer_focus = true;
 
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerMove {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                client_pos: Point::new_pixels(
-                    (lparam.0 & 0xffff) as i16 as _,
-                    ((lparam.0 >> 16) & 0xffff) as i16 as _,
-                )
-                .to_logical(Handle(hwnd).render_scale()),
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            client_pos: Point::new_pixels(
+                (lparam.0 & 0xffff) as i16 as _,
+                ((lparam.0 >> 16) & 0xffff) as i16 as _,
+            )
+            .to_logical(Handle(hwnd).render_scale()),
+        });
 
         return LRESULT(0);
     }
@@ -510,14 +486,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             MapWindowPoints(None, Some(hwnd), &mut p);
         }
 
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerMove {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-                client_pos: Point::new_pixels(p[0].x, p[0].y)
-                    .to_logical(Handle(hwnd).render_scale()),
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+            client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+        });
         // Note: NCMOUSEMOVEはデフォルト動作もさせる
     }
 
@@ -539,12 +512,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             //     });
         }
 
-        state(hwnd)
-            .event_dispatcher
-            .dispatch(Event::ContextMenuPointerLeave {
-                target: Handle(hwnd),
-                pointer_id: super::PointerID(),
-            });
+        state(hwnd).dispatch_event(Event::ContextMenuPointerLeave {
+            target: Handle(hwnd),
+            pointer_id: super::PointerID(),
+        });
 
         return LRESULT(0);
     }
@@ -789,7 +760,7 @@ impl super::SystemLink<'_> {
             Box::new(InstanceState {
                 composite_root,
                 ht_root,
-                event_dispatcher: unsafe { &*self.event_dispatcher }.clone(),
+                event_dispatcher: self.event_dispatcher,
                 _c_target: c_target,
                 keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
                 kf_root_group: root_kf_group,

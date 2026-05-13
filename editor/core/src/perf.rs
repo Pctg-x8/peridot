@@ -49,6 +49,68 @@ pub static TIMESTAMP_FREQUENCY: std::sync::LazyLock<i64> = std::sync::LazyLock::
 #[cfg(unix)]
 pub const TIMESTAMP_FREQUENCY: i64 = 1_000_000_000;
 
+#[cfg(windows)]
+#[cfg(feature = "enable-profiling")]
+pub fn memory_stats() {
+    let mut stat = core::mem::MaybeUninit::<
+        windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+    >::uninit();
+    unsafe {
+        windows::Win32::System::ProcessStatus::GetProcessMemoryInfo(
+            windows::Win32::System::Threading::GetCurrentProcess(),
+            stat.as_mut_ptr().cast(),
+            core::mem::size_of::<windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX>(
+            ) as _,
+        )
+        .expect("GetProcessMemoryInfo");
+    }
+    let stat = unsafe { stat.assume_init_ref() };
+    tracing::debug!(
+        working_set = stat.WorkingSetSize,
+        committed = stat.PagefileUsage,
+        "memory report"
+    );
+}
+
+#[cfg(feature = "enable-profiling")]
+#[derive(Debug)]
+pub struct MemoryStats {
+    pub total_resident_bytes: usize,
+    pub total_reserved_bytes: usize,
+}
+#[cfg(feature = "enable-profiling")]
+impl MemoryStats {
+    pub fn fetch() -> Self {
+        #[cfg(windows)]
+        let mut stat = core::mem::MaybeUninit::<
+            windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+        >::uninit();
+        #[cfg(windows)]
+        if let Err(e) = unsafe {
+            windows::Win32::System::ProcessStatus::GetProcessMemoryInfo(
+                windows::Win32::System::Threading::GetCurrentProcess(),
+                stat.as_mut_ptr().cast(),
+                core::mem::size_of::<
+                    windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+                >() as _,
+            )
+        } {
+            tracing::error!(reason = %e, "GetProcessMemoryInfo failed");
+            return Self {
+                total_resident_bytes: 0,
+                total_reserved_bytes: 0,
+            };
+        }
+        #[cfg(windows)]
+        let stat = unsafe { stat.assume_init_ref() };
+        #[cfg(windows)]
+        Self {
+            total_resident_bytes: stat.WorkingSetSize,
+            total_reserved_bytes: stat.PrivateUsage,
+        }
+    }
+}
+
 /// Simple spin-lock based mutex
 #[cfg(feature = "enable-profiling")]
 pub struct Spinlocked<T> {
@@ -304,6 +366,27 @@ impl Profiler {
     }
 
     #[inline(always)]
+    pub fn emit_memory_stats(&self) {
+        let ts = timestamp().to_ne_bytes();
+        let memstats = MemoryStats::fetch();
+
+        let marker_tag = MarkerTag::MemoryStats.to_ne_bytes();
+        let ms_total_resident_bytes = memstats.total_resident_bytes.to_ne_bytes();
+        let ms_total_reserved_bytes = memstats.total_reserved_bytes.to_ne_bytes();
+        let mut iovs = [
+            IoSlice::new(&marker_tag),
+            IoSlice::new(&ts),
+            IoSlice::new(&ms_total_resident_bytes),
+            IoSlice::new(&ms_total_reserved_bytes),
+        ];
+
+        let r = Self::writeva(&mut *self.writer.lock(), &mut iovs);
+        if let Err(e) = r {
+            tracing::warn!(reason = %e, "emit_memory_stats fail");
+        }
+    }
+
+    #[inline(always)]
     fn writeva(w: &mut (impl Write + ?Sized), mut v: &mut [IoSlice]) -> std::io::Result<()> {
         while !v.is_empty() {
             let b = w.write_vectored(v)?;
@@ -320,6 +403,7 @@ enum MarkerTag {
     Event = 1,
     SectionBegin = 2,
     SectionEnd = 3,
+    MemoryStats = 4,
 }
 impl MarkerTag {
     #[inline(always)]
@@ -531,5 +615,15 @@ macro_rules! perf_scope {
         let _scope = $crate::perf::SectionScope(
             $crate::perf::profiler().emit_section_begin_with_str(&$marker, $s),
         );
+    };
+}
+
+#[macro_export]
+macro_rules! perf_sample_memory {
+    () => {
+        #[cfg(feature = "enable-profiling")]
+        {
+            $crate::perf::profiler().emit_memory_stats();
+        }
     };
 }

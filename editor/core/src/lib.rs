@@ -173,6 +173,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")] static_pixbufs: &'sys platform::unix::wayland::StaticPixbufs,
     #[cfg(target_os = "linux")] dbus: &'sys dbus::Connection,
 ) {
+    perf_sample_memory!();
+
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
@@ -194,6 +196,26 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     ));
     #[cfg(feature = "wayland")]
     dp_context.bind_global_messaging(wl_global_msg.as_mut());
+
+    #[cfg(windows)]
+    #[cfg(feature = "enable-profiling")]
+    let memory_sample_timer = unsafe {
+        windows::Win32::System::Threading::CreateWaitableTimerW(None, false, None)
+            .expect("CreateWaitableTimerW")
+    };
+    #[cfg(windows)]
+    #[cfg(feature = "enable-profiling")]
+    unsafe {
+        windows::Win32::System::Threading::SetWaitableTimer(
+            memory_sample_timer,
+            &-50_000_0,
+            50,
+            None,
+            None,
+            false,
+        )
+        .expect("SetWaitableTimer");
+    }
 
     #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
@@ -293,6 +315,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .name("Render".into())
             .spawn_scoped(thread_scope, || render_thread.run())
             .expect("render_thread spawn");
+
+        perf_sample_memory!();
 
         #[cfg(target_os = "linux")]
         let epoll = Epoll::new(0).expect("epoll.new");
@@ -557,7 +581,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }
 
         #[cfg(windows)]
-        let handles = [sync_event_bus.event_notify];
+        let handles = [
+            sync_event_bus.event_notify,
+            #[cfg(feature = "enable-profiling")]
+            memory_sample_timer,
+        ];
         #[cfg(windows)]
         let mut msg = core::mem::MaybeUninit::uninit();
         #[cfg(windows)]
@@ -570,10 +598,23 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     windows::Win32::UI::WindowsAndMessaging::MWMO_INPUTAVAILABLE,
                 )
             };
+            if r == windows::Win32::Foundation::WAIT_FAILED {
+                panic!(
+                    "unrecoverable MsgWaitForMultipleObjectsEx error: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
 
             if r == windows::Win32::Foundation::WAIT_OBJECT_0 {
                 sync_event_bus.redispatch(&app_event_dispatcher);
-            } else if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
+                continue;
+            }
+            #[cfg(feature = "enable-profiling")]
+            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 1 {
+                crate::perf::profiler().emit_memory_stats();
+                continue;
+            }
+            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
                 while unsafe {
                     windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
                         msg.as_mut_ptr(),
@@ -611,14 +652,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(msg);
                     }
                 }
-            } else if r == windows::Win32::Foundation::WAIT_FAILED {
-                panic!(
-                    "unrecoverable MsgWaitForMultipleObjectsEx error: {}",
-                    std::io::Error::last_os_error()
-                );
-            } else {
-                tracing::warn!(?r, "unhandled mwmo result");
+                continue;
             }
+
+            tracing::warn!(?r, "unhandled mwmo result");
         }
 
         #[cfg(target_os = "macos")]
