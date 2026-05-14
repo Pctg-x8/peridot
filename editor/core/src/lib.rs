@@ -721,15 +721,15 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
 #[derive(Clone, Debug)]
 pub enum SyncEvent {
-    WindowPostResizeRenderBuffer { window: WindowHandle },
-    ContextMenuPostResizeRenderBuffer { target: FlyoutSurfaceHandle },
+    WindowPostCreateRenderBuffer { window: WindowHandle },
+    FlyoutSurfacePostCreateRenderBuffer { target: FlyoutSurfaceHandle },
     PopupUnmount { id: PopupID },
 }
 impl SyncEvent {
     pub const fn p_name(&self) -> &'static str {
         match self {
-            Self::WindowPostResizeRenderBuffer { .. } => "Sync(WindowPostResizeRenderBuffer)",
-            Self::ContextMenuPostResizeRenderBuffer { .. } => {
+            Self::WindowPostCreateRenderBuffer { .. } => "Sync(WindowPostResizeRenderBuffer)",
+            Self::FlyoutSurfacePostCreateRenderBuffer { .. } => {
                 "Sync(ContextMenuPostResizeRenderBuffer)"
             }
             Self::PopupUnmount { .. } => "Sync(PopupUnmount)",
@@ -1847,11 +1847,11 @@ async fn run<'sys>(
             Event::WindowResize { window, size } => {
                 // pointer_input_manager.set_client_size(window, size);
             }
-            Event::Sync(SyncEvent::WindowPostResizeRenderBuffer { window }) => {
+            Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
             }
-            Event::Sync(SyncEvent::ContextMenuPostResizeRenderBuffer { target }) => {
+            Event::Sync(SyncEvent::FlyoutSurfacePostCreateRenderBuffer { target }) => {
                 #[cfg(feature = "wayland")]
                 target.update_manual_scaling();
             }

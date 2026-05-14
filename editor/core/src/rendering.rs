@@ -243,6 +243,7 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 self.font_set,
+                                self.event_bus,
                             ),
                         );
                     }
@@ -293,6 +294,7 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 self.font_set,
+                                self.event_bus,
                                 #[cfg(windows)]
                                 self.dx_context,
                             ),
@@ -382,6 +384,7 @@ impl<'main> RenderThread<'main> {
             #[cfg(not(windows))]
             for x in context_menus.values_mut() {
                 if x.take_swapchain_externally_invalidation_signal() {
+                    tracing::debug!("ContextMenuSwapchainInvalidation");
                     x.invalidate_swapchain();
                     any_swapchain_invalidated = true;
                 }
@@ -956,6 +959,7 @@ impl<'d> ContextMenuRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         root_font_set: &'d FontSet,
+        event_bus: &SyncEventBus,
         #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
     ) -> Self {
         #[cfg(not(windows))]
@@ -1147,6 +1151,10 @@ impl<'d> ContextMenuRenderer<'d> {
                 .map(|b| unsafe { br::VkHandleRef::dangling(b.vk_image_view) }),
         );
 
+        event_bus.push(SyncEvent::FlyoutSurfacePostCreateRenderBuffer {
+            target: create_data.w,
+        });
+
         Self {
             w: create_data.w,
             active_scale: init_scale,
@@ -1318,7 +1326,7 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(windows)]
         todo!("revalidate composition swapchain");
 
-        event_bus.push(SyncEvent::ContextMenuPostResizeRenderBuffer { target: self.w });
+        event_bus.push(SyncEvent::FlyoutSurfacePostCreateRenderBuffer { target: self.w });
         self.swapchain_invalidated = false;
     }
 
@@ -1504,6 +1512,7 @@ impl<'d> WindowRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         root_font_set: &'d FontSet,
+        event_bus: &SyncEventBus,
     ) -> Self {
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.key.pixels_client_size());
@@ -1569,11 +1578,14 @@ impl<'d> WindowRenderer<'d> {
             None
         };
 
+        event_bus.push(SyncEvent::WindowPostCreateRenderBuffer {
+            window: create_data.key,
+        });
+
         Self {
             w: create_data.key,
             active_scale: init_scale,
             latest_ui_scale_changes: &create_data.key.state().latest_ui_scale_changes,
-
             vk_device: device,
             composite_root: create_data.key.composite_root(),
             composite_renderer,
@@ -1723,7 +1735,7 @@ impl<'d> WindowRenderer<'d> {
             descriptor_writes,
         );
 
-        event_bus.push(SyncEvent::WindowPostResizeRenderBuffer { window: self.w });
+        event_bus.push(SyncEvent::WindowPostCreateRenderBuffer { window: self.w });
         self.swapchain_invalidated = false;
     }
 
