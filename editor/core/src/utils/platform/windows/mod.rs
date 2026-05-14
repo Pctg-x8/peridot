@@ -48,26 +48,27 @@ pub unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
 
 pub struct WindowByClassIter {
     class: PCWSTR,
-    window_after: HWND,
+    window_after: Option<HWND>,
 }
 impl WindowByClassIter {
     pub fn new(class: PCWSTR) -> Self {
         Self {
             class,
-            window_after: HWND(core::ptr::null_mut()),
+            window_after: None,
         }
     }
 }
 impl Iterator for WindowByClassIter {
-    type Item = HWND;
+    type Item = windows_core::Result<HWND>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match unsafe { FindWindowExW(None, Some(self.window_after), self.class, None) } {
+        match unsafe { FindWindowExW(None, self.window_after, self.class, None) } {
             Ok(x) => {
-                self.window_after = x;
-                Some(x)
+                self.window_after = Some(x);
+                Some(Ok(x))
             }
-            Err(_) => None,
+            Err(e) if e == windows_core::Error::empty() => None,
+            Err(e) => Some(Err(e)),
         }
     }
 }

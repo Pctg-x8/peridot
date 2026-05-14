@@ -240,6 +240,8 @@ abstract class MarkerTransformStep {
                     return MarkerTransformStep.Section.Begin.Timestamp;
                 case "Section.End":
                     return MarkerTransformStep.Section.End.Timestamp;
+                case "MemoryStats":
+                    return MarkerTransformStep.MemoryStats.Timestamp;
             }
         }
     })();
@@ -425,6 +427,59 @@ abstract class MarkerTransformStep {
                     return MarkerTransformStep.MarkerTag;
                 }
             },
+        },
+    } as const;
+
+    static readonly MemoryStats = {
+        Timestamp: new (class extends MarkerTransformStep {
+            override execute(
+                controller: TransformStreamDefaultController<Marker>,
+                state: TransformerState,
+            ): MarkerTransformStep | null {
+                const timestamp = state.tryNextU64();
+                return timestamp === null ? null : new MarkerTransformStep.MemoryStats.TotalResidentBytes(timestamp);
+            }
+        })(),
+        TotalResidentBytes: class extends MarkerTransformStep {
+            constructor(private readonly timestamp: bigint) {
+                super();
+            }
+
+            override execute(
+                controller: TransformStreamDefaultController<Marker>,
+                state: TransformerState,
+            ): MarkerTransformStep | null {
+                const totalResidentBytes = state.tryNextUsize();
+                return totalResidentBytes === null
+                    ? null
+                    : new MarkerTransformStep.MemoryStats.TotalReservedBytes(this.timestamp, totalResidentBytes);
+            }
+        },
+        TotalReservedBytes: class extends MarkerTransformStep {
+            constructor(
+                private readonly timestamp: bigint,
+                private readonly totalResidentBytes: bigint,
+            ) {
+                super();
+            }
+
+            override execute(
+                controller: TransformStreamDefaultController<Marker>,
+                state: TransformerState,
+            ): MarkerTransformStep | null {
+                const totalReservedBytes = state.tryNextUsize();
+                if (totalReservedBytes === null) {
+                    return null;
+                }
+
+                controller.enqueue({
+                    type: "MemoryStats",
+                    timestamp: this.timestamp,
+                    totalResidentBytes: this.totalResidentBytes,
+                    totalReservedBytes: totalReservedBytes,
+                });
+                return MarkerTransformStep.MarkerTag;
+            }
         },
     } as const;
 
@@ -664,7 +719,8 @@ const MARKER_TAG_NUM_TERMINAL: MarkerTagNum = 0;
 const MARKER_TAG_NUM_EVENT: MarkerTagNum = 1;
 const MARKER_TAG_NUM_SECTION_BEGIN: MarkerTagNum = 2;
 const MARKER_TAG_NUM_SECTION_END: MarkerTagNum = 3;
-type MarkerTag = "Terminal" | "Event" | "Section.Begin" | "Section.End";
+const MARKER_TAG_NUM_MEMORY_STATS: MarkerTagNum = 4;
+type MarkerTag = "Terminal" | "Event" | "Section.Begin" | "Section.End" | "MemoryStats";
 export function getMarkerTag(num: number): MarkerTag {
     switch (num) {
         case MARKER_TAG_NUM_TERMINAL:
@@ -675,6 +731,8 @@ export function getMarkerTag(num: number): MarkerTag {
             return "Section.Begin";
         case MARKER_TAG_NUM_SECTION_END:
             return "Section.End";
+        case MARKER_TAG_NUM_MEMORY_STATS:
+            return "MemoryStats";
         default:
             throw new InvalidBinError(`unknown marker tag: ${num}`);
     }
@@ -695,7 +753,7 @@ export function getAuxDataTypeTag(num: number): AuxDataTypeTag {
     }
 }
 
-export type Marker = EventMarker | SectionBeginMarker | SectionEndMarker;
+export type Marker = EventMarker | SectionBeginMarker | SectionEndMarker | MemoryStatsMarker;
 export type EventMarker = {
     readonly type: "Event";
     readonly timestamp: bigint;
@@ -712,6 +770,12 @@ export type SectionEndMarker = {
     readonly type: "Section.End";
     readonly timestamp: bigint;
     readonly sectionId: bigint;
+};
+export type MemoryStatsMarker = {
+    readonly type: "MemoryStats";
+    readonly timestamp: bigint;
+    readonly totalResidentBytes: bigint;
+    readonly totalReservedBytes: bigint;
 };
 
 function readUsize(dv: DataView, offset: number, targetPointerSize: number, isLittleEndian: boolean): bigint {

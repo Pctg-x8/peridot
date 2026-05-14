@@ -100,7 +100,7 @@ use crate::{
     },
 };
 
-pub mod context_menu;
+pub mod flyout_surface;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowHandle(HWND);
@@ -1506,7 +1506,7 @@ pub struct SystemLink<'sys> {
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
     pub app_context_ptr: *const ApplicationContext,
     pub pointer_hovering_timer_id: *mut usize,
-    pub context_menu: context_menu::SharedState,
+    pub flyout_surface_context: flyout_surface::SharedState,
 }
 impl SystemLink<'_> {
     #[inline(always)]

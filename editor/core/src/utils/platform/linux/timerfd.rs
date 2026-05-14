@@ -49,6 +49,30 @@ impl TimerFD {
     }
 
     #[inline(always)]
+    pub fn set_interval(&self, sec: libc::time_t, nsec: libc::time_t) -> std::io::Result<()> {
+        match unsafe {
+            libc::timerfd_settime(
+                self.fd,
+                0,
+                &libc::itimerspec {
+                    it_interval: libc::timespec {
+                        tv_sec: sec,
+                        tv_nsec: nsec,
+                    },
+                    it_value: libc::timespec {
+                        tv_sec: sec,
+                        tv_nsec: nsec,
+                    },
+                },
+                std::ptr::null_mut(),
+            )
+        } {
+            r if r < 0 => Err(std::io::Error::last_os_error()),
+            _ => Ok(()),
+        }
+    }
+
+    #[inline(always)]
     pub fn unset(&self) -> std::io::Result<()> {
         match unsafe {
             libc::timerfd_settime(

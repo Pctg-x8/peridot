@@ -18,9 +18,6 @@ use std::{
 #[cfg(target_os = "macos")]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[cfg(not(windows))]
-#[cfg(feature = "wayland")]
-use crate::uikit::{MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView};
 use crate::{
     graphics::VulkanDevice,
     input::{
@@ -43,7 +40,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MenuItem, MenuItemCommonResources, MountContext, MountTarget, OverlayPopupBasicFrameView,
+        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
+        MenuItemView, MountContext, MountTarget, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
         ScrollContainer, SimpleButtonView, TextInputView, ViewIdentifier, ViewInitContext,
         ViewRegistry, ViewUpdateContext,
@@ -174,6 +172,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")] static_pixbufs: &'sys platform::unix::wayland::StaticPixbufs,
     #[cfg(target_os = "linux")] dbus: &'sys dbus::Connection,
 ) {
+    perf_sample_memory!();
+
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
@@ -196,10 +196,34 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     dp_context.bind_global_messaging(wl_global_msg.as_mut());
 
+    #[cfg(feature = "enable-profiling")]
+    #[cfg(target_os = "linux")]
     let memory_sample_timer_fd = utils::platform::linux::TimerFD::new().expect("timerfd.new");
+    #[cfg(feature = "enable-profiling")]
+    #[cfg(target_os = "linux")]
     memory_sample_timer_fd
-        .set(0, 50_000_000)
+        .set_interval(0, 50_000_000)
         .expect("timerfd.set");
+
+    #[cfg(windows)]
+    #[cfg(feature = "enable-profiling")]
+    let memory_sample_timer = unsafe {
+        windows::Win32::System::Threading::CreateWaitableTimerW(None, false, None)
+            .expect("CreateWaitableTimerW")
+    };
+    #[cfg(windows)]
+    #[cfg(feature = "enable-profiling")]
+    unsafe {
+        windows::Win32::System::Threading::SetWaitableTimer(
+            memory_sample_timer,
+            &-50_000_0,
+            50,
+            None,
+            None,
+            false,
+        )
+        .expect("SetWaitableTimer");
+    }
 
     #[cfg(windows)]
     let mut pointer_hovering_timer_id = 0;
@@ -225,7 +249,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context_ptr: app_context,
             pointer_hovering_timer_id: &mut pointer_hovering_timer_id,
-            context_menu: platform::windows::context_menu::SharedState::new(
+            flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
+                app_context,
                 &dx_context,
                 context_menu_delayed_action_timer_id.as_mut(),
             )
@@ -249,11 +274,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             #[cfg(target_os = "linux")]
             pointer_hovering_timer: &pointer_hovering_timer,
             #[cfg(feature = "wayland")]
-            context_menu: platform::unix::wayland::flyout_surface::SharedState {
+            flyout_surface_context: platform::unix::wayland::flyout_surface::SharedState {
                 delayed_action_timer,
             },
             #[cfg(target_os = "macos")]
-            context_menu: platform::mac::context_menu::SharedState {
+            flyout_surface_context: platform::mac::context_menu::SharedState {
                 event_dispatcher: app_event_dispatcher.as_mut().get_mut()
             },
         },
@@ -299,6 +324,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .spawn_scoped(thread_scope, || render_thread.run())
             .expect("render_thread spawn");
 
+        perf_sample_memory!();
+
         #[cfg(target_os = "linux")]
         let epoll = Epoll::new(0).expect("epoll.new");
         #[cfg(feature = "wayland")]
@@ -322,6 +349,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .add(&delayed_action_timer_fd, EpollEventBits::IN, 4)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
+        #[cfg(feature = "enable-profiling")]
         epoll
             .add(&memory_sample_timer_fd, EpollEventBits::IN, 5)
             .expect("epoll.add");
@@ -370,15 +398,25 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 let e = unsafe { eventbuf[n as usize].assume_init_ref() };
                 if e.value() == 0 {
                     wl_display_signal = true;
-                } else if e.value() == 1 {
+                    continue;
+                }
+                if e.value() == 1 {
                     terminate_signal = true;
-                } else if e.value() == 2 {
+                    continue;
+                }
+                if e.value() == 2 {
                     events_signal = true;
-                } else if e.value() == 3 {
+                    continue;
+                }
+                if e.value() == 3 {
                     pointer_hovering_timer_signal = true;
-                } else if e.value() == 4 {
+                    continue;
+                }
+                if e.value() == 4 {
                     delayed_action_timer_signal = true;
-                } else if e.value() >= 10 && e.value() < 10 + 32 {
+                    continue;
+                }
+                if e.value() >= 10 && e.value() < 10 + 32 {
                     let ed = evdevs[(e.value() - 10) as usize]
                         .read()
                         .expect("evdev.read");
@@ -391,7 +429,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         global_mouse_clicked = true;
                     }
                     // tracing::debug!(n = e.value() - 10, ?ed, "evdev");
-                } else if let Some(&wr) = unsafe { (*poll_id_to_watch_ref.get()).get(&e.value()) } {
+                    continue;
+                }
+                if let Some(&wr) = unsafe { (*poll_id_to_watch_ref.get()).get(&e.value()) } {
                     let mut flags = dbus::WatchFlags::empty();
                     if e.events().contains(EpollEventBits::IN) {
                         flags |= dbus::WatchFlags::READABLE;
@@ -410,8 +450,23 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         tracing::error!(?flags, "dbus.watch.handle");
                     }
                     dbus_signal = true;
-                } else if e.value() == 5 {
-                    perf::memory_stats();
+                    continue;
+                }
+                #[cfg(feature = "enable-profiling")]
+                if e.value() == 5 {
+                    let mut b = [core::mem::MaybeUninit::<u8>::uninit(); 8];
+                    if unsafe {
+                        libc::read(
+                            std::os::fd::AsRawFd::as_raw_fd(&memory_sample_timer_fd),
+                            b.as_mut_ptr().cast(),
+                            8,
+                        )
+                    } < 0
+                    {
+                        tracing::error!(reason = %std::io::Error::last_os_error(), "read memory_sample_timer_fd failed");
+                    }
+
+                    crate::perf_sample_memory!();
                 }
             }
 
@@ -568,7 +623,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }
 
         #[cfg(windows)]
-        let handles = [sync_event_bus.event_notify];
+        let handles = [
+            sync_event_bus.event_notify,
+            #[cfg(feature = "enable-profiling")]
+            memory_sample_timer,
+        ];
         #[cfg(windows)]
         let mut msg = core::mem::MaybeUninit::uninit();
         #[cfg(windows)]
@@ -581,10 +640,23 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     windows::Win32::UI::WindowsAndMessaging::MWMO_INPUTAVAILABLE,
                 )
             };
+            if r == windows::Win32::Foundation::WAIT_FAILED {
+                panic!(
+                    "unrecoverable MsgWaitForMultipleObjectsEx error: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
 
             if r == windows::Win32::Foundation::WAIT_OBJECT_0 {
                 sync_event_bus.redispatch(&app_event_dispatcher);
-            } else if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
+                continue;
+            }
+            #[cfg(feature = "enable-profiling")]
+            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 1 {
+                crate::perf::profiler().emit_memory_stats();
+                continue;
+            }
+            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
                 while unsafe {
                     windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
                         msg.as_mut_ptr(),
@@ -622,14 +694,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(msg);
                     }
                 }
-            } else if r == windows::Win32::Foundation::WAIT_FAILED {
-                panic!(
-                    "unrecoverable MsgWaitForMultipleObjectsEx error: {}",
-                    std::io::Error::last_os_error()
-                );
-            } else {
-                tracing::warn!(?r, "unhandled mwmo result");
+                continue;
             }
+
+            tracing::warn!(?r, "unhandled mwmo result");
         }
 
         #[cfg(target_os = "macos")]
@@ -1812,10 +1880,21 @@ async fn run<'sys>(
                         &mut ht_manager,
                         &mut keyboard_focus_registry,
                     );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
+
+                if let Some(mut c) =
+                    current_active_dropdown_menu_session.take_if(|x| x.parent == window)
+                {
+                    c.close_all(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
+                }
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::WindowRescaleUI {
                 mut window,
@@ -2297,7 +2376,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    system_link.context_menu.reserve_delayed_action();
+                    system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
             Event::ContextMenuDeselectItem { depth } => {
@@ -2310,7 +2389,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    system_link.context_menu.reserve_delayed_action();
+                    system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
             Event::ContextMenuOpenSubmenu { depth, index } => {
@@ -2338,7 +2417,9 @@ async fn run<'sys>(
                 }*/
             }
             Event::ContextMenuPerformDelayedAction => {
-                system_link.context_menu.unreserve_delayed_action();
+                system_link
+                    .flyout_surface_context
+                    .unreserve_delayed_action();
 
                 if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.perform_delayed_action(
@@ -2674,42 +2755,6 @@ async fn run<'sys>(
     }
 }
 
-pub struct ContextMenuSurface {
-    handle: FlyoutSurfaceHandle,
-    item_views: Vec<MenuItemView>,
-    _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
-    parent_path: Vec<usize>,
-    current_selecting: Option<usize>,
-}
-impl ContextMenuSurface {
-    pub fn set_current_selecting(
-        &mut self,
-        new_index: usize,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-    ) {
-        if self.current_selecting == Some(new_index) {
-            // no changes
-            return;
-        }
-
-        if let Some(x) = self.current_selecting {
-            self.item_views[x].unlit(composite_tree, current_sec);
-        }
-
-        self.current_selecting = Some(new_index);
-        self.item_views[new_index].lit(composite_tree, current_sec);
-    }
-
-    pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
-        if let Some(x) = self.current_selecting {
-            self.item_views[x].unlit(composite_tree, current_sec);
-        }
-
-        self.current_selecting = None;
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct DropdownMenuItem {
     pub content: String,
@@ -2863,9 +2908,8 @@ impl DropdownMenuSession {
         min_width: f32,
         items: Vec<DropdownMenuItem>,
     ) -> Self {
-        let mut item_views = Vec::with_capacity(items.len());
         let mut width = min_width;
-        for (n, v) in items.into_iter().enumerate() {
+        for v in items.iter() {
             width = width.max(
                 TextLayout::measure_visual_width(
                     &v.content,
@@ -2875,12 +2919,6 @@ impl DropdownMenuSession {
                 ) + 4.0
                     + 4.0,
             );
-            item_views.push(DropdownMenuItemView::new(
-                view_init_context,
-                selection_receiver.clone(),
-                v,
-                n as f32 * DropdownMenuItemView::ITEM_HEIGHT,
-            ));
         }
 
         let root_surface = syslink.new_flyout_surface(
@@ -2888,15 +2926,24 @@ impl DropdownMenuSession {
             pos,
             Size::new_logical(
                 width,
-                item_views.len() as f32 * DropdownMenuItemView::ITEM_HEIGHT,
+                items.len() as f32 * DropdownMenuItemView::ITEM_HEIGHT,
             ),
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
-            view_init_context.ui_scale_factor,
         );
-        for v in item_views.iter() {
+        view_init_context.ui_scale_factor = root_surface.render_scale();
+
+        let mut item_views = Vec::with_capacity(items.len());
+        for (n, v) in items.into_iter().enumerate() {
+            let v = DropdownMenuItemView::new(
+                view_init_context,
+                selection_receiver.clone(),
+                v,
+                n as f32 * DropdownMenuItemView::ITEM_HEIGHT,
+            );
             v.mount(view_init_context, &root_surface);
+            item_views.push(v);
         }
 
         Self {
@@ -2927,6 +2974,42 @@ impl DropdownMenuSession {
             v.native_surface
                 .close(syslink, composite_tree, ht_manager, keyboard_focus_registry);
         }
+    }
+}
+
+pub struct ContextMenuSurface {
+    handle: FlyoutSurfaceHandle,
+    item_views: Vec<MenuItemView>,
+    _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
+    parent_path: Vec<usize>,
+    current_selecting: Option<usize>,
+}
+impl ContextMenuSurface {
+    pub fn set_current_selecting(
+        &mut self,
+        new_index: usize,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
+        if self.current_selecting == Some(new_index) {
+            // no changes
+            return;
+        }
+
+        if let Some(x) = self.current_selecting {
+            self.item_views[x].unlit(composite_tree, current_sec);
+        }
+
+        self.current_selecting = Some(new_index);
+        self.item_views[new_index].lit(composite_tree, current_sec);
+    }
+
+    pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
+        if let Some(x) = self.current_selecting {
+            self.item_views[x].unlit(composite_tree, current_sec);
+        }
+
+        self.current_selecting = None;
     }
 }
 
@@ -3162,6 +3245,7 @@ impl ContextMenuSession {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
+        tracing::debug!("context menu terminate");
         while let Some(c) = self.opening_surfaces.pop() {
             c.handle.close(
                 system_link,
@@ -3230,7 +3314,7 @@ pub struct SystemLink<'sys> {
     #[cfg(target_os = "linux")]
     pointer_hovering_timer: *const utils::platform::linux::TimerFD,
     #[cfg(feature = "wayland")]
-    pub context_menu: platform::unix::wayland::flyout_surface::SharedState,
+    pub flyout_surface_context: platform::unix::wayland::flyout_surface::SharedState,
     #[cfg(target_os = "macos")]
     pub context_menu: platform::mac::context_menu::SharedState,
 }
@@ -3261,7 +3345,6 @@ impl SystemLink<'_> {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        ref_scale_factor: f32,
     ) -> FlyoutSurfaceHandle {
         platform::unix::wayland::flyout_surface::new_surface(
             parent,
@@ -3271,7 +3354,7 @@ impl SystemLink<'_> {
             composite_tree,
             ht_manager,
             keyboard_focus_registry,
-            ref_scale_factor,
+            parent.ui_scale_factor(),
         )
     }
 
@@ -3305,7 +3388,6 @@ impl SystemLink<'_> {
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
-            view_init_context.ui_scale_factor,
         );
 
         let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
@@ -3348,9 +3430,9 @@ pub type WindowHandle = platform::mac::WindowHandle;
 pub type WindowHandle = platform::unix::wayland::WindowHandle;
 
 #[cfg(windows)]
-pub type ContextMenuHandle = platform::windows::context_menu::Handle;
+pub type FlyoutSurfaceHandle = platform::windows::flyout_surface::Handle;
 #[cfg(target_os = "macos")]
-pub type ContextMenuHandle = platform::mac::context_menu::Handle;
+pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
 #[cfg(feature = "wayland")]
 pub type FlyoutSurfaceHandle = platform::unix::wayland::flyout_surface::Handle;
 

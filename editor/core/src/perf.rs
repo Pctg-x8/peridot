@@ -53,39 +53,137 @@ pub const TIMESTAMP_FREQUENCY: i64 = 1_000_000_000;
 #[cfg(unix)]
 static mut SELF_STATM_FD: core::ffi::c_int = -1;
 
+#[cfg(windows)]
 #[cfg(feature = "enable-profiling")]
 pub fn memory_stats() {
-    const BUFSIZE: usize = 64;
-    let mut buf = [core::mem::MaybeUninit::<u8>::uninit(); BUFSIZE];
-    let nread = unsafe { libc::pread(SELF_STATM_FD, buf.as_mut_ptr().cast(), BUFSIZE as _, 0) };
-    if nread < 0 {
-        tracing::error!(reason = %std::io::Error::last_os_error(), "cannot read statm");
-        return;
+    let mut stat = core::mem::MaybeUninit::<
+        windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+    >::uninit();
+    unsafe {
+        windows::Win32::System::ProcessStatus::GetProcessMemoryInfo(
+            windows::Win32::System::Threading::GetCurrentProcess(),
+            stat.as_mut_ptr().cast(),
+            core::mem::size_of::<windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX>(
+            ) as _,
+        )
+        .expect("GetProcessMemoryInfo");
     }
+    let stat = unsafe { stat.assume_init_ref() };
+    tracing::debug!(
+        working_set = stat.WorkingSetSize,
+        committed = stat.PagefileUsage,
+        "memory report"
+    );
+}
 
-    let mut buf: &[u8] =
-        unsafe { &core::mem::transmute::<&[_; BUFSIZE], &[_; BUFSIZE]>(&buf)[..nread as usize] };
-    let mut size = 0u64;
-    while let &[c, ref rest @ ..] = buf
-        && c != b' '
-    {
-        size = size * 10 + (c - b'0') as u64;
-        buf = rest;
-    }
-    while let &[b' ', ref rest @ ..] = buf {
-        buf = rest;
-    }
-    let mut resident = 0u64;
-    while let &[c, ref rest @ ..] = buf
-        && c != b' '
-    {
-        resident = resident * 10 + (c - b'0') as u64;
-        buf = rest;
-    }
+#[cfg(feature = "enable-profiling")]
+#[derive(Debug)]
+pub struct MemoryStats {
+    pub total_resident_bytes: usize,
+    pub total_reserved_bytes: usize,
+    pub total_private_resident_bytes: usize,
+}
+#[cfg(feature = "enable-profiling")]
+impl MemoryStats {
+    pub fn fetch() -> Self {
+        #[cfg(windows)]
+        let mut stat = core::mem::MaybeUninit::<
+            windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+        >::uninit();
+        #[cfg(windows)]
+        if let Err(e) = unsafe {
+            windows::Win32::System::ProcessStatus::GetProcessMemoryInfo(
+                windows::Win32::System::Threading::GetCurrentProcess(),
+                stat.as_mut_ptr().cast(),
+                core::mem::size_of::<
+                    windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+                >() as _,
+            )
+        } {
+            tracing::error!(reason = %e, "GetProcessMemoryInfo failed");
+            return Self {
+                total_resident_bytes: 0,
+                total_reserved_bytes: 0,
+            };
+        }
+        #[cfg(windows)]
+        let stat = unsafe { stat.assume_init_ref() };
+        #[cfg(windows)]
+        {
+            Self {
+                total_resident_bytes: stat.WorkingSetSize,
+                total_reserved_bytes: stat.PrivateUsage,
+            }
+        }
 
-    let pagesize = unsafe { getpagesize() };
+        #[cfg(target_os = "linux")]
+        const BUFSIZE: usize = 64;
+        #[cfg(target_os = "linux")]
+        let mut buf = [core::mem::MaybeUninit::<u8>::uninit(); BUFSIZE];
+        #[cfg(target_os = "linux")]
+        let nread = unsafe { libc::pread(SELF_STATM_FD, buf.as_mut_ptr().cast(), BUFSIZE as _, 0) };
+        #[cfg(target_os = "linux")]
+        if nread < 0 {
+            tracing::error!(reason = %std::io::Error::last_os_error(), "cannot read statm");
+            return Self {
+                total_resident_bytes: 0,
+                total_reserved_bytes: 0,
+                total_private_resident_bytes: 0,
+            };
+        }
 
-    tracing::debug!(size, resident, pagesize, "memory stats");
+        #[cfg(target_os = "linux")]
+        let mut buf: &[u8] = unsafe {
+            &core::mem::transmute::<&[_; BUFSIZE], &[_; BUFSIZE]>(&buf)[..nread as usize]
+        };
+        #[cfg(target_os = "linux")]
+        let mut size = 0u64;
+        #[cfg(target_os = "linux")]
+        while let &[c, ref rest @ ..] = buf
+            && c != b' '
+        {
+            size = size * 10 + (c - b'0') as u64;
+            buf = rest;
+        }
+        #[cfg(target_os = "linux")]
+        while let &[b' ', ref rest @ ..] = buf {
+            buf = rest;
+        }
+        #[cfg(target_os = "linux")]
+        let mut resident = 0u64;
+        #[cfg(target_os = "linux")]
+        while let &[c, ref rest @ ..] = buf
+            && c != b' '
+        {
+            resident = resident * 10 + (c - b'0') as u64;
+            buf = rest;
+        }
+        #[cfg(target_os = "linux")]
+        while let &[b' ', ref rest @ ..] = buf {
+            buf = rest;
+        }
+        #[cfg(target_os = "linux")]
+        let mut resident_shared = 0u64;
+        #[cfg(target_os = "linux")]
+        while let &[c, ref rest @ ..] = buf
+            && c != b' '
+        {
+            resident_shared = resident_shared * 10 + (c - b'0') as u64;
+            buf = rest;
+        }
+
+        #[cfg(target_os = "linux")]
+        let pagesize = unsafe { getpagesize() };
+
+        #[cfg(target_os = "linux")]
+        {
+            Self {
+                total_resident_bytes: (resident * pagesize as u64) as _,
+                total_reserved_bytes: (size * pagesize as u64) as _,
+                total_private_resident_bytes: ((resident - resident_shared) * pagesize as u64) as _,
+            }
+        }
+    }
 }
 
 #[cfg(feature = "enable-profiling")]
@@ -182,8 +280,6 @@ pub struct Profiler {
     writer: Spinlocked<std::io::BufWriter<std::fs::File>>,
     marker_addr_to_name: Spinlocked<HashMap<usize, &'static str>>,
     section_last_id: core::sync::atomic::AtomicU64,
-    #[cfg(target_os = "linux")]
-    pub memory_collection_interval_timer: crate::utils::platform::linux::TimerFD,
 }
 #[cfg(feature = "enable-profiling")]
 impl Drop for Profiler {
@@ -240,22 +336,10 @@ impl Profiler {
         )
         .expect("write");
 
-        #[cfg(target_os = "linux")]
-        let memory_collection_interval_timer =
-            crate::utils::platform::linux::TimerFD::new().expect("timerfd.create");
-        #[cfg(target_os = "linux")]
-        {
-            memory_collection_interval_timer
-                .set(0, 500 * 1_000_000)
-                .expect("timerfd.set");
-        }
-
         Self {
             writer: Spinlocked::new(target),
             marker_addr_to_name: Spinlocked::new(HashMap::new()),
             section_last_id: core::sync::atomic::AtomicU64::new(0),
-            #[cfg(target_os = "linux")]
-            memory_collection_interval_timer,
         }
     }
 
@@ -363,6 +447,29 @@ impl Profiler {
     }
 
     #[inline(always)]
+    pub fn emit_memory_stats(&self) {
+        let ts = timestamp().to_ne_bytes();
+        let memstats = MemoryStats::fetch();
+
+        let marker_tag = MarkerTag::MemoryStats.to_ne_bytes();
+        let ms_total_resident_bytes = memstats.total_resident_bytes.to_ne_bytes();
+        let ms_total_reserved_bytes = memstats.total_reserved_bytes.to_ne_bytes();
+        let ms_total_private_resident_bytes = memstats.total_private_resident_bytes.to_ne_bytes();
+        let mut iovs = [
+            IoSlice::new(&marker_tag),
+            IoSlice::new(&ts),
+            IoSlice::new(&ms_total_resident_bytes),
+            IoSlice::new(&ms_total_reserved_bytes),
+            IoSlice::new(&ms_total_private_resident_bytes),
+        ];
+
+        let r = Self::writeva(&mut *self.writer.lock(), &mut iovs);
+        if let Err(e) = r {
+            tracing::warn!(reason = %e, "emit_memory_stats fail");
+        }
+    }
+
+    #[inline(always)]
     fn writeva(w: &mut (impl Write + ?Sized), mut v: &mut [IoSlice]) -> std::io::Result<()> {
         while !v.is_empty() {
             let b = w.write_vectored(v)?;
@@ -379,7 +486,7 @@ enum MarkerTag {
     Event = 1,
     SectionBegin = 2,
     SectionEnd = 3,
-    MemoryUsage = 4,
+    MemoryStats = 4,
 }
 impl MarkerTag {
     #[inline(always)]
@@ -610,5 +717,15 @@ macro_rules! perf_scope {
         let _scope = $crate::perf::SectionScope(
             $crate::perf::profiler().emit_section_begin_with_str(&$marker, $s),
         );
+    };
+}
+
+#[macro_export]
+macro_rules! perf_sample_memory {
+    () => {
+        #[cfg(feature = "enable-profiling")]
+        {
+            $crate::perf::profiler().emit_memory_stats();
+        }
     };
 }
