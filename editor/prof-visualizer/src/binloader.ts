@@ -437,11 +437,18 @@ abstract class MarkerTransformStep {
                 state: TransformerState,
             ): MarkerTransformStep | null {
                 const timestamp = state.tryNextU64();
-                return timestamp === null ? null : new MarkerTransformStep.MemoryStats.TotalResidentBytes(timestamp);
+                return timestamp === null
+                    ? null
+                    : new MarkerTransformStep.MemoryStats.TotalResidentBytes({ type: "MemoryStats", timestamp });
             }
         })(),
         TotalResidentBytes: class extends MarkerTransformStep {
-            constructor(private readonly timestamp: bigint) {
+            constructor(
+                private readonly part: Omit<
+                    MemoryStatsMarker,
+                    "totalResidentBytes" | "totalReservedBytes" | "totalPrivateResidentBytes"
+                >,
+            ) {
                 super();
             }
 
@@ -452,13 +459,12 @@ abstract class MarkerTransformStep {
                 const totalResidentBytes = state.tryNextUsize();
                 return totalResidentBytes === null
                     ? null
-                    : new MarkerTransformStep.MemoryStats.TotalReservedBytes(this.timestamp, totalResidentBytes);
+                    : new MarkerTransformStep.MemoryStats.TotalReservedBytes({ ...this.part, totalResidentBytes });
             }
         },
         TotalReservedBytes: class extends MarkerTransformStep {
             constructor(
-                private readonly timestamp: bigint,
-                private readonly totalResidentBytes: bigint,
+                private readonly part: Omit<MemoryStatsMarker, "totalReservedBytes" | "totalPrivateResidentBytes">,
             ) {
                 super();
             }
@@ -468,16 +474,29 @@ abstract class MarkerTransformStep {
                 state: TransformerState,
             ): MarkerTransformStep | null {
                 const totalReservedBytes = state.tryNextUsize();
-                if (totalReservedBytes === null) {
+                return totalReservedBytes === null
+                    ? null
+                    : new MarkerTransformStep.MemoryStats.TotalPrivateResidentBytes({
+                          ...this.part,
+                          totalReservedBytes,
+                      });
+            }
+        },
+        TotalPrivateResidentBytes: class extends MarkerTransformStep {
+            constructor(private readonly part: Omit<MemoryStatsMarker, "totalPrivateResidentBytes">) {
+                super();
+            }
+
+            override execute(
+                controller: TransformStreamDefaultController<Marker>,
+                state: TransformerState,
+            ): MarkerTransformStep | null {
+                const totalPrivateResidentBytes = state.tryNextUsize();
+                if (totalPrivateResidentBytes === null) {
                     return null;
                 }
 
-                controller.enqueue({
-                    type: "MemoryStats",
-                    timestamp: this.timestamp,
-                    totalResidentBytes: this.totalResidentBytes,
-                    totalReservedBytes: totalReservedBytes,
-                });
+                controller.enqueue({ ...this.part, totalPrivateResidentBytes });
                 return MarkerTransformStep.MarkerTag;
             }
         },
@@ -776,6 +795,7 @@ export type MemoryStatsMarker = {
     readonly timestamp: bigint;
     readonly totalResidentBytes: bigint;
     readonly totalReservedBytes: bigint;
+    readonly totalPrivateResidentBytes: bigint;
 };
 
 function readUsize(dv: DataView, offset: number, targetPointerSize: number, isLittleEndian: boolean): bigint {

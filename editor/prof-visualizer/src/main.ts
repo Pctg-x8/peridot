@@ -128,6 +128,31 @@ class HeaderPresenter {
                 d.appendChild(g);
             }
 
+            const memoryTotalPrivateResidentLines = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+            memoryTotalPrivateResidentLines.setAttribute(
+                "points",
+                memoryChartModel.totalPrivateResident.map(x => `${x.x},${lineChartContentHeight - x.y}`).join(" "),
+            );
+            memoryTotalPrivateResidentLines.setAttribute("stroke-width", "1");
+            memoryTotalPrivateResidentLines.setAttribute("stroke", "#ccc");
+            d.appendChild(memoryTotalPrivateResidentLines);
+            for (const p of memoryChartModel.totalPrivateResident) {
+                const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+
+                const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                point.setAttribute("cx", p.x.toString());
+                point.setAttribute("cy", (lineChartContentHeight - p.y).toString());
+                point.setAttribute("r", "2");
+                point.setAttribute("fill", "#ccc");
+                g.appendChild(point);
+
+                const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+                title.textContent = p.tooltipText;
+                g.appendChild(title);
+
+                d.appendChild(g);
+            }
+
             const timelineTopLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
             timelineTopLine.setAttribute("x1", "0");
             timelineTopLine.setAttribute("y1", lineChartContentHeight.toString());
@@ -402,6 +427,7 @@ type ChartPoint = {
 type MemoryChartModel = {
     readonly totalResident: ChartPoint[];
     readonly totalReserved: ChartPoint[];
+    readonly totalPrivateResident: ChartPoint[];
 };
 export function buildMemoryChartModel(
     memoryStats: MemoryStatsMarker[],
@@ -410,6 +436,7 @@ export function buildMemoryChartModel(
 ): MemoryChartModel {
     const totalResident = [];
     const totalReserved = [];
+    const totalPrivateResident = [];
 
     let lastBeyond = false;
     for (const stat of memoryStats.toSorted((a, b) => Number(a.timestamp - b.timestamp))) {
@@ -435,6 +462,11 @@ export function buildMemoryChartModel(
             y: Number(stat.totalReservedBytes) * MEMORY_CHART_HEIGHT_PER_BYTES,
             tooltipText: `Memory: Total Reserved Bytes: ${displayByteSize(stat.totalReservedBytes)}`,
         });
+        totalPrivateResident.push({
+            x,
+            y: Number(stat.totalPrivateResidentBytes) * MEMORY_CHART_HEIGHT_PER_BYTES,
+            tooltipText: `Memory: Total Private Resident Bytes: ${displayByteSize(stat.totalPrivateResidentBytes)}`,
+        });
 
         if (lastBeyond && beyond) {
             // 2点連続で右端を超えた
@@ -443,7 +475,7 @@ export function buildMemoryChartModel(
         lastBeyond = beyond;
     }
 
-    return { totalResident, totalReserved };
+    return { totalResident, totalReserved, totalPrivateResident };
 }
 
 function formatSectionText(section: SectionRange): string {
