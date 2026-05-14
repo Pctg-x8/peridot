@@ -90,10 +90,11 @@ use crate::{
         },
     },
     rendering::{
-        NewWindowData, NewWindowVulkanSurface, RenderMessage,
+        NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderMessageSender,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
         text::FontSet,
     },
+    uikit::MountTarget,
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
         platform::windows::{current_instance_handle, register_class},
@@ -234,13 +235,8 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub fn composite_root(&self) -> CompositeTreeRef {
-        self.state().composite_root
-    }
-
-    #[inline(always)]
-    pub fn ht_root(&self) -> HitTestTreeRef {
-        self.state().ht_root
+    pub fn latest_ui_scale_changes(&self) -> &Mutex<Option<f32>> {
+        &self.state().latest_ui_scale_changes
     }
 
     #[inline(always)]
@@ -339,6 +335,17 @@ impl ShellPointerActions for WindowHandle {
         if let Err(e) = unsafe { ReleaseCapture() } {
             tracing::error!(reason = %e, "release_capture");
         }
+    }
+}
+impl crate::uikit::MountTarget for WindowHandle {
+    #[inline(always)]
+    fn ct_root(&self) -> CompositeTreeRef {
+        self.state().composite_root
+    }
+
+    #[inline(always)]
+    fn ht_root(&self) -> HitTestTreeRef {
+        self.state().ht_root
     }
 }
 
@@ -1629,7 +1636,7 @@ impl SystemLink<'_> {
             .recv()
             .expect("done_event_receiver.recv");
 
-        composite_tree.free_all(window_handle.composite_root());
+        composite_tree.free_all(window_handle.ct_root());
         hit_tree.free_all(window_handle.ht_root());
         keyboard_focus_registry.release_group(window_handle.state().root_focus_group);
         window_handle.destroy();

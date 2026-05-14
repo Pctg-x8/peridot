@@ -88,7 +88,7 @@ impl MemoryStats {
     pub fn fetch() -> Self {
         #[cfg(windows)]
         let mut stat = core::mem::MaybeUninit::<
-            windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+            windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX2,
         >::uninit();
         #[cfg(windows)]
         if let Err(e) = unsafe {
@@ -96,7 +96,7 @@ impl MemoryStats {
                 windows::Win32::System::Threading::GetCurrentProcess(),
                 stat.as_mut_ptr().cast(),
                 core::mem::size_of::<
-                    windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
+                    windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX2,
                 >() as _,
             )
         } {
@@ -104,17 +104,17 @@ impl MemoryStats {
             return Self {
                 total_resident_bytes: 0,
                 total_reserved_bytes: 0,
+                total_private_resident_bytes: 0,
             };
         }
         #[cfg(windows)]
         let stat = unsafe { stat.assume_init_ref() };
         #[cfg(windows)]
-        {
-            Self {
-                total_resident_bytes: stat.WorkingSetSize,
-                total_reserved_bytes: stat.PrivateUsage,
-            }
-        }
+        return Self {
+            total_resident_bytes: stat.WorkingSetSize,
+            total_reserved_bytes: stat.PrivateUsage,
+            total_private_resident_bytes: stat.PrivateWorkingSetSize,
+        };
 
         #[cfg(target_os = "linux")]
         const BUFSIZE: usize = 64;
