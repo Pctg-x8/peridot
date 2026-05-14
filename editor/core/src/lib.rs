@@ -30,7 +30,7 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
+        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -163,7 +163,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     renderer_sync: &'sys Mutex<RendererSync>,
     fs: &'sys FileSystem,
     vk_device: &'sys VulkanDevice,
-    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    rt_sender: RenderMessageSender,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     root_font_set: FontSet,
     #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
@@ -1128,10 +1128,7 @@ impl DropdownBoxViewSharedResources {
         &[[0.25, 0.375], [0.75, 0.375], [0.5, 0.625]];
     const DOWN_ARROW_TEX_INDICES: &'static [u16] = &[0, 1, 2];
 
-    pub fn new(
-        id_issuer: &mut MainThreadTextureIDIssuer,
-        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
-    ) -> Self {
+    pub fn new(id_issuer: &mut MainThreadTextureIDIssuer, rt_sender: &RenderMessageSender) -> Self {
         let down_arrow_tex = id_issuer.issue();
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
@@ -1471,13 +1468,10 @@ async fn run<'sys>(
         &mut keyboard_focus_registry,
     );
 
-    composite_tree
-        .get_mut(main_window.composite_root())
-        .composite_mode = CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
-    composite_tree
-        .get_mut(main_window.composite_root())
-        .has_bitmap = true;
-    composite_tree.mark_dirty(main_window.composite_root());
+    composite_tree.get_mut(main_window.ct_root()).composite_mode =
+        CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
+    composite_tree.get_mut(main_window.ct_root()).has_bitmap = true;
+    composite_tree.mark_dirty(main_window.ct_root());
 
     let mut view_init_ctx = ViewInitContext {
         mount_context: MountContext {
@@ -1543,7 +1537,7 @@ async fn run<'sys>(
     view_init_ctx.composite_tree.add_child(tab_main, tab_bg);
     view_init_ctx
         .composite_tree
-        .add_child(main_window.composite_root(), tab_main);
+        .add_child(main_window.ct_root(), tab_main);
     let ht_tab_main = view_init_ctx.ht_manager.create(HitTestTreeData {
         left: 100.0,
         top: 100.0,
@@ -1798,10 +1792,10 @@ async fn run<'sys>(
                     |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
                         ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
 
-                        composite_tree.get_mut(w.composite_root()).has_bitmap = true;
-                        composite_tree.get_mut(w.composite_root()).composite_mode =
+                        composite_tree.get_mut(w.ct_root()).has_bitmap = true;
+                        composite_tree.get_mut(w.ct_root()).composite_mode =
                             CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
-                        composite_tree.mark_dirty(w.composite_root());
+                        composite_tree.mark_dirty(w.ct_root());
 
                         let mut view_init_ctx = ViewInitContext {
                             mount_context: MountContext {
@@ -1930,7 +1924,6 @@ async fn run<'sys>(
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                 composite_tree.commit(&mut renderer_sync.composite_buffer);
-                system_link.notify_ui_scale_changes_to_render(window, new_scale);
             }
             Event::WindowMaximizeStateChanged {
                 window,
@@ -3302,7 +3295,7 @@ pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {
     vk_device: *const VulkanDevice<'sys>,
-    rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    rt_sender: RenderMessageSender,
     font_set: *const FontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -3321,7 +3314,7 @@ pub struct SystemLink<'sys> {
 #[cfg(not(windows))]
 impl SystemLink<'_> {
     #[inline(always)]
-    pub const fn rt_sender(&self) -> &std::sync::mpsc::Sender<RenderMessage> {
+    pub const fn rt_sender(&self) -> &RenderMessageSender {
         &self.rt_sender
     }
 
@@ -3427,14 +3420,14 @@ pub type WindowHandle = platform::windows::WindowHandle;
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]
-pub type WindowHandle = platform::unix::wayland::WindowHandle;
+pub type WindowHandle = platform::unix::wayland::ToplevelHandle;
 
 #[cfg(windows)]
 pub type FlyoutSurfaceHandle = platform::windows::flyout_surface::Handle;
 #[cfg(target_os = "macos")]
 pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
 #[cfg(feature = "wayland")]
-pub type FlyoutSurfaceHandle = platform::unix::wayland::flyout_surface::Handle;
+pub type FlyoutSurfaceHandle = platform::unix::wayland::FlyoutSurfaceHandle;
 
 pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,

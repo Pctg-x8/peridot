@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::{
-    SyncEvent, SystemLink, WindowHandle,
+    SyncEvent, SystemLink,
     input::{
         KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
@@ -67,17 +67,6 @@ where
     #[inline(always)]
     fn ht_root(&self) -> HitTestTreeRef {
         T::ht_root(self)
-    }
-}
-impl MountTarget for WindowHandle {
-    #[inline(always)]
-    fn ct_root(&self) -> CompositeTreeRef {
-        self.composite_root()
-    }
-
-    #[inline(always)]
-    fn ht_root(&self) -> HitTestTreeRef {
-        self.ht_root()
     }
 }
 

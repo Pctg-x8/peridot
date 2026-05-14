@@ -11,7 +11,7 @@ use crate::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     },
-    platform::unix::wayland::{SurfaceState, SurfaceStateTag, WindowScaling},
+    platform::unix::wayland::{SurfaceScaling, SurfaceState, SurfaceStateTag},
     rendering::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{
@@ -137,7 +137,7 @@ impl Handle {
 
     pub fn update_manual_scaling(&self) {
         let el = self.data();
-        if let WindowScaling::Manual { ref viewport, .. } = el.scaling {
+        if let SurfaceScaling::Manual { ref viewport, .. } = el.scaling {
             let committed_state = el.committed_state.lock().expect("poisoned");
             viewport
                 .set_source(
@@ -176,7 +176,7 @@ struct CommittedState {
 
 struct InstanceData {
     surface_ptr: *mut wl::Surface,
-    scaling: WindowScaling,
+    scaling: SurfaceScaling,
     xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_popup: wl::Owned<wl::XdgPopup>,
     _blur: Option<wl::Owned<wl::OrgKdeKwinBlur>>,
@@ -249,12 +249,12 @@ impl wl::XdgSurfaceEventListener for EventHandler {
         let mut rescaled = false;
         if let Some(s) = self.0.data.pending_configure_buffer_scale.take() {
             match self.0.data.scaling {
-                WindowScaling::Automatic => {
+                SurfaceScaling::Automatic => {
                     unsafe { &*self.0.data.surface_ptr }
                         .set_buffer_scale(s as _)
                         .expect("wl_surface.set_buffer_scale");
                 }
-                WindowScaling::Manual { .. } => {
+                SurfaceScaling::Manual { .. } => {
                     // fractional scaleでは1固定にして、viewporterでスケールを適用する必要がある
                     unsafe { &*self.0.data.surface_ptr }
                         .set_buffer_scale(1)
@@ -362,7 +362,7 @@ impl SharedState {
 }
 
 pub fn new_surface<E>(
-    parent: super::WindowHandle,
+    parent: super::toplevel::Handle,
     pos: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
     syslink: &SystemLink,
@@ -394,12 +394,12 @@ pub fn new_surface<E>(
             .get_viewport(&surface)
             .expect("viewporter.get_viewport");
 
-        WindowScaling::Manual {
+        SurfaceScaling::Manual {
             fractional_scale: f,
             viewport: vp,
         }
     } else {
-        WindowScaling::Automatic
+        SurfaceScaling::Automatic
     };
     let blur = if let Some(ref bm) = unsafe { &*syslink.display_server.context }
         .global_interfaces
@@ -426,7 +426,7 @@ pub fn new_surface<E>(
     p.set_gravity(wl::XdgPositionerGravity::BottomRight)
         .expect("pos.set_gravity");
     let xdg_popup = xdg_surface
-        .get_popup(Some(&parent.event_listener().state.data.xdg_surface), &p)
+        .get_popup(Some(&parent.xdg_surface()), &p)
         .expect("xdg_surface.get_popup");
 
     let ct_root = composite_tree.create(CompositeRect {
@@ -479,7 +479,7 @@ pub fn new_surface<E>(
         .set_listener(&mut *eh)
         .into_result()
         .expect("xdg_popup.set_listener");
-    if let WindowScaling::Manual {
+    if let SurfaceScaling::Manual {
         ref mut fractional_scale,
         ..
     } = eh.0.data.scaling

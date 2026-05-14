@@ -4,7 +4,7 @@ use crate::{
     Event,
     input::hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage,
+        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
@@ -226,7 +226,7 @@ impl CommonResources {
     pub fn new<E>(
         composite_tree: &mut CompositeTree<E>,
         tid_issuer: &mut MainThreadTextureIDIssuer,
-        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
+        rt_sender: &RenderMessageSender,
     ) -> Self {
         let light_gradient = composite_tree.create_gradient(Gradient::Radial {
             start_color: [0.75, 1.0, 1.5, 1.0],

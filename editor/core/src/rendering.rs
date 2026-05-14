@@ -24,6 +24,7 @@ use crate::{
         text::FontSet,
         vg::VectorRasterizationState,
     },
+    uikit::MountTarget,
     utils::SafeF32,
 };
 
@@ -64,6 +65,8 @@ pub enum RenderMessage {
         height: f32,
     },
 }
+
+pub type RenderMessageSender = std::sync::mpsc::Sender<RenderMessage>;
 
 pub struct RendererSync {
     pub composite_buffer: CompositeTreeSyncBuffer<SyncEvent>,
@@ -202,17 +205,6 @@ impl<'main> RenderThread<'main> {
                 crate::perf_scope!(PROCESS_MESSAGE);
                 match self.message_receiver.try_recv() {
                     Ok(RenderMessage::NewWindow(wd)) => {
-                        #[cfg(feature = "wayland")]
-                        let init_scale = SafeF32::new(
-                            wd.key
-                                .state()
-                                .committed_state
-                                .lock()
-                                .expect("poisoned")
-                                .active_buffer_scale,
-                        )
-                        .expect("invalid scale");
-                        #[cfg(any(windows, target_os = "macos"))]
                         let init_scale =
                             SafeF32::new(wd.key.ui_scale_factor()).expect("invalid scale");
 
@@ -1585,9 +1577,9 @@ impl<'d> WindowRenderer<'d> {
         Self {
             w: create_data.key,
             active_scale: init_scale,
-            latest_ui_scale_changes: &create_data.key.state().latest_ui_scale_changes,
+            latest_ui_scale_changes: create_data.key.latest_ui_scale_changes(),
             vk_device: device,
-            composite_root: create_data.key.composite_root(),
+            composite_root: create_data.key.ct_root(),
             composite_renderer,
             corner_cutout_renderer,
             last_composite_render_data: CompositeRenderingData::EMPTY,
@@ -1690,16 +1682,7 @@ impl<'d> WindowRenderer<'d> {
 
     #[cfg(any(feature = "wayland", target_os = "macos"))]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
-        self.w
-            .state()
-            .swapchain_externally_invalidation_signal
-            .compare_exchange_weak(
-                true,
-                false,
-                std::sync::atomic::Ordering::Relaxed,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            == Ok(true)
+        self.w.take_swapchain_externally_invalidation_signal()
     }
     #[cfg(not(any(feature = "wayland", target_os = "macos")))]
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {

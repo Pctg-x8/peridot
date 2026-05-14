@@ -1502,7 +1502,7 @@ impl DxContext {
 pub struct SystemLink<'sys> {
     pub font_set: *const FontSet,
     pub vk_device: *const VulkanDevice<'sys>,
-    pub rt_sender: std::sync::mpsc::Sender<RenderMessage>,
+    pub rt_sender: RenderMessageSender,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
     pub app_context_ptr: *const ApplicationContext,
     pub pointer_hovering_timer_id: *mut usize,
@@ -1515,7 +1515,7 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
-    pub fn rt_sender(&self) -> &std::sync::mpsc::Sender<RenderMessage> {
+    pub fn rt_sender(&self) -> &RenderMessageSender {
         &self.rt_sender
     }
 

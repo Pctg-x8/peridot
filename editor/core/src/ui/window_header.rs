@@ -10,7 +10,7 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage,
+        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
@@ -489,7 +489,7 @@ pub struct SystemCommandTextureIDSet {
 impl SystemCommandTextureIDSet {
     pub fn new(
         tid_issuer: &mut MainThreadTextureIDIssuer,
-        rt_sender: &std::sync::mpsc::Sender<RenderMessage>,
+        rt_sender: &RenderMessageSender,
     ) -> Self {
         let close = tid_issuer.issue();
         rt_sender
