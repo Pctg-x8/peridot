@@ -1907,14 +1907,12 @@ async fn run<'sys>(
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
                     text_input_view.rescale(
                         &mut composite_tree,
-                        window,
                         &system_link,
                         &ht_manager,
                         new_scale,
                     );
                     text_input_view2.rescale(
                         &mut composite_tree,
-                        window,
                         &system_link,
                         &ht_manager,
                         new_scale,
@@ -2904,12 +2902,8 @@ impl DropdownMenuSession {
         let mut width = min_width;
         for v in items.iter() {
             width = width.max(
-                TextLayout::measure_visual_width(
-                    &v.content,
-                    FontID::UIDefault,
-                    syslink.font_set(),
-                    1.0,
-                ) + 4.0
+                TextLayout::measure_visual_width(&v.content, FontID::UIDefault, syslink.font_set())
+                    + 4.0
                     + 4.0,
             );
         }

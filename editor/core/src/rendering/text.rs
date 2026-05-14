@@ -1254,6 +1254,19 @@ impl TextLayout {
             vrender: *mut VectorVertexRenderer<'a>,
         }
         #[cfg(windows)]
+        impl GlyphOutlineSink<'_> {
+            #[inline(always)]
+            const fn make_vg_point(
+                &self,
+                p: &windows_numerics::Vector2,
+            ) -> Point<VectorTextureUnit> {
+                Point::new_vector_texture(
+                    p.X * self.dip_to_pixels_scale + self.translate.X,
+                    -p.Y * self.dip_to_pixels_scale + self.translate.Y,
+                )
+            }
+        }
+        #[cfg(windows)]
         impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl<'_> {
             fn BeginFigure(
                 &self,
@@ -1266,10 +1279,7 @@ impl TextLayout {
                     "not filled figure"
                 );
 
-                unsafe { &mut *self.vrender }.move_to(Point::new_vector_texture(
-                    startpoint.X * self.dip_to_pixels_scale + self.translate.X,
-                    -startpoint.Y * self.dip_to_pixels_scale + self.translate.Y,
-                ));
+                unsafe { &mut *self.vrender }.move_to(self.make_vg_point(startpoint));
             }
 
             fn EndFigure(
@@ -1285,10 +1295,7 @@ impl TextLayout {
 
             fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
                 for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
-                    unsafe { &mut *self.vrender }.line_to(Point::new_vector_texture(
-                        p.X * self.dip_to_pixels_scale + self.translate.X,
-                        -p.Y * self.dip_to_pixels_scale + self.translate.Y,
-                    ));
+                    unsafe { &mut *self.vrender }.line_to(self.make_vg_point(p));
                 }
             }
 
@@ -1299,18 +1306,9 @@ impl TextLayout {
             ) {
                 for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
                     unsafe { &mut *self.vrender }.cubic_to(
-                        Point::new_vector_texture(
-                            p.point1.X * self.dip_to_pixels_scale + self.translate.X,
-                            -p.point1.Y * self.dip_to_pixels_scale + self.translate.Y,
-                        ),
-                        Point::new_vector_texture(
-                            p.point2.X * self.dip_to_pixels_scale + self.translate.X,
-                            -p.point2.Y * self.dip_to_pixels_scale + self.translate.Y,
-                        ),
-                        Point::new_vector_texture(
-                            p.point3.X * self.dip_to_pixels_scale + self.translate.X,
-                            -p.point3.Y * self.dip_to_pixels_scale + self.translate.Y,
-                        ),
+                        self.make_vg_point(&p.point1),
+                        self.make_vg_point(&p.point2),
+                        self.make_vg_point(&p.point3),
                     );
                 }
             }
@@ -1344,16 +1342,9 @@ impl TextLayout {
         boxes
     }
 
-    #[cfg(not(windows))]
-    #[inline(always)]
-    #[cfg(feature = "harfbuzz")]
-    pub fn height_unscaled(&self) -> f32 {
-        self.height
-    }
-
     #[cfg(target_os = "macos")]
     #[inline(always)]
-    pub fn height_unscaled(&self) -> f32 {
+    pub fn height(&self) -> f32 {
         if self.frame.lines().len() == 0 {
             // no lines(empty string)
             return 0.0;
@@ -1368,23 +1359,23 @@ impl TextLayout {
         unsafe { (ascender.assume_init() + descender.assume_init()) as f32 }
     }
 
-    #[cfg(windows)]
-    pub fn height_unscaled(&self) -> f32 {
+    pub fn height(&self) -> f32 {
+        #[cfg(feature = "harfbuzz")]
+        return self.height;
+
+        #[cfg(windows)]
         let mut metrics = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
         unsafe {
             self.layout
                 .GetMetrics(metrics.as_mut_ptr())
                 .expect("layout.GetMetrics")
         };
-        unsafe { metrics.assume_init().height }
+        #[cfg(windows)]
+        return unsafe { metrics.assume_init_ref() }.height;
     }
 
-    pub fn measure_visual_width(
-        text: &str,
-        font: FontID,
-        font_set: &FontSet,
-        render_scale: f32,
-    ) -> f32 {
+    pub fn measure_visual_width(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -1492,6 +1483,9 @@ impl TextLayout {
             }
         }
 
+        #[cfg(not(windows))]
+        return width;
+
         #[cfg(windows)]
         let mut metrics = core::mem::MaybeUninit::uninit();
         #[cfg(windows)]
@@ -1502,17 +1496,10 @@ impl TextLayout {
                 .expect("layout.GetMetrics")
         };
         #[cfg(windows)]
-        let width = unsafe { metrics.assume_init().width * render_scale };
-
-        width
+        return unsafe { metrics.assume_init_ref() }.width;
     }
 
-    pub fn measure_total_advances(
-        text: &str,
-        font: FontID,
-        font_set: &FontSet,
-        render_scale: f32,
-    ) -> f32 {
+    pub fn measure_total_advances(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -1594,6 +1581,9 @@ impl TextLayout {
             left_cursor = left_cursor.max(line_left_cursor + l.trailing_whitespace_width() as f32);
         }
 
+        #[cfg(not(windows))]
+        return left_cursor;
+
         #[cfg(windows)]
         let mut metrics = core::mem::MaybeUninit::uninit();
         #[cfg(windows)]
@@ -1604,19 +1594,10 @@ impl TextLayout {
                 .expect("layout.GetMetrics")
         };
         #[cfg(windows)]
-        let left_cursor =
-            unsafe { metrics.assume_init() }.widthIncludingTrailingWhitespace * render_scale;
-
-        left_cursor
+        return unsafe { metrics.assume_init_ref() }.widthIncludingTrailingWhitespace;
     }
 
-    pub fn find_nearest_bytes(
-        x: f32,
-        text: &str,
-        font: FontID,
-        font_set: &FontSet,
-        render_scale: f32,
-    ) -> usize {
+    pub fn find_nearest_bytes(x: f32, text: &str, font: FontID, font_set: &FontSet) -> usize {
         // TODO: 最適化はあとで
         let layout = Self::new(
             core::iter::once(TextRun {
@@ -1692,7 +1673,7 @@ impl TextLayout {
             layout
                 .layout
                 .HitTestPoint(
-                    x / render_scale,
+                    x,
                     1.0,
                     is_trailing_hit.as_mut_ptr(),
                     is_inside.as_mut_ptr(),
@@ -1707,13 +1688,15 @@ impl TextLayout {
         #[cfg(windows)]
         if is_trailing_hit {
             // trailing hitの場合は次の文字を返す（そっちのが近い）
-            text.chars()
+            return text
+                .chars()
                 .take(metrics.textPosition as usize + 1)
-                .fold(0, |a, c| a + c.len_utf8())
+                .fold(0, |a, c| a + c.len_utf8());
         } else {
-            text.chars()
+            return text
+                .chars()
                 .take(metrics.textPosition as _)
-                .fold(0, |a, c| a + c.len_utf8())
+                .fold(0, |a, c| a + c.len_utf8());
         }
 
         #[cfg(target_os = "macos")]

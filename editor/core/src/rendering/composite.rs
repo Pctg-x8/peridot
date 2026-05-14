@@ -1619,37 +1619,33 @@ impl<Event> CompositeTreeRender<Event> {
         vector_raster_state: &mut VectorRasterizationState,
         mut on_event: impl FnMut(Event),
     ) {
-        // let update_timer = std::time::Instant::now();
+        struct Process {
+            r: CompositeTreeRef,
+            effective_base_left: f32,
+            effective_base_top: f32,
+            effective_width: f32,
+            effective_height: f32,
+            parent_opacity: f32,
+            parent_matrix: Matrix4F32,
+            active_clip: Option<([SafeF32; 4], ClipConfig)>,
+        }
 
         let mut instance_slot_index = 0;
-        let mut processes = vec![(
-            root.0,
-            (
-                0.0,
-                0.0,
-                size.width as f32,
-                size.height as f32,
-                1.0,
-                Matrix4::ONE,
-                None::<([SafeF32; 4], ClipConfig)>,
-            ),
-        )];
-        while let Some((
-            rn,
-            (
-                effective_base_left,
-                effective_base_top,
-                effective_width,
-                effective_height,
-                parent_opacity,
-                parent_matrix,
-                active_clip,
-            ),
-        )) = processes.pop()
-        {
-            let cache = &mut self.caches[rn];
-            let r = &mut self.rects[rn];
-            self.dirty_flags[rn].dirty = false;
+        let mut processes = vec![Process {
+            r: root,
+            effective_base_left: 0.0,
+            effective_base_top: 0.0,
+            effective_width: size.width as f32,
+            effective_height: size.height as f32,
+            parent_opacity: 1.0,
+            parent_matrix: Matrix4::ONE,
+            active_clip: None::<([SafeF32; 4], ClipConfig)>,
+        }];
+        while let Some(p) = processes.pop() {
+            let cache = &mut self.caches[p.r.0];
+            let r = &mut self.rects[p.r.0];
+            self.dirty_flags[p.r.0].dirty = false;
+
             let local_left =
                 r.offset[0].evaluate(current_sec, &self.parameter_store) * r.base_scale_factor;
             let local_top =
@@ -1659,20 +1655,20 @@ impl<Event> CompositeTreeRender<Event> {
             let local_height =
                 r.size[1].evaluate(current_sec, &self.parameter_store) * r.base_scale_factor;
 
-            let left = effective_base_left
-                + (effective_width * r.relative_offset_adjustment[0])
+            let left = p.effective_base_left
+                + (p.effective_width * r.relative_offset_adjustment[0])
                 + local_left;
-            let top = effective_base_top
-                + (effective_height * r.relative_offset_adjustment[1])
+            let top = p.effective_base_top
+                + (p.effective_height * r.relative_offset_adjustment[1])
                 + local_top;
-            let w = effective_width * r.relative_size_adjustment[0] + local_width;
-            let h = effective_height * r.relative_size_adjustment[1] + local_height;
+            let w = p.effective_width * r.relative_size_adjustment[0] + local_width;
+            let h = p.effective_height * r.relative_size_adjustment[1] + local_height;
 
-            let opacity = parent_opacity * r.opacity.evaluate(current_sec, &self.parameter_store);
-            let matrix = parent_matrix
+            let opacity = p.parent_opacity * r.opacity.evaluate(current_sec, &self.parameter_store);
+            let matrix = p.parent_matrix
                 * (Matrix4::translation(Vector3(
-                    left - effective_base_left + r.pivot[0] * w,
-                    top - effective_base_top + r.pivot[1] * h,
+                    left - p.effective_base_left + r.pivot[0] * w,
+                    top - p.effective_base_top + r.pivot[1] * h,
                     0.0,
                 )) * Matrix4::scale(Vector4(
                     r.scale_x.evaluate(current_sec, &self.parameter_store),
@@ -1716,20 +1712,18 @@ impl<Event> CompositeTreeRender<Event> {
                 b.color.process_on_complete(current_sec, &mut on_event);
             }
 
-            if let Some((clip_rect_px, clip_config)) = active_clip {
+            if let Some((clip_rect_px, clip_config)) = p.active_clip {
                 inst_builder.set_clip(&clip_rect_px, &clip_config);
             } else {
                 inst_builder.clear_clip();
             }
 
             let texatlas_rect = r.texatlas_rect_id.map_or(
-                &const {
-                    AtlasRect {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
-                    }
+                &AtlasRect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
                 },
                 |n| &mask_atlas_rects[n],
             );
@@ -1847,7 +1841,7 @@ impl<Event> CompositeTreeRender<Event> {
             }
 
             if let Some(ref mut t) = r.text {
-                if self.dirty_flags[rn].text_layout_dirty {
+                if self.dirty_flags[p.r.0].text_layout_dirty {
                     Self::populate_text_layout_cache(
                         cache,
                         t,
@@ -1856,7 +1850,7 @@ impl<Event> CompositeTreeRender<Event> {
                         mask_atlas,
                         vector_raster_state,
                     );
-                    self.dirty_flags[rn].text_layout_dirty = false;
+                    self.dirty_flags[p.r.0].text_layout_dirty = false;
                 }
 
                 let x_offset = match t.horizontal_alignment {
@@ -1944,48 +1938,41 @@ impl<Event> CompositeTreeRender<Event> {
                 }
             }
 
-            processes.extend(r.children.iter().rev().map(|&x| {
-                (
-                    x,
-                    (
-                        left,
-                        top,
-                        w,
-                        h,
-                        opacity,
-                        matrix.clone(),
-                        match (r.clip_child.as_ref(), active_clip.as_ref()) {
-                            (None, None) => None,
-                            (Some(c), None) => Some((
-                                [
-                                    SafeF32::new(left).expect("invalid left"),
-                                    SafeF32::new(top).expect("invalid top"),
-                                    SafeF32::new(left + w).expect("invalid right"),
-                                    SafeF32::new(top + h).expect("invalid bottom"),
-                                ],
-                                c.clone(),
-                            )),
-                            (None, Some(a)) => Some(a.clone()),
-                            (Some(c), Some(a)) => {
-                                // TODO: softedgeの再クリップどうするか......
-                                Some((
-                                    [
-                                        SafeF32::new(left).expect("invalid left").max(a.0[0]),
-                                        SafeF32::new(top).expect("invalid top").max(a.0[1]),
-                                        SafeF32::new(left + w).expect("invalid right").min(a.0[2]),
-                                        SafeF32::new(top + h).expect("invalid bottom").min(a.0[3]),
-                                    ],
-                                    c.clone(),
-                                ))
-                            }
-                        },
-                    ),
-                )
+            processes.extend(r.children.iter().rev().map(|&x| Process {
+                r: CompositeTreeRef(x),
+                effective_base_left: left,
+                effective_base_top: top,
+                effective_width: w,
+                effective_height: h,
+                parent_opacity: opacity,
+                parent_matrix: matrix.clone(),
+                active_clip: match (r.clip_child.as_ref(), p.active_clip.as_ref()) {
+                    (None, None) => None,
+                    (Some(c), None) => Some((
+                        [
+                            SafeF32::new(left).expect("invalid left"),
+                            SafeF32::new(top).expect("invalid top"),
+                            SafeF32::new(left + w).expect("invalid right"),
+                            SafeF32::new(top + h).expect("invalid bottom"),
+                        ],
+                        c.clone(),
+                    )),
+                    (None, Some(a)) => Some(a.clone()),
+                    (Some(c), Some(a)) => {
+                        // TODO: softedgeの再クリップどうするか......
+                        Some((
+                            [
+                                SafeF32::new(left).expect("invalid left").max(a.0[0]),
+                                SafeF32::new(top).expect("invalid top").max(a.0[1]),
+                                SafeF32::new(left + w).expect("invalid right").min(a.0[2]),
+                                SafeF32::new(top + h).expect("invalid bottom").min(a.0[3]),
+                            ],
+                            c.clone(),
+                        ))
+                    }
+                },
             }));
         }
-
-        // let update_time = update_timer.elapsed();
-        // println!("instbuild({update_time:?}): {:?}", inst_builder.insts);
     }
 
     #[tracing::instrument(skip(text_layout, cache, font_set, glyph_atlas, vector_raster_state))]
@@ -2018,292 +2005,7 @@ impl<Event> CompositeTreeRender<Event> {
             ));
         // TODO: LTR前提 RTLサポートもするなら最大値をとる必要がある
         cache.text_width = cache.text_rects.last().map_or(0.0, |r| r.right());
-        cache.text_height = text_layout.height_unscaled() * scale_factor;
-
-        /*#[cfg(target_os = "macos")]
-        let framesetter = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
-            .expect("Framesetter.create");
-        #[cfg(target_os = "macos")]
-        let frame = framesetter
-            .create_frame(
-                apple_sdk_port::foundation::Range {
-                    location: 0,
-                    length: 0,
-                },
-                &apple_sdk_port::graphics::Path::new_rect(
-                    apple_sdk_port::raw::CGRect {
-                        origin: apple_sdk_port::raw::CGPoint { x: 0.0, y: 0.0 },
-                        size: apple_sdk_port::raw::CGSize {
-                            width: f64::MAX,
-                            height: f64::MAX,
-                        },
-                    },
-                    None,
-                ),
-                None,
-            )
-            .expect("Frame.create");
-        #[cfg(target_os = "macos")]
-        let lines = frame.lines();
-        #[cfg(target_os = "macos")]
-        tracing::debug!(line_count = lines.len(), "frameset lines");
-        #[cfg(target_os = "macos")]
-        for n in 0..lines.len() {
-            let runs = lines[n].glyph_runs();
-            tracing::debug!(count = runs.len(), "glyph runs");
-            let mut baseline_pos: apple_sdk_port::raw::CGFloat = 0.0;
-            for m in 0..runs.len() {
-                let font = match runs[m]
-                    .attributes()
-                    .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
-                {
-                    Some(x) => unsafe {
-                        apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
-                    },
-                    None => font_set.select(Default::default()),
-                };
-
-                baseline_pos = baseline_pos.max(font.ascent());
-                // TODO: 複数行になる場合はleadingを行間に足す
-                cache.text_height = cache
-                    .text_height
-                    .max((font.ascent() + font.descent()) as f32 * 2.0);
-            }
-            let mut x_shift = 0.0;
-            for m in 0..runs.len() {
-                let run = &runs[m];
-
-                let attributes = run.attributes();
-                attributes.apply_untyped_value(|key, value| {
-                    tracing::debug!(?key, ?value, "run attribute");
-                });
-                let font = match attributes
-                    .get_untyped_value(apple_sdk_port::foundation::AttributedStringKey::font())
-                {
-                    Some(x) => unsafe {
-                        apple_sdk_port::text::Font::ref_from_untyped_ptr(x.as_ptr())
-                    },
-                    None => font_set.select(Default::default()),
-                };
-                let run_index = match attributes.get_untyped_value(&corresponding_run_index) {
-                    Some(x) => unsafe {
-                        apple_sdk_port::foundation::Number::ref_from_untyped_ptr(x.as_ptr())
-                            .i64_value()
-                            .expect("invalid attr value") as _
-                    },
-                    None => 0,
-                };
-                let font_id = t.runs[run_index].font_id;
-                x_shift += t.runs[run_index].spacing_inline_start;
-
-                let glyph_count = run.glyph_count();
-                tracing::debug!(count = glyph_count, "run");
-                let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
-                font.bounding_rects_for_glyphs(
-                    apple_sdk_port::text::FontOrientation::Horizontal,
-                    unsafe { core::slice::from_raw_parts(run.glyphs_ptr(), glyph_count as _) },
-                    glyph_bounding_rects.spare_capacity_mut(),
-                );
-                unsafe {
-                    glyph_bounding_rects.set_len(glyph_count as _);
-                }
-
-                for g in 0..glyph_count {
-                    let glyph = unsafe { *run.glyphs_ptr().add(g as usize) };
-                    let pos = unsafe { &*run.positions().add(g as usize) };
-                    let bounding_rect = &glyph_bounding_rects[g as usize];
-                    tracing::debug!(glyph, ?font_id, ?pos, ?bounding_rect, "glyph");
-
-                    if bounding_rect.size.width == 0.0 && bounding_rect.size.height == 0.0 {
-                        // empty shape(whitespace)
-                        continue;
-                    }
-
-                    let (r, is_new) = mask_atlas.acquire(
-                        (font_id as usize, glyph),
-                        (bounding_rect.size.width as f32 * dip_to_pixels_scaling).ceil() as _,
-                        (bounding_rect.size.height as f32 * dip_to_pixels_scaling).ceil() as _,
-                    );
-                    let placement_box = GlyphPlacementBox {
-                        left: ((pos.x + bounding_rect.origin.x) as f32 + x_shift)
-                            * dip_to_pixels_scaling,
-                        top: (baseline_pos + pos.y
-                            - (bounding_rect.size.height + bounding_rect.origin.y))
-                            as f32
-                            * dip_to_pixels_scaling,
-                        tex_left: r.left,
-                        tex_top: r.top,
-                        width: r.width,
-                        height: r.height,
-                    };
-                    cache.text_width = cache.text_width.max(placement_box.right());
-                    cache.text_rects.push(placement_box);
-
-                    if is_new {
-                        vector_raster_state.updated_rects.push(br::Rect2D {
-                            offset: br::Offset2D {
-                                x: r.left as _,
-                                y: r.top as _,
-                            },
-                            extent: br::Extent2D {
-                                width: r.width,
-                                height: r.height,
-                            },
-                        });
-
-                        let path = font
-                            .create_path_for_glyph(glyph, None)
-                            .expect("font.create_path_for_glyph");
-                        let mut current_figure = None;
-                        let mut pen_pos = (0.0, 0.0);
-                        let offset_x =
-                            r.left as f32 - bounding_rect.origin.x as f32 * dip_to_pixels_scaling;
-                        let offset_y = r.top as f32
-                            - (bounding_rect.size.height + bounding_rect.origin.y) as f32
-                                * dip_to_pixels_scaling;
-                        path.apply(|e| match e.r#type {
-                            apple_sdk_port::raw::kCGPathElementMoveToPoint => {
-                                let to = unsafe { &*e.points };
-
-                                current_figure =
-                                    Some((to.clone(), vector_raster_state.fill_tri_points.len()));
-                                pen_pos = (to.x, to.y);
-                                vector_raster_state.fill_tri_points.push([
-                                    to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                    to.y as f32 * dip_to_pixels_scaling + offset_y,
-                                ]);
-                            }
-                            apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
-                                let to = unsafe { &*e.points };
-                                let Some((_, filltri_index0)) = current_figure else {
-                                    panic!("no figure started?");
-                                };
-
-                                let filltri_index1 = vector_raster_state.fill_tri_points.len() - 1;
-                                vector_raster_state.fill_tri_points.push([
-                                    to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                    to.y as f32 * dip_to_pixels_scaling + offset_y,
-                                ]);
-                                vector_raster_state.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    vector_raster_state.fill_tri_points.len() as u16 - 1,
-                                ]);
-                                pen_pos = (to.x, to.y);
-                            }
-                            apple_sdk_port::raw::kCGPathElementAddQuadCurveToPoint => {
-                                let points = unsafe { core::slice::from_raw_parts(e.points, 2) };
-                                let Some((_, filltri_index0)) = current_figure else {
-                                    panic!("no figure started?");
-                                };
-
-                                let filltri_index1 = vector_raster_state.fill_tri_points.len() - 1;
-                                vector_raster_state.fill_tri_points.push([
-                                    points[1].x as f32 * dip_to_pixels_scaling + offset_x,
-                                    points[1].y as f32 * dip_to_pixels_scaling + offset_y,
-                                ]);
-                                vector_raster_state.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    vector_raster_state.fill_tri_points.len() as u16 - 1,
-                                ]);
-                                vector_raster_state.curve_tris.extend([
-                                    [
-                                        pen_pos.0 as f32 * dip_to_pixels_scaling + offset_x,
-                                        pen_pos.1 as f32 * dip_to_pixels_scaling + offset_y,
-                                        0.0,
-                                        0.0,
-                                    ],
-                                    [
-                                        points[0].x as f32 * dip_to_pixels_scaling + offset_x,
-                                        points[0].y as f32 * dip_to_pixels_scaling + offset_y,
-                                        0.5,
-                                        0.0,
-                                    ],
-                                    [
-                                        points[1].x as f32 * dip_to_pixels_scaling + offset_x,
-                                        points[1].y as f32 * dip_to_pixels_scaling + offset_y,
-                                        1.0,
-                                        1.0,
-                                    ],
-                                ]);
-                                pen_pos = (points[1].x, points[1].y);
-                            }
-                            apple_sdk_port::raw::kCGPathElementAddCurveToPoint => {
-                                let points = unsafe { core::slice::from_raw_parts(e.points, 3) };
-                                lyon_geom::CubicBezierSegment {
-                                    from: lyon_geom::point(pen_pos.0, pen_pos.1),
-                                    ctrl1: lyon_geom::point(points[0].x, points[0].y),
-                                    ctrl2: lyon_geom::point(points[1].x, points[1].y),
-                                    to: lyon_geom::point(points[2].x, points[2].y),
-                                }
-                                .for_each_quadratic_bezier(
-                                    0.1,
-                                    &mut |q| {
-                                        let Some((_, filltri_index0)) = current_figure else {
-                                            panic!("no figure started?");
-                                        };
-
-                                        let filltri_index1 =
-                                            vector_raster_state.fill_tri_points.len() - 1;
-                                        vector_raster_state.fill_tri_points.push([
-                                            q.to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                            q.to.y as f32 * dip_to_pixels_scaling + offset_y,
-                                        ]);
-                                        vector_raster_state.fill_tri_indices.extend([
-                                            filltri_index0 as u16,
-                                            filltri_index1 as u16,
-                                            vector_raster_state.fill_tri_points.len() as u16 - 1,
-                                        ]);
-                                        vector_raster_state.curve_tris.extend([
-                                            [
-                                                pen_pos.0 as f32 * dip_to_pixels_scaling + offset_x,
-                                                pen_pos.1 as f32 * dip_to_pixels_scaling + offset_y,
-                                                0.0,
-                                                0.0,
-                                            ],
-                                            [
-                                                q.ctrl.x as f32 * dip_to_pixels_scaling + offset_x,
-                                                q.ctrl.y as f32 * dip_to_pixels_scaling + offset_y,
-                                                0.5,
-                                                0.0,
-                                            ],
-                                            [
-                                                q.to.x as f32 * dip_to_pixels_scaling + offset_x,
-                                                q.to.y as f32 * dip_to_pixels_scaling + offset_y,
-                                                1.0,
-                                                1.0,
-                                            ],
-                                        ]);
-                                        pen_pos = (q.to.x, q.to.y);
-                                    },
-                                )
-                            }
-                            apple_sdk_port::raw::kCGPathElementCloseSubpath => {
-                                // line to start point
-                                let Some((start_point, filltri_index0)) = current_figure.take()
-                                else {
-                                    panic!("no figure started?");
-                                };
-
-                                let filltri_index1 = vector_raster_state.fill_tri_points.len() - 1;
-                                vector_raster_state.fill_tri_points.push([
-                                    start_point.x as f32 * dip_to_pixels_scaling + offset_x,
-                                    start_point.y as f32 * dip_to_pixels_scaling + offset_y,
-                                ]);
-                                vector_raster_state.fill_tri_indices.extend([
-                                    filltri_index0 as u16,
-                                    filltri_index1 as u16,
-                                    vector_raster_state.fill_tri_points.len() as u16 - 1,
-                                ]);
-                                pen_pos = (start_point.x, start_point.y);
-                            }
-                            _ => unreachable!(),
-                        })
-                    }
-                }
-            }
-        }*/
+        cache.text_height = text_layout.height() * scale_factor;
     }
 }
 

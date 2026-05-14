@@ -436,7 +436,7 @@ impl<'fs> VulkanDevice<'fs> {
     #[tracing::instrument(skip(self), fields(path = ?path.as_ref(), resolved_path))]
     pub fn require_shader(&self, path: impl AsRef<Path>) -> br::ShaderModuleObject<&Self> {
         let resolved_path = self.fs.resolve_resource_path(&path);
-        tracing::Span::current().record("resolved_path", tracing::field::debug(&resolved_path));
+        tracing::record_all!(tracing::Span::current(), ?resolved_path);
         let bin = std::fs::read(resolved_path)
             .inspect_err(|e| tracing::error!(reason = %e, "require_shader.read"))
             .expect("require_shader");
@@ -534,7 +534,7 @@ impl<'fs> VulkanDevice<'fs> {
             tracing::error!("no suitable memory");
             std::process::exit(1);
         };
-        tracing::Span::current().record("memory_type_index", memindex);
+        tracing::record_all!(tracing::Span::current(), memory_type_index = memindex);
 
         match br::DeviceMemoryObject::new(self, &br::MemoryAllocateInfo::new(size, memindex)) {
             Ok(x) => x,

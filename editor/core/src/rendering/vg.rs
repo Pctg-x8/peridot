@@ -100,6 +100,8 @@ impl<'a> VectorVertexRenderer<'a> {
         self.pen = p;
     }
 
+    // PFによっては使われない
+    #[allow(dead_code)]
     pub fn quadratic_to(&mut self, ctrl: Point<VectorTextureUnit>, to: Point<VectorTextureUnit>) {
         let Some((_, filltri_index0)) = self.current_figure else {
             panic!("no figure started?");

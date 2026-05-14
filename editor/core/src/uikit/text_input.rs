@@ -122,6 +122,7 @@ impl TextInputView {
             ct_preedit_underline,
             ct_selection_bg,
             ht_root,
+            render_scale: core::cell::Cell::new(ctx.ui_scale_factor),
             content_h_offset: core::cell::Cell::new(0.0),
             content_visible_width: 128.0 - 4.0,
             content: core::cell::RefCell::new("aaa".into()),
@@ -182,11 +183,12 @@ impl TextInputView {
     pub fn rescale<E>(
         &self,
         ct: &mut CompositeTree<E>,
-        window: WindowHandle,
         syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
         new_scale: f32,
     ) {
+        self.eh.render_scale.set(new_scale);
+
         ct.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_root);
         ct.get_mut(self.eh.ct_text).base_scale_factor = new_scale;
@@ -204,9 +206,9 @@ impl TextInputView {
         self.eh.update_views(
             TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT,
             ct,
-            window,
             syslink,
             ht_manager,
+            0.0, // not interested in scale change
         );
     }
 }
@@ -220,6 +222,7 @@ struct TextInputViewEventHandler {
     ct_preedit_underline: CompositeTreeRef,
     ct_selection_bg: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    render_scale: core::cell::Cell<f32>,
     content_h_offset: core::cell::Cell<f32>,
     content_visible_width: f32,
     content: core::cell::RefCell<String>,
@@ -240,12 +243,9 @@ impl ViewEventHandler for TextInputViewEventHandler {
             self.pending_update_mask
                 .replace(TextInputViewUpdateMask::empty()),
             context.composite_tree,
-            context
-                .ht_manager
-                .query_root_window(self.ht_root)
-                .expect("not mounted"),
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
     }
 }
@@ -253,7 +253,6 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         tracing::debug!("text input focus taken");
 
-        self.update_focus(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
         #[cfg(target_os = "macos")]
@@ -262,12 +261,19 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .query_root_window(self.ht_root)
             .expect("not mounted")
             .begin_text_input(core::ptr::from_ref(self).cast_mut());
+
+        self.update_views(
+            TextInputViewUpdateMask::FOCUS,
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
         tracing::debug!("text input focus released");
 
-        self.update_focus(context);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
         #[cfg(target_os = "macos")]
@@ -279,24 +285,18 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 
         // clear selection
         let update_mask = self.deselect();
+
         self.update_views(
-            update_mask,
+            update_mask | TextInputViewUpdateMask::FOCUS,
             context.composite_tree,
-            context
-                .ht_manager
-                .query_root_window(self.ht_root)
-                .expect("not mounted"),
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         tracing::debug!(?code, "keydown");
-        let mounted_window = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
 
         let view_update_mask = match code {
             // cursor operations
@@ -328,9 +328,9 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         self.update_views(
             view_update_mask,
             context.composite_tree,
-            mounted_window,
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
     }
 
@@ -438,19 +438,11 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size.width,
             args.client_size.height,
         );
-        let mounted_window = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
-
-        let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
-        // TextLayoutはPixels座標系なのでscaleをかけておく
         let bytes = TextLayout::find_nearest_bytes(
-            (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
+            local_x - 2.0 - self.content_h_offset.get(),
             &self.content.borrow(),
             FontID::UIDefault,
             context.system_link.font_set(),
-            mounted_window.ui_scale_factor(),
         );
 
         // PointerDownのときは範囲選択なし状態
@@ -459,9 +451,9 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         self.update_views(
             update_mask,
             context.composite_tree,
-            mounted_window,
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
 
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
@@ -480,19 +472,11 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size.width,
             args.client_size.height,
         );
-        let mounted_window = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
-
-        let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
-        // TextLayoutはPixels座標系なのでscaleをかけておく
         let bytes = TextLayout::find_nearest_bytes(
-            (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
+            local_x - 2.0 - self.content_h_offset.get(),
             &self.content.borrow(),
             FontID::UIDefault,
             context.system_link.font_set(),
-            mounted_window.ui_scale_factor(),
         );
 
         let update_mask = self.move_cursor_keep_selection(bytes);
@@ -500,9 +484,9 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         self.update_views(
             update_mask,
             context.composite_tree,
-            mounted_window,
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
 
         EventContinueControl::STOP_PROPAGATION
@@ -521,19 +505,11 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
             args.client_size.width,
             args.client_size.height,
         );
-        let mounted_window = context
-            .ht_manager
-            .query_root_window(sender)
-            .expect("not mounted");
-
-        let cursor_rect = context.composite_tree.get_mut(self.ct_cursor);
-        // TextLayoutはPixels座標系なのでscaleをかけておく
         let bytes = TextLayout::find_nearest_bytes(
-            (local_x - 2.0 - self.content_h_offset.get()) * cursor_rect.base_scale_factor,
+            local_x - 2.0 - self.content_h_offset.get(),
             &self.content.borrow(),
             FontID::UIDefault,
             context.system_link.font_set(),
-            mounted_window.ui_scale_factor(),
         );
 
         let update_mask = self.move_cursor_keep_selection(bytes);
@@ -541,9 +517,9 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         self.update_views(
             update_mask,
             context.composite_tree,
-            mounted_window,
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
 
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
@@ -551,25 +527,20 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
     fn on_double_click(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         let selection_range =
             self.select_word_at(&*self.content.borrow(), self.cursor_pos_bytes.get());
         let update_mask = self.select_range(selection_range);
 
-        let mounted_window = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
-
         self.update_views(
             update_mask,
             context.composite_tree,
-            mounted_window,
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
 
         EventContinueControl::STOP_PROPAGATION
@@ -589,44 +560,46 @@ impl HitTestTreeScreenRepositionHandler for TextInputViewEventHandler {
     }
 }
 impl TextInputViewEventHandler {
-    fn update_focus(&self, context: &mut InputEventContext) {
-        let mounted_window = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
+    fn update_focus<E>(
+        &self,
+        window: WindowHandle,
+        composite_tree: &mut CompositeTree<E>,
+        current_sec: f32,
+    ) {
+        let has_focus = window.keyboard_focus_state().has_focus(&self.token);
 
-        if mounted_window.keyboard_focus_state().has_focus(&self.token) {
-            context.composite_tree.get_mut(self.ct_root).border = Some(Border {
+        if has_focus {
+            composite_tree.get_mut(self.ct_root).border = Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.5],
                     to_value: [1.0, 1.0, 1.0, 1.0],
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.1,
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },
                 ..Default::default()
             });
-            context.composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(1.0);
+            composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(1.0);
         } else {
-            context.composite_tree.get_mut(self.ct_root).border = Some(Border {
+            composite_tree.get_mut(self.ct_root).border = Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 1.0],
                     to_value: [1.0, 1.0, 1.0, 0.5],
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.1,
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },
                 ..Default::default()
             });
-            context.composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(0.0);
+            composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(0.0);
         }
 
-        context.composite_tree.mark_dirty(self.ct_root);
-        context.composite_tree.mark_dirty(self.ct_cursor);
+        composite_tree.mark_dirty(self.ct_root);
+        composite_tree.mark_dirty(self.ct_cursor);
     }
 
     fn update_text<E>(&self, composite_tree: &mut CompositeTree<E>) {
@@ -647,21 +620,18 @@ impl TextInputViewEventHandler {
     fn update_cursor_position<E>(
         &self,
         composite_tree: &mut CompositeTree<E>,
-        window: WindowHandle,
         system_link: &SystemLink,
-        ht_manager: &HitTestTreeManager,
+        _ht_manager: &HitTestTreeManager,
     ) {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
             FontID::UIDefault,
             system_link.font_set(),
-            window.ui_scale_factor(),
         );
 
         let mut text_scroll_occured = false;
         let cursor_rect = composite_tree.get_mut(self.ct_cursor);
-        // base_scale_factorがかかるのであらかじめわっておく
-        let mut cursor_display_x = tw / cursor_rect.base_scale_factor + self.content_h_offset.get();
+        let mut cursor_display_x = tw + self.content_h_offset.get();
         if cursor_display_x < 0.0 {
             // 範囲外になる(左すぎ cursor_display_xが0になるようにスクロール量を調整)
             self.content_h_offset
@@ -709,8 +679,8 @@ impl TextInputViewEventHandler {
             composite_tree.get_mut(self.ct_text).offset[0] =
                 AnimatableFloat::Value(self.content_h_offset.get());
             composite_tree.mark_dirty(self.ct_text);
-            self.update_preedit_underline(composite_tree, system_link, window);
-            self.update_selection(composite_tree, system_link, window);
+            self.update_preedit_underline(composite_tree, system_link);
+            self.update_selection(composite_tree, system_link);
         }
     }
 
@@ -718,7 +688,6 @@ impl TextInputViewEventHandler {
         &self,
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
-        window: WindowHandle,
     ) {
         let preedit_range =
             self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
@@ -733,31 +702,22 @@ impl TextInputViewEventHandler {
             &self.content.borrow()[..preedit_range.start],
             FontID::UIDefault,
             system_link.font_set(),
-            window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[preedit_range],
             FontID::UIDefault,
             system_link.font_set(),
-            window.ui_scale_factor(),
         );
 
         let underline_rect = composite_tree.get_mut(self.ct_preedit_underline);
-        underline_rect.offset[0] = AnimatableFloat::Value(
-            o / underline_rect.base_scale_factor + self.content_h_offset.get(),
-        );
-        underline_rect.size[0] = AnimatableFloat::Value(tw / underline_rect.base_scale_factor);
+        underline_rect.offset[0] = AnimatableFloat::Value(o + self.content_h_offset.get());
+        underline_rect.size[0] = AnimatableFloat::Value(tw);
         underline_rect.opacity = AnimatableFloat::Value(1.0);
 
         composite_tree.mark_dirty(self.ct_preedit_underline);
     }
 
-    fn update_selection<E>(
-        &self,
-        composite_tree: &mut CompositeTree<E>,
-        system_link: &SystemLink,
-        window: WindowHandle,
-    ) {
+    fn update_selection<E>(&self, composite_tree: &mut CompositeTree<E>, system_link: &SystemLink) {
         let selection_range = self.selection_range();
         if selection_range.is_empty() {
             // no selection
@@ -770,19 +730,16 @@ impl TextInputViewEventHandler {
             &self.content.borrow()[..selection_range.start],
             FontID::UIDefault,
             system_link.font_set(),
-            window.ui_scale_factor(),
         );
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..selection_range.end],
             FontID::UIDefault,
             system_link.font_set(),
-            window.ui_scale_factor(),
         );
 
         let ct = composite_tree.get_mut(self.ct_selection_bg);
-        ct.offset[0] =
-            AnimatableFloat::Value(o / ct.base_scale_factor + self.content_h_offset.get());
-        ct.size[0] = AnimatableFloat::Value((tw - o) / ct.base_scale_factor);
+        ct.offset[0] = AnimatableFloat::Value(o + self.content_h_offset.get());
+        ct.size[0] = AnimatableFloat::Value(tw - o);
 
         composite_tree.mark_dirty(self.ct_selection_bg);
     }
@@ -791,9 +748,9 @@ impl TextInputViewEventHandler {
         &self,
         mask: TextInputViewUpdateMask,
         composite_tree: &mut CompositeTree<E>,
-        window: WindowHandle,
         system_link: &SystemLink,
         ht_manager: &HitTestTreeManager,
+        current_sec: f32,
     ) {
         if mask.contains(TextInputViewUpdateMask::TEXT) {
             // needs update text
@@ -801,11 +758,20 @@ impl TextInputViewEventHandler {
         }
         if mask.contains(TextInputViewUpdateMask::CURSOR) {
             // needs update cursor position and selection highlight
-            self.update_cursor_position(composite_tree, window, system_link, ht_manager);
-            self.update_selection(composite_tree, system_link, window);
+            self.update_cursor_position(composite_tree, system_link, ht_manager);
+            self.update_selection(composite_tree, system_link);
         }
         if mask.contains(TextInputViewUpdateMask::PREEDIT) {
-            self.update_preedit_underline(composite_tree, system_link, window);
+            self.update_preedit_underline(composite_tree, system_link);
+        }
+        if mask.contains(TextInputViewUpdateMask::FOCUS) {
+            self.update_focus(
+                ht_manager
+                    .query_root_window(self.ht_root)
+                    .expect("not mounted"),
+                composite_tree,
+                current_sec,
+            );
         }
 
         if mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR) {
@@ -1262,10 +1228,6 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
             .take(range.EndCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
 
-        let window = ctx
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("no window bound");
         let r = ctx.ht_manager.compute_screen_rect_pixels_with_insets(
             self.ht_root,
             Point::new_logical(2.0, 2.0),
@@ -1275,20 +1237,18 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
             &self.content.borrow()[..start_bytes],
             FontID::UIDefault,
             ctx.system_link.font_set(),
-            window.ui_scale_factor(),
-        ) + self.content_h_offset.get() * window.ui_scale_factor();
+        );
         let w = TextLayout::measure_total_advances(
             &self.content.borrow()[start_bytes..end_bytes],
             FontID::UIDefault,
             ctx.system_link.font_set(),
-            window.ui_scale_factor(),
         );
 
         req.LayoutBounds()?
             .SetTextBounds(windows::Foundation::Rect {
-                X: r.left as f32 + o,
+                X: r.left as f32 + (o + self.content_h_offset.get()) * self.render_scale.get(),
                 Y: r.top as _,
-                Width: w,
+                Width: w * self.render_scale.get(),
                 Height: r.height as _,
             })
     }
@@ -1342,16 +1302,12 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
         let update_mask = self.select_range(new_cursor_start_bytes..new_cursor_end_bytes)
             | TextInputViewUpdateMask::TEXT;
 
-        let window = ctx
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("no root window");
         self.update_views(
             update_mask,
             ctx.composite_tree,
-            window,
             ctx.system_link,
             ctx.ht_manager,
+            ctx.current_sec,
         );
 
         e.SetResult(windows::UI::Text::Core::CoreTextTextUpdatingResult::Succeeded)?;
@@ -1399,12 +1355,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
             );
         }
 
-        let window = ctx
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("no root window");
-        self.update_preedit_underline(ctx.composite_tree, ctx.system_link, window);
-
+        self.update_preedit_underline(ctx.composite_tree, ctx.system_link);
         Ok(())
     }
 }
@@ -1667,5 +1618,6 @@ bitflags! {
         const TEXT = 1 << 0;
         const CURSOR = 1 << 1;
         const PREEDIT = 1 << 2;
+        const FOCUS = 1 << 3;
     }
 }

@@ -88,12 +88,7 @@ impl MenuItemLayout {
                         view_height = ITEM_HEIGHT;
                         post_spacing = 0.0;
                         required_width = SafeF32::new(
-                            TextLayout::measure_visual_width(
-                                label,
-                                FontID::UIDefault,
-                                font_set,
-                                render_scale,
-                            ) / render_scale
+                            TextLayout::measure_visual_width(label, FontID::UIDefault, font_set)
                                 + TEXT_INLINE_MARGIN * 2.0,
                         )
                         .expect("invalid width measured");
@@ -103,12 +98,7 @@ impl MenuItemLayout {
                         view_height = ITEM_HEIGHT;
                         post_spacing = 0.0;
                         required_width = SafeF32::new(
-                            TextLayout::measure_visual_width(
-                                label,
-                                FontID::UIDefault,
-                                font_set,
-                                render_scale,
-                            ) / render_scale
+                            TextLayout::measure_visual_width(label, FontID::UIDefault, font_set)
                                 + TEXT_INLINE_MARGIN * 2.0,
                         )
                         .expect("invalid width measured");
@@ -118,12 +108,7 @@ impl MenuItemLayout {
                         view_height = ITEM_HEIGHT;
                         post_spacing = 0.0;
                         required_width = SafeF32::new(
-                            TextLayout::measure_visual_width(
-                                label,
-                                FontID::UIDefault,
-                                font_set,
-                                render_scale,
-                            ) / render_scale
+                            TextLayout::measure_visual_width(label, FontID::UIDefault, font_set)
                                 + TEXT_INLINE_MARGIN * 2.0
                                 + SubMenuView::ICON_SIZE.width,
                         )
