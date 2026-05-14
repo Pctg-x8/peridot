@@ -176,6 +176,11 @@ impl State {
     }
 
     #[inline(always)]
+    pub fn key_get_utf32(&self, key: Keycode) -> u32 {
+        unsafe { ffi::xkb_state_key_get_utf32(self.0.as_ptr(), key) }
+    }
+
+    #[inline(always)]
     pub fn mod_index_is_active(&self, mod_index: u32, state: StateComponent) -> bool {
         unsafe { ffi::xkb_state_mod_index_is_active(self.0.as_ptr(), mod_index, state.bits()) == 1 }
     }

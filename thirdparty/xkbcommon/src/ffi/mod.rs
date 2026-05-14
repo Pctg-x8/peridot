@@ -345,7 +345,7 @@ unsafe extern "C" {
         buffer: *mut c_char,
         size: usize,
     ) -> c_int;
-    pub fn xkb_state_get_key_utf32(state: *mut xkb_state, key: xkb_keycode_t) -> u32;
+    pub fn xkb_state_key_get_utf32(state: *mut xkb_state, key: xkb_keycode_t) -> u32;
     pub fn xkb_state_key_get_one_sym(state: *mut xkb_state, key: xkb_keycode_t) -> xkb_keysym_t;
     pub fn xkb_state_key_get_layout(
         state: *mut xkb_state,

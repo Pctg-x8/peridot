@@ -2107,6 +2107,36 @@ struct KeyboardState {
     text_input: Option<wl::Owned<wl::ZwpTextInputV3>>,
     enter_state: Option<KeyboardEnterState>,
 }
+impl KeyboardState {
+    pub fn build_modifier(&self) -> ModifierKey {
+        let mut modifier = ModifierKey::empty();
+
+        if let Some(ref xkb_state) = self.xkb_state {
+            if self.xkb_shift_mod_index.is_some_and(|n| {
+                xkb_state.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::SHIFT;
+            }
+            if self.xkb_alt_mod_index.is_some_and(|n| {
+                xkb_state.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::ALT;
+            }
+            if self.xkb_ctrl_mod_index.is_some_and(|n| {
+                xkb_state.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::CONTROL;
+            }
+            if self.xkb_super_mod_index.is_some_and(|n| {
+                xkb_state.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
+            }) {
+                modifier |= ModifierKey::SUPER;
+            }
+        }
+
+        modifier
+    }
+}
 
 struct IMEPendingState {
     committed_text: String,
@@ -2476,7 +2506,7 @@ impl wl::PointerEventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, _pointer))]
     fn frame(&mut self, _pointer: &mut wl::Pointer) {
-        // tracing::trace!("pointer.frame");
+        tracing::trace!("pointer.frame");
     }
 
     #[tracing::instrument(skip(self, _pointer))]
@@ -2497,6 +2527,16 @@ impl wl::PointerEventListener for GlobalMessaging {
     #[tracing::instrument(skip(self, _pointer))]
     fn axis_value120(&mut self, _pointer: &mut wl::Pointer, axis: u32, value120: i32) {
         tracing::trace!("pointer.axis_value120");
+
+        // TODO: 必要なら他のaxisイベントシーケンスも処理する
+        self.event_dispatcher.dispatch(Event::ScrollWheel {
+            // 逆でくる
+            amount: -value120 as f32 / 120.0,
+            key_modifier: self
+                .keyboard
+                .as_ref()
+                .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
+        });
     }
 
     #[tracing::instrument(skip(self, _pointer))]
@@ -2607,87 +2647,59 @@ impl wl::KeyboardEventListener for GlobalMessaging {
             return;
         };
 
-        if let Some(ref mut x) = k_state.xkb_state {
-            let mut buf = Vec::with_capacity(32);
+        let modifier = k_state.build_modifier();
+        let ch = if let Some(ref x) = k_state.xkb_state {
             // evdevのスキャンコードでくるので、xkbのスキャンコードにする(8を足せばいいらしい: https://wayland-book.com/seat/keyboard.html)
-            let mut alen = x.key_get_utf8(key + 8, buf.spare_capacity_mut());
-            if alen > buf.capacity() {
-                buf.reserve(alen - buf.capacity());
-                alen = x.key_get_utf8(key + 8, buf.spare_capacity_mut());
-            }
-            unsafe {
-                buf.set_len(alen);
-            }
-            let text = unsafe { core::str::from_utf8_unchecked(&buf) };
-            tracing::trace!(alen, text, "keyboard translated");
+            char::from_u32(x.key_get_utf32(key + 8)).unwrap_or('\0')
+        } else {
+            '\0'
+        };
+        tracing::trace!(?ch, ?modifier, "keyinput");
 
-            let mut modifier = ModifierKey::empty();
-            if k_state.xkb_shift_mod_index.is_some_and(|n| {
-                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
-            }) {
-                modifier |= ModifierKey::SHIFT;
+        let code = match ch {
+            '\0' => match key {
+                k if k == Key::LeftControl as u32 => KeyInputCode::LeftControl,
+                k if k == Key::RightControl as u32 => KeyInputCode::RightControl,
+                k if k == Key::LeftShift as u32 => KeyInputCode::LeftShift,
+                k if k == Key::RightShift as u32 => KeyInputCode::RightShift,
+                k if k == Key::LeftAlt as u32 => KeyInputCode::LeftAlt,
+                k if k == Key::RightAlt as u32 => KeyInputCode::RightAlt,
+                k if k == Key::LeftMeta as u32 => KeyInputCode::LeftSuper,
+                k if k == Key::RightMeta as u32 => KeyInputCode::RightSuper,
+                k if k == Key::Left as u32 => KeyInputCode::LeftArrow,
+                k if k == Key::Right as u32 => KeyInputCode::RightArrow,
+                k if k == Key::Up as u32 => KeyInputCode::UpArrow,
+                k if k == Key::Down as u32 => KeyInputCode::DownArrow,
+                k if k == Key::Home as u32 => KeyInputCode::Home,
+                k if k == Key::End as u32 => KeyInputCode::End,
+                k if k == Key::PageUp as u32 => KeyInputCode::PageUp,
+                k if k == Key::PageDown as u32 => KeyInputCode::PageDown,
+                k if k == Key::Insert as u32 => KeyInputCode::Insert,
+                k if k == Key::Tab as u32 => KeyInputCode::Tab,
+                _ => KeyInputCode::UnknownNativeCode(key),
+            },
+            // 文字でくるキーの一部
+            '\r' => KeyInputCode::Enter,
+            '\x08' => KeyInputCode::Backspace,
+            '\x7f' => KeyInputCode::Delete,
+            c => KeyInputCode::Character(c),
+        };
+        match state {
+            wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
+                self.event_dispatcher.dispatch(Event::KeyDown {
+                    window: WindowHandle(enter_state.surface),
+                    modifier,
+                    code,
+                });
             }
-            if k_state.xkb_alt_mod_index.is_some_and(|n| {
-                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
-            }) {
-                modifier |= ModifierKey::ALT;
+            wl::KeyboardKeyState::Released => {
+                self.event_dispatcher.dispatch(Event::KeyUp {
+                    window: WindowHandle(enter_state.surface),
+                    modifier,
+                    code,
+                });
             }
-            if k_state.xkb_ctrl_mod_index.is_some_and(|n| {
-                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
-            }) {
-                modifier |= ModifierKey::CONTROL;
-            }
-            if k_state.xkb_super_mod_index.is_some_and(|n| {
-                x.mod_index_is_active(n, xkbcommon::StateComponent::MODS_EFFECTIVE)
-            }) {
-                modifier |= ModifierKey::SUPER;
-            }
-
-            let code = match text {
-                "" => match key {
-                    k if k == Key::LeftControl as u32 => KeyInputCode::LeftControl,
-                    k if k == Key::RightControl as u32 => KeyInputCode::RightControl,
-                    k if k == Key::LeftShift as u32 => KeyInputCode::LeftShift,
-                    k if k == Key::RightShift as u32 => KeyInputCode::RightShift,
-                    k if k == Key::LeftAlt as u32 => KeyInputCode::LeftAlt,
-                    k if k == Key::RightAlt as u32 => KeyInputCode::RightAlt,
-                    k if k == Key::LeftMeta as u32 => KeyInputCode::LeftSuper,
-                    k if k == Key::RightMeta as u32 => KeyInputCode::RightSuper,
-                    k if k == Key::Left as u32 => KeyInputCode::LeftArrow,
-                    k if k == Key::Right as u32 => KeyInputCode::RightArrow,
-                    k if k == Key::Up as u32 => KeyInputCode::UpArrow,
-                    k if k == Key::Down as u32 => KeyInputCode::DownArrow,
-                    k if k == Key::Home as u32 => KeyInputCode::Home,
-                    k if k == Key::End as u32 => KeyInputCode::End,
-                    k if k == Key::PageUp as u32 => KeyInputCode::PageUp,
-                    k if k == Key::PageDown as u32 => KeyInputCode::PageDown,
-                    k if k == Key::Insert as u32 => KeyInputCode::Insert,
-                    k if k == Key::Tab as u32 => KeyInputCode::Tab,
-                    _ => KeyInputCode::UnknownNativeCode(key),
-                },
-                // 文字でくるキーの一部
-                "\r" => KeyInputCode::Enter,
-                "\x08" => KeyInputCode::Backspace,
-                "\x7f" => KeyInputCode::Delete,
-                c => KeyInputCode::Character(c.chars().next().expect("empty")),
-            };
-            match state {
-                wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
-                    self.event_dispatcher.dispatch(Event::KeyDown {
-                        window: WindowHandle(enter_state.surface),
-                        modifier,
-                        code,
-                    });
-                }
-                wl::KeyboardKeyState::Released => {
-                    self.event_dispatcher.dispatch(Event::KeyUp {
-                        window: WindowHandle(enter_state.surface),
-                        modifier,
-                        code,
-                    });
-                }
-                _ => unreachable!(),
-            }
+            _ => unreachable!(),
         }
     }
 
