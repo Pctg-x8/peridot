@@ -56,7 +56,6 @@ impl VectorRasterizationState {
     }
 
     pub fn is_empty(&self) -> bool {
-        // self.fill_tri_points.is_empty() == self.fill_tri_indices.is_empty()
         self.fill_tri_points.is_empty()
             && self.curve_tris.is_empty()
             && self.rounded_fill_rect_radius_requests.is_empty()
@@ -156,6 +155,8 @@ impl<'a> VectorVertexRenderer<'a> {
         self.pen = to;
     }
 
+    // PFによっては使われない
+    #[allow(dead_code)]
     pub fn close(&mut self) {
         // line to figure origin
         let Some((org, filltri_index0)) = self.current_figure.take() else {
@@ -173,6 +174,8 @@ impl<'a> VectorVertexRenderer<'a> {
         self.pen = org;
     }
 
+    // PFによっては使われない
+    #[allow(dead_code)]
     pub const fn is_figure_opening(&self) -> bool {
         self.current_figure.is_some()
     }
