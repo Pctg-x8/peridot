@@ -33,6 +33,34 @@ use crate::{
 
 pub mod flyout_surface;
 
+macro_rules! event_trace {
+    ($($args:tt)+) => {
+        tracing::trace!(target: "wl::event-trace", $($args)+);
+    };
+    () => {
+        $crate::platform::unix::wayland::event_trace!("wayland event");
+    }
+}
+pub(self) use event_trace;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SurfaceStateTag {
+    ToplevelWindow,
+    ResizeEdge,
+    FlyoutSurface,
+}
+
+#[repr(C)]
+struct SurfaceState<T> {
+    tag: SurfaceStateTag,
+    data: T,
+}
+
+#[repr(C)]
+struct SurfaceStateUntyped {
+    tag: SurfaceStateTag,
+}
+
 pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
 
 #[repr(transparent)]
@@ -41,6 +69,11 @@ pub struct WindowHandle(NonNull<wl::Surface>);
 unsafe impl Send for WindowHandle {}
 unsafe impl Sync for WindowHandle {}
 impl WindowHandle {
+    #[inline(always)]
+    pub(self) const fn from_mut(ptr: &mut wl::Surface) -> Self {
+        Self(NonNull::from_mut(ptr))
+    }
+
     #[inline(always)]
     fn event_listener(&self) -> &WindowEventListener {
         unsafe { &*self.0.as_ref().user_data().cast::<WindowEventListener>() }
@@ -816,24 +849,6 @@ struct ResizeEdgeSurfaceData {
     target_toplevel: *const wl::XdgToplevel,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SurfaceStateTag {
-    ToplevelWindow,
-    ResizeEdge,
-    FlyoutSurface,
-}
-
-#[repr(C)]
-struct SurfaceState<T> {
-    tag: SurfaceStateTag,
-    data: T,
-}
-
-#[repr(C)]
-struct SurfaceStateUntyped {
-    tag: SurfaceStateTag,
-}
-
 pub struct Window {
     surface: wl::Owned<wl::Surface>,
 }
@@ -1104,36 +1119,36 @@ pub struct WindowEventListener {
     event_dispatcher: LogicFiberEventDispatcher,
 }
 impl wl::SurfaceEventListener for WindowEventListener {
-    #[tracing::instrument(skip(self, _surface, _output))]
-    fn enter(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {}
+    #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, _output))]
+    fn enter(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {
+        event_trace!();
+    }
 
-    #[tracing::instrument(skip(self, _surface, _output))]
-    fn leave(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {}
+    #[tracing::instrument(name = "wl_surface::leave", skip(self, _surface, _output))]
+    fn leave(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {
+        event_trace!();
+    }
 
-    #[tracing::instrument(skip(self, _surface))]
+    #[tracing::instrument(name = "wl_surface::preferred_buffer_scale", skip(self, _surface), fields(has_fractional_scale_support = self.scaling.is_manual()))]
     fn preferred_buffer_scale(&mut self, _surface: &mut wl::Surface, factor: i32) {
-        let has_fractional_scale_support = self.scaling.is_manual();
-        tracing::trace!(
-            has_fractional_scale = has_fractional_scale_support,
-            "perferred buffer scale"
-        );
-        if has_fractional_scale_support {
-            // fractional_scaleがある場合はこっちは処理しなくていい
+        event_trace!();
+
+        if self.scaling.is_manual() {
             return;
         }
 
         self.pending_configure_buffer_scale = Some(factor as _);
     }
 
-    #[tracing::instrument(skip(self, _surface))]
+    #[tracing::instrument(name = "wl_surface::preferred_buffer_transform", skip(self, _surface))]
     fn preferred_buffer_transform(&mut self, _surface: &mut wl::Surface, transform: u32) {
-        tracing::trace!("preferred buffer transform");
+        event_trace!();
     }
 }
 impl wl::XdgSurfaceEventListener for WindowEventListener {
-    #[tracing::instrument(skip(self, sender))]
+    #[tracing::instrument(name = "xdg_surface::configure", skip(self, sender))]
     fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
-        tracing::trace!("xdg surface configure");
+        event_trace!();
 
         self.commit();
         sender
@@ -1142,9 +1157,10 @@ impl wl::XdgSurfaceEventListener for WindowEventListener {
     }
 }
 impl wl::XdgToplevelEventListener for WindowEventListener {
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "xdg_toplevel::close", skip(self, _sender))]
     fn close(&mut self, _sender: &mut wl::XdgToplevel) {
-        tracing::trace!("xdg toplevel close");
+        event_trace!();
+
         match self.window_type {
             WindowType::Main {
                 ref termination_event,
@@ -1159,7 +1175,7 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
         }
     }
 
-    #[tracing::instrument(skip(self, _sender), fields(states = ?unsafe { states.as_slice::<u32>() }))]
+    #[tracing::instrument(name = "xdg_toplevel::configure", skip(self, _sender), fields(states = ?unsafe { states.as_slice::<wl::XdgToplevelState>() }))]
     fn configure(
         &mut self,
         _sender: &mut wl::XdgToplevel,
@@ -1167,7 +1183,8 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
         height: i32,
         states: &mut wl::ffi::Array,
     ) {
-        tracing::trace!("xdg toplevel configure");
+        event_trace!();
+
         let states = unsafe { states.as_slice::<wl::XdgToplevelState>() };
 
         self.pending_configure_size = (
@@ -1200,21 +1217,29 @@ impl wl::XdgToplevelEventListener for WindowEventListener {
         self.pending_maximized_changes = Some(states.contains(&wl::XdgToplevelState::Maximized));
     }
 
-    fn configure_bounds(&mut self, _sender: &mut wl::XdgToplevel, _width: i32, _height: i32) {}
+    #[tracing::instrument(name = "xdg_toplevel::configure_bounds", skip(self, _sender))]
+    fn configure_bounds(&mut self, _sender: &mut wl::XdgToplevel, width: i32, height: i32) {
+        event_trace!();
+    }
 
+    #[tracing::instrument(name = "xdg_toplevel::wm_capabilities", skip(self, _sender), fields(capabilities = ?unsafe { capabilities.as_slice::<wl::XdgToplevelWmCapabilities>() }))]
     fn wm_capabilities(
         &mut self,
         _sender: &mut wl::XdgToplevel,
-        _capabilities: &mut wl::ffi::Array,
+        capabilities: &mut wl::ffi::Array,
     ) {
+        event_trace!();
     }
 }
 impl wl::ZxdgToplevelDecorationV1EventListener for WindowEventListener {
+    #[tracing::instrument(name = "zxdg_toplevel_decoration_v1::configure", skip(self, _sender))]
     fn configure(
         &mut self,
         _sender: &mut wl::ZxdgToplevelDecorationV1,
         mode: wl::ZxdgToplevelDecorationV1Mode,
     ) {
+        event_trace!();
+
         match mode {
             wl::ZxdgToplevelDecorationV1Mode::ClientSide => {
                 tracing::warn!("TODO: client side decoration impl");
@@ -1226,9 +1251,10 @@ impl wl::ZxdgToplevelDecorationV1EventListener for WindowEventListener {
     }
 }
 impl wl::WpFractionalScaleV1EventListener for WindowEventListener {
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "wp_fractional_scale_v1::preferred_scale", skip(self, _sender))]
     fn preferred_scale(&mut self, _sender: &mut wl::WpFractionalScaleV1, scale: u32) {
-        tracing::trace!("fractional scale");
+        event_trace!();
+
         self.pending_configure_buffer_scale = Some(scale as f32 / 120.0);
     }
 }
@@ -1334,30 +1360,30 @@ struct PopupState {
     surface_ptr: *mut wl::Surface,
 }
 impl wl::XdgSurfaceEventListener for PopupState {
-    #[tracing::instrument(skip(self, sender))]
+    #[tracing::instrument(name = "xdg_surface(Popup)::configure", skip(self, sender))]
     fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
-        tracing::trace!("popup.surface.configure");
-        sender.ack_configure(serial).expect("popup.ack_configure");
+        event_trace!();
 
+        sender.ack_configure(serial).expect("popup.ack_configure");
         unsafe {
             (*self.surface_ptr).commit().expect("popup.surface.commit");
         }
     }
 }
 impl wl::XdgPopupEventListener for PopupState {
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "xdg_popup::configure", skip(self, _sender))]
     fn configure(&mut self, _sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
-        tracing::trace!("popup.configure");
+        event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "xdg_popup::popup_done", skip(self, _sender))]
     fn popup_done(&mut self, _sender: &mut wl::XdgPopup) {
-        tracing::trace!("popup.popup_done");
+        event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "xdg_popup::repositioned", skip(self, _sender))]
     fn repositioned(&mut self, _sender: &mut wl::XdgPopup, token: u32) {
-        tracing::trace!("popup.repositioned");
+        event_trace!();
     }
 }
 
@@ -1677,35 +1703,35 @@ impl WindowDecoration {
         // viewport fixed setup
         left.viewport
             .set_source(
-                wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::ZERO,
+                wl::Fixed::ZERO,
                 wl::Fixed::from_f32_lossy(Self::SIZE as _),
-                wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::ONE,
             )
             .expect("viewport.set_source");
         right
             .viewport
             .set_source(
-                wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(0.0),
+                wl::Fixed::ZERO,
+                wl::Fixed::ZERO,
                 wl::Fixed::from_f32_lossy(Self::SIZE as _),
-                wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::ONE,
             )
             .expect("viewport.set_source");
         top.viewport
             .set_source(
-                wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::ZERO,
+                wl::Fixed::ZERO,
+                wl::Fixed::ONE,
                 wl::Fixed::from_f32_lossy(Self::SIZE as _),
             )
             .expect("viewport.set_source");
         bottom
             .viewport
             .set_source(
-                wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(0.0),
-                wl::Fixed::from_f32_lossy(1.0),
+                wl::Fixed::ZERO,
+                wl::Fixed::ZERO,
+                wl::Fixed::ONE,
                 wl::Fixed::from_f32_lossy(Self::SIZE as _),
             )
             .expect("viewport.set_source");
@@ -1916,7 +1942,6 @@ impl WindowDecoration {
         Box::into_pin(this)
     }
 
-    #[tracing::instrument(skip(self))]
     fn adjust_for_frame(&self, parent_width: i32, parent_height: i32) {
         tracing::debug!("adjust_for_frame");
 
@@ -2144,11 +2169,11 @@ struct IMEPendingState {
 }
 
 pub struct GlobalMessaging {
-    text_input_manager: *mut wl::ZwpTextInputManagerV3,
+    text_input_manager: NonNull<wl::ZwpTextInputManagerV3>,
     xkb_context: xkbcommon::Context,
     keyboard: Option<KeyboardState>,
     pointer: Option<PointerState>,
-    cursor_shape_manager: Option<*mut wl::WpCursorShapeManagerV1>,
+    cursor_shape_manager: Option<NonNull<wl::WpCursorShapeManagerV1>>,
     event_dispatcher: LogicFiberEventDispatcher,
     ime_pending_state: IMEPendingState,
     _pinned: core::marker::PhantomPinned,
@@ -2156,7 +2181,7 @@ pub struct GlobalMessaging {
 impl GlobalMessaging {
     pub fn new(ctx: &DisplayServerContext, event_dispatcher: LogicFiberEventDispatcher) -> Self {
         Self {
-            text_input_manager: ctx.global_interfaces.text_input_manager.as_ptr(),
+            text_input_manager: unsafe { ctx.global_interfaces.text_input_manager.copy_ptr() },
             xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
                 .expect("xkb_context.create"),
             keyboard: None,
@@ -2165,7 +2190,7 @@ impl GlobalMessaging {
                 .global_interfaces
                 .cursor_shape_manager
                 .as_ref()
-                .map(|x| x.as_ptr()),
+                .map(|x| unsafe { x.copy_ptr() }),
             event_dispatcher,
             ime_pending_state: IMEPendingState {
                 committed_text: String::new(),
@@ -2191,8 +2216,9 @@ impl wl::XdgWmBaseEventListener for GlobalMessaging {
     }
 }
 impl wl::SeatEventListener for GlobalMessaging {
+    #[tracing::instrument(skip(self, seat))]
     fn capabilities(&mut self, seat: &mut wl::Seat, capabilities: wl::SeatCapability) {
-        tracing::trace!(?capabilities, "seat::capabilities");
+        event_trace!();
 
         if capabilities.contains(wl::SeatCapability::POINTER) {
             // pointer
@@ -2201,11 +2227,11 @@ impl wl::SeatEventListener for GlobalMessaging {
                 .into_result()
                 .expect("pointer.set_listener");
             let c = if let Some(mgr) = self.cursor_shape_manager {
-                Some(unsafe {
-                    (*mgr)
+                Some(
+                    unsafe { mgr.as_ref() }
                         .get_pointer(&p)
-                        .expect("cursor_shape_manager.get_pointer")
-                })
+                        .expect("cursor_shape_manager.get_pointer"),
+                )
             } else {
                 None
             };
@@ -2227,11 +2253,9 @@ impl wl::SeatEventListener for GlobalMessaging {
             k.set_listener(self)
                 .into_result()
                 .expect("keyboard.set_listener");
-            let mut ti = unsafe {
-                (*self.text_input_manager)
-                    .get_text_input(seat)
-                    .expect("text_input_manager.get_text_input")
-            };
+            let mut ti = unsafe { self.text_input_manager.as_ref() }
+                .get_text_input(seat)
+                .expect("text_input_manager.get_text_input");
             ti.set_listener(self)
                 .into_result()
                 .expect("text_input.set_listener");
@@ -2253,8 +2277,9 @@ impl wl::SeatEventListener for GlobalMessaging {
         }
     }
 
+    #[tracing::instrument(skip(self, _seat))]
     fn name(&mut self, _seat: &mut wl::Seat, name: &core::ffi::CStr) {
-        tracing::trace!(?name, "seat::name");
+        event_trace!();
     }
 }
 impl wl::PointerEventListener for GlobalMessaging {
@@ -2267,6 +2292,8 @@ impl wl::PointerEventListener for GlobalMessaging {
         surface_x: wl::Fixed,
         surface_y: wl::Fixed,
     ) {
+        event_trace!();
+
         let Some(surface) = surface else {
             return;
         };
@@ -2330,6 +2357,8 @@ impl wl::PointerEventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, pointer, surface))]
     fn leave(&mut self, pointer: &mut wl::Pointer, serial: u32, surface: Option<&mut wl::Surface>) {
+        event_trace!();
+
         let state = self.pointer.as_mut().expect("no pointer state initialized");
 
         if let Some(surface) = surface {
@@ -2363,6 +2392,8 @@ impl wl::PointerEventListener for GlobalMessaging {
         surface_x: wl::Fixed,
         surface_y: wl::Fixed,
     ) {
+        event_trace!();
+
         let state = self.pointer.as_mut().expect("no pointer state initialized");
         let Some(ref enter_state) = state.enter_state else {
             return;
@@ -2405,6 +2436,8 @@ impl wl::PointerEventListener for GlobalMessaging {
         button: u32,
         state: wl::PointerButtonState,
     ) {
+        event_trace!();
+
         let pointer_state = self.pointer.as_ref().expect("no pointer state initialized");
         let Some(ref enter_state) = pointer_state.enter_state else {
             return;
@@ -2501,32 +2534,32 @@ impl wl::PointerEventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, _pointer))]
     fn axis(&mut self, _pointer: &mut wl::Pointer, time: u32, axis: u32, value: wl::Fixed) {
-        tracing::trace!("pointer.axis");
+        event_trace!();
     }
 
     #[tracing::instrument(skip(self, _pointer))]
     fn frame(&mut self, _pointer: &mut wl::Pointer) {
-        tracing::trace!("pointer.frame");
+        event_trace!();
     }
 
     #[tracing::instrument(skip(self, _pointer))]
     fn axis_source(&mut self, _pointer: &mut wl::Pointer, axis_source: u32) {
-        tracing::trace!("pointer.axis_source");
+        event_trace!();
     }
 
     #[tracing::instrument(skip(self, _pointer))]
     fn axis_stop(&mut self, _pointer: &mut wl::Pointer, time: u32, axis: u32) {
-        tracing::trace!("pointer.axis_stop");
+        event_trace!();
     }
 
     #[tracing::instrument(skip(self, _pointer))]
     fn axis_discrete(&mut self, _pointer: &mut wl::Pointer, axis: u32, discrete: i32) {
-        tracing::trace!("pointer.axis_discrete");
+        event_trace!();
     }
 
     #[tracing::instrument(skip(self, _pointer))]
     fn axis_value120(&mut self, _pointer: &mut wl::Pointer, axis: u32, value120: i32) {
-        tracing::trace!("pointer.axis_value120");
+        event_trace!();
 
         // TODO: 必要なら他のaxisイベントシーケンスも処理する
         self.event_dispatcher.dispatch(Event::ScrollWheel {
@@ -2541,7 +2574,7 @@ impl wl::PointerEventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, _pointer))]
     fn axis_relative_direction(&mut self, _pointer: &mut wl::Pointer, axis: u32, direction: u32) {
-        tracing::trace!("pointer.axis_relative_direction");
+        event_trace!();
     }
 }
 impl wl::KeyboardEventListener for GlobalMessaging {
@@ -2553,6 +2586,8 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         fd: i32,
         size: u32,
     ) {
+        event_trace!();
+
         let state = self.keyboard.as_mut().expect("keyboard_state.uninit");
         if format != wl::KeyboardKeymapFormat::XkbV1 {
             unimplemented!("unknown keymap format: {format:?}");
@@ -2601,14 +2636,14 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         surface: &mut wl::Surface,
         keys: &[u32],
     ) {
-        tracing::trace!("keyboard::enter");
+        event_trace!();
 
         let state = self.keyboard.as_mut().expect("no keyboard");
         state.enter_state = Some(KeyboardEnterState {
             surface: NonNull::from_mut(surface),
         });
         self.event_dispatcher.dispatch(Event::WindowFocusChanged {
-            window: WindowHandle(NonNull::from_mut(surface)),
+            window: WindowHandle::from_mut(surface),
             focused: true,
         });
     }
@@ -2620,13 +2655,13 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         serial: u32,
         surface: Option<&mut wl::Surface>,
     ) {
-        tracing::trace!("keyboard::leave");
+        event_trace!();
 
         let state = self.keyboard.as_mut().expect("no keyboard");
         state.enter_state = None;
         if let Some(s) = surface {
             self.event_dispatcher.dispatch(Event::WindowFocusChanged {
-                window: WindowHandle(NonNull::from_mut(s)),
+                window: WindowHandle::from_mut(s),
                 focused: false,
             });
         }
@@ -2641,8 +2676,9 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         key: u32,
         state: wl::KeyboardKeyState,
     ) {
-        let k_state = self.keyboard.as_mut().expect("keyboard_state.uninit");
-        tracing::trace!("keyboard::key");
+        event_trace!();
+
+        let k_state = self.keyboard.as_ref().expect("keyboard_state.uninit");
         let Some(ref enter_state) = k_state.enter_state else {
             return;
         };
@@ -2713,9 +2749,9 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         mods_locked: u32,
         group: u32,
     ) {
-        let state = self.keyboard.as_mut().expect("keyboard_state.uninit");
-        tracing::trace!("keyboard::modifiers");
+        event_trace!();
 
+        let state = self.keyboard.as_mut().expect("keyboard_state.uninit");
         if let Some(ref mut x) = state.xkb_state {
             x.update_mask(
                 mods_depressed,
@@ -2730,20 +2766,22 @@ impl wl::KeyboardEventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, _sender))]
     fn repeat_info(&mut self, _sender: &mut wl::Keyboard, rate: i32, delay: i32) {
-        tracing::trace!("keyboard::repeat_info");
+        event_trace!();
     }
 }
 impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
     #[tracing::instrument(skip(self, sender, _surface))]
     fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: Option<&mut wl::Surface>) {
-        tracing::trace!("textinputv3::enter");
+        event_trace!();
+
         sender.enable().expect("text_input.enable");
         sender.commit().expect("text_input.commit");
     }
 
     #[tracing::instrument(skip(self, sender, _surface))]
     fn leave(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: Option<&mut wl::Surface>) {
-        tracing::trace!("textinputv3::leave");
+        event_trace!();
+
         sender.disable().expect("text_input.disable");
         sender.commit().expect("text_input.commit");
     }
@@ -2756,6 +2794,8 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
         cursor_begin: i32,
         cursor_end: i32,
     ) {
+        event_trace!();
+
         self.ime_pending_state.preedit_text = text
             .map(|t| t.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -2763,6 +2803,8 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, _sender))]
     fn commit_string(&mut self, _sender: &mut wl::ZwpTextInputV3, text: Option<&core::ffi::CStr>) {
+        event_trace!();
+
         self.ime_pending_state.committed_text = text
             .map(|t| t.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -2775,11 +2817,13 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
         before_length: u32,
         after_length: u32,
     ) {
-        tracing::trace!("textinputv3::delete_surrounding_text");
+        event_trace!();
     }
 
     #[tracing::instrument(skip(self, _sender))]
     fn done(&mut self, _sender: &mut wl::ZwpTextInputV3, serial: u32) {
+        event_trace!();
+
         let k_state = self.keyboard.as_ref().expect("keyboard.uninit");
         let Some(ref k_enter_state) = k_state.enter_state else {
             return;
@@ -2807,7 +2851,8 @@ impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
         width: u32,
         height: u32,
     ) {
-        tracing::trace!("layer surface configure");
+        event_trace!();
+
         sender
             .ack_configure(serial)
             .expect("layer_surface.ack_configure");
@@ -2815,7 +2860,7 @@ impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
 
     #[tracing::instrument(skip(self, _sender))]
     fn closed(&mut self, _sender: &mut wl::ZwlrLayerSurfaceV1) {
-        tracing::trace!("layer surface closed");
+        event_trace!();
     }
 }
 

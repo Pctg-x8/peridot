@@ -197,48 +197,52 @@ struct InstanceData {
 #[repr(transparent)]
 struct EventHandler(SurfaceState<InstanceData>);
 impl wl::SurfaceEventListener for EventHandler {
+    #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, _output))]
     fn enter(
         &mut self,
         _surface: &mut peridot_tp_wayland::Surface,
         _output: &mut peridot_tp_wayland::Output,
     ) {
-        tracing::debug!("context menu enter");
+        super::event_trace!();
     }
 
+    #[tracing::instrument(name = "wl_surface::leave", skip(self, _surface, _output))]
     fn leave(
         &mut self,
         _surface: &mut peridot_tp_wayland::Surface,
         _output: &mut peridot_tp_wayland::Output,
     ) {
-        tracing::debug!("context menu leave");
+        super::event_trace!();
     }
 
+    #[tracing::instrument(
+        name = "wl_surface::preferred_buffer_scale",
+        skip(self, _surface),
+        fields(has_fractional_scale_support = self.0.data.scaling.is_manual())
+    )]
     fn preferred_buffer_scale(&mut self, _surface: &mut peridot_tp_wayland::Surface, factor: i32) {
-        let has_fractional_scale_support = self.0.data.scaling.is_manual();
-        tracing::debug!(
-            has_fractional_scale_support,
-            factor,
-            "context menu preferred buffer scale"
-        );
-        if has_fractional_scale_support {
-            // Fractional Scaleがある場合はこっちは無視
+        super::event_trace!();
+
+        if self.0.data.scaling.is_manual() {
             return;
         }
 
         self.0.data.pending_configure_buffer_scale = Some(factor as _);
     }
 
+    #[tracing::instrument(name = "wl_surface::preferred_buffer_transform", skip(self, _surface))]
     fn preferred_buffer_transform(
         &mut self,
         _surface: &mut peridot_tp_wayland::Surface,
         transform: u32,
     ) {
-        tracing::debug!(transform, "context menu preferred buffer transform");
+        super::event_trace!();
     }
 }
 impl wl::XdgSurfaceEventListener for EventHandler {
+    #[tracing::instrument(name = "xdg_surface::configure", skip(self, sender))]
     fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
-        tracing::debug!(serial, "context menu configure(surface)");
+        super::event_trace!();
         let mut delayed_event_queue = Vec::with_capacity(1);
 
         let mut committed_state_ref = self.0.data.committed_state.lock().expect("poisoned");
@@ -307,6 +311,7 @@ impl wl::XdgSurfaceEventListener for EventHandler {
     }
 }
 impl wl::XdgPopupEventListener for EventHandler {
+    #[tracing::instrument(name = "xdg_popup::configure", skip(self, _sender))]
     fn configure(
         &mut self,
         _sender: &mut peridot_tp_wayland::XdgPopup,
@@ -315,24 +320,28 @@ impl wl::XdgPopupEventListener for EventHandler {
         width: i32,
         height: i32,
     ) {
-        tracing::debug!(x, y, width, height, "context menu configure");
+        super::event_trace!();
     }
 
+    #[tracing::instrument(name = "xdg_popup::popup_done", skip(self, _sender))]
     fn popup_done(&mut self, _sender: &mut peridot_tp_wayland::XdgPopup) {
-        tracing::debug!("context menu done");
+        super::event_trace!();
     }
 
+    #[tracing::instrument(name = "xdg_popup::repositioned", skip(self, _sender))]
     fn repositioned(&mut self, _sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
-        tracing::debug!(token, "context menu repositioned");
+        super::event_trace!();
     }
 }
 impl wl::WpFractionalScaleV1EventListener for EventHandler {
+    #[tracing::instrument(name = "wp_fractional_scale_v1::repositioned", skip(self, _sender))]
     fn preferred_scale(
         &mut self,
         _sender: &mut peridot_tp_wayland::WpFractionalScaleV1,
         scale: u32,
     ) {
-        tracing::debug!(scale, "context menu preferred scale(fractional)");
+        super::event_trace!();
+
         self.0.data.pending_configure_buffer_scale = Some(scale as f32 / 120.0);
     }
 }

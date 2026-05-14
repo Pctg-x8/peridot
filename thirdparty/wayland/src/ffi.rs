@@ -46,10 +46,17 @@ unsafe impl Send for Interface {}
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Fixed(i32);
 impl Fixed {
+    /// 0.0
+    pub const ZERO: Self = Self(0);
+    /// 1.0
+    pub const ONE: Self = Self(256);
+
+    /// from floating point value(possibly losing precision)
     pub const fn from_f32_lossy(v: f32) -> Self {
         Self((v * 256.0) as _)
     }
 
+    /// convert to floating point value
     pub const fn to_f32(&self) -> f32 {
         self.0 as f32 / 256.0
     }
