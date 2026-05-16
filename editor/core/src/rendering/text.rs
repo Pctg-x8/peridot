@@ -1410,7 +1410,7 @@ impl TextLayout {
         #[cfg(feature = "harfbuzz")]
         let font = font_set.select(font).faces[fallback_index];
         #[cfg(feature = "harfbuzz")]
-        let mut left_cursor = left_base * render_scale;
+        let mut left_cursor = left_base;
         #[cfg(feature = "harfbuzz")]
         let mut width = 0.0f32;
         #[cfg(feature = "harfbuzz")]
@@ -1432,11 +1432,6 @@ impl TextLayout {
             );
 
             left_cursor += glyph_position.x_advance as f32 / 64.0;
-        }
-
-        #[cfg(feature = "harfbuzz")]
-        {
-            width = width * render_scale;
         }
 
         #[cfg(target_os = "macos")]
@@ -1527,12 +1522,11 @@ impl TextLayout {
         };
 
         #[cfg(feature = "harfbuzz")]
-        let left_cursor = left_base * render_scale
+        return left_base
             + glyph_positions
                 .into_iter()
                 .map(|x| x.x_advance as f32 / 64.0)
-                .sum::<f32>()
-                * render_scale;
+                .sum::<f32>();
 
         #[cfg(target_os = "macos")]
         let mut left_cursor = 0.0 as f32;
@@ -1581,7 +1575,7 @@ impl TextLayout {
             left_cursor = left_cursor.max(line_left_cursor + l.trailing_whitespace_width() as f32);
         }
 
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         return left_cursor;
 
         #[cfg(windows)]
@@ -1619,12 +1613,12 @@ impl TextLayout {
             let glyph_positions = unsafe {
                 hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
             };
-            left_cursor = left_base * render_scale;
+            left_cursor = left_base;
             for n in 0..unsafe { glyph_positions_len.assume_init() } {
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
 
                 let left = left_cursor;
-                let right = left + glyph_position.x_advance as f32 / 64.0 * render_scale;
+                let right = left + glyph_position.x_advance as f32 / 64.0;
                 let mid = (left + right) / 2.0;
 
                 if x < left {
@@ -1649,7 +1643,7 @@ impl TextLayout {
                     return next_boundary_bytes;
                 }
 
-                left_cursor += glyph_position.x_advance as f32 / 64.0 * render_scale;
+                left_cursor += glyph_position.x_advance as f32 / 64.0;
                 bytes += text[bytes..]
                     .chars()
                     .next()

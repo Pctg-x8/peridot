@@ -403,6 +403,7 @@ impl<'h> HitTestTreeManager<'h> {
         )
     }
 
+    #[inline]
     pub fn query_root_window(&self, r: HitTestTreeRef) -> Option<WindowHandle> {
         match self.relations[r.0].parent {
             Some(p) => self.query_root_window(p),
@@ -410,6 +411,7 @@ impl<'h> HitTestTreeManager<'h> {
         }
     }
 
+    #[inline]
     pub fn translate_tree_local_to_root(
         &self,
         from: HitTestTreeRef,
@@ -419,6 +421,17 @@ impl<'h> HitTestTreeManager<'h> {
         root_height: f32,
     ) -> (f32, f32) {
         let (gx, gy, _, _, _) = self.compute_global_rect(from, root_width, root_height);
+        (gx + x, gy + y)
+    }
+
+    #[inline]
+    pub fn translate_tree_local_to_root_autoroot(
+        &self,
+        from: HitTestTreeRef,
+        x: f32,
+        y: f32,
+    ) -> (f32, f32) {
+        let (gx, gy, _, _, _) = self.compute_global_rect_autoroot(from);
         (gx + x, gy + y)
     }
 

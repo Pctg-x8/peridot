@@ -409,18 +409,14 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         // no selection in editing
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
 
-        let mounted_window = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
         self.update_views(
             TextInputViewUpdateMask::TEXT
                 | TextInputViewUpdateMask::CURSOR
                 | TextInputViewUpdateMask::PREEDIT,
             context.composite_tree,
-            mounted_window,
             context.system_link,
             context.ht_manager,
+            context.current_sec,
         );
     }
 }
@@ -621,7 +617,7 @@ impl TextInputViewEventHandler {
         &self,
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
-        _ht_manager: &HitTestTreeManager,
+        ht_manager: &HitTestTreeManager,
     ) {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
@@ -650,14 +646,10 @@ impl TextInputViewEventHandler {
         cursor_rect.offset[0] = AnimatableFloat::Value(cursor_display_x);
 
         #[cfg(feature = "wayland")]
-        let client_size = window.client_size();
-        #[cfg(feature = "wayland")]
-        let (sx, sy) = ht_manager.translate_tree_local_to_root(
+        let (sx, sy) = ht_manager.translate_tree_local_to_root_autoroot(
             self.ht_root,
             2.0 + cursor_display_x,
             2.0,
-            client_size.width,
-            client_size.height,
         );
         #[cfg(feature = "wayland")]
         system_link.set_ime_cursor_rect(crate::utils::Rect::from_lt_size(
