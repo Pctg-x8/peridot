@@ -1,4 +1,7 @@
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, Ref},
+    rc::Rc,
+};
 
 use bitflags::bitflags;
 
@@ -40,6 +43,7 @@ impl RawTextInputView {
     pub fn new(
         ctx: &mut ViewInitContext,
         rect: Rect<LogicalUnit>,
+        init_content: String,
         keyboard_focus_token: FocusTargetToken,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
@@ -133,7 +137,7 @@ impl RawTextInputView {
             render_scale: core::cell::Cell::new(ctx.ui_scale_factor),
             content_h_offset: core::cell::Cell::new(0.0),
             content_visible_width: 128.0 - 4.0,
-            content: core::cell::RefCell::new("aaa".into()),
+            content: core::cell::RefCell::new(init_content),
             cursor_pos_bytes: core::cell::Cell::new(0),
             preedit_range_start_bytes: core::cell::Cell::new(0),
             preedit_range_end_bytes: core::cell::Cell::new(0),
@@ -195,6 +199,15 @@ impl RawTextInputView {
         ct.mark_dirty_all(self.eh.ct_selection_bg);
 
         TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT
+    }
+
+    pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
+        *self.eh.content.borrow_mut() = content;
+        TextInputViewUpdateMask::TEXT
+    }
+
+    pub fn content(&self) -> Ref<String> {
+        self.eh.content.borrow()
     }
 
     #[inline(always)]
@@ -1670,7 +1683,7 @@ impl TextInputView {
             keyboard_focus: Some(kf_token),
             ..Default::default()
         });
-        let raw = RawTextInputView::new(ctx, rect, kf_token);
+        let raw = RawTextInputView::new(ctx, rect, "".into(), kf_token);
         let eh = Rc::new(TextInputViewEventHandler {
             raw,
             id: ctx.view_registry.alloc(),
@@ -1799,8 +1812,9 @@ impl NumericInputView {
             keyboard_focus: Some(kf_token),
             ..Default::default()
         });
-        let raw = RawTextInputView::new(ctx, rect, kf_token);
+        let raw = RawTextInputView::new(ctx, rect, "0".into(), kf_token);
         let eh = Rc::new(NumericInputViewEventHandler {
+            value: Cell::new(0),
             raw,
             id: ctx.view_registry.alloc(),
             token: kf_token,
@@ -1851,6 +1865,7 @@ impl NumericInputView {
 }
 
 struct NumericInputViewEventHandler {
+    value: Cell<i64>,
     raw: RawTextInputView,
     id: ViewIdentifier,
     token: FocusTargetToken,
@@ -1865,15 +1880,16 @@ impl ViewEventHandler for NumericInputViewEventHandler {
 }
 impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
-        // HitTestTreeへの変更がはいるので遅延させる
-        self.raw
-            .eh
-            .pending_update_mask
-            .set(self.raw.eh.release_focus());
-        context
-            .system_link
-            .dispatch_event(Event::UpdateView { id: self.id });
-        self.key_input_enabled.set(false);
+        let current_value = self.value.get();
+        let content = self.raw.content();
+        let new_value = content
+            .split_once('.')
+            .map_or(&**content, |x| x.0)
+            .parse::<i64>()
+            .unwrap_or(current_value);
+        self.value.set(new_value);
+        drop(content);
+        self.disable_direct_input(context.system_link, Some(new_value.to_string()));
     }
 
     #[inline(always)]
@@ -1881,8 +1897,16 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
         if code == KeyInputCode::Enter {
             // Enterで直接入力を切り替える
             if self.key_input_enabled.get() {
-                // TODO: validate input content here
-                self.disable_direct_input(context.system_link);
+                let current_value = self.value.get();
+                let content = self.raw.content();
+                let new_value = content
+                    .split_once('.')
+                    .map_or(&**content, |x| x.0)
+                    .parse::<i64>()
+                    .unwrap_or(current_value);
+                self.value.set(new_value);
+                drop(content);
+                self.disable_direct_input(context.system_link, Some(new_value.to_string()));
             } else {
                 self.enable_direct_input(context.system_link);
             }
@@ -1943,24 +1967,28 @@ impl NumericInputViewEventHandler {
         }
 
         // HitTestTreeへの変更がはいるので遅延させる(最初は全選択状態)
+        let update_mask = self.raw.set_content(self.value.get().to_string());
         self.raw
             .eh
             .pending_update_mask
-            .set(self.raw.eh.set_focus() | self.raw.eh.select_all());
+            .set(self.raw.eh.set_focus() | self.raw.eh.select_all() | update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    pub fn disable_direct_input(&self, syslink: &SystemLink) {
+    pub fn disable_direct_input(&self, syslink: &SystemLink, text_replacement: Option<String>) {
         if !self.key_input_enabled.replace(false) {
             // already disabled
             return;
         }
 
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw
-            .eh
-            .pending_update_mask
-            .set(self.raw.eh.release_focus());
+        let mut update_mask = self.raw.eh.release_focus();
+        if let Some(x) = text_replacement {
+            update_mask |= self.raw.set_content(x);
+            update_mask |= self.raw.eh.move_cursor(0);
+        }
+
+        self.raw.eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 }
