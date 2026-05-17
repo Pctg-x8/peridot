@@ -41,7 +41,7 @@ use crate::{
     },
     uikit::{
         MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
-        MenuItemView, MountContext, MountTarget, OverlayPopupBasicFrameView,
+        MenuItemView, MountContext, MountTarget, NumericInputView, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
         ScrollContainer, SimpleButtonView, TextInputView, ViewIdentifier, ViewInitContext,
         ViewRegistry, ViewUpdateContext,
@@ -1403,34 +1403,6 @@ impl DropdownBoxEventHandler {
             .runs[0]
             .content = content.into();
         composite_tree.mark_text_layout_dirty(self.ct_text);
-    }
-}
-
-pub struct NumericInputView {
-    editor: TextInputView,
-}
-impl NumericInputView {
-    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
-        let editor = TextInputView::new(ctx, rect);
-
-        Self { editor }
-    }
-
-    #[inline(always)]
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        self.editor.mount(ctx, target);
-    }
-
-    #[inline(always)]
-    pub fn rescale<E>(
-        &self,
-        new_scale: f32,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &HitTestTreeManager,
-        syslink: &SystemLink,
-    ) {
-        self.editor
-            .rescale(composite_tree, syslink, ht_manager, new_scale);
     }
 }
 

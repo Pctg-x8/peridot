@@ -195,7 +195,7 @@ pub use self::menu::{
 };
 
 mod text_input;
-pub use self::text_input::TextInputView;
+pub use self::text_input::{NumericInputView, RawTextInputView, TextInputView};
 
 mod scroll;
 pub use self::scroll::ScrollContainer;
