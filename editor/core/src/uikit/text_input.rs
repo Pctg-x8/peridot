@@ -14,7 +14,7 @@ use crate::{
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
             HitTestTreeRef, HitTestTreeScreenRepositionHandler, PointerActionArgs,
-            PointerButtonActionArgs,
+            PointerButtonActionArgs, ScrollWheelActionArgs, ScrollWheelActionResponse,
         },
     },
     rendering::{
@@ -1820,6 +1820,7 @@ impl NumericInputView {
             token: kf_token,
             ht_root,
             key_input_enabled: Cell::new(false),
+            last_drag_client_y: Cell::new(0.0),
         });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
@@ -1871,6 +1872,7 @@ struct NumericInputViewEventHandler {
     token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     key_input_enabled: Cell<bool>,
+    last_drag_client_y: Cell<f32>,
 }
 impl ViewEventHandler for NumericInputViewEventHandler {
     #[inline(always)]
@@ -1928,13 +1930,83 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
     }
 
-    fn on_pointer_up(
+    fn on_drag_start(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.last_drag_client_y.set(args.client_pos.y);
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_move(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        let diff = args.client_pos.y - self.last_drag_client_y.get();
+        let new_value = self.apply_delta(-(diff * 0.5).round() as _);
+        self.raw.eh.update_views(
+            self.raw.set_content(new_value.to_string()),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
+
+        self.last_drag_client_y.set(args.client_pos.y);
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_end(
+        &self,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        let diff = args.client_pos.y - self.last_drag_client_y.get();
+        let new_value = self.apply_delta(-(diff * 0.5).round() as _);
+        self.raw.eh.update_views(
+            self.raw.set_content(new_value.to_string()),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_up(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
+    }
+
+    fn on_scroll_wheel(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &ScrollWheelActionArgs,
+    ) -> ScrollWheelActionResponse {
+        let new_value = self.apply_delta(args.amount.round() as _);
+        self.raw.eh.update_views(
+            self.raw.set_content(new_value.to_string()),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
+
+        ScrollWheelActionResponse {
+            continue_flags: EventContinueControl::STOP_PROPAGATION,
+            left_amount: 0.0,
+        }
     }
 
     fn on_click(
@@ -1948,7 +2020,7 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
     }
 }
 impl NumericInputViewEventHandler {
-    pub fn begin_direct_input(&self, syslink: &SystemLink) {
+    fn begin_direct_input(&self, syslink: &SystemLink) {
         if self.key_input_enabled.replace(true) {
             // already enabled
             return;
@@ -1963,7 +2035,7 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    pub fn confirm_direct_input(&self, syslink: &SystemLink) {
+    fn confirm_direct_input(&self, syslink: &SystemLink) {
         if !self.key_input_enabled.replace(false) {
             // already disabled
             return;
@@ -1988,7 +2060,7 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    pub fn cancel_direct_input(&self, syslink: &SystemLink) {
+    fn cancel_direct_input(&self, syslink: &SystemLink) {
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.raw.eh.release_focus();
         // キャンセル時はもとにもどす
@@ -1997,5 +2069,12 @@ impl NumericInputViewEventHandler {
 
         self.raw.eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
+    }
+
+    fn apply_delta(&self, d: i64) -> i64 {
+        let new_value = self.value.get() + d;
+        self.value.set(new_value);
+
+        new_value
     }
 }
