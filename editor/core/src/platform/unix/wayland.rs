@@ -1258,9 +1258,11 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                 k if k == Key::PageDown as u32 => KeyInputCode::PageDown,
                 k if k == Key::Insert as u32 => KeyInputCode::Insert,
                 k if k == Key::Tab as u32 => KeyInputCode::Tab,
+                k if k == Key::Esc as u32 => KeyInputCode::Esc,
                 _ => KeyInputCode::UnknownNativeCode(key),
             },
             // 文字でくるキーの一部
+            '\x1b' => KeyInputCode::Esc,
             '\r' => KeyInputCode::Enter,
             '\x08' => KeyInputCode::Backspace,
             '\x7f' => KeyInputCode::Delete,

@@ -1146,6 +1146,7 @@ pub struct FocusTargetToken(usize);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyInputCode {
     Character(char),
+    Esc,
     LeftShift,
     LeftAlt,
     LeftControl,

@@ -114,6 +114,7 @@ pub enum AbsoluteAxes {
 /// Key
 #[repr(u16)]
 pub enum Key {
+    Esc = 1,
     Tab = 15,
     LeftControl = 29,
     LeftShift = 42,

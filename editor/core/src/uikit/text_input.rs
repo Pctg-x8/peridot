@@ -1880,37 +1880,25 @@ impl ViewEventHandler for NumericInputViewEventHandler {
 }
 impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
-        let current_value = self.value.get();
-        let content = self.raw.content();
-        let new_value = content
-            .split_once('.')
-            .map_or(&**content, |x| x.0)
-            .parse::<i64>()
-            .unwrap_or(current_value);
-        self.value.set(new_value);
-        drop(content);
-        self.disable_direct_input(context.system_link, Some(new_value.to_string()));
+        self.confirm_direct_input(context.system_link);
     }
 
     #[inline(always)]
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         if code == KeyInputCode::Enter {
-            // Enterで直接入力を切り替える
+            // 確定or入力開始
             if self.key_input_enabled.get() {
-                let current_value = self.value.get();
-                let content = self.raw.content();
-                let new_value = content
-                    .split_once('.')
-                    .map_or(&**content, |x| x.0)
-                    .parse::<i64>()
-                    .unwrap_or(current_value);
-                self.value.set(new_value);
-                drop(content);
-                self.disable_direct_input(context.system_link, Some(new_value.to_string()));
+                self.confirm_direct_input(context.system_link);
             } else {
-                self.enable_direct_input(context.system_link);
+                self.begin_direct_input(context.system_link);
             }
 
+            return;
+        }
+
+        if code == KeyInputCode::Esc {
+            // 入力キャンセル
+            self.cancel_direct_input(context.system_link);
             return;
         }
 
@@ -1955,12 +1943,12 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.enable_direct_input(context.system_link);
+        self.begin_direct_input(context.system_link);
         EventContinueControl::STOP_PROPAGATION
     }
 }
 impl NumericInputViewEventHandler {
-    pub fn enable_direct_input(&self, syslink: &SystemLink) {
+    pub fn begin_direct_input(&self, syslink: &SystemLink) {
         if self.key_input_enabled.replace(true) {
             // already enabled
             return;
@@ -1975,18 +1963,37 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    pub fn disable_direct_input(&self, syslink: &SystemLink, text_replacement: Option<String>) {
+    pub fn confirm_direct_input(&self, syslink: &SystemLink) {
         if !self.key_input_enabled.replace(false) {
             // already disabled
             return;
         }
 
+        let current_value = self.value.get();
+        let content = self.raw.content();
+        let new_value = content
+            .split_once('.')
+            .map_or(&**content, |x| x.0)
+            .parse::<i64>()
+            .unwrap_or(current_value);
+        self.value.set(new_value);
+        drop(content);
+
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.raw.eh.release_focus();
-        if let Some(x) = text_replacement {
-            update_mask |= self.raw.set_content(x);
-            update_mask |= self.raw.eh.move_cursor(0);
-        }
+        update_mask |= self.raw.set_content(new_value.to_string());
+        update_mask |= self.raw.eh.move_cursor(0);
+
+        self.raw.eh.pending_update_mask.set(update_mask);
+        syslink.dispatch_event(Event::UpdateView { id: self.id });
+    }
+
+    pub fn cancel_direct_input(&self, syslink: &SystemLink) {
+        // HitTestTreeへの変更がはいるので遅延させる
+        let mut update_mask = self.raw.eh.release_focus();
+        // キャンセル時はもとにもどす
+        update_mask |= self.raw.set_content(self.value.get().to_string());
+        update_mask |= self.raw.eh.move_cursor(0);
 
         self.raw.eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
