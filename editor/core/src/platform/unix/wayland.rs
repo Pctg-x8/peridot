@@ -412,7 +412,16 @@ impl crate::SystemLink<'_> {
             .as_ref()
         {
             shape_device
-                .set_shape(serial, cursor.as_wayland())
+                .set_shape(
+                    serial,
+                    match cursor {
+                        CursorShape::Default => wl::WpCursorShapeDeviceV1Shape::Default,
+                        CursorShape::Pointer => wl::WpCursorShapeDeviceV1Shape::Pointer,
+                        CursorShape::IBeam => wl::WpCursorShapeDeviceV1Shape::Text,
+                        CursorShape::ResizeHorizontal => wl::WpCursorShapeDeviceV1Shape::EwResize,
+                        CursorShape::ResizeVertical => wl::WpCursorShapeDeviceV1Shape::NsResize,
+                    },
+                )
                 .expect("cursor_shape_device.set_cursor");
         }
     }

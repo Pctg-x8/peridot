@@ -492,7 +492,11 @@ impl RawTextInputViewEventHandler {
     pub fn set_focus(&self) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus taken");
 
-        self.has_focus.set(true);
+        if self.has_focus.replace(true) {
+            // already taking focus
+            return TextInputViewUpdateMask::empty();
+        }
+
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
         #[cfg(target_os = "macos")]
@@ -508,7 +512,11 @@ impl RawTextInputViewEventHandler {
     pub fn release_focus(&self) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus released");
 
-        self.has_focus.set(false);
+        if !self.has_focus.replace(false) {
+            // already losing focus
+            return TextInputViewUpdateMask::empty();
+        }
+
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
         #[cfg(target_os = "macos")]
@@ -1027,6 +1035,11 @@ impl RawTextInputViewEventHandler {
             (a, b) if a <= b => a..b,
             (a, b) => b..a,
         }
+    }
+
+    #[inline(always)]
+    pub fn select_all(&self) -> TextInputViewUpdateMask {
+        self.select_range(0..self.content.borrow().len())
     }
 
     fn move_cursor(&self, pos_bytes: usize) -> TextInputViewUpdateMask {
@@ -1759,10 +1772,13 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
     fn on_pointer_down(
         &self,
-        _sender: HitTestTreeRef,
-        _context: &mut InputEventContext,
-        _args: &PointerButtonActionArgs,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        // forward first event
+        self.raw.eh.on_pointer_down(sender, context, args);
+
         // 下の要素にフォーカス処理がいかないようにする
         EventContinueControl::STOP_PROPAGATION
     }
@@ -1779,7 +1795,7 @@ impl NumericInputView {
             height: rect.height,
             left: rect.left,
             top: rect.top,
-            cursor_shape: CursorShape::Default,
+            cursor_shape: CursorShape::ResizeVertical,
             keyboard_focus: Some(kf_token),
             ..Default::default()
         });
@@ -1866,23 +1882,9 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
             // Enterで直接入力を切り替える
             if self.key_input_enabled.get() {
                 // TODO: validate input content here
-
-                // HitTestTreeへの変更がはいるので遅延させる
-                self.raw
-                    .eh
-                    .pending_update_mask
-                    .set(self.raw.eh.release_focus());
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.id });
-                self.key_input_enabled.set(false);
+                self.disable_direct_input(context.system_link);
             } else {
-                // HitTestTreeへの変更がはいるので遅延させる
-                self.raw.eh.pending_update_mask.set(self.raw.eh.set_focus());
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.id });
-                self.key_input_enabled.set(true);
+                self.enable_direct_input(context.system_link);
             }
 
             return;
@@ -1911,7 +1913,16 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         // 下の要素にフォーカス処理がいかないようにする
-        EventContinueControl::STOP_PROPAGATION
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
 
     fn on_click(
@@ -1920,13 +1931,36 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.eh.pending_update_mask.set(self.raw.eh.set_focus());
-        context
-            .system_link
-            .dispatch_event(Event::UpdateView { id: self.id });
-        self.key_input_enabled.set(true);
-
+        self.enable_direct_input(context.system_link);
         EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl NumericInputViewEventHandler {
+    pub fn enable_direct_input(&self, syslink: &SystemLink) {
+        if self.key_input_enabled.replace(true) {
+            // already enabled
+            return;
+        }
+
+        // HitTestTreeへの変更がはいるので遅延させる(最初は全選択状態)
+        self.raw
+            .eh
+            .pending_update_mask
+            .set(self.raw.eh.set_focus() | self.raw.eh.select_all());
+        syslink.dispatch_event(Event::UpdateView { id: self.id });
+    }
+
+    pub fn disable_direct_input(&self, syslink: &SystemLink) {
+        if !self.key_input_enabled.replace(false) {
+            // already disabled
+            return;
+        }
+
+        // HitTestTreeへの変更がはいるので遅延させる
+        self.raw
+            .eh
+            .pending_update_mask
+            .set(self.raw.eh.release_focus());
+        syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 }

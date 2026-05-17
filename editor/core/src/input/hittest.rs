@@ -512,17 +512,7 @@ pub enum CursorShape {
     Pointer,
     IBeam,
     ResizeHorizontal,
-}
-impl CursorShape {
-    #[cfg(feature = "wayland")]
-    pub const fn as_wayland(&self) -> peridot_tp_wayland::WpCursorShapeDeviceV1Shape {
-        match self {
-            Self::Default => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::Default,
-            Self::Pointer => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::Pointer,
-            Self::IBeam => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::Text,
-            Self::ResizeHorizontal => peridot_tp_wayland::WpCursorShapeDeviceV1Shape::EwResize,
-        }
-    }
+    ResizeVertical,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

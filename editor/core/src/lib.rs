@@ -1792,10 +1792,14 @@ async fn run<'sys>(
         &mut view_init_ctx,
         Rect::from_lt_size(
             Point::new_logical(500.0, 100.0),
-            Size::new_logical(128.0, 20.0),
+            Size::new_logical(64.0, 20.0),
         ),
     );
     numeric_input_view.mount(&mut view_init_ctx, &main_window);
+    numeric_input_view.set_keyboard_focus_group(
+        main_window.keyboard_focus_group(),
+        view_init_ctx.keyboard_focus_registry,
+    );
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
