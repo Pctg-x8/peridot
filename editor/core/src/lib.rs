@@ -1406,6 +1406,34 @@ impl DropdownBoxEventHandler {
     }
 }
 
+pub struct NumericInputView {
+    editor: TextInputView,
+}
+impl NumericInputView {
+    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
+        let editor = TextInputView::new(ctx, rect);
+
+        Self { editor }
+    }
+
+    #[inline(always)]
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        self.editor.mount(ctx, target);
+    }
+
+    #[inline(always)]
+    pub fn rescale<E>(
+        &self,
+        new_scale: f32,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &HitTestTreeManager,
+        syslink: &SystemLink,
+    ) {
+        self.editor
+            .rescale(composite_tree, syslink, ht_manager, new_scale);
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -1724,14 +1752,26 @@ async fn run<'sys>(
         view_init_ctx.keyboard_focus_registry,
     );
 
-    let text_input_view = TextInputView::new(&mut view_init_ctx, Point::new_logical(200.0, 300.0));
+    let text_input_view = TextInputView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(200.0, 300.0),
+            Size::new_logical(128.0, 20.0),
+        ),
+    );
     text_input_view.mount(&mut view_init_ctx, &main_window);
     text_input_view.set_keyboard_focus_group(
         main_window.keyboard_focus_group(),
         view_init_ctx.keyboard_focus_registry,
     );
 
-    let text_input_view2 = TextInputView::new(&mut view_init_ctx, Point::new_logical(200.0, 324.0));
+    let text_input_view2 = TextInputView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(200.0, 324.0),
+            Size::new_logical(128.0, 20.0),
+        ),
+    );
     text_input_view2.mount(&mut view_init_ctx, &main_window);
     text_input_view2.set_keyboard_focus_group(
         main_window.keyboard_focus_group(),
@@ -1747,7 +1787,10 @@ async fn run<'sys>(
     );
     scroll_container.mount(&mut view_init_ctx, &main_window);
 
-    let text_input_view3 = TextInputView::new(&mut view_init_ctx, Point::new_logical(8.0, 8.0));
+    let text_input_view3 = TextInputView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(Point::new_logical(8.0, 8.0), Size::new_logical(128.0, 20.0)),
+    );
     text_input_view3.mount(&mut view_init_ctx, &scroll_container);
     text_input_view3.set_keyboard_focus_group(
         main_window.keyboard_focus_group(),
@@ -1772,6 +1815,15 @@ async fn run<'sys>(
         ],
     );
     dropdown_box.mount(&mut view_init_ctx, &main_window);
+
+    let numeric_input_view = NumericInputView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(500.0, 100.0),
+            Size::new_logical(128.0, 20.0),
+        ),
+    );
+    numeric_input_view.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -1918,6 +1970,12 @@ async fn run<'sys>(
                         new_scale,
                     );
                     dropdown_box.rescale(new_scale, &mut composite_tree);
+                    numeric_input_view.rescale(
+                        new_scale,
+                        &mut composite_tree,
+                        &ht_manager,
+                        &system_link,
+                    );
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");

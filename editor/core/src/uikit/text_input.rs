@@ -5,7 +5,7 @@ use bitflags::bitflags;
 #[cfg(target_os = "macos")]
 use crate::{Event, LogicFiberEventDispatcher, input::hittest::HitTestTreeManager};
 use crate::{
-    LogicFiberEventDispatcher, SystemLink, WindowHandle,
+    LogicFiberEventDispatcher, SystemLink,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
@@ -23,26 +23,31 @@ use crate::{
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef,
         },
-        text::{FontID, TextLayout},
+        text::{FontID, FontSet, TextLayout},
     },
     uikit::{
         MountContext, MountTarget, ViewEventHandler, ViewIdentifier, ViewInitContext,
         ViewUpdateContext,
     },
-    utils::{LogicalUnit, Point, SafeF32},
+    utils::{LogicalUnit, Point, Rect, SafeF32},
 };
 
-pub struct TextInputView {
+pub struct RawTextInputView {
     ct_text_clip: CompositeTreeRef,
-    eh: Rc<TextInputViewEventHandler>,
+    eh: Rc<RawTextInputViewEventHandler>,
 }
-impl TextInputView {
-    pub fn new(ctx: &mut ViewInitContext, pos: Point<LogicalUnit>) -> Self {
-        let kf_token = ctx.keyboard_focus_registry.acquire_token();
+impl RawTextInputView {
+    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
-            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(20.0)],
-            offset: [AnimatableFloat::Value(pos.x), AnimatableFloat::Value(pos.y)],
+            size: [
+                AnimatableFloat::Value(rect.width),
+                AnimatableFloat::Value(rect.height),
+            ],
+            offset: [
+                AnimatableFloat::Value(rect.left),
+                AnimatableFloat::Value(rect.top),
+            ],
             has_bitmap: true,
             border: Some(Border {
                 thickness: 1.0,
@@ -54,8 +59,8 @@ impl TextInputView {
         let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             size: [
-                AnimatableFloat::Value(128.0 - 4.0),
-                AnimatableFloat::Value(20.0 - 4.0),
+                AnimatableFloat::Value(rect.width - 4.0),
+                AnimatableFloat::Value(rect.height - 4.0),
             ],
             offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
             clip_child: Some(ClipConfig {
@@ -96,15 +101,6 @@ impl TextInputView {
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.2, 0.4, 1.0, 0.25])),
             ..Default::default()
         });
-        let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
-            width: 128.0,
-            height: 20.0,
-            left: pos.x,
-            top: pos.y,
-            cursor_shape: CursorShape::IBeam,
-            keyboard_focus: Some(kf_token),
-            ..Default::default()
-        });
 
         ctx.composite_tree.add_child(ct_text_clip, ct_selection_bg);
         ctx.composite_tree.add_child(ct_text_clip, ct_text);
@@ -113,15 +109,13 @@ impl TextInputView {
             .add_child(ct_text_clip, ct_preedit_underline);
         ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
-        let eh = Rc::new(TextInputViewEventHandler {
-            id: ctx.view_registry.alloc(),
-            token: kf_token,
+        let eh = Rc::new(RawTextInputViewEventHandler {
             ct_root,
             ct_text,
             ct_cursor,
             ct_preedit_underline,
             ct_selection_bg,
-            ht_root,
+            has_focus: core::cell::Cell::new(false),
             render_scale: core::cell::Cell::new(ctx.ui_scale_factor),
             content_h_offset: core::cell::Cell::new(0.0),
             content_visible_width: 128.0 - 4.0,
@@ -139,17 +133,12 @@ impl TextInputView {
             pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
             event_dispatcher: ctx.system_link.event_dispatcher,
         });
-        ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-        ctx.view_registry.set_event_handler(eh.id, &eh);
         #[cfg(windows)]
         ctx.ht_manager
             .set_native_text_deferrable_event_handler(ht_root, &eh);
         #[cfg(windows)]
         eh.native_text_input_context
             .bind_action(ctx.system_link, &eh, ht_root);
-
-        ctx.ht_manager.set_screen_reposition_handler(ht_root, &eh);
 
         eh.update_text(ctx.composite_tree);
 
@@ -159,7 +148,7 @@ impl TextInputView {
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree
             .add_child(parent.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+        // ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
 
         #[cfg(windows)]
         unsafe {
@@ -172,21 +161,7 @@ impl TextInputView {
         }
     }
 
-    pub fn set_keyboard_focus_group(
-        &self,
-        group: KeyboardFocusGroupRef,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
-        keyboard_focus_registry.join_group(group, self.eh.token);
-    }
-
-    pub fn rescale<E>(
-        &self,
-        ct: &mut CompositeTree<E>,
-        syslink: &SystemLink,
-        ht_manager: &HitTestTreeManager,
-        new_scale: f32,
-    ) {
+    pub fn rescale<E>(&self, ct: &mut CompositeTree<E>, new_scale: f32) -> TextInputViewUpdateMask {
         self.eh.render_scale.set(new_scale);
 
         ct.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
@@ -202,26 +177,17 @@ impl TextInputView {
         ct.get_mut(self.eh.ct_selection_bg).base_scale_factor = new_scale;
         ct.mark_dirty_all(self.eh.ct_selection_bg);
 
-        // update for cursors
-        self.eh.update_views(
-            TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT,
-            ct,
-            syslink,
-            ht_manager,
-            0.0, // not interested in scale change
-        );
+        TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT
     }
 }
 
-struct TextInputViewEventHandler {
-    id: ViewIdentifier,
-    token: FocusTargetToken,
+struct RawTextInputViewEventHandler {
     ct_root: CompositeTreeRef,
     ct_text: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
     ct_preedit_underline: CompositeTreeRef,
     ct_selection_bg: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
+    has_focus: core::cell::Cell<bool>,
     render_scale: core::cell::Cell<f32>,
     content_h_offset: core::cell::Cell<f32>,
     content_visible_width: f32,
@@ -237,7 +203,7 @@ struct TextInputViewEventHandler {
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
 }
-impl ViewEventHandler for TextInputViewEventHandler {
+/*impl ViewEventHandler for RawTextInputViewEventHandler {
     fn update(&self, context: &mut ViewUpdateContext) {
         self.update_views(
             self.pending_update_mask
@@ -248,11 +214,12 @@ impl ViewEventHandler for TextInputViewEventHandler {
             context.current_sec,
         );
     }
-}
-impl KeyInputEventHandler for TextInputViewEventHandler {
-    fn focus_taken(&self, context: &mut InputEventContext) {
+}*/
+impl RawTextInputViewEventHandler {
+    pub fn set_focus(&self) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus taken");
 
+        self.has_focus.set(true);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
         #[cfg(target_os = "macos")]
@@ -262,18 +229,13 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .expect("not mounted")
             .begin_text_input(core::ptr::from_ref(self).cast_mut());
 
-        self.update_views(
-            TextInputViewUpdateMask::FOCUS,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+        TextInputViewUpdateMask::FOCUS
     }
 
-    fn focus_released(&self, context: &mut InputEventContext) {
+    pub fn release_focus(&self) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus released");
 
+        self.has_focus.set(false);
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
         #[cfg(target_os = "macos")]
@@ -286,19 +248,17 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         // clear selection
         let update_mask = self.deselect();
 
-        self.update_views(
-            update_mask | TextInputViewUpdateMask::FOCUS,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+        update_mask | TextInputViewUpdateMask::FOCUS
     }
 
-    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+    pub fn process_keydown(
+        &self,
+        code: KeyInputCode,
+        modifier: ModifierKey,
+    ) -> TextInputViewUpdateMask {
         tracing::debug!(?code, "keydown");
 
-        let view_update_mask = match code {
+        match code {
             // cursor operations
             KeyInputCode::LeftArrow => {
                 self.move_cursor_to_left(modifier.contains(ModifierKey::SHIFT))
@@ -323,24 +283,15 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             // ignore enter key
             KeyInputCode::Enter => TextInputViewUpdateMask::empty(),
             _ => TextInputViewUpdateMask::empty(),
-        };
-
-        self.update_views(
-            view_update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+        }
     }
 
     #[cfg(feature = "wayland")]
-    fn ime_state_changes(
+    pub fn process_ime_state_changes(
         &self,
-        context: &mut InputEventContext,
         new_committed_string: &str,
         new_preedit_string: &str,
-    ) {
+    ) -> TextInputViewUpdateMask {
         let selection_range = self.selection_range();
         if !selection_range.is_empty() {
             // remove selection first
@@ -409,162 +360,223 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         // no selection in editing
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
 
-        self.update_views(
-            TextInputViewUpdateMask::TEXT
-                | TextInputViewUpdateMask::CURSOR
-                | TextInputViewUpdateMask::PREEDIT,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+        TextInputViewUpdateMask::TEXT
+            | TextInputViewUpdateMask::CURSOR
+            | TextInputViewUpdateMask::PREEDIT
     }
-}
-impl HitTestTreeActionHandler for TextInputViewEventHandler {
-    fn on_pointer_down(
+
+    pub fn move_cursor_by_point(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
-            sender,
-            args.client_pos.x,
-            args.client_pos.y,
-            args.client_size.width,
-            args.client_size.height,
-        );
+        point: Point<LogicalUnit>,
+        font_set: &FontSet,
+    ) -> TextInputViewUpdateMask {
         let bytes = TextLayout::find_nearest_bytes(
-            local_x - 2.0 - self.content_h_offset.get(),
+            point.x - 2.0 - self.content_h_offset.get(),
             &self.content.borrow(),
             FontID::UIDefault,
-            context.system_link.font_set(),
+            font_set,
         );
 
-        // PointerDownのときは範囲選択なし状態
-        let update_mask = self.move_cursor(bytes);
-
-        self.update_views(
-            update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
-
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
+        self.move_cursor(bytes)
     }
 
-    fn on_drag_move(
+    pub fn move_cursor_by_point_keep_selection(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
-            sender,
-            args.client_pos.x,
-            args.client_pos.y,
-            args.client_size.width,
-            args.client_size.height,
-        );
+        point: Point<LogicalUnit>,
+        font_set: &FontSet,
+    ) -> TextInputViewUpdateMask {
         let bytes = TextLayout::find_nearest_bytes(
-            local_x - 2.0 - self.content_h_offset.get(),
+            point.x - 2.0 - self.content_h_offset.get(),
             &self.content.borrow(),
             FontID::UIDefault,
-            context.system_link.font_set(),
+            font_set,
         );
 
-        let update_mask = self.move_cursor_keep_selection(bytes);
-
-        self.update_views(
-            update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
-
-        EventContinueControl::STOP_PROPAGATION
+        self.move_cursor_keep_selection(bytes)
     }
 
-    fn on_pointer_up(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        let (local_x, _, _, _) = context.ht_manager.translate_client_to_tree_local(
-            sender,
-            args.client_pos.x,
-            args.client_pos.y,
-            args.client_size.width,
-            args.client_size.height,
-        );
-        let bytes = TextLayout::find_nearest_bytes(
-            local_x - 2.0 - self.content_h_offset.get(),
-            &self.content.borrow(),
-            FontID::UIDefault,
-            context.system_link.font_set(),
-        );
+    pub fn select_word_at_cursor(&self) -> TextInputViewUpdateMask {
+        let content = self.content.borrow();
+        if content.is_empty() {
+            return self.move_cursor(0);
+        }
 
-        let update_mask = self.move_cursor_keep_selection(bytes);
+        let cursor_pos_bytes = self.cursor_pos_bytes.get();
 
-        self.update_views(
-            update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+        #[cfg(windows)]
+        {
+            let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
+                .expect("globalization_preferences.languages")
+                .First()
+                .expect("vector_view.first")
+                .Current()
+                .expect("iterator.current");
+            let word_segmenter =
+                windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
+                    .expect("words_segmenter.create");
 
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
+            let start_index = content
+                .char_indices()
+                .take_while(|&(i, _)| i < cursor_pos_bytes)
+                .count()
+                .min(content.chars().count() - 1);
+            let ws = word_segmenter
+                .GetTokenAt(
+                    &windows_core::HSTRING::from_wide(&{
+                        let mut u16s = Vec::new();
+                        for c in content.chars() {
+                            let mut b = [0; 2];
+                            u16s.extend_from_slice(c.encode_utf16(&mut b));
+                        }
+                        u16s
+                    }),
+                    start_index as _,
+                )
+                .expect("word_segmenter.get_token_at");
+            let text_segment = ws
+                .SourceTextSegment()
+                .expect("word_segment.source_text_segment");
+
+            let start = content
+                .chars()
+                .take(text_segment.StartPosition as _)
+                .map(|c| c.len_utf8())
+                .sum();
+            let end = content
+                .chars()
+                .take((text_segment.StartPosition + text_segment.Length) as _)
+                .map(|c| c.len_utf8())
+                .sum();
+
+            start..end
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut start = core::mem::MaybeUninit::uninit();
+            let mut end = core::mem::MaybeUninit::uninit();
+
+            let at_utf16 = content[..cursor_pos_bytes]
+                .encode_utf16()
+                .count()
+                .min(content.encode_utf16().count() - 1);
+            unsafe {
+                crate::platform::mac::bridge::ni_query_range_for_word_at(
+                    content.as_ptr(),
+                    content.len() as _,
+                    at_utf16 as _,
+                    start.as_mut_ptr(),
+                    end.as_mut_ptr(),
+                );
+            }
+
+            let start_bytes = unsafe {
+                std::char::decode_utf16(content.encode_utf16().take(start.assume_init() as _))
+                    .map(|x| x.expect("invalid char?").len_utf8())
+                    .sum()
+            };
+            let end_bytes = unsafe {
+                std::char::decode_utf16(content.encode_utf16().take(end.assume_init() as _))
+                    .map(|x| x.expect("invalid char?").len_utf8())
+                    .sum()
+            };
+
+            start_bytes..end_bytes
+        }
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            // UnicodeSegmentation+BudouX fallback
+            use unicode_segmentation::UnicodeSegmentation;
+
+            let mut words = Vec::new();
+            let content = self.content.borrow();
+            let mut chars = content.chars();
+            let mut is_budou_cluster = false;
+            let mut same_cluster_range = 0..0;
+            let mut cb = 0;
+            while let Some(c) = chars.next() {
+                let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
+                        || peridot_tp_unicode_properties::script::is_katakana(c)
+                        || peridot_tp_unicode_properties::script::is_han(c)
+                        || peridot_tp_unicode_properties::script::is_thai(c)
+                        // 一部Commonにあるらしいので特別対応
+                        || c as u32 == 0x30fc || c as u32 == 0xff70;
+                if is_budou_cluster_c != is_budou_cluster {
+                    if !same_cluster_range.is_empty() {
+                        if !is_budou_cluster {
+                            words.extend(
+                                content[same_cluster_range.clone()]
+                                    .split_word_bounds()
+                                    .map(|x| x.to_owned()),
+                            )
+                        } else {
+                            words.extend(
+                                peridot_tp_budoux::parse(
+                                    &peridot_tp_budoux::embedded::ja_knbc::MODEL,
+                                    &content[same_cluster_range.clone()],
+                                )
+                                .into_iter()
+                                .map(|x| x.to_owned()),
+                            )
+                        }
+                    }
+
+                    is_budou_cluster = is_budou_cluster_c;
+                    same_cluster_range = cb..cb;
+                }
+
+                same_cluster_range.end += c.len_utf8();
+                cb += c.len_utf8();
+            }
+            if !same_cluster_range.is_empty() {
+                if !is_budou_cluster {
+                    words.extend(
+                        content[same_cluster_range.clone()]
+                            .split_word_bounds()
+                            .map(|x| x.to_owned()),
+                    )
+                } else {
+                    words.extend(
+                        peridot_tp_budoux::parse(
+                            &peridot_tp_budoux::embedded::ja_knbc::MODEL,
+                            &content[same_cluster_range.clone()],
+                        )
+                        .into_iter()
+                        .map(|x| x.to_owned()),
+                    )
+                }
+            }
+
+            tracing::debug!(?words, "double click");
+
+            // TODO: LTR前提 最適化はあとで
+            let mut measure_range = 0..0;
+            let mut select_range = 0..content.len();
+            for w in words {
+                let starting_byte = measure_range.end;
+                measure_range.end += w.len();
+
+                select_range = starting_byte..measure_range.end;
+                if select_range.contains(&cursor_pos_bytes) {
+                    // ここで確定
+                    break;
+                }
+            }
+
+            return self.select_range(select_range);
+        }
     }
 
-    fn on_double_click(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        _args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        let selection_range =
-            self.select_word_at(&*self.content.borrow(), self.cursor_pos_bytes.get());
-        let update_mask = self.select_range(selection_range);
-
-        self.update_views(
-            update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-}
-impl HitTestTreeScreenRepositionHandler for TextInputViewEventHandler {
-    fn on_screen_reposition_required(
-        &self,
-        _sender: HitTestTreeRef,
-        _context: &mut InputEventContext,
-        _window_screen_pos: Point<PointerInputUnit>,
-    ) {
+    pub fn notify_screen_reposition(&self) {
         #[cfg(windows)]
         {
             self.native_text_input_context.notify_layout_changed();
         }
     }
-}
-impl TextInputViewEventHandler {
-    fn update_focus<E>(
-        &self,
-        window: WindowHandle,
-        composite_tree: &mut CompositeTree<E>,
-        current_sec: f32,
-    ) {
-        let has_focus = window.keyboard_focus_state().has_focus(&self.token);
 
-        if has_focus {
+    fn update_focus<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if self.has_focus.get() {
             composite_tree.get_mut(self.ct_root).border = Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Animated {
@@ -618,6 +630,7 @@ impl TextInputViewEventHandler {
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
         ht_manager: &HitTestTreeManager,
+        delegated_ht: HitTestTreeRef,
     ) {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
@@ -647,7 +660,7 @@ impl TextInputViewEventHandler {
 
         #[cfg(feature = "wayland")]
         let (sx, sy) = ht_manager.translate_tree_local_to_root_autoroot(
-            self.ht_root,
+            delegated_ht,
             2.0 + cursor_display_x,
             2.0,
         );
@@ -736,12 +749,32 @@ impl TextInputViewEventHandler {
         composite_tree.mark_dirty(self.ct_selection_bg);
     }
 
-    fn update_views<E>(
+    pub fn process_pending_updates<E>(
+        &self,
+        composite_tree: &mut CompositeTree<E>,
+        system_link: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        delegated_ht: HitTestTreeRef,
+        current_sec: f32,
+    ) {
+        self.update_views(
+            self.pending_update_mask
+                .replace(TextInputViewUpdateMask::empty()),
+            composite_tree,
+            system_link,
+            ht_manager,
+            delegated_ht,
+            current_sec,
+        );
+    }
+
+    pub fn update_views<E>(
         &self,
         mask: TextInputViewUpdateMask,
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
         ht_manager: &HitTestTreeManager,
+        delegated_ht: HitTestTreeRef,
         current_sec: f32,
     ) {
         if mask.contains(TextInputViewUpdateMask::TEXT) {
@@ -750,20 +783,14 @@ impl TextInputViewEventHandler {
         }
         if mask.contains(TextInputViewUpdateMask::CURSOR) {
             // needs update cursor position and selection highlight
-            self.update_cursor_position(composite_tree, system_link, ht_manager);
+            self.update_cursor_position(composite_tree, system_link, ht_manager, delegated_ht);
             self.update_selection(composite_tree, system_link);
         }
         if mask.contains(TextInputViewUpdateMask::PREEDIT) {
             self.update_preedit_underline(composite_tree, system_link);
         }
         if mask.contains(TextInputViewUpdateMask::FOCUS) {
-            self.update_focus(
-                ht_manager
-                    .query_root_window(self.ht_root)
-                    .expect("not mounted"),
-                composite_tree,
-                current_sec,
-            );
+            self.update_focus(composite_tree, current_sec);
         }
 
         if mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR) {
@@ -977,179 +1004,9 @@ impl TextInputViewEventHandler {
             self.move_cursor(new_cursor_pos)
         }
     }
-
-    fn select_word_at(&self, content: &str, cursor_pos_bytes: usize) -> core::ops::Range<usize> {
-        if content.is_empty() {
-            return 0..0;
-        }
-
-        #[cfg(windows)]
-        {
-            let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
-                .expect("globalization_preferences.languages")
-                .First()
-                .expect("vector_view.first")
-                .Current()
-                .expect("iterator.current");
-            let word_segmenter =
-                windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
-                    .expect("words_segmenter.create");
-
-            let start_index = content
-                .char_indices()
-                .take_while(|&(i, _)| i < cursor_pos_bytes)
-                .count()
-                .min(content.chars().count() - 1);
-            let ws = word_segmenter
-                .GetTokenAt(
-                    &windows_core::HSTRING::from_wide(&{
-                        let mut u16s = Vec::new();
-                        for c in content.chars() {
-                            let mut b = [0; 2];
-                            u16s.extend_from_slice(c.encode_utf16(&mut b));
-                        }
-                        u16s
-                    }),
-                    start_index as _,
-                )
-                .expect("word_segmenter.get_token_at");
-            let text_segment = ws
-                .SourceTextSegment()
-                .expect("word_segment.source_text_segment");
-
-            let start = content
-                .chars()
-                .take(text_segment.StartPosition as _)
-                .map(|c| c.len_utf8())
-                .sum();
-            let end = content
-                .chars()
-                .take((text_segment.StartPosition + text_segment.Length) as _)
-                .map(|c| c.len_utf8())
-                .sum();
-
-            start..end
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let mut start = core::mem::MaybeUninit::uninit();
-            let mut end = core::mem::MaybeUninit::uninit();
-
-            let at_utf16 = content[..cursor_pos_bytes]
-                .encode_utf16()
-                .count()
-                .min(content.encode_utf16().count() - 1);
-            unsafe {
-                crate::platform::mac::bridge::ni_query_range_for_word_at(
-                    content.as_ptr(),
-                    content.len() as _,
-                    at_utf16 as _,
-                    start.as_mut_ptr(),
-                    end.as_mut_ptr(),
-                );
-            }
-
-            let start_bytes = unsafe {
-                std::char::decode_utf16(content.encode_utf16().take(start.assume_init() as _))
-                    .map(|x| x.expect("invalid char?").len_utf8())
-                    .sum()
-            };
-            let end_bytes = unsafe {
-                std::char::decode_utf16(content.encode_utf16().take(end.assume_init() as _))
-                    .map(|x| x.expect("invalid char?").len_utf8())
-                    .sum()
-            };
-
-            start_bytes..end_bytes
-        }
-
-        #[cfg(not(any(windows, target_os = "macos")))]
-        {
-            // UnicodeSegmentation+BudouX fallback
-            use unicode_segmentation::UnicodeSegmentation;
-
-            let mut words = Vec::new();
-            let content = self.content.borrow();
-            let mut chars = content.chars();
-            let mut is_budou_cluster = false;
-            let mut same_cluster_range = 0..0;
-            let mut cb = 0;
-            while let Some(c) = chars.next() {
-                let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
-                    || peridot_tp_unicode_properties::script::is_katakana(c)
-                    || peridot_tp_unicode_properties::script::is_han(c)
-                    || peridot_tp_unicode_properties::script::is_thai(c)
-                    // 一部Commonにあるらしいので特別対応
-                    || c as u32 == 0x30fc || c as u32 == 0xff70;
-                if is_budou_cluster_c != is_budou_cluster {
-                    if !same_cluster_range.is_empty() {
-                        if !is_budou_cluster {
-                            words.extend(
-                                content[same_cluster_range.clone()]
-                                    .split_word_bounds()
-                                    .map(|x| x.to_owned()),
-                            )
-                        } else {
-                            words.extend(
-                                peridot_tp_budoux::parse(
-                                    &peridot_tp_budoux::embedded::ja_knbc::MODEL,
-                                    &content[same_cluster_range.clone()],
-                                )
-                                .into_iter()
-                                .map(|x| x.to_owned()),
-                            )
-                        }
-                    }
-
-                    is_budou_cluster = is_budou_cluster_c;
-                    same_cluster_range = cb..cb;
-                }
-
-                same_cluster_range.end += c.len_utf8();
-                cb += c.len_utf8();
-            }
-            if !same_cluster_range.is_empty() {
-                if !is_budou_cluster {
-                    words.extend(
-                        content[same_cluster_range.clone()]
-                            .split_word_bounds()
-                            .map(|x| x.to_owned()),
-                    )
-                } else {
-                    words.extend(
-                        peridot_tp_budoux::parse(
-                            &peridot_tp_budoux::embedded::ja_knbc::MODEL,
-                            &content[same_cluster_range.clone()],
-                        )
-                        .into_iter()
-                        .map(|x| x.to_owned()),
-                    )
-                }
-            }
-
-            tracing::debug!(?words, "double click");
-
-            // TODO: LTR前提 最適化はあとで
-            let mut measure_range = 0..0;
-            let mut select_range = 0..content.len();
-            for w in words {
-                let starting_byte = measure_range.end;
-                measure_range.end += w.len();
-
-                select_range = starting_byte..measure_range.end;
-                if select_range.contains(&cursor_pos_bytes) {
-                    // ここで確定
-                    break;
-                }
-            }
-
-            select_range
-        }
-    }
 }
 #[cfg(windows)]
-impl crate::platform::windows::TextProvider for TextInputViewEventHandler {
+impl crate::platform::windows::TextProvider for RawTextInputViewEventHandler {
     fn text(
         &self,
         range: windows::UI::Text::Core::CoreTextRange,
@@ -1601,6 +1458,269 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewEv
             width.write(0.0);
             height.write(sh);
         }
+    }
+}
+
+pub struct TextInputView {
+    eh: Rc<TextInputViewEventHandler>,
+}
+impl TextInputView {
+    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
+        let kf_token = ctx.keyboard_focus_registry.acquire_token();
+        let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
+            width: rect.width,
+            height: rect.height,
+            left: rect.left,
+            top: rect.top,
+            cursor_shape: CursorShape::IBeam,
+            keyboard_focus: Some(kf_token),
+            ..Default::default()
+        });
+        let raw = RawTextInputView::new(ctx, rect);
+        let eh = Rc::new(TextInputViewEventHandler {
+            raw,
+            id: ctx.view_registry.alloc(),
+            token: kf_token,
+            ht_root,
+        });
+        ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+        ctx.view_registry.set_event_handler(eh.id, &eh);
+        #[cfg(windows)]
+        ctx.ht_manager
+            .set_native_text_deferrable_event_handler(ht_root, &eh);
+        #[cfg(windows)]
+        eh.native_text_input_context
+            .bind_action(ctx.system_link, &eh, ht_root);
+
+        ctx.ht_manager.set_screen_reposition_handler(ht_root, &eh);
+
+        Self { eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
+        self.eh.raw.mount(ctx, parent);
+        ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+
+        #[cfg(windows)]
+        unsafe {
+            ctx.ht_manager
+                .query_root_window(parent.ht_root())
+                .expect("no root window")
+                .extra_data_mut::<crate::PerWindowData>()
+                .screen_reposition_interests
+                .insert(self.eh.ht_root);
+        }
+    }
+
+    pub fn set_keyboard_focus_group(
+        &self,
+        group: KeyboardFocusGroupRef,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        keyboard_focus_registry.join_group(group, self.eh.token);
+    }
+
+    pub fn rescale<E>(
+        &self,
+        ct: &mut CompositeTree<E>,
+        syslink: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        new_scale: f32,
+    ) {
+        self.eh.raw.eh.update_views(
+            self.eh.raw.rescale(ct, new_scale),
+            ct,
+            syslink,
+            ht_manager,
+            self.eh.ht_root,
+            0.0, // not interested in scale change
+        );
+    }
+}
+
+struct TextInputViewEventHandler {
+    raw: RawTextInputView,
+    id: ViewIdentifier,
+    token: FocusTargetToken,
+    ht_root: HitTestTreeRef,
+}
+impl ViewEventHandler for TextInputViewEventHandler {
+    #[inline(always)]
+    fn update(&self, context: &mut ViewUpdateContext) {
+        self.raw.eh.process_pending_updates(
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+    }
+}
+impl KeyInputEventHandler for TextInputViewEventHandler {
+    fn focus_taken(&self, context: &mut InputEventContext) {
+        self.raw.eh.update_views(
+            self.raw.eh.set_focus(),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+    }
+
+    fn focus_released(&self, context: &mut InputEventContext) {
+        self.raw.eh.update_views(
+            self.raw.eh.release_focus(),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+    }
+
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        self.raw.eh.update_views(
+            self.raw.eh.process_keydown(code, modifier),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+    }
+
+    #[cfg(feature = "wayland")]
+    fn ime_state_changes(
+        &self,
+        context: &mut InputEventContext,
+        new_committed_string: &str,
+        new_preedit_string: &str,
+    ) {
+        self.raw.eh.update_views(
+            self.raw
+                .eh
+                .process_ime_state_changes(new_committed_string, new_preedit_string),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+    }
+}
+impl HitTestTreeActionHandler for TextInputViewEventHandler {
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x,
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+        self.raw.eh.update_views(
+            self.raw.eh.move_cursor_by_point(
+                Point::new_logical(local_x, local_y),
+                context.system_link.font_set(),
+            ),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
+    }
+
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x,
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+        self.raw.eh.update_views(
+            self.raw.eh.move_cursor_by_point_keep_selection(
+                Point::new_logical(local_x, local_y),
+                context.system_link.font_set(),
+            ),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x,
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+        self.raw.eh.update_views(
+            self.raw.eh.move_cursor_by_point_keep_selection(
+                Point::new_logical(local_x, local_y),
+                context.system_link.font_set(),
+            ),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
+    }
+
+    fn on_double_click(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.raw.eh.update_views(
+            self.raw.eh.select_word_at_cursor(),
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            self.ht_root,
+            context.current_sec,
+        );
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl HitTestTreeScreenRepositionHandler for TextInputViewEventHandler {
+    fn on_screen_reposition_required(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _window_screen_pos: Point<PointerInputUnit>,
+    ) {
+        self.raw.eh.notify_screen_reposition();
     }
 }
 
