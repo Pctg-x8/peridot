@@ -17,6 +17,8 @@ use crate::{
     utils::{LogicalUnit, SafeF32, Size},
 };
 
+pub const DELAYED_ACTION_TIMEOUT_MS: u32 = 400;
+
 #[derive(Clone, Debug)]
 pub enum MenuItem {
     Heading { label: String },

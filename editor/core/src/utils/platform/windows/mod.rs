@@ -2,8 +2,15 @@ mod log_writer;
 
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND},
-        System::{Diagnostics::Debug::OutputDebugStringA, LibraryLoader::GetModuleHandleW},
+        Foundation::{HANDLE, HINSTANCE, HWND},
+        System::{
+            Diagnostics::Debug::OutputDebugStringA,
+            LibraryLoader::GetModuleHandleW,
+            Threading::{
+                CancelWaitableTimer, CreateEventW, CreateWaitableTimerW, ResetEvent, SetEvent,
+                SetWaitableTimer,
+            },
+        },
         UI::WindowsAndMessaging::{
             FindWindowExW, MB_ICONERROR, MB_OK, MessageBoxA, RegisterClassExW, WNDCLASSEXW,
         },
@@ -70,5 +77,98 @@ impl Iterator for WindowByClassIter {
             Err(e) if e == windows_core::Error::empty() => None,
             Err(e) => Some(Err(e)),
         }
+    }
+}
+
+pub struct Event(HANDLE);
+unsafe impl Sync for Event {}
+unsafe impl Send for Event {}
+impl Drop for Event {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::Foundation::CloseHandle(self.0).expect("Event.CloseHandle");
+        }
+    }
+}
+impl Event {
+    #[inline(always)]
+    pub fn new(manual_reset: bool, initial: bool) -> windows_core::Result<Self> {
+        Ok(Self(unsafe {
+            CreateEventW(None, manual_reset, initial, None)?
+        }))
+    }
+
+    #[inline(always)]
+    pub fn set(&self) -> windows_core::Result<()> {
+        unsafe { SetEvent(self.0) }
+    }
+
+    #[inline(always)]
+    pub fn reset(&self) -> windows_core::Result<()> {
+        unsafe { ResetEvent(self.0) }
+    }
+
+    #[inline(always)]
+    pub const fn as_handle(&self) -> HANDLE {
+        self.0
+    }
+}
+
+pub struct WaitableTimer(HANDLE);
+unsafe impl Sync for WaitableTimer {}
+unsafe impl Send for WaitableTimer {}
+impl Drop for WaitableTimer {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::Foundation::CloseHandle(self.0).expect("WaitableTimer.CloseHandle");
+        }
+    }
+}
+impl WaitableTimer {
+    #[inline(always)]
+    pub fn new(manual_reset: bool) -> windows_core::Result<Self> {
+        Ok(Self(unsafe {
+            CreateWaitableTimerW(None, manual_reset, None)?
+        }))
+    }
+
+    #[inline(always)]
+    pub fn set_oneshot_relative(&self, timeout_millis: u64) -> windows_core::Result<()> {
+        unsafe {
+            SetWaitableTimer(
+                self.0,
+                &(timeout_millis as i64 * -1_000_0),
+                0,
+                None,
+                None,
+                false,
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_interval_relative(&self, period_millis: u64) -> windows_core::Result<()> {
+        unsafe {
+            SetWaitableTimer(
+                self.0,
+                &(period_millis as i64 * -1_000_0),
+                period_millis as _,
+                None,
+                None,
+                false,
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub fn cancel(&self) -> windows_core::Result<()> {
+        unsafe { CancelWaitableTimer(self.0) }
+    }
+
+    #[inline(always)]
+    pub const fn as_handle(&self) -> HANDLE {
+        self.0
     }
 }

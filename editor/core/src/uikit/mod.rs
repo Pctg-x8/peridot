@@ -189,9 +189,10 @@ pub use self::button::SimpleButtonView;
 mod menu;
 pub use self::menu::{
     BaseSurfaceEventHandler as MenuBaseSurfaceEventHandler, CommandView as MenuItemCommandView,
-    CommonResources as MenuItemCommonResources, HeadingView as MenuItemHeadingView, MenuItem,
-    MenuItemLayout, MenuItemView, SeparatorView as MenuItemSeparatorView,
-    SubMenuView as MenuItemSubMenuView,
+    CommonResources as MenuItemCommonResources,
+    DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS,
+    HeadingView as MenuItemHeadingView, MenuItem, MenuItemLayout, MenuItemView,
+    SeparatorView as MenuItemSeparatorView, SubMenuView as MenuItemSubMenuView,
 };
 
 mod text_input;

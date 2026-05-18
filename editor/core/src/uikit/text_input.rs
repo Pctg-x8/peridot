@@ -206,7 +206,7 @@ impl RawTextInputView {
         TextInputViewUpdateMask::TEXT
     }
 
-    pub fn content(&self) -> Ref<String> {
+    pub fn content<'a>(&'a self) -> Ref<'a, String> {
         self.eh.content.borrow()
     }
 

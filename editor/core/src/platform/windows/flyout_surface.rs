@@ -23,11 +23,11 @@ use windows::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
                 GetWindowLongPtrW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
                 HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTNOWHERE, HTRIGHT, HTTOP, HTTOPLEFT,
-                HTTOPRIGHT, HTTRANSPARENT, KillTimer, MA_NOACTIVATE, SW_SHOWNOACTIVATE, SetTimer,
-                SetWindowLongPtrW, ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
-                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP,
-                WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
+                HTTOPRIGHT, HTTRANSPARENT, MA_NOACTIVATE, SW_SHOWNOACTIVATE, SetWindowLongPtrW,
+                ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+                WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
+                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW,
+                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
                 WindowFromPoint,
             },
         },
@@ -56,7 +56,7 @@ use crate::{
     },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
-        platform::windows::{WindowByClassIter, register_class},
+        platform::windows::{WaitableTimer, WindowByClassIter, register_class},
     },
 };
 
@@ -536,7 +536,7 @@ pub struct SharedState {
     window_class: u16,
     dxgi_factory: IDXGIFactory2,
     d3d12_cq: ID3D12CommandQueue,
-    delayed_action_timer_id: *mut usize,
+    delayed_action_timer: *const WaitableTimer,
 }
 impl SharedState {
     pub(super) const CLASS_NAME: PCWSTR = w!("ContextMenu");
@@ -544,7 +544,7 @@ impl SharedState {
     pub fn new(
         app_context: &ApplicationContext,
         dx_context: &super::DxContext,
-        delayed_action_timer_id: core::pin::Pin<&mut usize>,
+        delayed_action_timer: core::pin::Pin<&WaitableTimer>,
     ) -> Self {
         let window_class = unsafe {
             register_class(&WNDCLASSEXW {
@@ -562,7 +562,7 @@ impl SharedState {
             window_class,
             dxgi_factory: dx_context.dxgi_factory.clone(),
             d3d12_cq: dx_context.d3d12_cq.clone(),
-            delayed_action_timer_id: delayed_action_timer_id.get_mut(),
+            delayed_action_timer: delayed_action_timer.get_ref(),
         }
     }
 
@@ -572,17 +572,15 @@ impl SharedState {
     }
 
     pub fn reserve_delayed_action(&self) {
-        unsafe {
-            *self.delayed_action_timer_id =
-                SetTimer(None, *self.delayed_action_timer_id, 400, None);
-        }
+        unsafe { &*self.delayed_action_timer }
+            .set_oneshot_relative(crate::uikit::MENU_DELAYED_ACTION_TIMEOUT_MS as _)
+            .expect("delayed_action_timer.set_oneshot_relative");
     }
 
     pub fn unreserve_delayed_action(&self) {
-        let active_timer_id = unsafe { self.delayed_action_timer_id.replace(0) };
-        if active_timer_id != 0 {
-            unsafe { KillTimer(None, active_timer_id).expect("KillTimer") };
-        }
+        unsafe { &*self.delayed_action_timer }
+            .cancel()
+            .expect("delayed_action_timer.cancel");
     }
 }
 

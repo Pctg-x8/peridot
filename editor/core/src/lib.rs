@@ -207,28 +207,25 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     #[cfg(windows)]
     #[cfg(feature = "enable-profiling")]
-    let memory_sample_timer = unsafe {
-        windows::Win32::System::Threading::CreateWaitableTimerW(None, false, None)
-            .expect("CreateWaitableTimerW")
-    };
+    let memory_sample_timer =
+        utils::platform::windows::WaitableTimer::new(false).expect("memory_sample_timer.create");
     #[cfg(windows)]
     #[cfg(feature = "enable-profiling")]
-    unsafe {
-        windows::Win32::System::Threading::SetWaitableTimer(
-            memory_sample_timer,
-            &-50_000_0,
-            50,
-            None,
-            None,
-            false,
-        )
-        .expect("SetWaitableTimer");
+    {
+        memory_sample_timer
+            .set_interval_relative(50)
+            .expect("memory_sample_timer.set_interval_relative");
     }
 
     #[cfg(windows)]
-    let mut pointer_hovering_timer_id = 0;
+    let pointer_hovering_timer = core::pin::pin!(
+        utils::platform::windows::WaitableTimer::new(false).expect("pointer_hovering_timer.create")
+    );
     #[cfg(windows)]
-    let mut context_menu_delayed_action_timer_id = core::pin::pin!(0);
+    let context_menu_delayed_action_timer = core::pin::pin!(
+        utils::platform::windows::WaitableTimer::new(false)
+            .expect("context_menu_delayed_action_timer.create")
+    );
     #[cfg(target_os = "linux")]
     let pointer_hovering_timer = utils::platform::linux::TimerFD::new().expect("timerfd.new");
     #[cfg(feature = "wayland")]
@@ -248,11 +245,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context_ptr: app_context,
-            pointer_hovering_timer_id: &mut pointer_hovering_timer_id,
+            pointer_hovering_timer: pointer_hovering_timer.as_ref().get_ref(),
             flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
                 app_context,
                 &dx_context,
-                context_menu_delayed_action_timer_id.as_mut(),
+                context_menu_delayed_action_timer.as_ref(),
             )
         },
         #[cfg(not(windows))]
@@ -624,9 +621,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
         #[cfg(windows)]
         let handles = [
-            sync_event_bus.event_notify,
+            sync_event_bus.event_notify.as_handle(),
+            pointer_hovering_timer.as_handle(),
+            context_menu_delayed_action_timer.as_handle(),
             #[cfg(feature = "enable-profiling")]
-            memory_sample_timer,
+            memory_sample_timer.as_handle(),
         ];
         #[cfg(windows)]
         let mut msg = core::mem::MaybeUninit::uninit();
@@ -647,12 +646,20 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 );
             }
 
-            if r == windows::Win32::Foundation::WAIT_OBJECT_0 {
+            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 {
                 sync_event_bus.redispatch(&app_event_dispatcher);
                 continue;
             }
-            #[cfg(feature = "enable-profiling")]
             if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 1 {
+                app_event_dispatcher.dispatch(Event::PointerHover);
+                continue;
+            }
+            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 2 {
+                app_event_dispatcher.dispatch(Event::ContextMenuPerformDelayedAction);
+                continue;
+            }
+            #[cfg(feature = "enable-profiling")]
+            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 3 {
                 crate::perf::profiler().emit_memory_stats();
                 continue;
             }
@@ -675,18 +682,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         && msg.message <= windows::Win32::UI::WindowsAndMessaging::WM_MBUTTONDBLCLK
                     {
                         app_event_dispatcher.dispatch(Event::GlobalMouseClicked);
-                    }
-                    if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_TIMER
-                        && msg.wParam.0 == pointer_hovering_timer_id
-                    {
-                        app_event_dispatcher.dispatch(Event::PointerHover);
-                        continue;
-                    }
-                    if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_TIMER
-                        && msg.wParam.0 == *context_menu_delayed_action_timer_id
-                    {
-                        app_event_dispatcher.dispatch(Event::ContextMenuPerformDelayedAction);
-                        continue;
                     }
 
                     unsafe {
@@ -3429,29 +3424,26 @@ pub enum WindowType {
     Sub,
 }
 
-#[cfg(windows)]
-pub type PointerID = platform::windows::PointerID;
 #[cfg(target_os = "macos")]
 pub type PointerID = platform::mac::PointerID;
 #[cfg(feature = "wayland")]
 pub type PointerID = platform::unix::wayland::PointerID;
 
-#[cfg(windows)]
-pub type DragPreviewPopoverHandle = platform::windows::DragPreviewPopoverHandle;
 #[cfg(target_os = "macos")]
 pub type DragPreviewPopoverHandle = platform::mac::DragPreviewPopoverHandle;
 #[cfg(feature = "wayland")]
 pub type DragPreviewPopoverHandle = platform::unix::wayland::DragPreviewPopoverHandle;
 
 #[cfg(windows)]
-pub use platform::windows::WindowHandle;
+pub use platform::windows::{
+    DragPreviewPopoverHandle, PointerID, WindowHandle,
+    flyout_surface::Handle as FlyoutSurfaceHandle,
+};
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]
 pub type WindowHandle = platform::unix::wayland::ToplevelHandle;
 
-#[cfg(windows)]
-pub type FlyoutSurfaceHandle = platform::windows::flyout_surface::Handle;
 #[cfg(target_os = "macos")]
 pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
 #[cfg(feature = "wayland")]
@@ -3462,24 +3454,14 @@ pub struct SyncEventBus {
     #[cfg(target_os = "linux")]
     efd: linux_eventfd::EventFD,
     #[cfg(windows)]
-    event_notify: windows::Win32::Foundation::HANDLE,
+    event_notify: utils::platform::windows::Event,
     #[cfg(target_os = "macos")]
     redispatch_to: LogicFiberEventDispatcher,
 }
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 unsafe impl Sync for SyncEventBus {}
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 unsafe impl Send for SyncEventBus {}
-impl Drop for SyncEventBus {
-    fn drop(&mut self) {
-        #[cfg(windows)]
-        unsafe {
-            if let Err(e) = windows::Win32::Foundation::CloseHandle(self.event_notify) {
-                tracing::error!(reason = ?e, "event_notify.close");
-            }
-        }
-    }
-}
 impl SyncEventBus {
     pub fn new(redispatch_to: LogicFiberEventDispatcher) -> Self {
         Self {
@@ -3488,10 +3470,7 @@ impl SyncEventBus {
             efd: linux_eventfd::EventFD::new(0, linux_eventfd::EventFDFlags::empty())
                 .expect("app_event_bus.efd.create"),
             #[cfg(windows)]
-            event_notify: unsafe {
-                windows::Win32::System::Threading::CreateEventW(None, true, false, None)
-                    .expect("event_notify.create")
-            },
+            event_notify: utils::platform::windows::Event::new(true, false).expect("event.new"),
             #[cfg(target_os = "macos")]
             redispatch_to,
         }
@@ -3502,9 +3481,8 @@ impl SyncEventBus {
         #[cfg(target_os = "linux")]
         self.efd.inc(1).unwrap();
         #[cfg(windows)]
-        unsafe {
-            windows::Win32::System::Threading::SetEvent(self.event_notify)
-                .expect("event_notify.set");
+        {
+            self.event_notify.set().expect("event_notify.set");
         }
         #[cfg(target_os = "macos")]
         unsafe {
@@ -3539,8 +3517,8 @@ impl SyncEventBus {
             Ok(_) => Ok(()),
         }
         #[cfg(windows)]
-        unsafe {
-            windows::Win32::System::Threading::ResetEvent(self.event_notify).map_err(From::from)
+        {
+            self.event_notify.reset().map_err(From::from)
         }
         #[cfg(target_os = "macos")]
         {
