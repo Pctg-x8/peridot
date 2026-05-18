@@ -54,16 +54,17 @@ use windows::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
                 GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
                 HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
-                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZEWE,
-                IDI_APPLICATION, IsZoomed, KillTimer, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS,
-                PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
-                SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW,
-                SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetTimer, SetWindowLongPtrW, SetWindowPos,
-                ShowWindow, WA_INACTIVE, WHEEL_DELTA, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR,
-                WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
-                WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS,
+                IDC_SIZEWE, IDI_APPLICATION, IsZoomed, KillTimer, LoadCursorW, LoadIconW,
+                NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE,
+                SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
+                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
+                SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE, WHEEL_DELTA,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
+                WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST,
+                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
                 WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
                 WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
                 WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
@@ -1657,6 +1658,9 @@ impl SystemLink<'_> {
                 }
                 CursorShape::ResizeHorizontal => {
                     Some(LoadCursorW(None, IDC_SIZEWE).expect("load_cursor.resize_horizontal"))
+                }
+                CursorShape::ResizeVertical => {
+                    Some(LoadCursorW(None, IDC_SIZENS).expect("load_cursor.resize_vertical"))
                 }
             });
         }

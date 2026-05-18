@@ -156,10 +156,10 @@ impl RawTextInputView {
             .set_screen_reposition_handler(eh.ht_root, &eh);
         #[cfg(windows)]
         ctx.ht_manager
-            .set_native_text_deferrable_event_handler(ht_root, &eh);
+            .set_native_text_deferrable_event_handler(eh.ht_root, &eh);
         #[cfg(windows)]
         eh.native_text_input_context
-            .bind_action(ctx.system_link, &eh, ht_root);
+            .bind_action(ctx.system_link, &eh, eh.ht_root);
 
         eh.update_text(ctx.composite_tree);
 
@@ -628,7 +628,7 @@ impl RawTextInputViewEventHandler {
                 .map(|c| c.len_utf8())
                 .sum();
 
-            start..end
+            self.select_range(start..end)
         }
 
         #[cfg(target_os = "macos")]
@@ -1216,8 +1216,7 @@ impl crate::platform::windows::TextProvider for RawTextInputViewEventHandler {
             .skip(range.StartCaretPosition as _)
             .take((range.EndCaretPosition - range.StartCaretPosition) as _)
         {
-            let mut buf = [0; 2];
-            u16s.extend_from_slice(c.encode_utf16(&mut buf));
+            u16s.extend_from_slice(c.encode_utf16(&mut [0; 2]));
         }
 
         Ok(windows_core::HSTRING::from_wide(&u16s))
@@ -1249,7 +1248,7 @@ impl crate::platform::windows::TextProvider for RawTextInputViewEventHandler {
     }
 }
 #[cfg(windows)]
-impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewEventHandler {
+impl crate::platform::windows::CoreTextDeferrableEventHandler for RawTextInputViewEventHandler {
     fn layout(
         &self,
         ctx: &mut InputEventContext,
@@ -1261,15 +1260,12 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
             "edit_context.layout_requested"
         );
 
-        let start_bytes = self
-            .content
-            .borrow()
+        let content = self.content.borrow();
+        let start_bytes = content
             .chars()
             .take(range.StartCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
-        let end_bytes = self
-            .content
-            .borrow()
+        let end_bytes = content
             .chars()
             .take(range.EndCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
@@ -1280,12 +1276,12 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
             Point::new_logical(2.0, 2.0),
         );
         let o = TextLayout::measure_total_advances(
-            &self.content.borrow()[..start_bytes],
+            &content[..start_bytes],
             FontID::UIDefault,
             ctx.system_link.font_set(),
         );
         let w = TextLayout::measure_total_advances(
-            &self.content.borrow()[start_bytes..end_bytes],
+            &content[start_bytes..end_bytes],
             FontID::UIDefault,
             ctx.system_link.font_set(),
         );
@@ -1314,37 +1310,29 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
             current = &self.content.borrow() as &str,
             "edit_context.text_updating"
         );
+        let mut content = self.content.borrow_mut();
 
-        let replace_start_bytes = self
-            .content
-            .borrow()
+        let replace_start_bytes = content
             .chars()
             .take(range.StartCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
-        let replace_end_bytes = self
-            .content
-            .borrow()
+        let replace_end_bytes = content
             .chars()
             .take(range.EndCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
 
-        self.content
-            .borrow_mut()
-            .replace_range(replace_start_bytes..replace_end_bytes, &text);
+        content.replace_range(replace_start_bytes..replace_end_bytes, &text);
 
-        let new_cursor_start_bytes = self
-            .content
-            .borrow()
+        let new_cursor_start_bytes = content
             .chars()
             .take(new_selection.StartCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
-        let new_cursor_end_bytes = self
-            .content
-            .borrow()
+        let new_cursor_end_bytes = content
             .chars()
             .take(new_selection.EndCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
 
+        drop(content);
         let update_mask = self.select_range(new_cursor_start_bytes..new_cursor_end_bytes)
             | TextInputViewUpdateMask::TEXT;
 
@@ -1406,7 +1394,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewE
     }
 }
 #[cfg(target_os = "macos")]
-impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewEventHandler {
+impl crate::platform::mac::bridge::TextInputClientForwarding for RawTextInputViewEventHandler {
     fn has_marked_text(&self) -> bool {
         tracing::debug!(
             start = self.preedit_range_start_bytes.get(),
@@ -1693,12 +1681,6 @@ impl TextInputView {
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.view_registry.set_event_handler(eh.id, &eh);
-        #[cfg(windows)]
-        ctx.ht_manager
-            .set_native_text_deferrable_event_handler(ht_root, &eh);
-        #[cfg(windows)]
-        eh.native_text_input_context
-            .bind_action(ctx.system_link, &eh, ht_root);
 
         Self { eh }
     }
@@ -1825,12 +1807,6 @@ impl NumericInputView {
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.view_registry.set_event_handler(eh.id, &eh);
-        #[cfg(windows)]
-        ctx.ht_manager
-            .set_native_text_deferrable_event_handler(ht_root, &eh);
-        #[cfg(windows)]
-        eh.native_text_input_context
-            .bind_action(ctx.system_link, &eh, ht_root);
 
         Self { eh }
     }
