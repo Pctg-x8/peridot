@@ -550,9 +550,23 @@ pub struct ScrollWheelActionArgs {
     pub amount: f32,
     pub key_modifier: ModifierKey,
 }
+impl ScrollWheelActionArgs {
+    #[inline(always)]
+    pub const fn make_empty_response(&self) -> ScrollWheelActionResponse {
+        ScrollWheelActionResponse {
+            continue_flags: EventContinueControl::empty(),
+            left_amount: self.amount,
+        }
+    }
+}
 pub struct ScrollWheelActionResponse {
     pub continue_flags: EventContinueControl,
     pub left_amount: f32,
+}
+
+pub struct GrabDeltaMoveActionArgs {
+    pub pointer_id: PointerID,
+    pub delta: Point<LogicalUnit>,
 }
 
 pub trait HitTestTreeActionHandler {
@@ -673,10 +687,17 @@ pub trait HitTestTreeActionHandler {
         context: &mut InputEventContext,
         args: &ScrollWheelActionArgs,
     ) -> ScrollWheelActionResponse {
-        ScrollWheelActionResponse {
-            continue_flags: EventContinueControl::empty(),
-            left_amount: args.amount,
-        }
+        args.make_empty_response()
+    }
+
+    #[allow(unused_variables)]
+    fn grab_delta_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &GrabDeltaMoveActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::empty()
     }
 }
 

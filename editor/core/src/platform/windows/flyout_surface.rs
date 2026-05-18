@@ -144,6 +144,15 @@ impl Handle {
     }
 
     #[inline(always)]
+    pub fn client_pos_to_screen_pos(&self, p: Point<LogicalUnit>) -> Point<PixelsUnit> {
+        let mut p = [p.to_pixels_round(self.render_scale()).to_win32()];
+        unsafe {
+            MapWindowPoints(Some(self.0), None, &mut p);
+        }
+        Point::from_win32(p[0])
+    }
+
+    #[inline(always)]
     pub fn submenu_pop_position(&self, view: &MenuItemSubMenuView) -> Point<LogicalUnit> {
         let mut window_rect = core::mem::MaybeUninit::uninit();
         unsafe {

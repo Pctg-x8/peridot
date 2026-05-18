@@ -60,10 +60,10 @@ use windows::{
                 SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
                 SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
                 SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
-                SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE, WHEEL_DELTA,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
-                WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-                WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST,
+                SetCursorPos, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE,
+                WHEEL_DELTA, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE,
+                WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST,
                 WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
                 WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
                 WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
@@ -241,6 +241,15 @@ impl WindowHandle {
     }
 
     #[inline(always)]
+    pub fn client_pos_to_screen_pos(&self, p: Point<LogicalUnit>) -> Point<PixelsUnit> {
+        let mut p = [p.to_pixels_round(self.ui_scale_factor()).to_win32()];
+        unsafe {
+            MapWindowPoints(Some(self.0), None, &mut p);
+        }
+        Point::from_win32(p[0])
+    }
+
+    #[inline(always)]
     pub const fn needs_system_command_buttons(&self) -> bool {
         // Windowsは常にtrue
         true
@@ -352,6 +361,14 @@ impl crate::uikit::MountTarget for WindowHandle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PointerID();
+impl PointerID {
+    #[inline(always)]
+    pub fn set_position(&self, screen_pos: Point<PixelsUnit>) {
+        if let Err(e) = unsafe { SetCursorPos(screen_pos.x, screen_pos.y) } {
+            tracing::error!(reason = %e, "set_cursor_pos");
+        }
+    }
+}
 
 pub struct WindowClassSet {
     hinstance: HINSTANCE,
@@ -1842,7 +1859,7 @@ impl NativeTextInputContext {
                 CoreTextEditContext,
                 CoreTextCompositionStartedEventArgs,
             >::new(|_sender, e| {
-                let e = e.ok().expect("event_args.null");
+                let _e = e.ok().expect("event_args.null");
                 tracing::trace!("edit_context.composition_started");
                 Ok(())
             }))

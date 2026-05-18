@@ -3444,7 +3444,7 @@ pub type DragPreviewPopoverHandle = platform::mac::DragPreviewPopoverHandle;
 pub type DragPreviewPopoverHandle = platform::unix::wayland::DragPreviewPopoverHandle;
 
 #[cfg(windows)]
-pub type WindowHandle = platform::windows::WindowHandle;
+pub use platform::windows::WindowHandle;
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]

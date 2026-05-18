@@ -9,11 +9,11 @@ use bitflags::bitflags;
 use crate::{
     DragPreviewPopoverHandle, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
-        CursorShape, HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButton,
-        PointerButtonActionArgs, Role, ScrollWheelActionArgs,
+        CursorShape, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
+        PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     rendering::composite::CompositeTree,
-    utils::{LogicalUnit, Point, Rect, Size},
+    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
 
 pub mod hittest;
@@ -39,6 +39,7 @@ bitflags! {
         const CAPTURE_ELEMENT = 1 << 1;
         const RELEASE_CAPTURE_ELEMENT = 1 << 2;
         const RECOMPUTE_POINTER_ENTER = 1 << 3;
+        const GRAB_POINTER = Self::CAPTURE_ELEMENT.bits() | (1 << 4);
     }
 }
 impl EventContinueControl {
@@ -59,6 +60,10 @@ enum PointerFocusState {
     None,
     Entering(HitTestTreeRef),
     Capturing(HitTestTreeRef),
+    Grabbing {
+        target: HitTestTreeRef,
+        pos: Point<PointerInputUnit>,
+    },
 }
 
 enum PointerDownGestureState {
@@ -102,8 +107,8 @@ impl ShellPointerActions for NativeDesktopSurface {
     #[inline(always)]
     fn capture_pointer(&self) {
         match self {
-            NativeDesktopSurface::Window(w) => w.capture_pointer(),
-            NativeDesktopSurface::ContextMenu(_) => {
+            Self::Window(w) => w.capture_pointer(),
+            Self::ContextMenu(_) => {
                 unimplemented!("not implemented for context menu")
             }
         }
@@ -112,8 +117,8 @@ impl ShellPointerActions for NativeDesktopSurface {
     #[inline(always)]
     fn release_pointer(&self) {
         match self {
-            NativeDesktopSurface::Window(w) => w.release_pointer(),
-            NativeDesktopSurface::ContextMenu(_) => {
+            Self::Window(w) => w.release_pointer(),
+            Self::ContextMenu(_) => {
                 unimplemented!("not implemented for context menu")
             }
         }
@@ -123,16 +128,27 @@ impl NativeDesktopSurface {
     #[inline(always)]
     fn size(&self) -> Size<PointerInputUnit> {
         match self {
-            NativeDesktopSurface::Window(w) => w.client_size(),
-            NativeDesktopSurface::ContextMenu(w) => w.logical_size(),
+            Self::Window(w) => w.client_size(),
+            Self::ContextMenu(w) => w.logical_size(),
         }
     }
 
     #[inline(always)]
     fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
         match self {
-            NativeDesktopSurface::Window(w) => w.keyboard_focus_state_mut(),
-            NativeDesktopSurface::ContextMenu(w) => w.keyboard_focus_state_mut(),
+            Self::Window(w) => w.keyboard_focus_state_mut(),
+            Self::ContextMenu(w) => w.keyboard_focus_state_mut(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn client_pos_to_screen_pos(
+        &self,
+        client_pos: Point<PointerInputUnit>,
+    ) -> Point<PixelsUnit> {
+        match self {
+            Self::Window(w) => w.client_pos_to_screen_pos(client_pos),
+            Self::ContextMenu(w) => w.client_pos_to_screen_pos(client_pos),
         }
     }
 }
@@ -197,7 +213,10 @@ impl PointerInputManager {
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
-    ) -> (bool, Option<HitTestTreeRef>) {
+    ) -> (
+        bool,
+        Option<(HitTestTreeRef, Option<Point<PointerInputUnit>>)>,
+    ) {
         let mut needs_recompute_pointer_enter = false;
         let mut new_captured = None;
 
@@ -220,8 +239,17 @@ impl PointerInputManager {
                 needs_recompute_pointer_enter = true;
             }
             if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
-                new_captured = Some(ht_ref);
+                new_captured = Some((ht_ref, None));
                 surface.capture_pointer();
+            }
+            if flags.contains(EventContinueControl::GRAB_POINTER) {
+                new_captured = Some((
+                    ht_ref,
+                    Some(Point::new_logical(
+                        action_args.client_pos.x,
+                        action_args.client_pos.y,
+                    )),
+                ));
             }
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
@@ -298,7 +326,7 @@ impl PointerInputManager {
 
         match self.pointer_focus {
             PointerFocusState::None => unreachable!("drag started without focus?"),
-            PointerFocusState::Capturing(e) => {
+            PointerFocusState::Capturing(e) | PointerFocusState::Grabbing { target: e, .. } => {
                 let _ = ht
                     .get_data(e)
                     .action_handler()
@@ -317,6 +345,12 @@ impl PointerInputManager {
                     if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
                         self.pointer_focus = PointerFocusState::Capturing(ht_ref);
                         shell.capture_pointer();
+                    }
+                    if flags.contains(EventContinueControl::GRAB_POINTER) {
+                        self.pointer_focus = PointerFocusState::Grabbing {
+                            target: ht_ref,
+                            pos: action_args.client_pos,
+                        };
                     }
                     if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                         break;
@@ -346,7 +380,8 @@ impl PointerInputManager {
             client_size: window_size,
         };
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()
@@ -417,6 +452,8 @@ impl PointerInputManager {
         let (new_leave, new_enter) = match (&self.pointer_focus, new_hit) {
             // in capturing, this routine is never called
             (&PointerFocusState::Capturing(_), _) => unreachable!(),
+            // same for grabbing(implies capturing)
+            (&PointerFocusState::Grabbing { .. }, _) => unreachable!(),
             // entering changed
             (&PointerFocusState::Entering(old), Some(new)) if old != new => (Some(old), Some(new)),
             // nothing changed
@@ -479,6 +516,10 @@ impl PointerInputManager {
             &PointerFocusState::Capturing(_) => {
                 return;
             }
+            // same for grabbing
+            &PointerFocusState::Grabbing { .. } => {
+                return;
+            }
             // just leave
             &PointerFocusState::Entering(old) => Some(old),
             // nothing changed
@@ -504,6 +545,11 @@ impl PointerInputManager {
         }
     }
 
+    #[inline(always)]
+    const fn is_grabbing(&self) -> bool {
+        matches!(self.pointer_focus, PointerFocusState::Grabbing { .. })
+    }
+
     pub fn handle_mouse_move<'env, 'sys, 'h>(
         &mut self,
         surface: NativeDesktopSurface,
@@ -517,10 +563,11 @@ impl PointerInputManager {
             .insert(pointer_id, (surface, client_pos));
         let ws = surface.size();
 
-        if let PointerDownGestureState::Click {
-            base_client_pos,
-            initiator_button,
-        } = self.down_gesture
+        if !self.is_grabbing()
+            && let PointerDownGestureState::Click {
+                base_client_pos,
+                initiator_button,
+            } = self.down_gesture
             && client_pos.distance_sq(&base_client_pos) >= CLICK_DETECTION_MAX_DISTANCE.powi(2)
         {
             // 動きすぎたのでクリック状態をドラッグ化
@@ -537,23 +584,43 @@ impl PointerInputManager {
             );
         }
 
-        if let PointerFocusState::Capturing(ht_ref) = self.pointer_focus {
-            // キャプチャ中の要素があればそれにだけ流す
-            if let Some(h) = ht.get_data(ht_ref).action_handler() {
-                let args = PointerActionArgs {
-                    pointer_id,
-                    client_pos,
-                    client_size: ws,
-                };
+        // キャプチャ中の要素があればそれにだけ流す
+        match self.pointer_focus {
+            PointerFocusState::Capturing(ht_ref) => {
+                if let Some(h) = ht.get_data(ht_ref).action_handler() {
+                    let args = PointerActionArgs {
+                        pointer_id,
+                        client_pos,
+                        client_size: ws,
+                    };
 
-                if self.down_gesture.is_dragging() {
-                    h.on_drag_move(ht_ref, action_context, &args);
-                } else {
-                    h.on_pointer_move(ht_ref, action_context, &args);
+                    if self.down_gesture.is_dragging() {
+                        h.on_drag_move(ht_ref, action_context, &args);
+                    } else {
+                        h.on_pointer_move(ht_ref, action_context, &args);
+                    }
                 }
-            }
 
-            return;
+                return;
+            }
+            PointerFocusState::Grabbing { target, pos } => {
+                if let Some(h) = ht.get_data(target).action_handler() {
+                    let args = GrabDeltaMoveActionArgs {
+                        pointer_id,
+                        delta: Point::new_logical(client_pos.x - pos.x, client_pos.y - pos.y),
+                    };
+
+                    let _ = h.grab_delta_move(target, action_context, &args);
+                }
+
+                // grab中の場合はポインタ位置をとどまらせる
+                self.last_client_pointer_pos
+                    .insert(pointer_id, (surface, pos));
+                pointer_id.set_position(surface.client_pos_to_screen_pos(pos));
+
+                return;
+            }
+            PointerFocusState::None | PointerFocusState::Entering(_) => (),
         }
 
         self.update_pointer_enter(&ws, pointer_id, client_pos, ht, action_context, ht_root);
@@ -621,9 +688,10 @@ impl PointerInputManager {
                     }
                 }
             }
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 // キャプチャ対象にだけ通知
-                action_context
+                let _ = action_context
                     .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
@@ -675,7 +743,8 @@ impl PointerInputManager {
             client_size: ws,
         };
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()
@@ -714,8 +783,14 @@ impl PointerInputManager {
                     kf_registry,
                 );
 
-                if let Some(h) = new_captured {
-                    self.pointer_focus = PointerFocusState::Capturing(h);
+                match new_captured {
+                    Some((h, None)) => {
+                        self.pointer_focus = PointerFocusState::Capturing(h);
+                    }
+                    Some((h, Some(p))) => {
+                        self.pointer_focus = PointerFocusState::Grabbing { target: h, pos: p };
+                    }
+                    None => (),
                 }
                 if needs_recompute_pointer_enter {
                     self.update_pointer_enter(
@@ -761,6 +836,7 @@ impl PointerInputManager {
             );
         }
 
+        let was_grabbing = self.is_grabbing();
         let args = PointerButtonActionArgs {
             button,
             pointer_id,
@@ -768,7 +844,8 @@ impl PointerInputManager {
             client_size: ws,
         };
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()
@@ -813,8 +890,8 @@ impl PointerInputManager {
             PointerFocusState::None => (),
         };
 
-        if self.down_gesture.is_click(button) {
-            // クリック判定持続してた
+        if !was_grabbing && self.down_gesture.is_click(button) {
+            // クリック判定持続してた(Grab中はその場から動かないので除外)
 
             match self.last_click {
                 // double click
@@ -879,7 +956,8 @@ impl PointerInputManager {
             client_size: surface_size,
         };
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()
@@ -968,7 +1046,8 @@ impl PointerInputManager {
             client_size: surface_size,
         };
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()
@@ -1043,7 +1122,8 @@ impl PointerInputManager {
         };
 
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 let _resp = action_context
                     .ht_manager
                     .get_data(ht_ref)
@@ -1074,7 +1154,10 @@ impl PointerInputManager {
 
     pub fn cursor_shape(&self, ht: &HitTestTreeManager) -> CursorShape {
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => ht.get_data(ht_ref).cursor_shape,
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
+                ht.get_data(ht_ref).cursor_shape
+            }
             PointerFocusState::Entering(ht_ref) => ht
                 .iter_ascending_from(ht_ref)
                 .map(|hr| ht.get_data(hr))
@@ -1086,7 +1169,8 @@ impl PointerInputManager {
 
     pub fn role_focus(&self, ht: &HitTestTreeManager) -> Option<Role> {
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref) => {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
                 // キャプチャ中の要素があればそれだけを見る
                 ht.get_data(ht_ref).role
             }
@@ -1104,7 +1188,9 @@ impl PointerInputManager {
         ht: &HitTestTreeManager,
         ht_root: HitTestTreeRef,
     ) -> Option<Role> {
-        if let PointerFocusState::Capturing(ht_ref) = self.pointer_focus {
+        if let PointerFocusState::Capturing(ht_ref)
+        | PointerFocusState::Grabbing { target: ht_ref, .. } = self.pointer_focus
+        {
             // キャプチャ中の要素があればそれだけを見る
             return ht.get_data(ht_ref).role;
         }

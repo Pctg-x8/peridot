@@ -1802,7 +1802,9 @@ impl NumericInputView {
             token: kf_token,
             ht_root,
             key_input_enabled: Cell::new(false),
-            last_drag_client_y: Cell::new(0.0),
+            dragging: Cell::new(false),
+            drag_base_value: Cell::new(0),
+            drag_accum_delta: Cell::new(0.0),
         });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
@@ -1848,7 +1850,9 @@ struct NumericInputViewEventHandler {
     token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     key_input_enabled: Cell<bool>,
-    last_drag_client_y: Cell<f32>,
+    dragging: Cell<bool>,
+    drag_base_value: Cell<i64>,
+    drag_accum_delta: Cell<f32>,
 }
 impl ViewEventHandler for NumericInputViewEventHandler {
     #[inline(always)]
@@ -1903,27 +1907,33 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         // 下の要素にフォーカス処理がいかないようにする
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
+        EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_drag_start(
         &self,
         _sender: HitTestTreeRef,
         _context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.last_drag_client_y.set(args.client_pos.y);
-        EventContinueControl::STOP_PROPAGATION
+        self.dragging.set(true);
+        self.drag_base_value.set(self.value.get());
+        self.drag_accum_delta.set(0.0);
+
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
     }
 
-    fn on_drag_move(
+    fn grab_delta_move(
         &self,
         _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        args: &crate::input::hittest::GrabDeltaMoveActionArgs,
     ) -> EventContinueControl {
-        let diff = args.client_pos.y - self.last_drag_client_y.get();
-        let new_value = self.apply_delta(-(diff * 0.5).round() as _);
+        let new_drag_accum_delta = self.drag_accum_delta.get() + args.delta.y;
+        let new_value = self.drag_base_value.get() - (new_drag_accum_delta * 0.5).round() as i64;
+        self.value.set(new_value);
+        self.drag_accum_delta.set(new_drag_accum_delta);
+
         self.raw.eh.update_views(
             self.raw.set_content(new_value.to_string()),
             context.composite_tree,
@@ -1932,27 +1942,18 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
             context.current_sec,
         );
 
-        self.last_drag_client_y.set(args.client_pos.y);
         EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_drag_end(
         &self,
         _sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        let diff = args.client_pos.y - self.last_drag_client_y.get();
-        let new_value = self.apply_delta(-(diff * 0.5).round() as _);
-        self.raw.eh.update_views(
-            self.raw.set_content(new_value.to_string()),
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+        self.dragging.set(false);
 
-        EventContinueControl::STOP_PROPAGATION
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
 
     fn on_pointer_up(
@@ -1961,7 +1962,7 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
+        EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_scroll_wheel(
@@ -1970,6 +1971,11 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         context: &mut InputEventContext,
         args: &ScrollWheelActionArgs,
     ) -> ScrollWheelActionResponse {
+        if self.dragging.get() {
+            // ドラッグでの値変更中 base+accum_deltaで計算してるのでスクロールするとベースがズレる
+            return args.make_empty_response();
+        }
+
         let new_value = self.apply_delta(args.amount.round() as _);
         self.raw.eh.update_views(
             self.raw.set_content(new_value.to_string()),
