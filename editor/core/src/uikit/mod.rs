@@ -12,7 +12,10 @@ use crate::{
         KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
-    rendering::composite::{CompositeTree, CompositeTreeRef},
+    rendering::{
+        MainThreadTextureIDIssuer, RenderMessageSender,
+        composite::{CompositeTree, CompositeTreeRef},
+    },
 };
 
 pub struct MountContext<'a, 'h> {
@@ -27,6 +30,7 @@ pub struct ViewInitContext<'a, 'h> {
     pub view_registry: &'a mut ViewRegistry,
     pub system_link: &'a SystemLink<'a>,
     pub ui_scale_factor: f32,
+    pub main_thread_texture_id_issuer: &'a mut MainThreadTextureIDIssuer,
 }
 impl<'a, 'h> core::ops::Deref for ViewInitContext<'a, 'h> {
     type Target = MountContext<'a, 'h>;
@@ -200,3 +204,5 @@ pub use self::text_input::{NumericInputView, RawTextInputView, TextInputView};
 
 mod scroll;
 pub use self::scroll::ScrollContainer;
+
+pub mod dropdown_box;

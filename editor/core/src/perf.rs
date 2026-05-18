@@ -53,29 +53,6 @@ pub const TIMESTAMP_FREQUENCY: i64 = 1_000_000_000;
 #[cfg(unix)]
 static mut SELF_STATM_FD: core::ffi::c_int = -1;
 
-#[cfg(windows)]
-#[cfg(feature = "enable-profiling")]
-pub fn memory_stats() {
-    let mut stat = core::mem::MaybeUninit::<
-        windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX,
-    >::uninit();
-    unsafe {
-        windows::Win32::System::ProcessStatus::GetProcessMemoryInfo(
-            windows::Win32::System::Threading::GetCurrentProcess(),
-            stat.as_mut_ptr().cast(),
-            core::mem::size_of::<windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX>(
-            ) as _,
-        )
-        .expect("GetProcessMemoryInfo");
-    }
-    let stat = unsafe { stat.assume_init_ref() };
-    tracing::debug!(
-        working_set = stat.WorkingSetSize,
-        committed = stat.PagefileUsage,
-        "memory report"
-    );
-}
-
 #[cfg(feature = "enable-profiling")]
 #[derive(Debug)]
 pub struct MemoryStats {

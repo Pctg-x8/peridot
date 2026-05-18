@@ -55,6 +55,11 @@ impl SafeF32 {
 }
 
 #[repr(transparent)]
+pub struct UnsafeMainThreadOnlyOnceCell<T>(pub core::cell::OnceCell<T>);
+unsafe impl<T> Sync for UnsafeMainThreadOnlyOnceCell<T> {}
+unsafe impl<T> Send for UnsafeMainThreadOnlyOnceCell<T> {}
+
+#[repr(transparent)]
 pub struct ByteLengthFormatter(pub usize);
 impl core::fmt::Display for ByteLengthFormatter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -821,8 +821,8 @@ pub enum Event {
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
         min_width: f32,
-        items: Vec<DropdownMenuItem>,
-        selection_receiver: std::rc::Weak<DropdownBoxEventHandler>,
+        items: Vec<crate::uikit::dropdown_box::MenuItem>,
+        selection_receiver: std::rc::Weak<crate::uikit::dropdown_box::EventHandler>,
     },
     ContextMenuCloseAll,
     ContextMenuRescale {
@@ -866,7 +866,7 @@ pub enum Event {
     },
     DropdownMenuSelectItem {
         id: usize,
-        receiver: std::rc::Weak<DropdownBoxEventHandler>,
+        receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
     },
     UpdateView {
         id: ViewIdentifier,
@@ -1114,293 +1114,6 @@ impl Popup for AlertDialogPresenter {
     }
 }
 
-pub struct DropdownBoxViewSharedResources {
-    down_arrow_tex: usize,
-}
-impl DropdownBoxViewSharedResources {
-    const DOWN_ARROW_TEX_SIZE: f32 = 16.0;
-    const DOWN_ARROW_TEX_VERTICES: &'static [[f32; 2]] =
-        &[[0.25, 0.375], [0.75, 0.375], [0.5, 0.625]];
-    const DOWN_ARROW_TEX_INDICES: &'static [u16] = &[0, 1, 2];
-
-    pub fn new(id_issuer: &mut MainThreadTextureIDIssuer, rt_sender: &RenderMessageSender) -> Self {
-        let down_arrow_tex = id_issuer.issue();
-        rt_sender
-            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: down_arrow_tex,
-                vertices: Self::DOWN_ARROW_TEX_VERTICES,
-                indices: Self::DOWN_ARROW_TEX_INDICES,
-                width: Self::DOWN_ARROW_TEX_SIZE,
-                height: Self::DOWN_ARROW_TEX_SIZE,
-            })
-            .expect("rt_sender.send");
-
-        Self { down_arrow_tex }
-    }
-}
-
-pub struct DropdownBoxView {
-    eh: Rc<DropdownBoxEventHandler>,
-    ct_text_clip: CompositeTreeRef,
-}
-impl DropdownBoxView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        shared_res: &DropdownBoxViewSharedResources,
-        items: Vec<String>,
-    ) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
-            offset: [AnimatableFloat::Value(200.0), AnimatableFloat::Value(24.0)],
-            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(24.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            corner_radius: CornerRadius::all(4.0),
-            border: Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
-            relative_size_adjustment: [1.0, 1.0],
-            size: [AnimatableFloat::Value(-12.0), AnimatableFloat::Value(0.0)],
-            clip_child: Some(ClipConfig {
-                left_softness: SafeF32::ZERO,
-                right_softness: unsafe { SafeF32::new_unchecked(12.0) },
-                top_softness: SafeF32::ZERO,
-                bottom_softness: SafeF32::ZERO,
-            }),
-            ..Default::default()
-        });
-        let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
-            relative_size_adjustment: [1.0, 1.0],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: if items.is_empty() {
-                        ""
-                    } else {
-                        items[0].as_str()
-                    }
-                    .into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                offset: [4.0, 0.0],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_down_arrow = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
-            offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
-            relative_offset_adjustment: [1.0, 0.5],
-            size: [AnimatableFloat::Value(16.0), AnimatableFloat::Value(16.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
-            texatlas_rect_id: Some(shared_res.down_arrow_tex),
-            ..Default::default()
-        });
-        ctx.composite_tree.add_child(ct_text_clip, ct_text);
-        ctx.composite_tree.add_child(ct_root, ct_text_clip);
-        ctx.composite_tree.add_child(ct_root, ct_down_arrow);
-
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: 200.0,
-            top: 24.0,
-            width: 128.0,
-            height: 24.0,
-            ..Default::default()
-        });
-
-        let eh = Rc::new_cyclic(|w| DropdownBoxEventHandler {
-            this_weakref: w.clone(),
-            ct_root,
-            ct_text,
-            ct_down_arrow,
-            ht_root,
-            items,
-            current_selected: core::cell::Cell::new(0),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        Self { eh, ct_text_clip }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.get_mut(self.ct_text_clip).base_scale_factor = new_scale;
-        composite_tree.get_mut(self.eh.ct_text).base_scale_factor = new_scale;
-        composite_tree
-            .get_mut(self.eh.ct_down_arrow)
-            .base_scale_factor = new_scale;
-
-        composite_tree.mark_dirty(self.eh.ct_root);
-        composite_tree.mark_dirty_all(self.ct_text_clip);
-        composite_tree.mark_dirty_all(self.eh.ct_text);
-        composite_tree.mark_dirty(self.eh.ct_down_arrow);
-    }
-}
-
-pub struct DropdownBoxEventHandler {
-    this_weakref: std::rc::Weak<DropdownBoxEventHandler>,
-    ct_root: CompositeTreeRef,
-    ct_text: CompositeTreeRef,
-    ct_down_arrow: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    items: Vec<String>,
-    current_selected: core::cell::Cell<usize>,
-}
-impl HitTestTreeActionHandler for DropdownBoxEventHandler {
-    fn on_pointer_enter(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.0],
-                to_value: [1.0, 1.0, 1.0, 0.0625],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_leave(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.0625],
-                to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_down(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_down_arrow).offset[1] = AnimatableFloat::Animated {
-            from_value: -8.0,
-            to_value: -7.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
-            curve: AnimationCurve::EASE_OUT,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_down_arrow);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_up(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_down_arrow).offset[1] = AnimatableFloat::Animated {
-            from_value: -7.0,
-            to_value: -8.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
-            curve: AnimationCurve::EASE_OUT,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_down_arrow);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_click(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        let w = context
-            .ht_manager
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
-        let (x, y) = context.ht_manager.translate_tree_local_to_root(
-            self.ht_root,
-            0.0,
-            24.0,
-            w.client_size().width,
-            w.client_size().height,
-        );
-
-        context.system_link.dispatch_event(Event::DropdownMenuOpen {
-            parent: w,
-            surface_pos: Point::new_logical(x, y),
-            min_width: 128.0,
-            items: self
-                .items
-                .iter()
-                .enumerate()
-                .map(|(n, c)| DropdownMenuItem {
-                    content: c.into(),
-                    id: n,
-                })
-                .collect(),
-            selection_receiver: self.this_weakref.clone(),
-        });
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-}
-impl DropdownBoxEventHandler {
-    pub fn set_selection_id<E>(&self, id: usize, composite_tree: &mut CompositeTree<E>) {
-        self.current_selected.set(id);
-        self.update_text(composite_tree);
-    }
-
-    fn update_text<E>(&self, composite_tree: &mut CompositeTree<E>) {
-        let content = if self.items.is_empty() {
-            ""
-        } else {
-            self.items[self.current_selected.get()].as_str()
-        };
-        composite_tree
-            .get_mut(self.ct_text)
-            .text
-            .as_mut()
-            .expect("no text set?")
-            .runs[0]
-            .content = content.into();
-        composite_tree.mark_text_layout_dirty(self.ct_text);
-    }
-}
-
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -1478,6 +1191,7 @@ async fn run<'sys>(
         view_registry: &mut view_registry,
         ui_scale_factor: main_window.ui_scale_factor(),
         system_link: &system_link,
+        main_thread_texture_id_issuer: &mut texture_id_issuer,
     };
     let window_header_view = ui::window_header::View::new(
         &mut view_init_ctx,
@@ -1770,11 +1484,8 @@ async fn run<'sys>(
         view_init_ctx.mount_context.ht_manager,
     );
 
-    let dropdown_box_view_shared_res =
-        DropdownBoxViewSharedResources::new(&mut texture_id_issuer, system_link.rt_sender());
-    let dropdown_box = DropdownBoxView::new(
+    let dropdown_box = uikit::dropdown_box::View::new(
         &mut view_init_ctx,
-        &dropdown_box_view_shared_res,
         vec![
             "DropdownBox Item 1".into(),
             "DropdownBox Item 2".into(),
@@ -1830,6 +1541,7 @@ async fn run<'sys>(
                             view_registry: &mut view_registry,
                             ui_scale_factor: w.ui_scale_factor(),
                             system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
                         };
                         let window_header_view = ui::window_header::View::new(
                             &mut view_init_ctx,
@@ -2253,6 +1965,7 @@ async fn run<'sys>(
                         view_registry: &mut view_registry,
                         ui_scale_factor: main_window.ui_scale_factor(),
                         system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
                     target_window,
                     |id, ctx| AlertDialogPresenter::new(ctx, id, message),
@@ -2317,6 +2030,7 @@ async fn run<'sys>(
                         view_registry: &mut view_registry,
                         ui_scale_factor: 1.0, // updated later
                         system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
                     &context_menu_common_resources,
                 ));
@@ -2345,6 +2059,7 @@ async fn run<'sys>(
                         view_registry: &mut view_registry,
                         ui_scale_factor: 1.0, // updated later
                         system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
                     surface_pos,
                     min_width,
@@ -2454,6 +2169,7 @@ async fn run<'sys>(
                             view_registry: &mut view_registry,
                             ui_scale_factor: 1.0, // updated later
                             system_link: &system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
                         },
                         &context_menu_common_resources,
                     );
@@ -2775,143 +2491,9 @@ async fn run<'sys>(
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DropdownMenuItem {
-    pub content: String,
-    pub id: usize,
-}
-
-pub struct DropdownMenuItemView {
-    eh: Rc<DropdownMenuItemEventHandler>,
-}
-impl DropdownMenuItemView {
-    const ITEM_HEIGHT: f32 = 24.0;
-
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        selection_receiver: std::rc::Weak<DropdownBoxEventHandler>,
-        item: DropdownMenuItem,
-        y_pos: f32,
-    ) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(y_pos)],
-            relative_size_adjustment: [1.0, 0.0],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(Self::ITEM_HEIGHT),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: item.content,
-                    color: AnimatableColor::Value([1.0; 4]),
-                    ..Default::default()
-                }],
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                offset: [4.0, 0.0],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
-            top: y_pos,
-            width_adjustment_factor: 1.0,
-            height: Self::ITEM_HEIGHT,
-            ..Default::default()
-        });
-
-        let eh = Rc::new(DropdownMenuItemEventHandler {
-            ct_root,
-            ht_root,
-            id: item.id,
-            receiver: selection_receiver,
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        Self { eh }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty_all(self.eh.ct_root);
-    }
-}
-
-pub struct DropdownMenuItemEventHandler {
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    id: usize,
-    receiver: std::rc::Weak<DropdownBoxEventHandler>,
-}
-impl HitTestTreeActionHandler for DropdownMenuItemEventHandler {
-    fn on_pointer_enter(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.0],
-                to_value: [1.0, 1.0, 1.0, 0.0625],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_leave(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.0625],
-                to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_click(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        context
-            .system_link
-            .dispatch_event(Event::DropdownMenuSelectItem {
-                id: self.id,
-                receiver: self.receiver.clone(),
-            });
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-}
-
 pub struct DropdownMenuSurface {
     native_surface: FlyoutSurfaceHandle,
-    item_views: Vec<DropdownMenuItemView>,
+    item_views: Vec<uikit::dropdown_box::MenuItemView>,
 }
 
 pub struct DropdownMenuSession {
@@ -2920,29 +2502,21 @@ pub struct DropdownMenuSession {
 }
 impl DropdownMenuSession {
     pub fn new(
-        selection_receiver: std::rc::Weak<DropdownBoxEventHandler>,
+        selection_receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
         parent: WindowHandle,
         syslink: &SystemLink,
         view_init_context: &mut ViewInitContext,
         pos: Point<LogicalUnit>,
         min_width: f32,
-        items: Vec<DropdownMenuItem>,
+        items: Vec<uikit::dropdown_box::MenuItem>,
     ) -> Self {
-        let mut width = min_width;
-        for v in items.iter() {
-            width = width.max(
-                TextLayout::measure_visual_width(&v.content, FontID::UIDefault, syslink.font_set())
-                    + 4.0
-                    + 4.0,
-            );
-        }
-
+        let menu_layout = uikit::dropdown_box::MenuLayout::new(items, syslink.font_set());
         let root_surface = syslink.new_flyout_surface(
             parent,
             pos,
             Size::new_logical(
-                width,
-                items.len() as f32 * DropdownMenuItemView::ITEM_HEIGHT,
+                menu_layout.required_width().max(min_width),
+                menu_layout.height(),
             ),
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
@@ -2950,17 +2524,11 @@ impl DropdownMenuSession {
         );
         view_init_context.ui_scale_factor = root_surface.render_scale();
 
-        let mut item_views = Vec::with_capacity(items.len());
-        for (n, v) in items.into_iter().enumerate() {
-            let v = DropdownMenuItemView::new(
-                view_init_context,
-                selection_receiver.clone(),
-                v,
-                n as f32 * DropdownMenuItemView::ITEM_HEIGHT,
-            );
-            v.mount(view_init_context, &root_surface);
-            item_views.push(v);
-        }
+        let item_views = menu_layout
+            .instantiate_all(view_init_context, selection_receiver, |v, ctx| {
+                v.mount(ctx, &root_surface)
+            })
+            .collect::<Vec<_>>();
 
         Self {
             parent,
