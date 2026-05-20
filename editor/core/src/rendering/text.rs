@@ -14,6 +14,7 @@ use windows_core::*;
 use crate::{
     rendering::{
         MaskTextureAtlasManager,
+        composite::CompositeRectTextHorizontalAlignment,
         vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
     },
     utils::Point,
@@ -427,7 +428,29 @@ impl Drop for TextLayout {
     }
 }
 impl TextLayout {
-    pub fn new<'s>(text_runs: impl Iterator<Item = TextRun<'s>>, font_set: &FontSet) -> Self {
+    #[inline(always)]
+    pub fn new_single<'s>(
+        text: &'s str,
+        font: FontID,
+        font_set: &FontSet,
+        alignment: CompositeRectTextHorizontalAlignment,
+    ) -> Self {
+        Self::new(
+            core::iter::once(TextRun {
+                content: text,
+                font,
+                spacing_inline_start: 0.0,
+            }),
+            font_set,
+            alignment,
+        )
+    }
+
+    pub fn new<'s>(
+        text_runs: impl Iterator<Item = TextRun<'s>>,
+        font_set: &FontSet,
+        alignment: CompositeRectTextHorizontalAlignment,
+    ) -> Self {
         let (lb, ub) = text_runs.size_hint();
         #[cfg(feature = "harfbuzz")]
         let mut buffers = Vec::with_capacity(ub.unwrap_or(lb));
@@ -678,6 +701,41 @@ impl TextLayout {
                     )
                     .expect("dwrite.layout.set_drawing_effect");
             }
+        }
+        #[cfg(windows)]
+        if alignment != CompositeRectTextHorizontalAlignment::Start {
+            // 頭揃えじゃないときはサイズ指定が必要なので一回測ってそれを適用する
+            let mut metrics = core::mem::MaybeUninit::uninit();
+            unsafe {
+                layout
+                    .GetMetrics(metrics.as_mut_ptr())
+                    .expect("dwrite.layout.get_metrics")
+            }
+            let metrics = unsafe { metrics.assume_init_ref() };
+            unsafe {
+                layout
+                    .SetMaxWidth(metrics.width)
+                    .expect("dwrite.layout.set_max_width");
+                layout
+                    .SetMaxHeight(metrics.height)
+                    .expect("dwrite.layout.set_max_height");
+            }
+        }
+        #[cfg(windows)]
+        unsafe {
+            layout
+                .SetTextAlignment(match alignment {
+                    CompositeRectTextHorizontalAlignment::Start => {
+                        windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_LEADING
+                    }
+                    CompositeRectTextHorizontalAlignment::Middle => {
+                        windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_CENTER
+                    }
+                    CompositeRectTextHorizontalAlignment::End => {
+                        windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_TRAILING
+                    }
+                })
+                .expect("dwrite.layout.set_text_alignment");
         }
 
         Self {
@@ -1342,6 +1400,19 @@ impl TextLayout {
         boxes
     }
 
+    pub fn visual_width(&self) -> f32 {
+        #[cfg(windows)]
+        let mut metrics = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        unsafe {
+            self.layout
+                .GetMetrics(metrics.as_mut_ptr())
+                .expect("layout.GetMetrics");
+        }
+        #[cfg(windows)]
+        return unsafe { metrics.assume_init_ref() }.width;
+    }
+
     #[cfg(target_os = "macos")]
     #[inline(always)]
     pub fn height(&self) -> f32 {
@@ -1375,6 +1446,20 @@ impl TextLayout {
         return unsafe { metrics.assume_init_ref() }.height;
     }
 
+    pub fn measure_height(text: &str, font: FontID, font_set: &FontSet) -> f32 {
+        // TODO: 最適化はあとで
+        let layout = Self::new(
+            core::iter::once(TextRun {
+                content: text,
+                font,
+                spacing_inline_start: 0.0,
+            }),
+            font_set,
+            CompositeRectTextHorizontalAlignment::Start,
+        );
+        layout.height()
+    }
+
     pub fn measure_visual_width(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
@@ -1384,6 +1469,7 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
+            CompositeRectTextHorizontalAlignment::Start,
         );
 
         #[cfg(feature = "harfbuzz")]
@@ -1503,6 +1589,7 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
+            CompositeRectTextHorizontalAlignment::Start,
         );
 
         #[cfg(feature = "harfbuzz")]
@@ -1600,6 +1687,7 @@ impl TextLayout {
                 spacing_inline_start: 0.0,
             }),
             font_set,
+            CompositeRectTextHorizontalAlignment::Start,
         );
 
         // TODO: LTR前提

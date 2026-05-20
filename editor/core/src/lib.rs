@@ -37,7 +37,7 @@ use crate::{
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
         },
-        text::{FontID, FontSet, TextLayout},
+        text::{FontID, FontSet, TextLayout, TextRun},
     },
     uikit::{
         MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
@@ -1015,10 +1015,22 @@ pub struct AlertDialogPresenter {
     confirm_button: SimpleButtonView,
 }
 impl AlertDialogPresenter {
+    const AROUND_PADDING: f32 = 16.0;
+    const MESSAGE_BUTTON_SPACING: f32 = 12.0;
+
     pub fn new(ctx: &mut ViewInitContext, popup_id: PopupID, message: String) -> Self {
+        let tl = TextLayout::new_single(
+            &message,
+            FontID::UIDefault,
+            ctx.system_link.font_set(),
+            CompositeRectTextHorizontalAlignment::Middle,
+        );
+        let box_width = tl.visual_width().max(64.0) + Self::AROUND_PADDING * 2.0;
+        let box_height =
+            tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0;
+
         let mask = OverlayPopupBasicMaskView::new(ctx);
-        // TODO: サイズをmessageの長さにあわせる必要がある どう計測したものか......(あるいは固定サイズにして折り返させるか？)
-        let frame = OverlayPopupBasicFrameView::new(ctx, Size::new_logical(200.0, 88.0));
+        let frame = OverlayPopupBasicFrameView::new(ctx, Size::new_logical(box_width, box_height));
         let confirm_button = SimpleButtonView::new(
             ctx,
             "OK".into(),
@@ -1027,9 +1039,15 @@ impl AlertDialogPresenter {
         );
         let ct_message = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
-            size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(16.0)],
+            size: [
+                AnimatableFloat::Value(box_width),
+                AnimatableFloat::Value(16.0),
+            ],
             relative_offset_adjustment: [0.5, 0.0],
-            offset: [AnimatableFloat::Value(-32.0), AnimatableFloat::Value(16.0)],
+            offset: [
+                AnimatableFloat::Value(-box_width * 0.5),
+                AnimatableFloat::Value(Self::AROUND_PADDING),
+            ],
             text: Some(CompositeRectText {
                 runs: vec![CompositeRectTextRun {
                     font_id: FontID::UIDefault,
@@ -1038,7 +1056,7 @@ impl AlertDialogPresenter {
                     spacing_inline_start: 0.0,
                 }],
                 horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                vertical_alignment: CompositeRectTextVerticalAlignment::Start,
                 ..Default::default()
             }),
             ..Default::default()
@@ -1048,7 +1066,7 @@ impl AlertDialogPresenter {
             &Positioning {
                 parent_anchor: [0.5, 1.0],
                 anchor: [0.5, 1.0],
-                offset: [0.0, -16.0],
+                offset: [0.0, -Self::AROUND_PADDING],
             },
             ctx.mount_context.composite_tree,
             ctx.mount_context.ht_manager,
@@ -1810,20 +1828,44 @@ async fn run<'sys>(
         Size::new_logical(64.0, 24.0),
         Some(Event::OpenAlertDialog {
             target_window: main_window,
-            message: "てすとめっせーじ from button".into(),
+            message: "てすとめっせーじ from button\n改行もしてみる".into(),
         }),
     );
     test_alert_btn.locate(
         &Positioning {
             parent_anchor: [0.0, 0.0],
             anchor: [0.0, 0.0],
-            offset: [200.0, 64.0],
+            offset: [200.0, 96.0],
         },
         &mut view_init_ctx.mount_context.composite_tree,
         &mut view_init_ctx.mount_context.ht_manager,
     );
     test_alert_btn.mount(&mut view_init_ctx, &main_window);
     test_alert_btn.set_keyboard_focus_group(
+        main_window.keyboard_focus_group(),
+        view_init_ctx.keyboard_focus_registry,
+    );
+
+    let test_alert_btn2 = SimpleButtonView::new(
+        &mut view_init_ctx,
+        "Test Alert 2".into(),
+        Size::new_logical(96.0, 24.0),
+        Some(Event::OpenAlertDialog {
+            target_window: main_window,
+            message: "とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ".into(),
+        }),
+    );
+    test_alert_btn2.locate(
+        &Positioning {
+            parent_anchor: [0.0, 0.0],
+            anchor: [0.0, 0.0],
+            offset: [280.0, 96.0],
+        },
+        &mut view_init_ctx.mount_context.composite_tree,
+        &mut view_init_ctx.mount_context.ht_manager,
+    );
+    test_alert_btn2.mount(&mut view_init_ctx, &main_window);
+    test_alert_btn2.set_keyboard_focus_group(
         main_window.keyboard_focus_group(),
         view_init_ctx.keyboard_focus_registry,
     );

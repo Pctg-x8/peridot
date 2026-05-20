@@ -505,7 +505,7 @@ pub struct ClipConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CustomRenderToken(usize);
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CompositeRectTextHorizontalAlignment {
     #[default]
     Start,
@@ -1847,6 +1847,7 @@ impl<Event> CompositeTreeRender<Event> {
                         t,
                         r.base_scale_factor,
                         font_set,
+                        t.horizontal_alignment,
                         mask_atlas,
                         vector_raster_state,
                     );
@@ -1981,6 +1982,7 @@ impl<Event> CompositeTreeRender<Event> {
         text_layout: &CompositeRectText<Event>,
         scale_factor: f32,
         font_set: &FontSet,
+        alignment: CompositeRectTextHorizontalAlignment,
         glyph_atlas: &mut MaskTextureAtlasManager,
         vector_raster_state: &mut VectorRasterizationState,
     ) {
@@ -1993,6 +1995,7 @@ impl<Event> CompositeTreeRender<Event> {
                 spacing_inline_start: r.spacing_inline_start,
             }),
             font_set,
+            alignment,
         );
         cache.text_rects.clear();
         cache
@@ -2003,8 +2006,7 @@ impl<Event> CompositeTreeRender<Event> {
                 glyph_atlas,
                 scale_factor,
             ));
-        // TODO: LTR前提 RTLサポートもするなら最大値をとる必要がある
-        cache.text_width = cache.text_rects.last().map_or(0.0, |r| r.right());
+        cache.text_width = text_layout.visual_width() * scale_factor;
         cache.text_height = text_layout.height() * scale_factor;
     }
 }
