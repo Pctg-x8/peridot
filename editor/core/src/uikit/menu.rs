@@ -620,7 +620,7 @@ impl HitTestTreeActionHandler for BaseSurfaceEventHandler {
     ) -> crate::input::EventContinueControl {
         context
             .system_link
-            .dispatch_event(Event::ContextMenuDeselectItem { depth: self.depth });
+            .dispatch_event(Event::MenuDeselectItem { depth: self.depth });
 
         crate::input::EventContinueControl::STOP_PROPAGATION
     }
@@ -639,12 +639,10 @@ impl HitTestTreeActionHandler for CommandViewEventHandler {
         context: &mut crate::input::InputEventContext,
         _args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
-        context
-            .system_link
-            .dispatch_event(Event::ContextMenuSelectItem {
-                depth: self.depth,
-                index: self.index,
-            });
+        context.system_link.dispatch_event(Event::MenuSelectItem {
+            depth: self.depth,
+            index: self.index,
+        });
 
         crate::input::EventContinueControl::STOP_PROPAGATION
     }
@@ -657,7 +655,7 @@ impl HitTestTreeActionHandler for CommandViewEventHandler {
     ) -> crate::input::EventContinueControl {
         context
             .system_link
-            .dispatch_event(Event::ContextMenuSelectCommand {
+            .dispatch_event(Event::MenuSelectCommand {
                 id: self.command_id,
             });
 
@@ -702,12 +700,10 @@ impl HitTestTreeActionHandler for SubMenuViewEventHandler {
         context: &mut crate::input::InputEventContext,
         _args: &crate::input::hittest::PointerActionArgs,
     ) -> crate::input::EventContinueControl {
-        context
-            .system_link
-            .dispatch_event(Event::ContextMenuSelectItem {
-                depth: self.depth,
-                index: self.index,
-            });
+        context.system_link.dispatch_event(Event::MenuSelectItem {
+            depth: self.depth,
+            index: self.index,
+        });
 
         crate::input::EventContinueControl::STOP_PROPAGATION
     }

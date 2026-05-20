@@ -32,8 +32,8 @@ use crate::{
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
         composite::{
-            AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
-            CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            self, AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig,
+            CompositeMode, CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
         },
@@ -486,7 +486,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             }
 
             if delayed_action_timer_signal {
-                app_event_dispatcher.dispatch(Event::ContextMenuPerformDelayedAction);
+                app_event_dispatcher.dispatch(Event::MenuPerformDelayedAction);
             }
 
             if global_mouse_clicked {
@@ -655,7 +655,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 continue;
             }
             if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 2 {
-                app_event_dispatcher.dispatch(Event::ContextMenuPerformDelayedAction);
+                app_event_dispatcher.dispatch(Event::MenuPerformDelayedAction);
                 continue;
             }
             #[cfg(feature = "enable-profiling")]
@@ -678,8 +678,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
                         break 'app;
                     }
-                    if windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN <= msg.message
-                        && msg.message <= windows::Win32::UI::WindowsAndMessaging::WM_MBUTTONDBLCLK
+                    if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN
+                        || msg.message == windows::Win32::UI::WindowsAndMessaging::WM_RBUTTONDOWN
+                        || msg.message == windows::Win32::UI::WindowsAndMessaging::WM_MBUTTONDOWN
                     {
                         app_event_dispatcher.dispatch(Event::GlobalMouseClicked);
                     }
@@ -812,7 +813,12 @@ pub enum Event {
     PopupClose {
         id: PopupID,
     },
-    ContextMenuOpen {
+    MenuOpen {
+        parent: WindowHandle,
+        items: Vec<MenuItem>,
+        surface_pos: Point<LogicalUnit>,
+    },
+    MenuReopen {
         parent: WindowHandle,
         items: Vec<MenuItem>,
         surface_pos: Point<LogicalUnit>,
@@ -824,44 +830,44 @@ pub enum Event {
         items: Vec<crate::uikit::dropdown_box::MenuItem>,
         selection_receiver: std::rc::Weak<crate::uikit::dropdown_box::EventHandler>,
     },
-    ContextMenuCloseAll,
-    ContextMenuRescale {
+    MenuCloseAll,
+    MenuRescale {
         scale: f32,
     },
-    ContextMenuSelectItem {
+    MenuSelectItem {
         depth: usize,
         index: usize,
     },
-    ContextMenuDeselectItem {
+    MenuDeselectItem {
         depth: usize,
     },
-    ContextMenuOpenSubmenu {
+    MenuOpenSubmenu {
         depth: usize,
         index: usize,
     },
-    ContextMenuPerformDelayedAction,
-    ContextMenuPointerDown {
+    MenuPerformDelayedAction,
+    MenuPointerDown {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
         button: PointerButton,
         #[cfg(feature = "wayland")]
         event_id: platform::unix::wayland::PointerEventID,
     },
-    ContextMenuPointerMove {
+    MenuPointerMove {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
         client_pos: Point<PointerInputUnit>,
     },
-    ContextMenuPointerUp {
+    MenuPointerUp {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
         button: PointerButton,
     },
-    ContextMenuPointerLeave {
+    MenuPointerLeave {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
     },
-    ContextMenuSelectCommand {
+    MenuSelectCommand {
         id: u64,
     },
     DropdownMenuSelectItem {
@@ -917,19 +923,20 @@ impl Event {
             Self::SubWindowClose { .. } => "SubWindowClose",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
             Self::PopupClose { .. } => "PopupClose",
-            Self::ContextMenuOpen { .. } => "ContextMenuOpen",
+            Self::MenuOpen { .. } => "MenuOpen",
+            Self::MenuReopen { .. } => "MenuReopen",
             Self::DropdownMenuOpen { .. } => "DropdownMenuOpen",
-            Self::ContextMenuCloseAll => "ContextMenuCloseAll",
-            Self::ContextMenuRescale { .. } => "ContextMenuRescale",
-            Self::ContextMenuSelectItem { .. } => "ContextMenuSelectItem",
-            Self::ContextMenuDeselectItem { .. } => "ContextMenuDeselectItem",
-            Self::ContextMenuOpenSubmenu { .. } => "ContextMenuOpenSubmenu",
-            Self::ContextMenuPerformDelayedAction => "ContextMenuPerformDelayedAction",
-            Self::ContextMenuPointerDown { .. } => "ContextMenuPointerDown",
-            Self::ContextMenuPointerMove { .. } => "ContextMenuPointerMove",
-            Self::ContextMenuPointerUp { .. } => "ContextMenuPointerUp",
-            Self::ContextMenuPointerLeave { .. } => "ContextMenuPointerLeave",
-            Self::ContextMenuSelectCommand { .. } => "ContextMenuSelectCommand",
+            Self::MenuCloseAll => "MenuCloseAll",
+            Self::MenuRescale { .. } => "MenuRescale",
+            Self::MenuSelectItem { .. } => "MenuSelectItem",
+            Self::MenuDeselectItem { .. } => "MenuDeselectItem",
+            Self::MenuOpenSubmenu { .. } => "MenuOpenSubmenu",
+            Self::MenuPerformDelayedAction => "MenuPerformDelayedAction",
+            Self::MenuPointerDown { .. } => "MenuPointerDown",
+            Self::MenuPointerMove { .. } => "MenuPointerMove",
+            Self::MenuPointerUp { .. } => "MenuPointerUp",
+            Self::MenuPointerLeave { .. } => "MenuPointerLeave",
+            Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
             Self::UpdateView { .. } => "UpdateView",
             #[cfg(not(target_os = "macos"))]
@@ -1114,6 +1121,310 @@ impl Popup for AlertDialogPresenter {
     }
 }
 
+pub struct AppMenuItemView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    width: f32,
+    lit: core::cell::Cell<bool>,
+}
+impl AppMenuItemView {
+    const ITEM_HEIGHT: f32 = 20.0;
+    const PADDING_INLINE: f32 = 8.0;
+
+    pub fn new(ctx: &mut ViewInitContext, label: String, left: f32) -> Self {
+        let text_width =
+            TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
+
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(left), AnimatableFloat::Value(0.0)],
+            size: [
+                AnimatableFloat::Value(text_width + Self::PADDING_INLINE * 2.0),
+                AnimatableFloat::Value(AppMenuItemView::ITEM_HEIGHT),
+            ],
+            has_bitmap: true,
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    font_id: FontID::UIDefault,
+                    content: label,
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left,
+            width: text_width + Self::PADDING_INLINE * 2.0,
+            height: AppMenuItemView::ITEM_HEIGHT,
+            ..Default::default()
+        });
+
+        Self {
+            ct_root,
+            ht_root,
+            width: text_width,
+            lit: core::cell::Cell::new(false),
+        }
+    }
+
+    #[inline(always)]
+    fn bind_event_handler(
+        &self,
+        event_handler: &Rc<AppMenuViewEventHandler>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        ht_manager.set_action_handler(self.ht_root, event_handler);
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty_all(self.ct_root);
+    }
+
+    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if self.lit.replace(true) {
+            // already lit
+            return;
+        }
+
+        composite_tree.get_mut(self.ct_root).composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.25],
+                start_sec: current_sec,
+                end_sec: current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            });
+        composite_tree.mark_dirty(self.ct_root);
+    }
+
+    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if !self.lit.replace(false) {
+            // already unlit
+            return;
+        }
+
+        composite_tree.get_mut(self.ct_root).composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.25],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                start_sec: current_sec,
+                end_sec: current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            });
+        composite_tree.mark_dirty(self.ct_root);
+    }
+}
+
+pub struct AppMenuView {
+    eh: Rc<AppMenuViewEventHandler>,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl AppMenuView {
+    pub fn new(ctx: &mut ViewInitContext, top: f32, labels: Vec<String>) -> Self {
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(top)],
+            size: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(AppMenuItemView::ITEM_HEIGHT),
+            ],
+            relative_size_adjustment: [1.0, 0.0],
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            top,
+            height: AppMenuItemView::ITEM_HEIGHT,
+            width_adjustment_factor: 1.0,
+            ..Default::default()
+        });
+
+        let mut items = Vec::with_capacity(labels.len());
+        let mut item_left = 0.0;
+        for label in labels {
+            let v = AppMenuItemView::new(ctx, label, item_left);
+            v.mount(ctx, &RawMountTarget { ct_root, ht_root });
+            item_left += v.width + AppMenuItemView::PADDING_INLINE * 2.0;
+            items.push(v);
+        }
+
+        let eh = Rc::new(AppMenuViewEventHandler {
+            items,
+            opening: core::cell::Cell::new(false),
+            last_lit_index: core::cell::Cell::new(None),
+            ignore_next_pointer_down_event: core::cell::Cell::new(false),
+        });
+        for x in eh.items.iter() {
+            x.bind_event_handler(&eh, ctx.ht_manager);
+        }
+
+        Self {
+            eh,
+            ct_root,
+            ht_root,
+        }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.ct_root);
+
+        for x in self.eh.items.iter() {
+            x.rescale(new_scale, composite_tree);
+        }
+    }
+}
+
+struct AppMenuViewEventHandler {
+    items: Vec<AppMenuItemView>,
+    opening: core::cell::Cell<bool>,
+    last_lit_index: core::cell::Cell<Option<usize>>,
+    ignore_next_pointer_down_event: core::cell::Cell<bool>,
+}
+impl HitTestTreeActionHandler for AppMenuViewEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        let mut new_lit_index = None;
+        for (n, x) in self.items.iter().enumerate() {
+            if x.ht_root == sender {
+                new_lit_index = Some(n);
+                break;
+            }
+        }
+
+        let last_lit = self.last_lit_index.replace(new_lit_index);
+        if last_lit != new_lit_index {
+            if self.opening.get()
+                && let Some(x) = last_lit
+            {
+                self.items[x].unlit(context.composite_tree, context.current_sec);
+            }
+            if let Some(x) = new_lit_index {
+                self.items[x].lit(context.composite_tree, context.current_sec);
+                if self.opening.get() {
+                    for (n, v) in self.items.iter().enumerate() {
+                        if n != x {
+                            v.unlit(context.composite_tree, context.current_sec);
+                        }
+                    }
+
+                    let parent = context
+                        .ht_manager
+                        .query_root_window(self.items[x].ht_root)
+                        .expect("not mounted?");
+                    let (x, y, _, h, _) = context
+                        .ht_manager
+                        .compute_global_rect_autoroot(self.items[x].ht_root);
+                    context.system_link.dispatch_event(Event::MenuReopen {
+                        parent,
+                        items: vec![uikit::MenuItem::Command {
+                            command_id: 0,
+                            label: "項目1".into(),
+                        }],
+                        surface_pos: Point::new_logical(x, y + h),
+                    });
+                }
+            }
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.last_lit_index.set(None);
+
+        if self.opening.get() {
+            // メニュー開いてるときはunlitしない
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        for x in self.items.iter() {
+            if x.ht_root == sender {
+                x.unlit(context.composite_tree, context.current_sec);
+                break;
+            }
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        if self.ignore_next_pointer_down_event.replace(false) {
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        self.opening.set(true);
+        let (x, y, _, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
+        context.system_link.dispatch_event(Event::MenuOpen {
+            parent: context
+                .ht_manager
+                .query_root_window(sender)
+                .expect("not mounted?"),
+            items: vec![uikit::MenuItem::Command {
+                command_id: 0,
+                label: "項目1".into(),
+            }],
+            surface_pos: Point::new_logical(x, y + h),
+        });
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl AppMenuViewEventHandler {
+    pub fn on_global_mouse_click<E>(
+        &self,
+        composite_tree: &mut CompositeTree<E>,
+        current_sec: f32,
+    ) {
+        self.on_close_all(composite_tree, current_sec);
+        if self.last_lit_index.get().is_some() {
+            // 連続で開いちゃうので次のPointerDownを無視する
+            self.ignore_next_pointer_down_event.set(true);
+        }
+    }
+
+    pub fn on_close_all<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        self.opening.set(false);
+
+        if self.last_lit_index.get().is_none() {
+            for x in self.items.iter() {
+                x.unlit(composite_tree, current_sec);
+            }
+        }
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -1167,7 +1478,7 @@ async fn run<'sys>(
         &mut texture_id_issuer,
         system_link.rt_sender(),
     );
-    let mut current_active_context_menu_session = None::<ContextMenuSession>;
+    let mut current_active_menu_session = None::<MenuSession>;
     let mut current_active_dropdown_menu_session = None::<DropdownMenuSession>;
 
     let mut main_window = system_link.create_main_window(
@@ -1202,6 +1513,18 @@ async fn run<'sys>(
         main_window.needs_system_command_buttons(),
     );
     window_header_view.mount(&mut view_init_ctx, &main_window);
+
+    let app_menu_view = AppMenuView::new(
+        &mut view_init_ctx,
+        ui::window_header::View::THICKNESS,
+        vec![
+            "ファイル(F)".into(),
+            "編集(E)".into(),
+            "ウィンドウ(W)".into(),
+            "ヘルプ(H)".into(),
+        ],
+    );
+    app_menu_view.mount(&mut view_init_ctx, &main_window);
 
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
@@ -1360,7 +1683,7 @@ async fn run<'sys>(
 
                 input::EventContinueControl::STOP_PROPAGATION
             } else {
-                context.system_link.dispatch_event(Event::ContextMenuOpen {
+                context.system_link.dispatch_event(Event::MenuOpen {
                     parent: context
                         .ht_manager
                         .query_root_window(self.ht)
@@ -1486,6 +1809,10 @@ async fn run<'sys>(
 
     let dropdown_box = uikit::dropdown_box::View::new(
         &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(200.0, 44.0),
+            Size::new_logical(128.0, 24.0),
+        ),
         vec![
             "DropdownBox Item 1".into(),
             "DropdownBox Item 2".into(),
@@ -1601,8 +1928,14 @@ async fn run<'sys>(
                 }
 
                 // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
-                if let Some(c) = current_active_context_menu_session.take_if(|x| x.parent == window)
-                {
+                if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
+                    if window == main_window {
+                        app_menu_view.eh.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
+                    }
+
                     c.terminate(
                         &system_link,
                         &mut composite_tree,
@@ -1637,6 +1970,7 @@ async fn run<'sys>(
 
                 if window == main_window {
                     // TODO: このへんそろそろいい感じに自動でやりたい スクロールコンテナとかは子Viewを含むのでまた木構造を組む必要がある
+                    app_menu_view.rescale(new_scale, &mut composite_tree);
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
@@ -1697,8 +2031,17 @@ async fn run<'sys>(
                     mgr.notify_window_lost_focus(&mut input_context, &keyboard_focus_registry);
                 }
 
-                if !focused && let Some(c) = current_active_context_menu_session.take() {
+                if !focused
+                    && let Some(c) = current_active_menu_session.take_if(|x| x.parent == window)
+                {
                     // フォーカスロストした時もコンテキストメニューを閉じる
+                    if window == main_window {
+                        app_menu_view.eh.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
+                    }
+
                     c.terminate(
                         &system_link,
                         &mut composite_tree,
@@ -1712,9 +2055,14 @@ async fn run<'sys>(
             }
             Event::WindowActivatingStateChanged { window, activated } => {
                 if !activated {
-                    if let Some(c) =
-                        current_active_context_menu_session.take_if(|x| x.parent == window)
-                    {
+                    if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
+                        if window == main_window {
+                            app_menu_view.eh.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
+                        }
+
                         c.terminate(
                             &system_link,
                             &mut composite_tree,
@@ -2010,12 +2358,49 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::ContextMenuOpen {
+            Event::MenuOpen {
                 parent,
                 items,
                 surface_pos,
             } => {
-                current_active_context_menu_session = Some(ContextMenuSession::new(
+                current_active_menu_session = Some(MenuSession::new(
+                    parent,
+                    items,
+                    &system_link,
+                    surface_pos,
+                    &mut ViewInitContext {
+                        mount_context: MountContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                        },
+                        view_registry: &mut view_registry,
+                        ui_scale_factor: 1.0, // updated later
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                    },
+                    &context_menu_common_resources,
+                ));
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::MenuReopen {
+                parent,
+                items,
+                surface_pos,
+            } => {
+                if let Some(c) = current_active_menu_session.take() {
+                    c.terminate(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
+                }
+
+                current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
                     &system_link,
@@ -2069,8 +2454,15 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::ContextMenuCloseAll => {
-                if let Some(c) = current_active_context_menu_session.take() {
+            Event::MenuCloseAll => {
+                if let Some(c) = current_active_menu_session.take() {
+                    if c.parent == main_window {
+                        app_menu_view.eh.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
+                    }
+
                     c.terminate(
                         &system_link,
                         &mut composite_tree,
@@ -2082,10 +2474,10 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::ContextMenuRescale { scale } => {
+            Event::MenuRescale { scale } => {
                 let mut should_commit_ct = false;
 
-                if let Some(ref c) = current_active_context_menu_session {
+                if let Some(ref c) = current_active_menu_session {
                     c.rescale(scale, &mut composite_tree);
                     should_commit_ct = true;
                 }
@@ -2100,8 +2492,8 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::ContextMenuSelectItem { depth, index } => {
-                if let Some(c) = current_active_context_menu_session.as_mut() {
+            Event::MenuSelectItem { depth, index } => {
+                if let Some(c) = current_active_menu_session.as_mut() {
                     c.select_item(
                         depth,
                         index,
@@ -2114,8 +2506,8 @@ async fn run<'sys>(
                     system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
-            Event::ContextMenuDeselectItem { depth } => {
-                if let Some(c) = current_active_context_menu_session.as_mut() {
+            Event::MenuDeselectItem { depth } => {
+                if let Some(c) = current_active_menu_session.as_mut() {
                     c.deselect_item(
                         depth,
                         &mut composite_tree,
@@ -2127,7 +2519,7 @@ async fn run<'sys>(
                     system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
-            Event::ContextMenuOpenSubmenu { depth, index } => {
+            Event::MenuOpenSubmenu { depth, index } => {
                 /* if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.open_submenu(
                         depth,
@@ -2151,12 +2543,12 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }*/
             }
-            Event::ContextMenuPerformDelayedAction => {
+            Event::MenuPerformDelayedAction => {
                 system_link
                     .flyout_surface_context
                     .unreserve_delayed_action();
 
-                if let Some(c) = current_active_context_menu_session.as_mut() {
+                if let Some(c) = current_active_menu_session.as_mut() {
                     c.perform_delayed_action(
                         &system_link,
                         &mut ViewInitContext {
@@ -2178,7 +2570,7 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::ContextMenuPointerDown {
+            Event::MenuPointerDown {
                 pointer_id,
                 target,
                 button,
@@ -2212,7 +2604,7 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::ContextMenuPointerMove {
+            Event::MenuPointerMove {
                 pointer_id,
                 target,
                 client_pos,
@@ -2237,7 +2629,7 @@ async fn run<'sys>(
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
             }
-            Event::ContextMenuPointerUp {
+            Event::MenuPointerUp {
                 pointer_id,
                 target,
                 button,
@@ -2258,7 +2650,7 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::ContextMenuPointerLeave { pointer_id, .. } => {
+            Event::MenuPointerLeave { pointer_id, .. } => {
                 pointer_input_manager.handle_mouse_leave(
                     pointer_id,
                     &ht_manager,
@@ -2274,11 +2666,18 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::ContextMenuSelectCommand { id } => {
+            Event::MenuSelectCommand { id } => {
                 tracing::debug!(id, "ContextMenuSelectCommand");
 
                 // コマンド選択したらとじる
-                if let Some(c) = current_active_context_menu_session.take() {
+                if let Some(c) = current_active_menu_session.take() {
+                    if c.parent == main_window {
+                        app_menu_view.eh.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
+                    }
+
                     c.terminate(
                         &system_link,
                         &mut composite_tree,
@@ -2320,7 +2719,14 @@ async fn run<'sys>(
                 let mut should_commit_ct = false;
 
                 if !system_link.any_pointer_on_context_menu() {
-                    if let Some(c) = current_active_context_menu_session.take() {
+                    if let Some(c) = current_active_menu_session.take() {
+                        if c.parent == main_window {
+                            app_menu_view.eh.on_global_mouse_click(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
+                        }
+
                         c.terminate(
                             &system_link,
                             &mut composite_tree,
@@ -2561,14 +2967,14 @@ impl DropdownMenuSession {
     }
 }
 
-pub struct ContextMenuSurface {
+pub struct MenuSurface {
     handle: FlyoutSurfaceHandle,
     item_views: Vec<MenuItemView>,
     _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
     parent_path: Vec<usize>,
     current_selecting: Option<usize>,
 }
-impl ContextMenuSurface {
+impl MenuSurface {
     pub fn set_current_selecting(
         &mut self,
         new_index: usize,
@@ -2597,13 +3003,13 @@ impl ContextMenuSurface {
     }
 }
 
-pub struct ContextMenuSession {
+pub struct MenuSession {
     parent: WindowHandle,
     items: Vec<MenuItem>,
-    opening_surfaces: Vec<ContextMenuSurface>,
+    opening_surfaces: Vec<MenuSurface>,
     active_selection: Option<(usize, usize)>,
 }
-impl ContextMenuSession {
+impl MenuSession {
     pub fn new(
         parent: WindowHandle,
         items: Vec<MenuItem>,
@@ -2646,7 +3052,7 @@ impl ContextMenuSession {
         Self {
             parent,
             items,
-            opening_surfaces: vec![ContextMenuSurface {
+            opening_surfaces: vec![MenuSurface {
                 handle: root_surface,
                 item_views,
                 _base_event_handler: base_event_handler,
@@ -2727,7 +3133,7 @@ impl ContextMenuSession {
                         },
                     );
 
-                    self.opening_surfaces.push(ContextMenuSurface {
+                    self.opening_surfaces.push(MenuSurface {
                         handle: surface,
                         item_views,
                         _base_event_handler: base_event_handler,
@@ -2813,7 +3219,7 @@ impl ContextMenuSession {
             },
         );
 
-        self.opening_surfaces.push(ContextMenuSurface {
+        self.opening_surfaces.push(MenuSurface {
             handle: surface,
             item_views,
             _base_event_handler: base_event_handler,

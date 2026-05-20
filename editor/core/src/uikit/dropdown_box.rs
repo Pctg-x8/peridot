@@ -20,7 +20,7 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{MountContext, MountTarget, ViewInitContext},
-    utils::{Point, SafeF32, UnsafeMainThreadOnlyOnceCell},
+    utils::{LogicalUnit, Point, Rect, SafeF32, UnsafeMainThreadOnlyOnceCell},
 };
 
 struct SharedResources {
@@ -56,7 +56,11 @@ pub struct View {
     ct_text_clip: CompositeTreeRef,
 }
 impl View {
-    pub fn new(ctx: &mut ViewInitContext, items: Vec<String>) -> Self {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        placement: Rect<LogicalUnit>,
+        items: Vec<String>,
+    ) -> Self {
         let shared_res = SHARED_RESOURCES.0.get_or_init(|| {
             SharedResources::new(
                 ctx.main_thread_texture_id_issuer,
@@ -66,8 +70,14 @@ impl View {
 
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
-            offset: [AnimatableFloat::Value(200.0), AnimatableFloat::Value(24.0)],
-            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(24.0)],
+            offset: [
+                AnimatableFloat::Value(placement.left),
+                AnimatableFloat::Value(placement.top),
+            ],
+            size: [
+                AnimatableFloat::Value(placement.width),
+                AnimatableFloat::Value(placement.height),
+            ],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             corner_radius: CornerRadius::all(4.0),
@@ -115,7 +125,10 @@ impl View {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
             relative_offset_adjustment: [1.0, 0.5],
-            size: [AnimatableFloat::Value(16.0), AnimatableFloat::Value(16.0)],
+            size: [
+                AnimatableFloat::Value(SharedResources::DOWN_ARROW_TEX_SIZE),
+                AnimatableFloat::Value(SharedResources::DOWN_ARROW_TEX_SIZE),
+            ],
             has_bitmap: true,
             composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
             texatlas_rect_id: Some(shared_res.down_arrow_tex),
@@ -126,10 +139,10 @@ impl View {
         ctx.composite_tree.add_child(ct_root, ct_down_arrow);
 
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: 200.0,
-            top: 24.0,
-            width: 128.0,
-            height: 24.0,
+            left: placement.left,
+            top: placement.top,
+            width: placement.width,
+            height: placement.height,
             ..Default::default()
         });
 

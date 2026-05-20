@@ -335,7 +335,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
     if msg == WM_LBUTTONDOWN {
         // move then down
-        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+        state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(
@@ -344,7 +344,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             )
             .to_logical(Handle(hwnd).render_scale()),
         });
-        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+        state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Primary,
@@ -365,12 +365,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+        state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
         });
-        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+        state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Primary,
@@ -382,7 +382,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_LBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        state(hwnd).dispatch_event(Event::ContextMenuPointerUp {
+        state(hwnd).dispatch_event(Event::MenuPointerUp {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Primary,
@@ -392,7 +392,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
     if msg == WM_RBUTTONDOWN {
         // move then down
-        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+        state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(
@@ -401,7 +401,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             )
             .to_logical(Handle(hwnd).render_scale()),
         });
-        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+        state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Secondary,
@@ -422,12 +422,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+        state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
         });
-        state(hwnd).dispatch_event(Event::ContextMenuPointerDown {
+        state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Secondary,
@@ -439,7 +439,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_RBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        state(hwnd).dispatch_event(Event::ContextMenuPointerUp {
+        state(hwnd).dispatch_event(Event::MenuPointerUp {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Secondary,
@@ -460,7 +460,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
         state_mut(hwnd).pointer_focus = true;
 
-        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+        state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(
@@ -495,7 +495,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             MapWindowPoints(None, Some(hwnd), &mut p);
         }
 
-        state(hwnd).dispatch_event(Event::ContextMenuPointerMove {
+        state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
@@ -521,7 +521,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             //     });
         }
 
-        state(hwnd).dispatch_event(Event::ContextMenuPointerLeave {
+        state(hwnd).dispatch_event(Event::MenuPointerLeave {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
         });
