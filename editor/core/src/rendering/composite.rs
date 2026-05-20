@@ -545,6 +545,7 @@ pub struct CompositeRectText<Event> {
     pub horizontal_alignment: CompositeRectTextHorizontalAlignment,
     pub vertical_alignment: CompositeRectTextVerticalAlignment,
     pub offset: [f32; 2],
+    pub allow_wrapping: bool,
 }
 impl<Event> Default for CompositeRectText<Event> {
     fn default() -> Self {
@@ -553,6 +554,7 @@ impl<Event> Default for CompositeRectText<Event> {
             horizontal_alignment: Default::default(),
             vertical_alignment: Default::default(),
             offset: [0.0, 0.0],
+            allow_wrapping: false,
         }
     }
 }
@@ -1483,6 +1485,7 @@ struct CompositeRectCache {
     text_rects: Vec<GlyphPlacementBox>,
     text_width: f32,
     text_height: f32,
+    text_max_width: f32,
 }
 impl CompositeRectCache {
     fn new() -> Self {
@@ -1490,6 +1493,7 @@ impl CompositeRectCache {
             text_rects: Vec::new(),
             text_width: 0.0,
             text_height: 0.0,
+            text_max_width: f32::MAX,
         }
     }
 }
@@ -1841,13 +1845,15 @@ impl<Event> CompositeTreeRender<Event> {
             }
 
             if let Some(ref mut t) = r.text {
-                if self.dirty_flags[p.r.0].text_layout_dirty {
+                let wrap_width = if t.allow_wrapping { w } else { f32::MAX };
+                if self.dirty_flags[p.r.0].text_layout_dirty || cache.text_max_width != wrap_width {
                     Self::populate_text_layout_cache(
                         cache,
                         t,
                         r.base_scale_factor,
                         font_set,
                         t.horizontal_alignment,
+                        wrap_width,
                         mask_atlas,
                         vector_raster_state,
                     );
@@ -1983,10 +1989,11 @@ impl<Event> CompositeTreeRender<Event> {
         scale_factor: f32,
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
+        layout_max_width: f32,
         glyph_atlas: &mut MaskTextureAtlasManager,
         vector_raster_state: &mut VectorRasterizationState,
     ) {
-        tracing::trace!("relayout text");
+        tracing::trace!(layout_max_width, "relayout text");
 
         let text_layout = TextLayout::new(
             text_layout.runs.iter().map(|r| TextRun {
@@ -1996,6 +2003,7 @@ impl<Event> CompositeTreeRender<Event> {
             }),
             font_set,
             alignment,
+            layout_max_width / scale_factor,
         );
         cache.text_rects.clear();
         cache
@@ -2008,6 +2016,7 @@ impl<Event> CompositeTreeRender<Event> {
             ));
         cache.text_width = text_layout.visual_width() * scale_factor;
         cache.text_height = text_layout.height() * scale_factor;
+        cache.text_max_width = layout_max_width;
     }
 }
 

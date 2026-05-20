@@ -1018,19 +1018,29 @@ impl AlertDialogPresenter {
     const AROUND_PADDING: f32 = 16.0;
     const MESSAGE_BUTTON_SPACING: f32 = 12.0;
 
-    pub fn new(ctx: &mut ViewInitContext, popup_id: PopupID, message: String) -> Self {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        popup_id: PopupID,
+        message: String,
+        owner_window: WindowHandle,
+    ) -> Self {
         let tl = TextLayout::new_single(
             &message,
             FontID::UIDefault,
             ctx.system_link.font_set(),
             CompositeRectTextHorizontalAlignment::Middle,
+            owner_window.client_size().width * 0.8,
         );
-        let box_width = tl.visual_width().max(64.0) + Self::AROUND_PADDING * 2.0;
-        let box_height =
-            tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0;
+        let text_width = tl.visual_width().max(64.0);
 
         let mask = OverlayPopupBasicMaskView::new(ctx);
-        let frame = OverlayPopupBasicFrameView::new(ctx, Size::new_logical(box_width, box_height));
+        let frame = OverlayPopupBasicFrameView::new(
+            ctx,
+            Size::new_logical(
+                text_width + Self::AROUND_PADDING * 2.0,
+                tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
+            ),
+        );
         let confirm_button = SimpleButtonView::new(
             ctx,
             "OK".into(),
@@ -1040,12 +1050,12 @@ impl AlertDialogPresenter {
         let ct_message = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             size: [
-                AnimatableFloat::Value(box_width),
+                AnimatableFloat::Value(text_width),
                 AnimatableFloat::Value(16.0),
             ],
             relative_offset_adjustment: [0.5, 0.0],
             offset: [
-                AnimatableFloat::Value(-box_width * 0.5),
+                AnimatableFloat::Value(-text_width * 0.5),
                 AnimatableFloat::Value(Self::AROUND_PADDING),
             ],
             text: Some(CompositeRectText {
@@ -1057,6 +1067,7 @@ impl AlertDialogPresenter {
                 }],
                 horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
                 vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+                allow_wrapping: true,
                 ..Default::default()
             }),
             ..Default::default()
@@ -2430,7 +2441,7 @@ async fn run<'sys>(
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
                     target_window,
-                    |id, ctx| AlertDialogPresenter::new(ctx, id, message),
+                    |id, ctx| AlertDialogPresenter::new(ctx, id, message, target_window),
                 );
                 popup_manager.post_open_action(
                     opened_id,

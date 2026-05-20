@@ -434,6 +434,7 @@ impl TextLayout {
         font: FontID,
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
+        max_width: f32,
     ) -> Self {
         Self::new(
             core::iter::once(TextRun {
@@ -443,6 +444,7 @@ impl TextLayout {
             }),
             font_set,
             alignment,
+            max_width,
         )
     }
 
@@ -450,6 +452,7 @@ impl TextLayout {
         text_runs: impl Iterator<Item = TextRun<'s>>,
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
+        max_width: f32,
     ) -> Self {
         let (lb, ub) = text_runs.size_hint();
         #[cfg(feature = "harfbuzz")]
@@ -654,7 +657,7 @@ impl TextLayout {
                 .CreateTextLayout(
                     &run_str_utf16s,
                     font_set.select(FontID::UIDefault),
-                    f32::MAX,
+                    max_width,
                     f32::MAX,
                 )
                 .expect("dwrite.layout.create")
@@ -701,6 +704,14 @@ impl TextLayout {
                     )
                     .expect("dwrite.layout.set_drawing_effect");
             }
+        }
+        #[cfg(windows)]
+        unsafe {
+            layout
+                .SetWordWrapping(
+                    windows::Win32::Graphics::DirectWrite::DWRITE_WORD_WRAPPING_EMERGENCY_BREAK,
+                )
+                .expect("dwrite.layout.set_word_wrapping");
         }
         #[cfg(windows)]
         if alignment != CompositeRectTextHorizontalAlignment::Start {
@@ -1456,6 +1467,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
+            f32::MAX,
         );
         layout.height()
     }
@@ -1470,6 +1482,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
+            f32::MAX,
         );
 
         #[cfg(feature = "harfbuzz")]
@@ -1590,6 +1603,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
+            f32::MAX,
         );
 
         #[cfg(feature = "harfbuzz")]
@@ -1688,6 +1702,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
+            f32::MAX,
         );
 
         // TODO: LTR前提
