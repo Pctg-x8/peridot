@@ -1125,13 +1125,14 @@ pub struct AppMenuItemView {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     width: f32,
+    items: Vec<MenuItem>,
     lit: core::cell::Cell<bool>,
 }
 impl AppMenuItemView {
     const ITEM_HEIGHT: f32 = 20.0;
     const PADDING_INLINE: f32 = 8.0;
 
-    pub fn new(ctx: &mut ViewInitContext, label: String, left: f32) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, label: String, left: f32, items: Vec<MenuItem>) -> Self {
         let text_width =
             TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
 
@@ -1167,6 +1168,7 @@ impl AppMenuItemView {
             ct_root,
             ht_root,
             width: text_width,
+            items,
             lit: core::cell::Cell::new(false),
         }
     }
@@ -1233,7 +1235,7 @@ pub struct AppMenuView {
     ht_root: HitTestTreeRef,
 }
 impl AppMenuView {
-    pub fn new(ctx: &mut ViewInitContext, top: f32, labels: Vec<String>) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, top: f32, labels: Vec<(String, Vec<MenuItem>)>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(top)],
@@ -1251,17 +1253,17 @@ impl AppMenuView {
             ..Default::default()
         });
 
-        let mut items = Vec::with_capacity(labels.len());
+        let mut item_views = Vec::with_capacity(labels.len());
         let mut item_left = 0.0;
-        for label in labels {
-            let v = AppMenuItemView::new(ctx, label, item_left);
+        for (label, items) in labels {
+            let v = AppMenuItemView::new(ctx, label, item_left, items);
             v.mount(ctx, &RawMountTarget { ct_root, ht_root });
             item_left += v.width + AppMenuItemView::PADDING_INLINE * 2.0;
-            items.push(v);
+            item_views.push(v);
         }
 
         let eh = Rc::new(AppMenuViewEventHandler {
-            items,
+            items: item_views,
             opening: core::cell::Cell::new(false),
             last_lit_index: core::cell::Cell::new(None),
             ignore_next_pointer_down_event: core::cell::Cell::new(false),
@@ -1329,6 +1331,7 @@ impl HitTestTreeActionHandler for AppMenuViewEventHandler {
                         }
                     }
 
+                    let items = self.items[x].items.clone();
                     let parent = context
                         .ht_manager
                         .query_root_window(self.items[x].ht_root)
@@ -1338,10 +1341,7 @@ impl HitTestTreeActionHandler for AppMenuViewEventHandler {
                         .compute_global_rect_autoroot(self.items[x].ht_root);
                     context.system_link.dispatch_event(Event::MenuReopen {
                         parent,
-                        items: vec![uikit::MenuItem::Command {
-                            command_id: 0,
-                            label: "項目1".into(),
-                        }],
+                        items,
                         surface_pos: Point::new_logical(x, y + h),
                     });
                 }
@@ -1391,10 +1391,13 @@ impl HitTestTreeActionHandler for AppMenuViewEventHandler {
                 .ht_manager
                 .query_root_window(sender)
                 .expect("not mounted?"),
-            items: vec![uikit::MenuItem::Command {
-                command_id: 0,
-                label: "項目1".into(),
-            }],
+            items: self
+                .items
+                .iter()
+                .find(|x| x.ht_root == sender)
+                .expect("invalid sender")
+                .items
+                .clone(),
             surface_pos: Point::new_logical(x, y + h),
         });
 
@@ -1518,10 +1521,79 @@ async fn run<'sys>(
         &mut view_init_ctx,
         ui::window_header::View::THICKNESS,
         vec![
-            "ファイル(F)".into(),
-            "編集(E)".into(),
-            "ウィンドウ(W)".into(),
-            "ヘルプ(H)".into(),
+            (
+                "ファイル(F)".into(),
+                vec![
+                    MenuItem::Command {
+                        label: "新規プロジェクト...".into(),
+                        command_id: 0,
+                    },
+                    MenuItem::Command {
+                        label: "新規ファイル...".into(),
+                        command_id: 0,
+                    },
+                    MenuItem::Separator,
+                    MenuItem::Command {
+                        label: "プロジェクトを開く...".into(),
+                        command_id: 0,
+                    },
+                    MenuItem::Command {
+                        label: "保存".into(),
+                        command_id: 0,
+                    },
+                    MenuItem::Command {
+                        label: "名前をつけて保存...".into(),
+                        command_id: 0,
+                    },
+                    MenuItem::Separator,
+                    MenuItem::Command {
+                        label: "Peridot Marble Editor を終了".into(),
+                        command_id: 1000,
+                    },
+                ],
+            ),
+            (
+                "編集(E)".into(),
+                vec![MenuItem::Command {
+                    label: "項目2".into(),
+                    command_id: 1,
+                }],
+            ),
+            (
+                "ウィンドウ(W)".into(),
+                vec![
+                    MenuItem::Command {
+                        label: "項目3".into(),
+                        command_id: 2,
+                    },
+                    MenuItem::SubMenu {
+                        label: "その他".into(),
+                        items: vec![
+                            MenuItem::Command {
+                                label: "ウィンドウ1".into(),
+                                command_id: 201,
+                            },
+                            MenuItem::Command {
+                                label: "ウィンドウ2".into(),
+                                command_id: 202,
+                            },
+                        ],
+                    },
+                ],
+            ),
+            (
+                "ヘルプ(H)".into(),
+                vec![
+                    MenuItem::Command {
+                        label: "項目4".into(),
+                        command_id: 3,
+                    },
+                    MenuItem::Command {
+                        label: "バージョン情報".into(),
+                        command_id: 100,
+                    },
+                ],
+            ),
         ],
     );
     app_menu_view.mount(&mut view_init_ctx, &main_window);
