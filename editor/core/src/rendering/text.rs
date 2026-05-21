@@ -405,27 +405,81 @@ thread_local! {
     static FONT_UNIQUIFY_STORAGE: FontUniquifyStorage = FontUniquifyStorage::new();
 }
 
+#[cfg(feature = "harfbuzz")]
+pub struct HarfbuzzLineLayout {
+    buffers: Vec<(*mut hb::ffi::hb_buffer_t, f32, FontID, usize)>,
+    width_with_trailing_whitespace: f32,
+    baseline_y_offset: f32,
+}
+#[cfg(feature = "harfbuzz")]
+impl Drop for HarfbuzzLineLayout {
+    fn drop(&mut self) {
+        for x in self.buffers.drain(..) {
+            unsafe {
+                hb::ffi::hb_buffer_destroy(x.0);
+            }
+        }
+    }
+}
+#[cfg(feature = "harfbuzz")]
+impl HarfbuzzLineLayout {
+    pub fn visual_width(&self, font_set: &FontSet) -> f32 {
+        self.buffers
+            .iter()
+            .map(|&(buf, left_base, font, fallback_index)| {
+                let face = font_set.select(font).faces[fallback_index];
+
+                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+                let glyph_infos = unsafe {
+                    hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
+                };
+                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                let glyph_positions = unsafe {
+                    hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
+                };
+                let glyph_infos = unsafe {
+                    core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
+                };
+                let glyph_positions = unsafe {
+                    core::slice::from_raw_parts(
+                        glyph_positions,
+                        glyph_positions_len.assume_init() as _,
+                    )
+                };
+                assert_eq!(glyph_infos.len(), glyph_positions.len());
+
+                // compute visual right of this buffer
+                left_base
+                    + match (glyph_positions, glyph_infos) {
+                        (&[ref advances @ .., _], &[.., ref last_glyph]) => {
+                            unsafe {
+                                ft::load_glyph(face, last_glyph.codepoint, ft::LoadFlags::DEFAULT)
+                                    .expect("face.load_glyph");
+                            }
+
+                            advances
+                                .iter()
+                                .map(|p| p.x_advance as f32 / 64.0)
+                                .sum::<f32>()
+                                + unsafe { &(*(*face).glyph).metrics }.width as f32 / 64.0
+                        }
+                        (&[], &[]) => 0.0,
+                        _ => unreachable!(),
+                    }
+            })
+            .fold(0.0, f32::max)
+    }
+}
+
 pub struct TextLayout {
     #[cfg(feature = "harfbuzz")]
-    buffers: Vec<(*mut hb::ffi::hb_buffer_t, f32, FontID, usize)>,
+    lines: Vec<HarfbuzzLineLayout>,
     #[cfg(feature = "harfbuzz")]
     height: f32,
-    #[cfg(feature = "harfbuzz")]
-    baseline_y_offset: f32,
     #[cfg(target_os = "macos")]
     frame: apple_sdk_port::Owned<apple_sdk_port::text::Frame>,
     #[cfg(windows)]
     layout: windows::Win32::Graphics::DirectWrite::IDWriteTextLayout,
-}
-impl Drop for TextLayout {
-    fn drop(&mut self) {
-        #[cfg(feature = "harfbuzz")]
-        for (buf, _, _, _) in self.buffers.drain(..) {
-            unsafe {
-                hb::ffi::hb_buffer_destroy(buf);
-            }
-        }
-    }
 }
 impl TextLayout {
     #[inline(always)]
@@ -456,13 +510,23 @@ impl TextLayout {
     ) -> Self {
         let (lb, ub) = text_runs.size_hint();
         #[cfg(feature = "harfbuzz")]
-        let mut buffers = Vec::with_capacity(ub.unwrap_or(lb));
-        #[cfg(feature = "freetype")]
-        let mut baseline_y_offset = 0.0f32;
+        let mut lines = Vec::new();
+        #[cfg(feature = "harfbuzz")]
+        {
+            lines.push(HarfbuzzLineLayout {
+                buffers: Vec::new(),
+                width_with_trailing_whitespace: 0.0,
+                baseline_y_offset: 0.0,
+            });
+        }
+        #[cfg(feature = "harfbuzz")]
+        let mut line_y_offset = 0.0f32;
+        #[cfg(feature = "harfbuzz")]
+        let mut line_height = 0.0f32;
         #[cfg(feature = "freetype")]
         let mut left_offset = 0.0f32;
         #[cfg(feature = "freetype")]
-        let mut height = 0.0f32;
+        let mut final_line_height = 0.0f32;
         #[cfg(feature = "freetype")]
         for x in text_runs {
             left_offset += x.spacing_inline_start;
@@ -476,7 +540,14 @@ impl TextLayout {
             let mut shaped_bytes = 0usize;
             while shaped_bytes < x.content.len() {
                 let starting_bytes = shaped_bytes;
+                let mut newline_break = false;
                 for c in x.content[starting_bytes..].chars() {
+                    if c == '\n' {
+                        // line break
+                        newline_break = true;
+                        break;
+                    }
+
                     if unsafe { ft::get_char_index(font.faces[font_index], c as _) } == 0 {
                         // no char in font, needs fallback
                         break;
@@ -485,74 +556,147 @@ impl TextLayout {
                     shaped_bytes += c.len_utf8();
                 }
 
-                if starting_bytes == shaped_bytes {
-                    // no chars available for this font, fallback
-                    font_index += 1;
-                    continue;
+                if starting_bytes != shaped_bytes {
+                    // needs shaping
+                    #[cfg(feature = "harfbuzz")]
+                    let buf = unsafe { hb::ffi::hb_buffer_create() };
+                    #[cfg(feature = "harfbuzz")]
+                    unsafe {
+                        hb::ffi::hb_buffer_add_utf8(
+                            buf,
+                            x.content.as_ptr().add(starting_bytes).cast(),
+                            (shaped_bytes - starting_bytes) as _,
+                            0,
+                            -1,
+                        );
+                        hb::ffi::hb_buffer_guess_segment_properties(buf);
+                        hb::ffi::hb_shape(
+                            shaping_set.faces[font_index].as_ptr(),
+                            buf,
+                            core::ptr::null(),
+                            0,
+                        );
+                    }
+
+                    let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+                    let _glyph_infos = unsafe {
+                        hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
+                    };
+                    let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                    let glyph_positions = unsafe {
+                        hb::ffi::hb_buffer_get_glyph_positions(
+                            buf,
+                            glyph_positions_len.as_mut_ptr(),
+                        )
+                    };
+                    assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
+                        glyph_positions_len.assume_init()
+                    });
+                    let glyph_count = unsafe { glyph_infos_len.assume_init() };
+                    let buf_total_advances =
+                        unsafe { core::slice::from_raw_parts(glyph_positions, glyph_count as _) }
+                            .iter()
+                            .map(|p| p.x_advance as f32 / 64.0)
+                            .sum::<f32>();
+
+                    #[cfg(feature = "harfbuzz")]
+                    let last_line = lines.last_mut().expect("empty lines");
+
+                    #[cfg(feature = "harfbuzz")]
+                    last_line
+                        .buffers
+                        .push((buf, left_offset, x.font, font_index));
+                    #[cfg(feature = "freetype")]
+                    {
+                        // update metrics
+
+                        last_line.baseline_y_offset = last_line.baseline_y_offset.max(unsafe {
+                            (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
+                        });
+                        line_height = line_height.max(unsafe {
+                            (*(*font.faces[font_index]).size).metrics.height as f32 / 64.0
+                        });
+
+                        // freetype2のdescenderは符号が逆になってるのでこれで正解
+                        // TODO: 複数行になる場合はleadingを行間に足す
+                        final_line_height = final_line_height.max(unsafe {
+                            ((*(*font.faces[font_index]).size).metrics.ascender
+                                - (*(*font.faces[font_index]).size).metrics.descender)
+                                as f32
+                                / 64.0
+                        });
+
+                        left_offset += buf_total_advances;
+                    }
+
+                    // reset for next chunk
+                    font_index = 0;
+                } else {
+                    if !newline_break {
+                        // no chars available for this font, fallback
+                        font_index += 1;
+                    }
                 }
 
-                #[cfg(feature = "harfbuzz")]
-                let buf = unsafe { hb::ffi::hb_buffer_create() };
-                #[cfg(feature = "harfbuzz")]
-                unsafe {
-                    hb::ffi::hb_buffer_add_utf8(
-                        buf,
-                        x.content.as_ptr().add(starting_bytes).cast(),
-                        (shaped_bytes - starting_bytes) as _,
-                        0,
-                        -1,
-                    );
-                    hb::ffi::hb_buffer_guess_segment_properties(buf);
-                    hb::ffi::hb_shape(
-                        shaping_set.faces[font_index].as_ptr(),
-                        buf,
-                        core::ptr::null(),
-                        0,
-                    );
-                }
-
-                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-                let _glyph_infos = unsafe {
-                    hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
-                };
-                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                let glyph_positions = unsafe {
-                    hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
-                };
-                assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-                    glyph_positions_len.assume_init()
-                });
-                let glyph_count = unsafe { glyph_infos_len.assume_init() };
-                let buf_width =
-                    unsafe { core::slice::from_raw_parts(glyph_positions, glyph_count as _) }
-                        .iter()
-                        .map(|p| p.x_advance as f32 / 64.0)
-                        .sum::<f32>();
-
-                #[cfg(feature = "harfbuzz")]
-                buffers.push((buf, left_offset, x.font, font_index));
-                #[cfg(feature = "freetype")]
-                {
-                    // update metrics
-
-                    baseline_y_offset = baseline_y_offset.max(unsafe {
-                        (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
+                if newline_break {
+                    // broke actual run by newline
+                    lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
+                    lines
+                        .last_mut()
+                        .expect("empty lines")
+                        .width_with_trailing_whitespace = left_offset;
+                    line_y_offset += line_height;
+                    final_line_height = 0.0;
+                    left_offset = 0.0;
+                    lines.push(HarfbuzzLineLayout {
+                        buffers: Vec::new(),
+                        width_with_trailing_whitespace: 0.0,
+                        baseline_y_offset: 0.0,
                     });
 
-                    // freetype2のdescenderは符号が逆になってるのでこれで正解
-                    // TODO: 複数行になる場合はleadingを行間に足す
-                    height = height.max(unsafe {
-                        ((*(*font.faces[font_index]).size).metrics.ascender
-                            - (*(*font.faces[font_index]).size).metrics.descender)
-                            as f32
-                            / 64.0
-                    });
-
-                    left_offset += buf_width;
+                    shaped_bytes += 1;
                 }
+            }
+        }
 
-                // reset for next chunk
-                font_index = 0;
+        #[cfg(feature = "harfbuzz")]
+        {
+            lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
+            lines
+                .last_mut()
+                .expect("empty lines")
+                .width_with_trailing_whitespace = left_offset;
+        }
+
+        // apply per-line alignment
+        #[cfg(feature = "harfbuzz")]
+        match alignment {
+            CompositeRectTextHorizontalAlignment::Start => (),
+            CompositeRectTextHorizontalAlignment::Middle => {
+                let line_widths = lines
+                    .iter()
+                    .map(|x| x.visual_width(font_set))
+                    .collect::<Vec<_>>();
+                let max_width = line_widths.iter().copied().fold(0.0, f32::max);
+                for (x, w) in lines.iter_mut().zip(line_widths.iter()) {
+                    let offset = (max_width - w) * 0.5;
+                    for (_, lo, _, _) in x.buffers.iter_mut() {
+                        *lo += offset;
+                    }
+                }
+            }
+            CompositeRectTextHorizontalAlignment::End => {
+                let line_widths = lines
+                    .iter()
+                    .map(|x| x.visual_width(font_set))
+                    .collect::<Vec<_>>();
+                let max_width = line_widths.iter().copied().fold(0.0, f32::max);
+                for (x, w) in lines.iter_mut().zip(line_widths.iter()) {
+                    let offset = max_width - w;
+                    for (_, lo, _, _) in x.buffers.iter_mut() {
+                        *lo += offset;
+                    }
+                }
             }
         }
 
@@ -751,11 +895,9 @@ impl TextLayout {
 
         Self {
             #[cfg(feature = "harfbuzz")]
-            buffers,
+            lines,
             #[cfg(feature = "harfbuzz")]
-            height,
-            #[cfg(feature = "harfbuzz")]
-            baseline_y_offset,
+            height: line_y_offset + final_line_height,
             #[cfg(target_os = "macos")]
             frame,
             #[cfg(windows)]
@@ -773,122 +915,129 @@ impl TextLayout {
         let mut boxes = Vec::new();
 
         #[cfg(feature = "harfbuzz")]
-        for &(buf, left_base, font, fallback_index) in self.buffers.iter() {
-            let font = font_set.select(font).faces[fallback_index];
+        for l in self.lines.iter() {
+            for &(buf, left_base, font, fallback_index) in l.buffers.iter() {
+                let font = font_set.select(font).faces[fallback_index];
 
-            let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-            let glyph_infos =
-                unsafe { hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr()) };
-            let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-            let glyph_positions = unsafe {
-                hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
-            };
-            let glyph_infos = unsafe {
-                core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
-            };
-            let glyph_positions = unsafe {
-                core::slice::from_raw_parts(glyph_positions, glyph_positions_len.assume_init() as _)
-            };
-            assert_eq!(glyph_infos.len(), glyph_positions.len());
-
-            let baseline_y = self.baseline_y_offset;
-            let mut left_cursor = left_base;
-            for (glyph_info, glyph_position) in
-                glyph_infos.into_iter().zip(glyph_positions.into_iter())
-            {
-                unsafe {
-                    ft::load_glyph(font, glyph_info.codepoint, ft::LoadFlags::DEFAULT)
-                        .expect("face.load_glyph")
+                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+                let glyph_infos = unsafe {
+                    hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
                 };
-                let metrics = unsafe { &(*(*font).glyph).metrics };
-                let glyph_width = metrics.width as f32 / 64.0 * render_scale;
-                let glyph_height = metrics.height as f32 / 64.0 * render_scale;
+                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                let glyph_positions = unsafe {
+                    hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
+                };
+                let glyph_infos = unsafe {
+                    core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
+                };
+                let glyph_positions = unsafe {
+                    core::slice::from_raw_parts(
+                        glyph_positions,
+                        glyph_positions_len.assume_init() as _,
+                    )
+                };
+                assert_eq!(glyph_infos.len(), glyph_positions.len());
 
-                let (r, is_new) = atlas.acquire_for_glyph(
-                    (font as _, glyph_info.codepoint as _),
-                    glyph_width.ceil() as _,
-                    glyph_height.ceil() as _,
-                );
-                boxes.push(GlyphPlacementBox {
-                    left: (left_cursor
-                        + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32) / 64.0)
-                        * render_scale,
-                    top: (baseline_y - metrics.horiBearingY as f32 / 64.0) * render_scale,
-                    tex_left: r.left,
-                    tex_top: r.top,
-                    width: r.width(),
-                    height: r.height(),
-                });
-
-                if is_new {
-                    vector_rasterization_state.updated_rects.push(r.vk_rect());
-
-                    struct OutlineReceiver<'r> {
-                        vrender: VectorVertexRenderer<'r>,
-                        render_scale: f32,
-                        offset_x: f32,
-                        offset_y: f32,
-                    }
-                    impl OutlineReceiver<'_> {
-                        #[inline(always)]
-                        const fn make_point(&self, v: &ft::Vector) -> Point<VectorTextureUnit> {
-                            Point::new_vector_texture(
-                                v.x as f32 / 64.0 * self.render_scale + self.offset_x,
-                                v.y as f32 / 64.0 * self.render_scale + self.offset_y,
-                            )
-                        }
-                    }
-                    impl ft::OutlineFuncs for OutlineReceiver<'_> {
-                        #[inline(always)]
-                        fn move_to(&mut self, to: &ft::Vector) {
-                            self.vrender.move_to(self.make_point(to));
-                        }
-
-                        #[inline(always)]
-                        fn line_to(&mut self, to: &ft::Vector) {
-                            self.vrender.line_to(self.make_point(to));
-                        }
-
-                        #[inline(always)]
-                        fn conic_to(&mut self, control: &ft::Vector, to: &ft::Vector) {
-                            self.vrender
-                                .quadratic_to(self.make_point(control), self.make_point(to));
-                        }
-
-                        #[inline(always)]
-                        fn cubic_to(
-                            &mut self,
-                            control1: &ft::Vector,
-                            control2: &ft::Vector,
-                            to: &ft::Vector,
-                        ) {
-                            self.vrender.cubic_to(
-                                self.make_point(control1),
-                                self.make_point(control2),
-                                self.make_point(to),
-                            );
-                        }
-                    }
-
+                let baseline_y = l.baseline_y_offset;
+                let mut left_cursor = left_base;
+                for (glyph_info, glyph_position) in
+                    glyph_infos.into_iter().zip(glyph_positions.into_iter())
+                {
                     unsafe {
-                        ft::outline_decompose(
-                            &mut (*(*font).glyph).outline,
-                            &mut OutlineReceiver {
-                                vrender: VectorVertexRenderer::new(vector_rasterization_state),
-                                render_scale,
-                                offset_x: r.left as f32
-                                    - metrics.horiBearingX as f32 / 64.0 * render_scale,
-                                offset_y: -(r.top as f32)
-                                    - metrics.horiBearingY as f32 / 64.0 * render_scale,
-                            },
-                            0,
-                            0,
-                        )
-                        .expect("glyph.outline.decompose");
-                    }
-                }
+                        ft::load_glyph(font, glyph_info.codepoint, ft::LoadFlags::DEFAULT)
+                            .expect("face.load_glyph")
+                    };
+                    let metrics = unsafe { &(*(*font).glyph).metrics };
+                    let glyph_width = metrics.width as f32 / 64.0 * render_scale;
+                    let glyph_height = metrics.height as f32 / 64.0 * render_scale;
 
-                left_cursor += glyph_position.x_advance as f32 / 64.0;
+                    let (r, is_new) = atlas.acquire_for_glyph(
+                        (font as _, glyph_info.codepoint as _),
+                        glyph_width.ceil() as _,
+                        glyph_height.ceil() as _,
+                    );
+                    boxes.push(GlyphPlacementBox {
+                        left: (left_cursor
+                            + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32)
+                                / 64.0)
+                            * render_scale,
+                        top: (baseline_y - metrics.horiBearingY as f32 / 64.0) * render_scale,
+                        tex_left: r.left,
+                        tex_top: r.top,
+                        width: r.width(),
+                        height: r.height(),
+                    });
+
+                    if is_new {
+                        vector_rasterization_state.updated_rects.push(r.vk_rect());
+
+                        struct OutlineReceiver<'r> {
+                            vrender: VectorVertexRenderer<'r>,
+                            render_scale: f32,
+                            offset_x: f32,
+                            offset_y: f32,
+                        }
+                        impl OutlineReceiver<'_> {
+                            #[inline(always)]
+                            const fn make_point(&self, v: &ft::Vector) -> Point<VectorTextureUnit> {
+                                Point::new_vector_texture(
+                                    v.x as f32 / 64.0 * self.render_scale + self.offset_x,
+                                    v.y as f32 / 64.0 * self.render_scale + self.offset_y,
+                                )
+                            }
+                        }
+                        impl ft::OutlineFuncs for OutlineReceiver<'_> {
+                            #[inline(always)]
+                            fn move_to(&mut self, to: &ft::Vector) {
+                                self.vrender.move_to(self.make_point(to));
+                            }
+
+                            #[inline(always)]
+                            fn line_to(&mut self, to: &ft::Vector) {
+                                self.vrender.line_to(self.make_point(to));
+                            }
+
+                            #[inline(always)]
+                            fn conic_to(&mut self, control: &ft::Vector, to: &ft::Vector) {
+                                self.vrender
+                                    .quadratic_to(self.make_point(control), self.make_point(to));
+                            }
+
+                            #[inline(always)]
+                            fn cubic_to(
+                                &mut self,
+                                control1: &ft::Vector,
+                                control2: &ft::Vector,
+                                to: &ft::Vector,
+                            ) {
+                                self.vrender.cubic_to(
+                                    self.make_point(control1),
+                                    self.make_point(control2),
+                                    self.make_point(to),
+                                );
+                            }
+                        }
+
+                        unsafe {
+                            ft::outline_decompose(
+                                &mut (*(*font).glyph).outline,
+                                &mut OutlineReceiver {
+                                    vrender: VectorVertexRenderer::new(vector_rasterization_state),
+                                    render_scale,
+                                    offset_x: r.left as f32
+                                        - metrics.horiBearingX as f32 / 64.0 * render_scale,
+                                    offset_y: -(r.top as f32)
+                                        - metrics.horiBearingY as f32 / 64.0 * render_scale,
+                                },
+                                0,
+                                0,
+                            )
+                            .expect("glyph.outline.decompose");
+                        }
+                    }
+
+                    left_cursor += glyph_position.x_advance as f32 / 64.0;
+                }
             }
         }
 
@@ -1424,54 +1573,11 @@ impl TextLayout {
         return unsafe { metrics.assume_init_ref() }.width;
 
         #[cfg(feature = "harfbuzz")]
-        let Some(&(last_buf, left_base, font, fallback_index)) = self.buffers.last() else {
-            return 0.0;
-        };
-
-        #[cfg(feature = "harfbuzz")]
-        let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-        #[cfg(feature = "harfbuzz")]
-        let glyph_infos =
-            unsafe { hb::ffi::hb_buffer_get_glyph_infos(last_buf, glyph_infos_len.as_mut_ptr()) };
-        #[cfg(feature = "harfbuzz")]
-        let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-        #[cfg(feature = "harfbuzz")]
-        let glyph_positions = unsafe {
-            hb::ffi::hb_buffer_get_glyph_positions(last_buf, glyph_positions_len.as_mut_ptr())
-        };
-        #[cfg(feature = "harfbuzz")]
-        assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-            glyph_positions_len.assume_init()
-        });
-
-        #[cfg(feature = "harfbuzz")]
-        let font = font_set.select(font).faces[fallback_index];
-        #[cfg(feature = "harfbuzz")]
-        let mut left_cursor = left_base;
-        #[cfg(feature = "harfbuzz")]
-        let mut width = 0.0f32;
-        #[cfg(feature = "harfbuzz")]
-        for n in 0..unsafe { glyph_positions_len.assume_init() } {
-            let glyph_info = unsafe { &*glyph_infos.add(n as usize) };
-            let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
-
-            unsafe {
-                ft::load_glyph(font, glyph_info.codepoint, ft::LoadFlags::DEFAULT)
-                    .expect("face.load_glyph")
-            };
-            let metrics = unsafe { &(*(*font).glyph).metrics };
-            let glyph_width = metrics.width as f32 / 64.0;
-
-            width = width.max(
-                left_cursor
-                    + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32) / 64.0
-                    + glyph_width.ceil(),
-            );
-
-            left_cursor += glyph_position.x_advance as f32 / 64.0;
-        }
-        #[cfg(feature = "harfbuzz")]
-        return width;
+        return self
+            .lines
+            .iter()
+            .map(|l| l.visual_width(font_set))
+            .fold(0.0, f32::max);
     }
 
     #[cfg(target_os = "macos")]
@@ -1598,27 +1704,11 @@ impl TextLayout {
         );
 
         #[cfg(feature = "harfbuzz")]
-        let Some(&(last_buf, left_base, _, _)) = layout.buffers.last() else {
-            return 0.0;
-        };
-
-        #[cfg(feature = "harfbuzz")]
-        let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-        #[cfg(feature = "harfbuzz")]
-        let glyph_positions = unsafe {
-            hb::ffi::hb_buffer_get_glyph_positions(last_buf, glyph_positions_len.as_mut_ptr())
-        };
-        #[cfg(feature = "harfbuzz")]
-        let glyph_positions = unsafe {
-            core::slice::from_raw_parts(glyph_positions, glyph_positions_len.assume_init() as _)
-        };
-
-        #[cfg(feature = "harfbuzz")]
-        return left_base
-            + glyph_positions
-                .into_iter()
-                .map(|x| x.x_advance as f32 / 64.0)
-                .sum::<f32>();
+        return layout
+            .lines
+            .iter()
+            .map(|l| l.width_with_trailing_whitespace)
+            .fold(0.0, f32::max);
 
         #[cfg(target_os = "macos")]
         let mut left_cursor = 0.0 as f32;
@@ -1696,13 +1786,18 @@ impl TextLayout {
             f32::MAX,
         );
 
-        // TODO: LTR前提
+        // TODO: LTR前提+複数行対応
         #[cfg(feature = "harfbuzz")]
         let mut left_cursor;
         #[cfg(feature = "harfbuzz")]
         let mut bytes = 0;
         #[cfg(feature = "harfbuzz")]
-        for &(buf, left_base, _, _) in layout.buffers.iter() {
+        let Some(l) = layout.lines.first() else {
+            // no lines(empty?)
+            return 0;
+        };
+        #[cfg(feature = "harfbuzz")]
+        for &(buf, left_base, _, _) in l.buffers.iter() {
             let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
             let glyph_positions = unsafe {
                 hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())

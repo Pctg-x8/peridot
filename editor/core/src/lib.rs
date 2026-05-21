@@ -2105,6 +2105,7 @@ async fn run<'sys>(
                     composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
                     composite_tree.mark_dirty_all(tab_main);
                     test_alert_btn.rescale(new_scale, &mut composite_tree);
+                    test_alert_btn2.rescale(new_scale, &mut composite_tree);
                     text_input_view.rescale(
                         &mut composite_tree,
                         &system_link,
