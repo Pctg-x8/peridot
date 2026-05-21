@@ -93,6 +93,8 @@ features = [
   "cursor-shape-v1",
   "fractional-scale-v1",
   "alpha-modifier-v1",
+  "pointer-constraints-unstable-v1",
+  "relative-pointer-unstable-v1"
 ]
 
 [target.'cfg(unix)'.dependencies]

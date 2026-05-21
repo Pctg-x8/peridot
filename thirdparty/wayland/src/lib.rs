@@ -1651,6 +1651,8 @@ Ext!("alpha-modifier-v1", alpha_modifier);
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
 Ext!("xdg-foreign-unstable-v2", xdg_foreign);
 Ext!("text-input-unstable-v3", text_input);
+Ext!("pointer-constraints-unstable-v1", pointer_constraints);
+Ext!("relative-pointer-unstable-v1", relative_pointer);
 Ext!("wlr-layer-shell-unstable-v1", layer_shell);
 Ext!("kde-blur", kde_blur);
 Ext!("kde-appmenu", kde_appmenu);

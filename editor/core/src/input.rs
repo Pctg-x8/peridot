@@ -142,6 +142,7 @@ impl NativeDesktopSurface {
     }
 
     #[inline(always)]
+    #[cfg(windows)]
     pub fn client_pos_to_screen_pos(
         &self,
         client_pos: Point<PointerInputUnit>,
@@ -208,6 +209,7 @@ impl PointerInputManager {
 
     fn dispatch_pointer_down(
         surface: &mut NativeDesktopSurface,
+        pointer: PointerID,
         action_args: &PointerButtonActionArgs,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
@@ -250,6 +252,8 @@ impl PointerInputManager {
                         action_args.client_pos.y,
                     )),
                 ));
+                #[cfg(feature = "wayland")]
+                pointer.acquire_lock_on_surface();
             }
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
@@ -321,6 +325,7 @@ impl PointerInputManager {
         action_context: &mut InputEventContext,
         action_args: &PointerButtonActionArgs,
         shell: &(impl ShellPointerActions + ?Sized),
+        pointer: PointerID,
     ) {
         self.down_gesture = PointerDownGestureState::Drag;
 
@@ -351,6 +356,8 @@ impl PointerInputManager {
                             target: ht_ref,
                             pos: action_args.client_pos,
                         };
+                        #[cfg(feature = "wayland")]
+                        pointer.acquire_lock_on_surface();
                     }
                     if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                         break;
@@ -380,8 +387,24 @@ impl PointerInputManager {
             client_size: window_size,
         };
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref)
-            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
+            PointerFocusState::Grabbing { target: ht_ref, .. } => {
+                let flags = ht
+                    .get_data(ht_ref)
+                    .action_handler()
+                    .map_or(EventContinueControl::empty(), |h| {
+                        h.on_drag_end(ht_ref, action_context, &args)
+                    });
+
+                if flags.releasing_capture() {
+                    sh.release_pointer();
+                    #[cfg(feature = "wayland")]
+                    pointer_id.release_lock();
+
+                    self.pointer_focus = PointerFocusState::Entering(ht_ref);
+                }
+                needs_recompute_pointer_enter = flags.needs_recompute_pointer_enter();
+            }
+            PointerFocusState::Capturing(ht_ref) => {
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()
@@ -581,6 +604,7 @@ impl PointerInputManager {
                     client_size: ws,
                 },
                 &surface,
+                pointer_id,
             );
         }
 
@@ -613,9 +637,11 @@ impl PointerInputManager {
                     let _ = h.grab_delta_move(target, action_context, &args);
                 }
 
-                // grab中の場合はポインタ位置をとどまらせる
+                // grab中の場合はポインタ位置をとどまらせる(Windowsのみ 他はcompositorがやってくれる)
+                #[cfg(windows)]
                 self.last_client_pointer_pos
                     .insert(pointer_id, (surface, pos));
+                #[cfg(windows)]
                 pointer_id.set_position(surface.client_pos_to_screen_pos(pos));
 
                 return;
@@ -655,6 +681,31 @@ impl PointerInputManager {
             if needs_recompute_pointer_enter {
                 self.update_pointer_enter(&ws, pointer_id, client_pos, ht, action_context, ht_root);
             }
+        }
+    }
+
+    pub fn handle_mouse_move_relative<'env, 'sys, 'h>(
+        &mut self,
+        pointer_id: PointerID,
+        relative: Point<PointerInputUnit>,
+        ht: &HitTestTreeManager,
+        action_context: &mut InputEventContext<'env, 'sys, 'h>,
+    ) {
+        match self.pointer_focus {
+            PointerFocusState::Grabbing { target, .. } => {
+                // grab中のみくる
+                if let Some(h) = ht.get_data(target).action_handler() {
+                    let args = GrabDeltaMoveActionArgs {
+                        pointer_id,
+                        delta: relative,
+                    };
+
+                    h.grab_delta_move(target, action_context, &args);
+                }
+            }
+            PointerFocusState::Capturing(_)
+            | PointerFocusState::Entering(_)
+            | PointerFocusState::None => unreachable!("never happens"),
         }
     }
 
@@ -776,6 +827,7 @@ impl PointerInputManager {
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, new_captured) = Self::dispatch_pointer_down(
                     &mut entering_surface,
+                    pointer_id,
                     &args,
                     ht,
                     action_context,
@@ -844,8 +896,33 @@ impl PointerInputManager {
             client_size: ws,
         };
         match self.pointer_focus {
-            PointerFocusState::Capturing(ht_ref)
-            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
+            PointerFocusState::Grabbing { target: ht_ref, .. } => {
+                let flags = ht
+                    .get_data(ht_ref)
+                    .action_handler()
+                    .map_or(EventContinueControl::empty(), |h| {
+                        h.on_pointer_up(ht_ref, action_context, &args)
+                    });
+
+                if flags.releasing_capture() {
+                    entering_surface.release_pointer();
+                    #[cfg(feature = "wayland")]
+                    pointer_id.release_lock();
+
+                    self.pointer_focus = PointerFocusState::Entering(ht_ref);
+                }
+                if flags.needs_recompute_pointer_enter() {
+                    self.update_pointer_enter(
+                        &ws,
+                        pointer_id,
+                        client_pos,
+                        ht,
+                        action_context,
+                        ht_root,
+                    );
+                }
+            }
+            PointerFocusState::Capturing(ht_ref) => {
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()

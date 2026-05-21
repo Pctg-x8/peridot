@@ -662,6 +662,78 @@ impl DragPreviewPopoverBuffer {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerID(*mut wl::Pointer);
+impl PointerID {
+    pub fn acquire_lock_on_surface(&self) {
+        let global_msg = unsafe { &mut *(*self.0).user_data().cast::<GlobalMessaging>() };
+        let Some(rpm) = global_msg.relative_pointer_manager else {
+            // no locking supported by compositor
+            return;
+        };
+
+        let surface = unsafe {
+            global_msg
+                .pointer
+                .as_ref()
+                .expect("no pointer?")
+                .enter_state
+                .as_ref()
+                .expect("not entering surface")
+                .surface
+                .as_ref()
+        };
+
+        let mut relative_pointer_object = unsafe { rpm.as_ref() }
+            .get_relative_pointer(unsafe { &*self.0 })
+            .expect("relative_pointer_manager.get_relative_pointer");
+        let mut lock_constraint_object = if let Some(pc) = global_msg.pointer_constraints {
+            Some(
+                unsafe { pc.as_ref() }
+                    .lock_pointer(
+                        surface,
+                        unsafe { &*self.0 },
+                        None,
+                        wl::ZwpPointerConstraintsV1Lifetime::Oneshot,
+                    )
+                    .expect("pointer_constraints.lock_pointer"),
+            )
+        } else {
+            None
+        };
+
+        relative_pointer_object
+            .set_listener(global_msg)
+            .into_result()
+            .expect("relative_pointer_object.set_listener");
+        if let Some(ref mut o) = lock_constraint_object {
+            o.set_listener(global_msg)
+                .into_result()
+                .expect("lock_constraint_object.set_listener");
+        }
+
+        global_msg
+            .pointer
+            .as_mut()
+            .expect("no pointer?")
+            .enter_state
+            .as_mut()
+            .expect("not entering surface")
+            .lock_state = Some(PointerLockState {
+            _lock_constraint_object: lock_constraint_object,
+            _relative_pointer_object: relative_pointer_object,
+        });
+    }
+
+    pub fn release_lock(&self) {
+        unsafe { &mut *(*self.0).user_data().cast::<GlobalMessaging>() }
+            .pointer
+            .as_mut()
+            .expect("no pointer?")
+            .enter_state
+            .as_mut()
+            .expect("not entering surface")
+            .lock_state = None;
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PointerEventID {
@@ -674,6 +746,12 @@ unsafe impl Send for PointerEventID {}
 struct PointerEnterState {
     surface: NonNull<wl::Surface>,
     serial: u32,
+    lock_state: Option<PointerLockState>,
+}
+
+struct PointerLockState {
+    _lock_constraint_object: Option<wl::Owned<wl::ZwpLockedPointerV1>>,
+    _relative_pointer_object: wl::Owned<wl::ZwpRelativePointerV1>,
 }
 
 pub struct PointerState {
@@ -741,6 +819,8 @@ pub struct GlobalMessaging {
     keyboard: Option<KeyboardState>,
     pointer: Option<PointerState>,
     cursor_shape_manager: Option<NonNull<wl::WpCursorShapeManagerV1>>,
+    pointer_constraints: Option<NonNull<wl::ZwpPointerConstraintsV1>>,
+    relative_pointer_manager: Option<NonNull<wl::ZwpRelativePointerManagerV1>>,
     event_dispatcher: LogicFiberEventDispatcher,
     ime_pending_state: IMEPendingState,
     _pinned: core::marker::PhantomPinned,
@@ -756,6 +836,16 @@ impl GlobalMessaging {
             cursor_shape_manager: ctx
                 .global_interfaces
                 .cursor_shape_manager
+                .as_ref()
+                .map(|x| unsafe { x.copy_ptr() }),
+            pointer_constraints: ctx
+                .global_interfaces
+                .pointer_constraints
+                .as_ref()
+                .map(|x| unsafe { x.copy_ptr() }),
+            relative_pointer_manager: ctx
+                .global_interfaces
+                .relative_pointer_manager
                 .as_ref()
                 .map(|x| unsafe { x.copy_ptr() }),
             event_dispatcher,
@@ -850,7 +940,7 @@ impl wl::SeatEventListener for GlobalMessaging {
     }
 }
 impl wl::PointerEventListener for GlobalMessaging {
-    #[tracing::instrument(skip(self, pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
+    #[tracing::instrument(name = "pointer::enter", skip(self, pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn enter(
         &mut self,
         pointer: &mut wl::Pointer,
@@ -869,6 +959,7 @@ impl wl::PointerEventListener for GlobalMessaging {
         state.enter_state = Some(PointerEnterState {
             surface: NonNull::from_mut(surface),
             serial,
+            lock_state: None,
         });
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
 
@@ -893,17 +984,16 @@ impl wl::PointerEventListener for GlobalMessaging {
                 });
             }
             SurfaceStateTag::FlyoutSurface => {
-                self.event_dispatcher
-                    .dispatch(Event::MenuPointerMove {
-                        pointer_id: PointerID(pointer),
-                        target: flyout_surface::Handle(NonNull::from_mut(surface)),
-                        client_pos: state.pos,
-                    });
+                self.event_dispatcher.dispatch(Event::MenuPointerMove {
+                    pointer_id: PointerID(pointer),
+                    target: flyout_surface::Handle(NonNull::from_mut(surface)),
+                    client_pos: state.pos,
+                });
             }
         }
     }
 
-    #[tracing::instrument(skip(self, pointer, surface))]
+    #[tracing::instrument(name = "pointer::leave", skip(self, pointer, surface))]
     fn leave(&mut self, pointer: &mut wl::Pointer, serial: u32, surface: Option<&mut wl::Surface>) {
         event_trace!();
 
@@ -919,11 +1009,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                     });
                 }
                 SurfaceStateTag::FlyoutSurface => {
-                    self.event_dispatcher
-                        .dispatch(Event::MenuPointerLeave {
-                            pointer_id: PointerID(pointer),
-                            target: flyout_surface::Handle(NonNull::from_mut(surface)),
-                        });
+                    self.event_dispatcher.dispatch(Event::MenuPointerLeave {
+                        pointer_id: PointerID(pointer),
+                        target: flyout_surface::Handle(NonNull::from_mut(surface)),
+                    });
                 }
                 _ => (),
             }
@@ -932,7 +1021,7 @@ impl wl::PointerEventListener for GlobalMessaging {
         state.enter_state = None;
     }
 
-    #[tracing::instrument(skip(self, pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
+    #[tracing::instrument(name = "pointer::motion", skip(self, pointer), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn motion(
         &mut self,
         pointer: &mut wl::Pointer,
@@ -965,17 +1054,16 @@ impl wl::PointerEventListener for GlobalMessaging {
                 });
             }
             SurfaceStateTag::FlyoutSurface => {
-                self.event_dispatcher
-                    .dispatch(Event::MenuPointerMove {
-                        pointer_id: PointerID(pointer),
-                        target: flyout_surface::Handle(enter_state.surface),
-                        client_pos: state.pos,
-                    });
+                self.event_dispatcher.dispatch(Event::MenuPointerMove {
+                    pointer_id: PointerID(pointer),
+                    target: flyout_surface::Handle(enter_state.surface),
+                    client_pos: state.pos,
+                });
             }
         }
     }
 
-    #[tracing::instrument(skip(self, pointer), fields(state = state as u32))]
+    #[tracing::instrument(name = "pointer::button", skip(self, pointer), fields(state = state as u32))]
     fn button(
         &mut self,
         pointer: &mut wl::Pointer,
@@ -1026,20 +1114,19 @@ impl wl::PointerEventListener for GlobalMessaging {
                     });
                 }
                 SurfaceStateTag::FlyoutSurface => {
-                    self.event_dispatcher
-                        .dispatch(Event::MenuPointerDown {
-                            pointer_id: PointerID(pointer),
-                            target: flyout_surface::Handle(enter_state.surface),
-                            button: if button == linux_input::Key::MouseLeft as u32 {
-                                PointerButton::Primary
-                            } else {
-                                PointerButton::Secondary
-                            },
-                            event_id: PointerEventID {
-                                serial,
-                                seat_ptr: pointer_state.seat_ptr,
-                            },
-                        });
+                    self.event_dispatcher.dispatch(Event::MenuPointerDown {
+                        pointer_id: PointerID(pointer),
+                        target: flyout_surface::Handle(enter_state.surface),
+                        button: if button == linux_input::Key::MouseLeft as u32 {
+                            PointerButton::Primary
+                        } else {
+                            PointerButton::Secondary
+                        },
+                        event_id: PointerEventID {
+                            serial,
+                            seat_ptr: pointer_state.seat_ptr,
+                        },
+                    });
                 }
             }
         } else if state == wl::PointerButtonState::Released {
@@ -1078,32 +1165,32 @@ impl wl::PointerEventListener for GlobalMessaging {
         }
     }
 
-    #[tracing::instrument(skip(self, _pointer))]
+    #[tracing::instrument(name = "pointer::axis", skip(self, _pointer))]
     fn axis(&mut self, _pointer: &mut wl::Pointer, time: u32, axis: u32, value: wl::Fixed) {
         event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _pointer))]
+    #[tracing::instrument(name = "pointer::frame", skip(self, _pointer))]
     fn frame(&mut self, _pointer: &mut wl::Pointer) {
         event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _pointer))]
+    #[tracing::instrument(name = "pointer::axis_source", skip(self, _pointer))]
     fn axis_source(&mut self, _pointer: &mut wl::Pointer, axis_source: u32) {
         event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _pointer))]
+    #[tracing::instrument(name = "pointer::axis_stop", skip(self, _pointer))]
     fn axis_stop(&mut self, _pointer: &mut wl::Pointer, time: u32, axis: u32) {
         event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _pointer))]
+    #[tracing::instrument(name = "pointer::axis_discrete", skip(self, _pointer))]
     fn axis_discrete(&mut self, _pointer: &mut wl::Pointer, axis: u32, discrete: i32) {
         event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _pointer))]
+    #[tracing::instrument(name = "pointer::axis_value120", skip(self, _pointer))]
     fn axis_value120(&mut self, _pointer: &mut wl::Pointer, axis: u32, value120: i32) {
         event_trace!();
 
@@ -1118,9 +1205,46 @@ impl wl::PointerEventListener for GlobalMessaging {
         });
     }
 
-    #[tracing::instrument(skip(self, _pointer))]
+    #[tracing::instrument(name = "pointer::axis_relative_direction", skip(self, _pointer))]
     fn axis_relative_direction(&mut self, _pointer: &mut wl::Pointer, axis: u32, direction: u32) {
         event_trace!();
+    }
+}
+impl wl::ZwpLockedPointerV1EventListener for GlobalMessaging {
+    #[tracing::instrument(name = "locked_pointer::locked", skip(self, _sender))]
+    fn locked(&mut self, _sender: &mut wl::ZwpLockedPointerV1) {
+        event_trace!();
+    }
+
+    #[tracing::instrument(name = "locked_pointer::unlocked", skip(self, _sender))]
+    fn unlocked(&mut self, _sender: &mut wl::ZwpLockedPointerV1) {
+        event_trace!();
+    }
+}
+impl wl::ZwpRelativePointerV1EventListener for GlobalMessaging {
+    #[tracing::instrument(name = "pointer::relative_motion", skip(self, _sender))]
+    fn relative_motion(
+        &mut self,
+        _sender: &mut wl::ZwpRelativePointerV1,
+        utime_hi: u32,
+        utime_lo: u32,
+        dx: wl::Fixed,
+        dy: wl::Fixed,
+        dx_unaccel: wl::Fixed,
+        dy_unaccel: wl::Fixed,
+    ) {
+        event_trace!();
+
+        let state = self.pointer.as_mut().expect("no pointer state initialized");
+        let Some(ref enter_state) = state.enter_state else {
+            return;
+        };
+
+        self.event_dispatcher.dispatch(Event::PointerMoveRelative {
+            pointer_id: PointerID(state._wl_object.as_ptr()),
+            window: toplevel::Handle(enter_state.surface),
+            relative: Point::new_logical(dx.to_f32(), dy.to_f32()),
+        });
     }
 }
 impl wl::KeyboardEventListener for GlobalMessaging {
@@ -1430,6 +1554,8 @@ struct GlobalInterfaces {
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
     alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
+    pointer_constraints: Option<wl::Owned<wl::ZwpPointerConstraintsV1>>,
+    relative_pointer_manager: Option<wl::Owned<wl::ZwpRelativePointerManagerV1>>,
     // flags
     is_hyprland: bool,
 }
@@ -1460,6 +1586,8 @@ impl GlobalInterfaces {
             cursor_shape_manager: rl.cursor_shape_manager,
             fractional_scale_manager: rl.fractional_scale_manager,
             alpha_modifier: rl.alpha_modifier,
+            pointer_constraints: rl.pointer_constraints,
+            relative_pointer_manager: rl.relative_pointer_manager,
             is_hyprland: rl.is_hyprland,
         })
     }
@@ -1494,6 +1622,8 @@ struct RegistryListener {
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
     alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
+    pointer_constraints: Option<wl::Owned<wl::ZwpPointerConstraintsV1>>,
+    relative_pointer_manager: Option<wl::Owned<wl::ZwpRelativePointerManagerV1>>,
     is_hyprland: bool,
 }
 impl wl::RegistryListener for RegistryListener {
@@ -1604,6 +1734,22 @@ impl wl::RegistryListener for RegistryListener {
         }
         if interface == c"wp_alpha_modifier_v1" {
             self.alpha_modifier = Some(registry.bind(name, version).expect("bind alpha_modifier"));
+            return;
+        }
+        if interface == c"zwp_pointer_constraints_v1" {
+            self.pointer_constraints = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind pointer_constraints"),
+            );
+            return;
+        }
+        if interface == c"zwp_relative_pointer_manager_v1" {
+            self.relative_pointer_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind relative_pointer_manager"),
+            );
             return;
         }
     }

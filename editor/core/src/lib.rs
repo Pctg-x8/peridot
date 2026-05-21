@@ -749,6 +749,11 @@ pub enum Event {
         window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
     },
+    PointerMoveRelative {
+        pointer_id: PointerID,
+        window: WindowHandle,
+        relative: Point<PointerInputUnit>,
+    },
     PointerUp {
         window: WindowHandle,
         pointer_id: PointerID,
@@ -906,6 +911,7 @@ impl Event {
             Self::Quit => "Quit",
             Self::PointerDown { .. } => "PointerDown",
             Self::PointerMove { .. } => "PointerMove",
+            Self::PointerMoveRelative { .. } => "PointerMoveRelative",
             Self::PointerUp { .. } => "PointerUp",
             Self::PointerLeaveWindow { .. } => "PointerLeaveWindow",
             Self::PointerHover => "PointerHover",
@@ -2264,6 +2270,26 @@ async fn run<'sys>(
 
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
+            }
+            Event::PointerMoveRelative {
+                pointer_id,
+                window,
+                relative,
+            } => {
+                pointer_input_manager.handle_mouse_move_relative(
+                    pointer_id,
+                    relative,
+                    &ht_manager,
+                    &mut InputEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &mut system_link,
+                        drag_preview_popover: &drag_preview_popover,
+                        ht_manager: &ht_manager,
+                    },
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::PointerUp {
                 window,
