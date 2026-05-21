@@ -2014,7 +2014,7 @@ impl<Event> CompositeTreeRender<Event> {
                 glyph_atlas,
                 scale_factor,
             ));
-        cache.text_width = text_layout.visual_width() * scale_factor;
+        cache.text_width = text_layout.visual_width(font_set) * scale_factor;
         cache.text_height = text_layout.height() * scale_factor;
         cache.text_max_width = layout_max_width;
     }

@@ -1031,7 +1031,7 @@ impl AlertDialogPresenter {
             CompositeRectTextHorizontalAlignment::Middle,
             owner_window.client_size().width * 0.8,
         );
-        let text_width = tl.visual_width().max(64.0);
+        let text_width = tl.visual_width(ctx.system_link.font_set()).max(64.0);
 
         let mask = OverlayPopupBasicMaskView::new(ctx);
         let frame = OverlayPopupBasicFrameView::new(

@@ -894,7 +894,7 @@ impl wl::PointerEventListener for GlobalMessaging {
             }
             SurfaceStateTag::FlyoutSurface => {
                 self.event_dispatcher
-                    .dispatch(Event::ContextMenuPointerMove {
+                    .dispatch(Event::MenuPointerMove {
                         pointer_id: PointerID(pointer),
                         target: flyout_surface::Handle(NonNull::from_mut(surface)),
                         client_pos: state.pos,
@@ -920,7 +920,7 @@ impl wl::PointerEventListener for GlobalMessaging {
                 }
                 SurfaceStateTag::FlyoutSurface => {
                     self.event_dispatcher
-                        .dispatch(Event::ContextMenuPointerLeave {
+                        .dispatch(Event::MenuPointerLeave {
                             pointer_id: PointerID(pointer),
                             target: flyout_surface::Handle(NonNull::from_mut(surface)),
                         });
@@ -966,7 +966,7 @@ impl wl::PointerEventListener for GlobalMessaging {
             }
             SurfaceStateTag::FlyoutSurface => {
                 self.event_dispatcher
-                    .dispatch(Event::ContextMenuPointerMove {
+                    .dispatch(Event::MenuPointerMove {
                         pointer_id: PointerID(pointer),
                         target: flyout_surface::Handle(enter_state.surface),
                         client_pos: state.pos,
@@ -1027,7 +1027,7 @@ impl wl::PointerEventListener for GlobalMessaging {
                 }
                 SurfaceStateTag::FlyoutSurface => {
                     self.event_dispatcher
-                        .dispatch(Event::ContextMenuPointerDown {
+                        .dispatch(Event::MenuPointerDown {
                             pointer_id: PointerID(pointer),
                             target: flyout_surface::Handle(enter_state.surface),
                             button: if button == linux_input::Key::MouseLeft as u32 {
@@ -1064,7 +1064,7 @@ impl wl::PointerEventListener for GlobalMessaging {
                     });
                 }
                 SurfaceStateTag::FlyoutSurface => {
-                    self.event_dispatcher.dispatch(Event::ContextMenuPointerUp {
+                    self.event_dispatcher.dispatch(Event::MenuPointerUp {
                         target: flyout_surface::Handle(enter_state.surface),
                         pointer_id: PointerID(pointer),
                         button: if button == linux_input::Key::MouseLeft as u32 {

@@ -269,7 +269,7 @@ impl wl::XdgSurfaceEventListener for EventHandler {
                 .latest_ui_scale_changes
                 .lock()
                 .expect("poisoned") = Some(s);
-            delayed_event_queue.push(Event::ContextMenuRescale { scale: s });
+            delayed_event_queue.push(Event::MenuRescale { scale: s });
             rescaled = true;
         }
 

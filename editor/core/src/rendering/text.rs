@@ -1411,7 +1411,7 @@ impl TextLayout {
         boxes
     }
 
-    pub fn visual_width(&self) -> f32 {
+    pub fn visual_width(&self, font_set: &FontSet) -> f32 {
         #[cfg(windows)]
         let mut metrics = core::mem::MaybeUninit::uninit();
         #[cfg(windows)]
@@ -1422,71 +1422,9 @@ impl TextLayout {
         }
         #[cfg(windows)]
         return unsafe { metrics.assume_init_ref() }.width;
-    }
-
-    #[cfg(target_os = "macos")]
-    #[inline(always)]
-    pub fn height(&self) -> f32 {
-        if self.frame.lines().len() == 0 {
-            // no lines(empty string)
-            return 0.0;
-        }
-
-        // TODO: multi-line consideration
-        let mut ascender = core::mem::MaybeUninit::uninit();
-        let mut descender = core::mem::MaybeUninit::uninit();
-        let l = &self.frame.lines()[0];
-        l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
-
-        unsafe { (ascender.assume_init() + descender.assume_init()) as f32 }
-    }
-
-    pub fn height(&self) -> f32 {
-        #[cfg(feature = "harfbuzz")]
-        return self.height;
-
-        #[cfg(windows)]
-        let mut metrics = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        unsafe {
-            self.layout
-                .GetMetrics(metrics.as_mut_ptr())
-                .expect("layout.GetMetrics")
-        };
-        #[cfg(windows)]
-        return unsafe { metrics.assume_init_ref() }.height;
-    }
-
-    pub fn measure_height(text: &str, font: FontID, font_set: &FontSet) -> f32 {
-        // TODO: 最適化はあとで
-        let layout = Self::new(
-            core::iter::once(TextRun {
-                content: text,
-                font,
-                spacing_inline_start: 0.0,
-            }),
-            font_set,
-            CompositeRectTextHorizontalAlignment::Start,
-            f32::MAX,
-        );
-        layout.height()
-    }
-
-    pub fn measure_visual_width(text: &str, font: FontID, font_set: &FontSet) -> f32 {
-        // TODO: 最適化はあとで
-        let layout = Self::new(
-            core::iter::once(TextRun {
-                content: text,
-                font,
-                spacing_inline_start: 0.0,
-            }),
-            font_set,
-            CompositeRectTextHorizontalAlignment::Start,
-            f32::MAX,
-        );
 
         #[cfg(feature = "harfbuzz")]
-        let Some(&(last_buf, left_base, font, fallback_index)) = layout.buffers.last() else {
+        let Some(&(last_buf, left_base, font, fallback_index)) = self.buffers.last() else {
             return 0.0;
         };
 
@@ -1532,6 +1470,71 @@ impl TextLayout {
 
             left_cursor += glyph_position.x_advance as f32 / 64.0;
         }
+        #[cfg(feature = "harfbuzz")]
+        return width;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[inline(always)]
+    pub fn height(&self) -> f32 {
+        if self.frame.lines().len() == 0 {
+            // no lines(empty string)
+            return 0.0;
+        }
+
+        // TODO: multi-line consideration
+        let mut ascender = core::mem::MaybeUninit::uninit();
+        let mut descender = core::mem::MaybeUninit::uninit();
+        let l = &self.frame.lines()[0];
+        l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
+
+        unsafe { (ascender.assume_init() + descender.assume_init()) as f32 }
+    }
+
+    pub fn height(&self) -> f32 {
+        #[cfg(feature = "harfbuzz")]
+        return self.height;
+
+        #[cfg(windows)]
+        let mut metrics = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        unsafe {
+            self.layout
+                .GetMetrics(metrics.as_mut_ptr())
+                .expect("layout.GetMetrics")
+        };
+        #[cfg(windows)]
+        return unsafe { metrics.assume_init_ref() }.height;
+    }
+
+    pub fn measure_height(text: &str, font: FontID, font_set: &FontSet) -> f32 {
+        // TODO: 最適化はあとで
+        Self::new(
+            core::iter::once(TextRun {
+                content: text,
+                font,
+                spacing_inline_start: 0.0,
+            }),
+            font_set,
+            CompositeRectTextHorizontalAlignment::Start,
+            f32::MAX,
+        )
+        .height()
+    }
+
+    pub fn measure_visual_width(text: &str, font: FontID, font_set: &FontSet) -> f32 {
+        // TODO: 最適化はあとで
+        return Self::new(
+            core::iter::once(TextRun {
+                content: text,
+                font,
+                spacing_inline_start: 0.0,
+            }),
+            font_set,
+            CompositeRectTextHorizontalAlignment::Start,
+            f32::MAX,
+        )
+        .visual_width(font_set);
 
         #[cfg(target_os = "macos")]
         let mut width = 0.0f32;
@@ -1577,20 +1580,8 @@ impl TextLayout {
             }
         }
 
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
         return width;
-
-        #[cfg(windows)]
-        let mut metrics = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        unsafe {
-            layout
-                .layout
-                .GetMetrics(metrics.as_mut_ptr())
-                .expect("layout.GetMetrics")
-        };
-        #[cfg(windows)]
-        return unsafe { metrics.assume_init_ref() }.width;
     }
 
     pub fn measure_total_advances(text: &str, font: FontID, font_set: &FontSet) -> f32 {

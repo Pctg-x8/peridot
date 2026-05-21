@@ -503,7 +503,7 @@ impl EventListener {
 
         if self.pending_activated_changes.take() == Some(false) {
             // window deactivated
-            delayed_event_queue.push(Event::ContextMenuCloseAll);
+            delayed_event_queue.push(Event::MenuCloseAll);
         }
 
         for x in delayed_event_queue {
