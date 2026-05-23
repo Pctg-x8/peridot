@@ -1035,7 +1035,7 @@ impl AlertDialogPresenter {
             FontID::UIDefault,
             ctx.system_link.font_set(),
             CompositeRectTextHorizontalAlignment::Middle,
-            owner_window.client_size().width * 0.8,
+            Some(owner_window.client_size().width * 0.8),
         );
         let text_width = tl.visual_width(ctx.system_link.font_set()).max(64.0);
 

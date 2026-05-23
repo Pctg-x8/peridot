@@ -94,7 +94,7 @@ features = [
   "fractional-scale-v1",
   "alpha-modifier-v1",
   "pointer-constraints-unstable-v1",
-  "relative-pointer-unstable-v1"
+  "relative-pointer-unstable-v1",
 ]
 
 [target.'cfg(unix)'.dependencies]
@@ -106,6 +106,7 @@ linux-epoll = { path = "../../platform/linux/epoll" }
 linux-input = { path = "../../platform/linux/input" }
 peridot-tp-dbus = { path = "../../thirdparty/dbus" }
 peridot-tp-xkbcommon = { path = "../../thirdparty/xkbcommon" }
+peridot-tp-icu = { path = "../../thirdparty/icu" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }

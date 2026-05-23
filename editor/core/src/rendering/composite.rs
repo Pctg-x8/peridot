@@ -2003,7 +2003,7 @@ impl<Event> CompositeTreeRender<Event> {
             }),
             font_set,
             alignment,
-            layout_max_width / scale_factor,
+            Some(layout_max_width / scale_factor),
         );
         cache.text_rects.clear();
         cache

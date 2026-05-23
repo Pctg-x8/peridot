@@ -488,7 +488,7 @@ impl TextLayout {
         font: FontID,
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
-        max_width: f32,
+        max_width: Option<f32>,
     ) -> Self {
         Self::new(
             core::iter::once(TextRun {
@@ -506,7 +506,7 @@ impl TextLayout {
         text_runs: impl Iterator<Item = TextRun<'s>>,
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
-        max_width: f32,
+        max_width: Option<f32>,
     ) -> Self {
         let (lb, ub) = text_runs.size_hint();
         #[cfg(feature = "harfbuzz")]
@@ -528,144 +528,462 @@ impl TextLayout {
         #[cfg(feature = "freetype")]
         let mut final_line_height = 0.0f32;
         #[cfg(feature = "freetype")]
-        for x in text_runs {
-            left_offset += x.spacing_inline_start;
+        if let Some(max_width) = max_width {
+            for x in text_runs {
+                left_offset += x.spacing_inline_start;
 
-            #[cfg(feature = "freetype")]
-            let font = font_set.select(x.font);
-            #[cfg(feature = "harfbuzz")]
-            let shaping_set = font_set.select_shaping(x.font);
+                #[cfg(feature = "freetype")]
+                let font = font_set.select(x.font);
+                #[cfg(feature = "harfbuzz")]
+                let shaping_set = font_set.select_shaping(x.font);
 
-            let mut font_index = 0;
-            let mut shaped_bytes = 0usize;
-            while shaped_bytes < x.content.len() {
-                let starting_bytes = shaped_bytes;
-                let mut newline_break = false;
-                for c in x.content[starting_bytes..].chars() {
-                    if c == '\n' {
-                        // line break
-                        newline_break = true;
+                let mut line_boundary_clusters = Vec::new();
+                line_boundary_clusters.push(Vec::new());
+                let mut starting_bytes = 0;
+                let mut in_budou_cluster = false;
+                loop {
+                    let mut ending_bytes = starting_bytes;
+                    let mut break_by_newline = false;
+                    for c in x.content[starting_bytes..].chars() {
+                        if c == '\n' {
+                            break_by_newline = true;
+                            break;
+                        }
+
+                        let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
+                        || peridot_tp_unicode_properties::script::is_katakana(c)
+                        || peridot_tp_unicode_properties::script::is_han(c)
+                        || peridot_tp_unicode_properties::script::is_thai(c)
+                        // 一部Commonにあるらしいので特別対応
+                        || c as u32 == 0x30fc || c as u32 == 0xff70;
+
+                        if is_budou_cluster_c != in_budou_cluster {
+                            break;
+                        }
+
+                        ending_bytes += c.len_utf8();
+                    }
+
+                    if starting_bytes != ending_bytes {
+                        if in_budou_cluster {
+                            let words = peridot_tp_budoux::parse(
+                                &peridot_tp_budoux::embedded::ja_knbc::MODEL,
+                                &x.content[starting_bytes..ending_bytes],
+                            );
+                            // tracing::debug!(?words, "budou-cluster");
+                            line_boundary_clusters
+                                .last_mut()
+                                .expect("empty lines")
+                                .extend(words);
+                        } else {
+                            let mut res = 0;
+                            let u16s = x.content[starting_bytes..ending_bytes]
+                                .encode_utf16()
+                                .collect::<Vec<_>>();
+                            let brk = unsafe {
+                                peridot_tp_icu::c::ubrk_open(
+                                    peridot_tp_icu::c::UBRK_LINE,
+                                    core::ptr::null(),
+                                    u16s.as_ptr(),
+                                    u16s.len() as _,
+                                    &mut res,
+                                )
+                            };
+                            if peridot_tp_icu::c::U_FAILURE(res) {
+                                panic!("fail {res}");
+                            }
+                            let mut boundaries = Vec::new();
+                            boundaries.push(unsafe { peridot_tp_icu::c::ubrk_first(brk) });
+                            loop {
+                                let r = unsafe { peridot_tp_icu::c::ubrk_next(brk) };
+                                if r == peridot_tp_icu::c::UBRK_DONE {
+                                    break;
+                                }
+                                boundaries.push(r);
+                            }
+                            unsafe {
+                                peridot_tp_icu::c::ubrk_close(brk);
+                            }
+                            // tracing::debug!(
+                            //     ?boundaries,
+                            //     content = &x.content[starting_bytes..ending_bytes],
+                            //     "non-budou-cluster"
+                            // );
+                            line_boundary_clusters
+                                .last_mut()
+                                .expect("empty lines")
+                                .extend(boundaries.array_windows::<2>().map(|&[a, b]| {
+                                    &x.content
+                                        [starting_bytes + a as usize..starting_bytes + b as usize]
+                                }));
+                        }
+                    }
+
+                    starting_bytes = ending_bytes;
+                    if break_by_newline {
+                        line_boundary_clusters.push(Vec::new());
+                        starting_bytes += 1;
+                    }
+
+                    if starting_bytes >= x.content.len() {
                         break;
                     }
 
-                    if unsafe { ft::get_char_index(font.faces[font_index], c as _) } == 0 {
-                        // no char in font, needs fallback
-                        break;
-                    }
-
-                    shaped_bytes += c.len_utf8();
+                    in_budou_cluster = !in_budou_cluster;
                 }
+                tracing::debug!(?line_boundary_clusters);
 
-                if starting_bytes != shaped_bytes {
-                    // needs shaping
-                    #[cfg(feature = "harfbuzz")]
-                    let buf = unsafe { hb::ffi::hb_buffer_create() };
-                    #[cfg(feature = "harfbuzz")]
-                    unsafe {
-                        hb::ffi::hb_buffer_add_utf8(
-                            buf,
-                            x.content.as_ptr().add(starting_bytes).cast(),
-                            (shaped_bytes - starting_bytes) as _,
-                            0,
-                            -1,
+                let line_count = line_boundary_clusters.len();
+                for (n, line) in line_boundary_clusters.into_iter().enumerate() {
+                    let mut baseline_y_offset = 0.0f32;
+                    let mut line_left_offset = left_offset;
+                    for b in line {
+                        let mut section_buffers = Vec::new();
+                        let mut section_left_offset = 0.0f32;
+                        let mut section_visual_right = 0.0f32;
+                        let mut section_line_height = 0.0f32;
+                        let mut section_height = 0.0f32;
+
+                        let mut font_index = 0;
+                        let mut shaped_bytes = 0usize;
+                        while shaped_bytes < b.len() {
+                            let starting_bytes = shaped_bytes;
+                            for c in b[starting_bytes..].chars() {
+                                if unsafe { ft::get_char_index(font.faces[font_index], c as _) }
+                                    == 0
+                                {
+                                    // no char in font, needs fallback
+                                    break;
+                                }
+
+                                shaped_bytes += c.len_utf8();
+                            }
+
+                            if starting_bytes != shaped_bytes {
+                                // needs shaping
+                                #[cfg(feature = "harfbuzz")]
+                                let buf = unsafe { hb::ffi::hb_buffer_create() };
+                                #[cfg(feature = "harfbuzz")]
+                                unsafe {
+                                    hb::ffi::hb_buffer_add_utf8(
+                                        buf,
+                                        b.as_ptr().add(starting_bytes).cast(),
+                                        (shaped_bytes - starting_bytes) as _,
+                                        0,
+                                        -1,
+                                    );
+                                    hb::ffi::hb_buffer_guess_segment_properties(buf);
+                                    hb::ffi::hb_shape(
+                                        shaping_set.faces[font_index].as_ptr(),
+                                        buf,
+                                        core::ptr::null(),
+                                        0,
+                                    );
+                                }
+
+                                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+                                let glyph_infos = unsafe {
+                                    hb::ffi::hb_buffer_get_glyph_infos(
+                                        buf,
+                                        glyph_infos_len.as_mut_ptr(),
+                                    )
+                                };
+                                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                                let glyph_positions = unsafe {
+                                    hb::ffi::hb_buffer_get_glyph_positions(
+                                        buf,
+                                        glyph_positions_len.as_mut_ptr(),
+                                    )
+                                };
+                                assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
+                                    glyph_positions_len.assume_init()
+                                });
+                                let glyph_count = unsafe { glyph_infos_len.assume_init() };
+                                let glyph_positions = unsafe {
+                                    core::slice::from_raw_parts(glyph_positions, glyph_count as _)
+                                };
+                                let glyph_infos = unsafe {
+                                    core::slice::from_raw_parts(glyph_infos, glyph_count as _)
+                                };
+
+                                let buf_total_advances = glyph_positions
+                                    .iter()
+                                    .map(|p| p.x_advance as f32 / 64.0)
+                                    .sum::<f32>();
+                                section_visual_right = section_visual_right.max(
+                                    section_left_offset
+                                        + match (glyph_positions, glyph_infos) {
+                                            (&[], &[]) => 0.0,
+                                            (&[ref pos @ .., _], &[.., ref last_glyph]) => {
+                                                let face =
+                                                    font_set.select(x.font).faces[font_index];
+                                                unsafe {
+                                                    ft::load_glyph(
+                                                        face,
+                                                        last_glyph.codepoint,
+                                                        ft::LoadFlags::DEFAULT,
+                                                    )
+                                                    .expect("ft.load_glyph");
+                                                }
+                                                let metrics = unsafe { &(*(*face).glyph).metrics };
+                                                pos.iter()
+                                                    .map(|x| x.x_advance as f32 / 64.0)
+                                                    .sum::<f32>()
+                                                    + metrics.width as f32 / 64.0
+                                            }
+                                            _ => unreachable!(),
+                                        },
+                                );
+
+                                #[cfg(feature = "harfbuzz")]
+                                section_buffers.push((
+                                    buf,
+                                    line_left_offset + section_left_offset,
+                                    x.font,
+                                    font_index,
+                                ));
+                                #[cfg(feature = "freetype")]
+                                {
+                                    // update metrics
+
+                                    baseline_y_offset = baseline_y_offset.max(unsafe {
+                                        (*(*font.faces[font_index]).size).metrics.ascender as f32
+                                            / 64.0
+                                    });
+                                    section_line_height = section_line_height.max(unsafe {
+                                        (*(*font.faces[font_index]).size).metrics.height as f32
+                                            / 64.0
+                                    });
+
+                                    // freetype2のdescenderは符号が逆になってるのでこれで正解
+                                    // TODO: 複数行になる場合はleadingを行間に足す
+                                    section_height = section_height.max(unsafe {
+                                        ((*(*font.faces[font_index]).size).metrics.ascender
+                                            - (*(*font.faces[font_index]).size).metrics.descender)
+                                            as f32
+                                            / 64.0
+                                    });
+
+                                    section_left_offset += buf_total_advances;
+                                }
+
+                                // reset for next chunk
+                                font_index = 0;
+                            } else {
+                                // no chars available for this font, fallback
+                                font_index += 1;
+                            }
+                        }
+
+                        tracing::debug!(
+                            line_right = line_left_offset + section_visual_right,
+                            max_width,
+                            content = b
                         );
-                        hb::ffi::hb_buffer_guess_segment_properties(buf);
-                        hb::ffi::hb_shape(
-                            shaping_set.faces[font_index].as_ptr(),
-                            buf,
-                            core::ptr::null(),
-                            0,
-                        );
+                        if line_left_offset + section_visual_right > max_width {
+                            // overflow: should line feed
+                            lines.last_mut().expect("empty lines").baseline_y_offset +=
+                                line_y_offset;
+                            lines
+                                .last_mut()
+                                .expect("empty lines")
+                                .width_with_trailing_whitespace = line_left_offset;
+                            line_y_offset += core::mem::replace(&mut line_height, 0.0);
+                            final_line_height = 0.0;
+                            lines.push(HarfbuzzLineLayout {
+                                buffers: Vec::new(),
+                                width_with_trailing_whitespace: 0.0,
+                                baseline_y_offset: 0.0,
+                            });
+
+                            // move to line head
+                            for (_, lo, _, _) in section_buffers.iter_mut() {
+                                *lo -= line_left_offset;
+                            }
+                            line_left_offset = 0.0;
+                        }
+
+                        #[cfg(feature = "harfbuzz")]
+                        let last_line = lines.last_mut().expect("empty lines");
+                        last_line.buffers.extend(section_buffers);
+                        last_line.baseline_y_offset =
+                            last_line.baseline_y_offset.max(baseline_y_offset);
+                        line_left_offset += section_left_offset;
+                        line_height = line_height.max(section_line_height);
+                        final_line_height = final_line_height.max(section_height);
                     }
 
-                    let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-                    let _glyph_infos = unsafe {
-                        hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
-                    };
-                    let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                    let glyph_positions = unsafe {
-                        hb::ffi::hb_buffer_get_glyph_positions(
-                            buf,
-                            glyph_positions_len.as_mut_ptr(),
-                        )
-                    };
-                    assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-                        glyph_positions_len.assume_init()
-                    });
-                    let glyph_count = unsafe { glyph_infos_len.assume_init() };
-                    let buf_total_advances =
-                        unsafe { core::slice::from_raw_parts(glyph_positions, glyph_count as _) }
-                            .iter()
-                            .map(|p| p.x_advance as f32 / 64.0)
-                            .sum::<f32>();
-
-                    #[cfg(feature = "harfbuzz")]
-                    let last_line = lines.last_mut().expect("empty lines");
-
-                    #[cfg(feature = "harfbuzz")]
-                    last_line
-                        .buffers
-                        .push((buf, left_offset, x.font, font_index));
-                    #[cfg(feature = "freetype")]
-                    {
-                        // update metrics
-
-                        last_line.baseline_y_offset = last_line.baseline_y_offset.max(unsafe {
-                            (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
+                    if n < line_count - 1 {
+                        // newline
+                        lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
+                        lines
+                            .last_mut()
+                            .expect("empty lines")
+                            .width_with_trailing_whitespace = line_left_offset;
+                        line_y_offset += line_height;
+                        final_line_height = 0.0;
+                        line_left_offset = 0.0;
+                        lines.push(HarfbuzzLineLayout {
+                            buffers: Vec::new(),
+                            width_with_trailing_whitespace: 0.0,
+                            baseline_y_offset: 0.0,
                         });
-                        line_height = line_height.max(unsafe {
-                            (*(*font.faces[font_index]).size).metrics.height as f32 / 64.0
-                        });
-
-                        // freetype2のdescenderは符号が逆になってるのでこれで正解
-                        // TODO: 複数行になる場合はleadingを行間に足す
-                        final_line_height = final_line_height.max(unsafe {
-                            ((*(*font.faces[font_index]).size).metrics.ascender
-                                - (*(*font.faces[font_index]).size).metrics.descender)
-                                as f32
-                                / 64.0
-                        });
-
-                        left_offset += buf_total_advances;
                     }
 
-                    // reset for next chunk
-                    font_index = 0;
-                } else {
-                    if !newline_break {
-                        // no chars available for this font, fallback
-                        font_index += 1;
-                    }
-                }
-
-                if newline_break {
-                    // broke actual run by newline
-                    lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
-                    lines
-                        .last_mut()
-                        .expect("empty lines")
-                        .width_with_trailing_whitespace = left_offset;
-                    line_y_offset += line_height;
-                    final_line_height = 0.0;
-                    left_offset = 0.0;
-                    lines.push(HarfbuzzLineLayout {
-                        buffers: Vec::new(),
-                        width_with_trailing_whitespace: 0.0,
-                        baseline_y_offset: 0.0,
-                    });
-
-                    shaped_bytes += 1;
+                    left_offset = line_left_offset;
                 }
             }
-        }
 
-        #[cfg(feature = "harfbuzz")]
-        {
-            lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
-            lines
-                .last_mut()
-                .expect("empty lines")
-                .width_with_trailing_whitespace = left_offset;
+            #[cfg(feature = "harfbuzz")]
+            {
+                lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
+                lines
+                    .last_mut()
+                    .expect("empty lines")
+                    .width_with_trailing_whitespace = left_offset;
+            }
+        } else {
+            // no max width(no autowrapping): optimal path
+            for x in text_runs {
+                left_offset += x.spacing_inline_start;
+
+                #[cfg(feature = "freetype")]
+                let font = font_set.select(x.font);
+                #[cfg(feature = "harfbuzz")]
+                let shaping_set = font_set.select_shaping(x.font);
+
+                let mut font_index = 0;
+                let mut shaped_bytes = 0usize;
+                while shaped_bytes < x.content.len() {
+                    let starting_bytes = shaped_bytes;
+                    let mut newline_break = false;
+                    for c in x.content[starting_bytes..].chars() {
+                        if c == '\n' {
+                            // line break
+                            newline_break = true;
+                            break;
+                        }
+
+                        if unsafe { ft::get_char_index(font.faces[font_index], c as _) } == 0 {
+                            // no char in font, needs fallback
+                            break;
+                        }
+
+                        shaped_bytes += c.len_utf8();
+                    }
+
+                    if starting_bytes != shaped_bytes {
+                        // needs shaping
+                        #[cfg(feature = "harfbuzz")]
+                        let buf = unsafe { hb::ffi::hb_buffer_create() };
+                        #[cfg(feature = "harfbuzz")]
+                        unsafe {
+                            hb::ffi::hb_buffer_add_utf8(
+                                buf,
+                                x.content.as_ptr().add(starting_bytes).cast(),
+                                (shaped_bytes - starting_bytes) as _,
+                                0,
+                                -1,
+                            );
+                            hb::ffi::hb_buffer_guess_segment_properties(buf);
+                            hb::ffi::hb_shape(
+                                shaping_set.faces[font_index].as_ptr(),
+                                buf,
+                                core::ptr::null(),
+                                0,
+                            );
+                        }
+
+                        let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+                        let _glyph_infos = unsafe {
+                            hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
+                        };
+                        let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                        let glyph_positions = unsafe {
+                            hb::ffi::hb_buffer_get_glyph_positions(
+                                buf,
+                                glyph_positions_len.as_mut_ptr(),
+                            )
+                        };
+                        assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
+                            glyph_positions_len.assume_init()
+                        });
+                        let glyph_count = unsafe { glyph_infos_len.assume_init() };
+                        let buf_total_advances = unsafe {
+                            core::slice::from_raw_parts(glyph_positions, glyph_count as _)
+                        }
+                        .iter()
+                        .map(|p| p.x_advance as f32 / 64.0)
+                        .sum::<f32>();
+
+                        #[cfg(feature = "harfbuzz")]
+                        let last_line = lines.last_mut().expect("empty lines");
+
+                        #[cfg(feature = "harfbuzz")]
+                        last_line
+                            .buffers
+                            .push((buf, left_offset, x.font, font_index));
+                        #[cfg(feature = "freetype")]
+                        {
+                            // update metrics
+
+                            last_line.baseline_y_offset = last_line.baseline_y_offset.max(unsafe {
+                                (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
+                            });
+                            line_height = line_height.max(unsafe {
+                                (*(*font.faces[font_index]).size).metrics.height as f32 / 64.0
+                            });
+
+                            // freetype2のdescenderは符号が逆になってるのでこれで正解
+                            // TODO: 複数行になる場合はleadingを行間に足す
+                            final_line_height = final_line_height.max(unsafe {
+                                ((*(*font.faces[font_index]).size).metrics.ascender
+                                    - (*(*font.faces[font_index]).size).metrics.descender)
+                                    as f32
+                                    / 64.0
+                            });
+
+                            left_offset += buf_total_advances;
+                        }
+
+                        // reset for next chunk
+                        font_index = 0;
+                    } else {
+                        if !newline_break {
+                            // no chars available for this font, fallback
+                            font_index += 1;
+                        }
+                    }
+
+                    if newline_break {
+                        // broke actual run by newline
+                        lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
+                        lines
+                            .last_mut()
+                            .expect("empty lines")
+                            .width_with_trailing_whitespace = left_offset;
+                        line_y_offset += line_height;
+                        final_line_height = 0.0;
+                        left_offset = 0.0;
+                        lines.push(HarfbuzzLineLayout {
+                            buffers: Vec::new(),
+                            width_with_trailing_whitespace: 0.0,
+                            baseline_y_offset: 0.0,
+                        });
+
+                        shaped_bytes += 1;
+                    }
+                }
+            }
+
+            #[cfg(feature = "harfbuzz")]
+            {
+                lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
+                lines
+                    .last_mut()
+                    .expect("empty lines")
+                    .width_with_trailing_whitespace = left_offset;
+            }
         }
 
         // apply per-line alignment
@@ -1623,7 +1941,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
-            f32::MAX,
+            None,
         )
         .height()
     }
@@ -1638,7 +1956,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
-            f32::MAX,
+            None,
         )
         .visual_width(font_set);
 
@@ -1700,7 +2018,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
-            f32::MAX,
+            None,
         );
 
         #[cfg(feature = "harfbuzz")]
@@ -1783,7 +2101,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
-            f32::MAX,
+            None,
         );
 
         // TODO: LTR前提+複数行対応

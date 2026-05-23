@@ -38,6 +38,7 @@
         pkgs.harfbuzz
         pkgs.dbus
         pkgs.libxkbcommon
+        pkgs.icu
         # required for some asset processing
         pkgs.shaderc
         pkgs.shader-slang
