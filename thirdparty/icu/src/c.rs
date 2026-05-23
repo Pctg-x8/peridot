@@ -6,8 +6,12 @@ pub(self) struct OpaqueStruct(
     core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
 );
 
-#[link(name = "icui18n")]
-unsafe extern "C" {}
+macro_rules! symbol_rename {
+    ($name: ident) => {
+        concat!(stringify!($name), "_76")
+    };
+}
+pub(self) use symbol_rename;
 
 mod umachine;
 pub use self::umachine::*;

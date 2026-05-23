@@ -36,12 +36,6 @@ pub const UBRK_SENTENCE_TERM_LIMIT: USentenceBreakTag = 100;
 pub const UBRK_SENTENCE_SEP: USentenceBreakTag = 100;
 pub const UBRK_SENTENCE_SEP_LIMIT: USentenceBreakTag = 200;
 
-macro_rules! symbol_rename {
-    ($name: ident) => {
-        concat!(stringify!($name), "_76")
-    };
-}
-
 #[link(name = "icuuc", kind = "dylib")]
 unsafe extern "C" {
     #[link_name = symbol_rename!(ubrk_open)]

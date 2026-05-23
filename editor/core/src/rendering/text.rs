@@ -1,11 +1,15 @@
 use std::{cell::UnsafeCell, collections::HashMap};
 
+#[cfg(target_os = "linux")]
+use peridot_tp_budoux as budoux;
 #[cfg(feature = "fontconfig")]
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
 use peridot_tp_freetype as ft;
 #[cfg(feature = "harfbuzz")]
 use peridot_tp_harfbuzz as hb;
+#[cfg(target_os = "linux")]
+use peridot_tp_icu as icu;
 #[cfg(windows)]
 use windows::Win32::Graphics::{Direct2D::Common::*, DirectWrite::*};
 #[cfg(windows)]
@@ -406,70 +410,79 @@ thread_local! {
 }
 
 #[cfg(feature = "harfbuzz")]
-pub struct HarfbuzzLineLayout {
-    buffers: Vec<(*mut hb::ffi::hb_buffer_t, f32, FontID, usize)>,
-    width_with_trailing_whitespace: f32,
-    baseline_y_offset: f32,
+pub struct NativeTextRun {
+    buffer: *mut hb::ffi::hb_buffer_t,
+    left_offset: f32,
+    font_id: FontID,
+    face_index: usize,
 }
 #[cfg(feature = "harfbuzz")]
-impl Drop for HarfbuzzLineLayout {
+impl Drop for NativeTextRun {
+    #[inline(always)]
     fn drop(&mut self) {
-        for x in self.buffers.drain(..) {
-            unsafe {
-                hb::ffi::hb_buffer_destroy(x.0);
-            }
+        unsafe {
+            hb::ffi::hb_buffer_destroy(self.buffer);
         }
     }
+}
+#[cfg(feature = "harfbuzz")]
+impl NativeTextRun {
+    pub fn visual_width(&self, font_set: &FontSet) -> f32 {
+        let face = font_set.select(self.font_id).faces[self.face_index];
+
+        let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+        let glyph_infos = unsafe {
+            hb::ffi::hb_buffer_get_glyph_infos(self.buffer, glyph_infos_len.as_mut_ptr())
+        };
+        let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+        let glyph_positions = unsafe {
+            hb::ffi::hb_buffer_get_glyph_positions(self.buffer, glyph_positions_len.as_mut_ptr())
+        };
+        let glyph_infos =
+            unsafe { core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _) };
+        let glyph_positions = unsafe {
+            core::slice::from_raw_parts(glyph_positions, glyph_positions_len.assume_init() as _)
+        };
+        assert_eq!(glyph_infos.len(), glyph_positions.len());
+
+        match (glyph_positions, glyph_infos) {
+            (&[ref advances @ .., _], &[.., ref last_glyph]) => {
+                unsafe {
+                    ft::load_glyph(face, last_glyph.codepoint, ft::LoadFlags::DEFAULT)
+                        .expect("face.load_glyph");
+                }
+
+                advances
+                    .iter()
+                    .map(|p| p.x_advance as f32 / 64.0)
+                    .sum::<f32>()
+                    + unsafe { &(*(*face).glyph).metrics }.width as f32 / 64.0
+            }
+            (&[], &[]) => 0.0,
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[cfg(feature = "harfbuzz")]
+pub struct HarfbuzzLineLayout {
+    buffers: Vec<NativeTextRun>,
+    width_with_trailing_whitespace: f32,
+    baseline_y_offset: f32,
 }
 #[cfg(feature = "harfbuzz")]
 impl HarfbuzzLineLayout {
     pub fn visual_width(&self, font_set: &FontSet) -> f32 {
         self.buffers
             .iter()
-            .map(|&(buf, left_base, font, fallback_index)| {
-                let face = font_set.select(font).faces[fallback_index];
-
-                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-                let glyph_infos = unsafe {
-                    hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
-                };
-                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                let glyph_positions = unsafe {
-                    hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
-                };
-                let glyph_infos = unsafe {
-                    core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
-                };
-                let glyph_positions = unsafe {
-                    core::slice::from_raw_parts(
-                        glyph_positions,
-                        glyph_positions_len.assume_init() as _,
-                    )
-                };
-                assert_eq!(glyph_infos.len(), glyph_positions.len());
-
-                // compute visual right of this buffer
-                left_base
-                    + match (glyph_positions, glyph_infos) {
-                        (&[ref advances @ .., _], &[.., ref last_glyph]) => {
-                            unsafe {
-                                ft::load_glyph(face, last_glyph.codepoint, ft::LoadFlags::DEFAULT)
-                                    .expect("face.load_glyph");
-                            }
-
-                            advances
-                                .iter()
-                                .map(|p| p.x_advance as f32 / 64.0)
-                                .sum::<f32>()
-                                + unsafe { &(*(*face).glyph).metrics }.width as f32 / 64.0
-                        }
-                        (&[], &[]) => 0.0,
-                        _ => unreachable!(),
-                    }
-            })
+            // compute visual right of each buffers
+            .map(|tr| tr.left_offset + tr.visual_width(font_set))
             .fold(0.0, f32::max)
     }
 }
+
+crate::perf_section!(CREATE_TEXT_LAYOUT = "TextLayout.New");
+crate::perf_section!(RASTERIZE_AND_PLACE_GLYPHS = "TextLayout.RasterizeAndPlaceGlyphs");
 
 pub struct TextLayout {
     #[cfg(feature = "harfbuzz")]
@@ -508,17 +521,15 @@ impl TextLayout {
         alignment: CompositeRectTextHorizontalAlignment,
         max_width: Option<f32>,
     ) -> Self {
+        crate::perf_scope!(CREATE_TEXT_LAYOUT);
+
         let (lb, ub) = text_runs.size_hint();
         #[cfg(feature = "harfbuzz")]
-        let mut lines = Vec::new();
-        #[cfg(feature = "harfbuzz")]
-        {
-            lines.push(HarfbuzzLineLayout {
-                buffers: Vec::new(),
-                width_with_trailing_whitespace: 0.0,
-                baseline_y_offset: 0.0,
-            });
-        }
+        let mut lines = vec![HarfbuzzLineLayout {
+            buffers: Vec::new(),
+            width_with_trailing_whitespace: 0.0,
+            baseline_y_offset: 0.0,
+        }];
         #[cfg(feature = "harfbuzz")]
         let mut line_y_offset = 0.0f32;
         #[cfg(feature = "harfbuzz")]
@@ -537,8 +548,7 @@ impl TextLayout {
                 #[cfg(feature = "harfbuzz")]
                 let shaping_set = font_set.select_shaping(x.font);
 
-                let mut line_boundary_clusters = Vec::new();
-                line_boundary_clusters.push(Vec::new());
+                let mut line_boundary_clusters = vec![Vec::new()];
                 let mut starting_bytes = 0;
                 let mut in_budou_cluster = false;
                 loop {
@@ -551,11 +561,11 @@ impl TextLayout {
                         }
 
                         let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
-                        || peridot_tp_unicode_properties::script::is_katakana(c)
-                        || peridot_tp_unicode_properties::script::is_han(c)
-                        || peridot_tp_unicode_properties::script::is_thai(c)
-                        // 一部Commonにあるらしいので特別対応
-                        || c as u32 == 0x30fc || c as u32 == 0xff70;
+                            || peridot_tp_unicode_properties::script::is_katakana(c)
+                            || peridot_tp_unicode_properties::script::is_han(c)
+                            || peridot_tp_unicode_properties::script::is_thai(c)
+                            // 一部Commonにあるらしいので特別対応
+                            || c as u32 == 0x30fc || c as u32 == 0xff70;
 
                         if is_budou_cluster_c != in_budou_cluster {
                             break;
@@ -566,56 +576,62 @@ impl TextLayout {
 
                     if starting_bytes != ending_bytes {
                         if in_budou_cluster {
-                            let words = peridot_tp_budoux::parse(
-                                &peridot_tp_budoux::embedded::ja_knbc::MODEL,
-                                &x.content[starting_bytes..ending_bytes],
-                            );
-                            // tracing::debug!(?words, "budou-cluster");
                             line_boundary_clusters
                                 .last_mut()
                                 .expect("empty lines")
-                                .extend(words);
+                                .extend(
+                                    budoux::BreakIterator::new(
+                                        &budoux::embedded::ja_knbc::MODEL,
+                                        &x.content[starting_bytes..ending_bytes],
+                                    )
+                                    .scan(0, |last_boundary, next_boundary| {
+                                        let res = if *last_boundary == next_boundary {
+                                            // ignore this chunk
+                                            None
+                                        } else {
+                                            Some(
+                                                &x.content[*last_boundary + starting_bytes
+                                                    ..next_boundary + starting_bytes],
+                                            )
+                                        };
+                                        *last_boundary = next_boundary;
+                                        Some(res)
+                                    })
+                                    .filter_map(crate::utils::identity),
+                                );
                         } else {
-                            let mut res = 0;
                             let u16s = x.content[starting_bytes..ending_bytes]
                                 .encode_utf16()
                                 .collect::<Vec<_>>();
-                            let brk = unsafe {
-                                peridot_tp_icu::c::ubrk_open(
-                                    peridot_tp_icu::c::UBRK_LINE,
-                                    core::ptr::null(),
-                                    u16s.as_ptr(),
-                                    u16s.len() as _,
-                                    &mut res,
-                                )
-                            };
-                            if peridot_tp_icu::c::U_FAILURE(res) {
-                                panic!("fail {res}");
-                            }
-                            let mut boundaries = Vec::new();
-                            boundaries.push(unsafe { peridot_tp_icu::c::ubrk_first(brk) });
-                            loop {
-                                let r = unsafe { peridot_tp_icu::c::ubrk_next(brk) };
-                                if r == peridot_tp_icu::c::UBRK_DONE {
-                                    break;
-                                }
-                                boundaries.push(r);
-                            }
-                            unsafe {
-                                peridot_tp_icu::c::ubrk_close(brk);
-                            }
-                            // tracing::debug!(
-                            //     ?boundaries,
-                            //     content = &x.content[starting_bytes..ending_bytes],
-                            //     "non-budou-cluster"
-                            // );
                             line_boundary_clusters
                                 .last_mut()
                                 .expect("empty lines")
-                                .extend(boundaries.array_windows::<2>().map(|&[a, b]| {
-                                    &x.content
-                                        [starting_bytes + a as usize..starting_bytes + b as usize]
-                                }));
+                                .extend(
+                                    icu::BreakIterator::new(
+                                        icu::BreakIteratorType::Line,
+                                        None,
+                                        &u16s,
+                                    )
+                                    .expect("icu.break_iterator.new")
+                                    .into_iter()
+                                    .scan(0, |last_boundary, next_boundary| {
+                                        let next_boundary = next_boundary as usize;
+                                        let res = if *last_boundary == next_boundary {
+                                            // ignore this chunk
+                                            None
+                                        } else {
+                                            // TODO: ascii以外も来るか？
+                                            Some(
+                                                &x.content[starting_bytes + *last_boundary
+                                                    ..starting_bytes + next_boundary],
+                                            )
+                                        };
+
+                                        *last_boundary = next_boundary;
+                                        Some(res)
+                                    })
+                                    .filter_map(crate::utils::identity),
+                                );
                         }
                     }
 
@@ -644,12 +660,12 @@ impl TextLayout {
                         let mut section_line_height = 0.0f32;
                         let mut section_height = 0.0f32;
 
-                        let mut font_index = 0;
+                        let mut face_index = 0;
                         let mut shaped_bytes = 0usize;
                         while shaped_bytes < b.len() {
                             let starting_bytes = shaped_bytes;
                             for c in b[starting_bytes..].chars() {
-                                if unsafe { ft::get_char_index(font.faces[font_index], c as _) }
+                                if unsafe { ft::get_char_index(font.faces[face_index], c as _) }
                                     == 0
                                 {
                                     // no char in font, needs fallback
@@ -661,6 +677,9 @@ impl TextLayout {
 
                             if starting_bytes != shaped_bytes {
                                 // needs shaping
+                                let face = font.faces[face_index];
+                                let shaping_face = shaping_set.faces[face_index];
+
                                 #[cfg(feature = "harfbuzz")]
                                 let buf = unsafe { hb::ffi::hb_buffer_create() };
                                 #[cfg(feature = "harfbuzz")]
@@ -674,7 +693,7 @@ impl TextLayout {
                                     );
                                     hb::ffi::hb_buffer_guess_segment_properties(buf);
                                     hb::ffi::hb_shape(
-                                        shaping_set.faces[font_index].as_ptr(),
+                                        shaping_face.as_ptr(),
                                         buf,
                                         core::ptr::null(),
                                         0,
@@ -715,8 +734,6 @@ impl TextLayout {
                                         + match (glyph_positions, glyph_infos) {
                                             (&[], &[]) => 0.0,
                                             (&[ref pos @ .., _], &[.., ref last_glyph]) => {
-                                                let face =
-                                                    font_set.select(x.font).faces[font_index];
                                                 unsafe {
                                                     ft::load_glyph(
                                                         face,
@@ -736,42 +753,36 @@ impl TextLayout {
                                 );
 
                                 #[cfg(feature = "harfbuzz")]
-                                section_buffers.push((
-                                    buf,
-                                    line_left_offset + section_left_offset,
-                                    x.font,
-                                    font_index,
-                                ));
+                                section_buffers.push(NativeTextRun {
+                                    buffer: buf,
+                                    left_offset: line_left_offset + section_left_offset,
+                                    font_id: x.font,
+                                    face_index,
+                                });
                                 #[cfg(feature = "freetype")]
                                 {
                                     // update metrics
+                                    let face_metrics = unsafe { &(*(*face).size).metrics };
 
-                                    baseline_y_offset = baseline_y_offset.max(unsafe {
-                                        (*(*font.faces[font_index]).size).metrics.ascender as f32
-                                            / 64.0
-                                    });
-                                    section_line_height = section_line_height.max(unsafe {
-                                        (*(*font.faces[font_index]).size).metrics.height as f32
-                                            / 64.0
-                                    });
+                                    baseline_y_offset =
+                                        baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                                    section_line_height =
+                                        section_line_height.max(face_metrics.height as f32 / 64.0);
 
                                     // freetype2のdescenderは符号が逆になってるのでこれで正解
-                                    // TODO: 複数行になる場合はleadingを行間に足す
-                                    section_height = section_height.max(unsafe {
-                                        ((*(*font.faces[font_index]).size).metrics.ascender
-                                            - (*(*font.faces[font_index]).size).metrics.descender)
-                                            as f32
-                                            / 64.0
-                                    });
+                                    section_height = section_height.max(
+                                        (face_metrics.ascender - face_metrics.descender) as f32
+                                            / 64.0,
+                                    );
 
                                     section_left_offset += buf_total_advances;
                                 }
 
                                 // reset for next chunk
-                                font_index = 0;
+                                face_index = 0;
                             } else {
                                 // no chars available for this font, fallback
-                                font_index += 1;
+                                face_index += 1;
                             }
                         }
 
@@ -797,8 +808,8 @@ impl TextLayout {
                             });
 
                             // move to line head
-                            for (_, lo, _, _) in section_buffers.iter_mut() {
-                                *lo -= line_left_offset;
+                            for x in section_buffers.iter_mut() {
+                                x.left_offset -= line_left_offset;
                             }
                             line_left_offset = 0.0;
                         }
@@ -852,7 +863,7 @@ impl TextLayout {
                 #[cfg(feature = "harfbuzz")]
                 let shaping_set = font_set.select_shaping(x.font);
 
-                let mut font_index = 0;
+                let mut face_index = 0;
                 let mut shaped_bytes = 0usize;
                 while shaped_bytes < x.content.len() {
                     let starting_bytes = shaped_bytes;
@@ -864,7 +875,7 @@ impl TextLayout {
                             break;
                         }
 
-                        if unsafe { ft::get_char_index(font.faces[font_index], c as _) } == 0 {
+                        if unsafe { ft::get_char_index(font.faces[face_index], c as _) } == 0 {
                             // no char in font, needs fallback
                             break;
                         }
@@ -874,6 +885,9 @@ impl TextLayout {
 
                     if starting_bytes != shaped_bytes {
                         // needs shaping
+                        let face = font.faces[face_index];
+                        let shaping_face = shaping_set.faces[face_index];
+
                         #[cfg(feature = "harfbuzz")]
                         let buf = unsafe { hb::ffi::hb_buffer_create() };
                         #[cfg(feature = "harfbuzz")]
@@ -886,12 +900,7 @@ impl TextLayout {
                                 -1,
                             );
                             hb::ffi::hb_buffer_guess_segment_properties(buf);
-                            hb::ffi::hb_shape(
-                                shaping_set.faces[font_index].as_ptr(),
-                                buf,
-                                core::ptr::null(),
-                                0,
-                            );
+                            hb::ffi::hb_shape(shaping_face.as_ptr(), buf, core::ptr::null(), 0);
                         }
 
                         let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
@@ -920,38 +929,36 @@ impl TextLayout {
                         let last_line = lines.last_mut().expect("empty lines");
 
                         #[cfg(feature = "harfbuzz")]
-                        last_line
-                            .buffers
-                            .push((buf, left_offset, x.font, font_index));
+                        last_line.buffers.push(NativeTextRun {
+                            buffer: buf,
+                            left_offset,
+                            font_id: x.font,
+                            face_index,
+                        });
                         #[cfg(feature = "freetype")]
                         {
                             // update metrics
+                            let face_metrics = unsafe { &(*(*face).size).metrics };
 
-                            last_line.baseline_y_offset = last_line.baseline_y_offset.max(unsafe {
-                                (*(*font.faces[font_index]).size).metrics.ascender as f32 / 64.0
-                            });
-                            line_height = line_height.max(unsafe {
-                                (*(*font.faces[font_index]).size).metrics.height as f32 / 64.0
-                            });
+                            last_line.baseline_y_offset = last_line
+                                .baseline_y_offset
+                                .max(face_metrics.ascender as f32 / 64.0);
+                            line_height = line_height.max(face_metrics.height as f32 / 64.0);
 
                             // freetype2のdescenderは符号が逆になってるのでこれで正解
-                            // TODO: 複数行になる場合はleadingを行間に足す
-                            final_line_height = final_line_height.max(unsafe {
-                                ((*(*font.faces[font_index]).size).metrics.ascender
-                                    - (*(*font.faces[font_index]).size).metrics.descender)
-                                    as f32
-                                    / 64.0
-                            });
+                            final_line_height = final_line_height.max(
+                                (face_metrics.ascender - face_metrics.descender) as f32 / 64.0,
+                            );
 
                             left_offset += buf_total_advances;
                         }
 
                         // reset for next chunk
-                        font_index = 0;
+                        face_index = 0;
                     } else {
                         if !newline_break {
                             // no chars available for this font, fallback
-                            font_index += 1;
+                            face_index += 1;
                         }
                     }
 
@@ -998,8 +1005,8 @@ impl TextLayout {
                 let max_width = line_widths.iter().copied().fold(0.0, f32::max);
                 for (x, w) in lines.iter_mut().zip(line_widths.iter()) {
                     let offset = (max_width - w) * 0.5;
-                    for (_, lo, _, _) in x.buffers.iter_mut() {
-                        *lo += offset;
+                    for x in x.buffers.iter_mut() {
+                        x.left_offset += offset;
                     }
                 }
             }
@@ -1011,8 +1018,8 @@ impl TextLayout {
                 let max_width = line_widths.iter().copied().fold(0.0, f32::max);
                 for (x, w) in lines.iter_mut().zip(line_widths.iter()) {
                     let offset = max_width - w;
-                    for (_, lo, _, _) in x.buffers.iter_mut() {
-                        *lo += offset;
+                    for x in x.buffers.iter_mut() {
+                        x.left_offset += offset;
                     }
                 }
             }
@@ -1230,20 +1237,25 @@ impl TextLayout {
         atlas: &mut MaskTextureAtlasManager,
         render_scale: f32,
     ) -> Vec<GlyphPlacementBox> {
+        crate::perf_scope!(RASTERIZE_AND_PLACE_GLYPHS);
+
         let mut boxes = Vec::new();
 
         #[cfg(feature = "harfbuzz")]
         for l in self.lines.iter() {
-            for &(buf, left_base, font, fallback_index) in l.buffers.iter() {
-                let font = font_set.select(font).faces[fallback_index];
+            for x in l.buffers.iter() {
+                let font = font_set.select(x.font_id).faces[x.face_index];
 
                 let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
                 let glyph_infos = unsafe {
-                    hb::ffi::hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
+                    hb::ffi::hb_buffer_get_glyph_infos(x.buffer, glyph_infos_len.as_mut_ptr())
                 };
                 let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
                 let glyph_positions = unsafe {
-                    hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
+                    hb::ffi::hb_buffer_get_glyph_positions(
+                        x.buffer,
+                        glyph_positions_len.as_mut_ptr(),
+                    )
                 };
                 let glyph_infos = unsafe {
                     core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
@@ -1257,7 +1269,7 @@ impl TextLayout {
                 assert_eq!(glyph_infos.len(), glyph_positions.len());
 
                 let baseline_y = l.baseline_y_offset;
-                let mut left_cursor = left_base;
+                let mut left_cursor = x.left_offset;
                 for (glyph_info, glyph_position) in
                     glyph_infos.into_iter().zip(glyph_positions.into_iter())
                 {
@@ -2115,12 +2127,12 @@ impl TextLayout {
             return 0;
         };
         #[cfg(feature = "harfbuzz")]
-        for &(buf, left_base, _, _) in l.buffers.iter() {
+        for tr in l.buffers.iter() {
             let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
             let glyph_positions = unsafe {
-                hb::ffi::hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
+                hb::ffi::hb_buffer_get_glyph_positions(tr.buffer, glyph_positions_len.as_mut_ptr())
             };
-            left_cursor = left_base;
+            left_cursor = tr.left_offset;
             for n in 0..unsafe { glyph_positions_len.assume_init() } {
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
 

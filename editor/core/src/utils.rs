@@ -4,6 +4,12 @@ mod coord;
 pub use self::coord::*;
 pub mod platform;
 
+/// identity function
+#[inline(always)]
+pub const fn identity<T>(x: T) -> T {
+    x
+}
+
 /// Safely comparable/equatable f32
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]

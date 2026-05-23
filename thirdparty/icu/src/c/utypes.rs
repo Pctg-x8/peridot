@@ -13,6 +13,8 @@ pub const fn U_FAILURE(code: UErrorCode) -> bool {
     code > U_ZERO_ERROR
 }
 
+#[link(name = "icuuc", kind = "dylib")]
 unsafe extern "C" {
+    #[link_name = symbol_rename!(u_errorName)]
     pub fn u_errorName(code: UErrorCode) -> *const c_char;
 }
