@@ -17,7 +17,7 @@ use crate::{
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, VulkanDevice,
     },
     rendering::{
-        MaskTextureAtlasManager,
+        MaskTextureAtlasManager, TextureID,
         atlas::{AtlasRect, DynamicAtlasManager},
         text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
         vg::VectorRasterizationState,
@@ -624,7 +624,7 @@ pub struct CompositeRect<Event> {
     pub relative_offset_adjustment: [f32; 2],
     pub relative_size_adjustment: [f32; 2],
     pub clip_child: Option<ClipConfig>,
-    pub texatlas_rect_id: Option<usize>,
+    pub texatlas_rect_id: Option<TextureID>,
     pub slice_borders: [f32; 4],
     pub composite_mode: CompositeMode<Event>,
     pub custom_render_token: Option<CustomRenderToken>,
@@ -1737,7 +1737,7 @@ impl<Event> CompositeTreeRender<Event> {
                     right: 0,
                     bottom: 0,
                 },
-                |n| &mask_atlas_rects[n],
+                |n| &mask_atlas_rects[n.rect_index()],
             );
 
             if let Some(t) = r.custom_render_token {

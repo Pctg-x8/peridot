@@ -4,7 +4,8 @@ use crate::{
     Event,
     input::hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
+        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
+        RenderMessageSender, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
@@ -76,11 +77,7 @@ pub struct MenuItemLayout {
     pub required_width: SafeF32,
 }
 impl MenuItemLayout {
-    pub fn build(
-        items: impl Iterator<Item = MenuItem>,
-        font_set: &FontSet,
-        render_scale: f32,
-    ) -> Vec<Self> {
+    pub fn build(items: impl Iterator<Item = MenuItem>, font_set: &FontSet) -> Vec<Self> {
         items
             .scan(0.0, |top, item| {
                 let (pre_spacing, view_height, post_spacing, required_width);
@@ -112,7 +109,7 @@ impl MenuItemLayout {
                         required_width = SafeF32::new(
                             TextLayout::measure_visual_width(label, FontID::UIDefault, font_set)
                                 + TEXT_INLINE_MARGIN * 2.0
-                                + SubMenuView::ICON_SIZE.width,
+                                + SubMenuView::ARROW.width,
                         )
                         .expect("invalid width measured")
                             + LR_TEXT_MINIMUM_MARGIN;
@@ -207,7 +204,7 @@ impl MenuItemLayout {
 
 pub struct CommonResources {
     light_gradient: GradientRef,
-    tid_submenu_arrow: usize,
+    tid_submenu_arrow: TextureID,
 }
 impl CommonResources {
     pub fn new<E>(
@@ -225,10 +222,7 @@ impl CommonResources {
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: tid_submenu_arrow,
-                vertices: SubMenuView::ARROW_VERTICES,
-                indices: SubMenuView::ARROW_INDICES,
-                width: SubMenuView::ICON_SIZE.width,
-                height: SubMenuView::ICON_SIZE.height,
+                data: SubMenuView::ARROW,
             })
             .expect("rt_sender.send");
 
@@ -428,15 +422,19 @@ pub struct SubMenuView {
 }
 impl SubMenuView {
     const ICON_SIZE: Size<LogicalUnit> = Size::new_logical(6.0, 8.0);
-    const ARROW_VERTICES: &[[f32; 2]] = &[
-        [0.0, 0.0],
-        [0.0 + 1.5 / Self::ICON_SIZE.width, 0.0],
-        [1.0 - 1.5 / Self::ICON_SIZE.width, 0.5],
-        [1.0, 0.5],
-        [0.0, 1.0],
-        [0.0 + 1.5 / Self::ICON_SIZE.width, 1.0],
-    ];
-    const ARROW_INDICES: &[u16] = &[0, 1, 2, 2, 1, 3, 2, 4, 5, 5, 3, 2];
+    const ARROW: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+        vertices: &[
+            [0.0, 0.0],
+            [0.0 + 1.5 / Self::ICON_SIZE.width, 0.0],
+            [1.0 - 1.5 / Self::ICON_SIZE.width, 0.5],
+            [1.0, 0.5],
+            [0.0, 1.0],
+            [0.0 + 1.5 / Self::ICON_SIZE.width, 1.0],
+        ],
+        indices: &[0, 1, 2, 2, 1, 3, 2, 4, 5, 5, 3, 2],
+        width: Self::ICON_SIZE.width,
+        height: Self::ICON_SIZE.height,
+    };
 
     pub fn new(
         ctx: &mut ViewInitContext,

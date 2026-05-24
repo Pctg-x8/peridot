@@ -352,7 +352,10 @@ pub struct SharedState {
 impl SharedState {
     pub fn reserve_delayed_action(&self) {
         self.delayed_action_timer
-            .set(0, 400 * 1000 * 1000)
+            .set(
+                0,
+                crate::uikit::MENU_DELAYED_ACTION_TIMEOUT_MS as i64 * 1000 * 1000,
+            )
             .expect("timerfd.set");
     }
 

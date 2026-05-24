@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bedrock as br;
 
 use crate::{
-    rendering::atlas::AtlasRect,
+    rendering::{TextureID, atlas::AtlasRect},
     utils::{Point, SafeF32},
 };
 
@@ -32,7 +32,7 @@ pub struct VectorRasterizationState {
     pub curve_tris: Vec<[f32; 4]>,
     pub updated_rects: Vec<br::Rect2D>,
     pub rounded_fill_rect_radius_requests: HashMap<SafeF32, AtlasRect>,
-    pub normalized_2d_mesh_requests: HashMap<usize, (u32, u32)>,
+    pub normalized_2d_mesh_requests: HashMap<TextureID, (u32, u32)>,
 }
 impl VectorRasterizationState {
     pub fn new() -> Self {

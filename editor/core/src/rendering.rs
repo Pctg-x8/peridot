@@ -1,3 +1,4 @@
+use core::num::NonZeroUsize;
 use std::{
     collections::HashMap,
     sync::{Mutex, atomic::AtomicBool},
@@ -52,17 +53,22 @@ pub struct NewContextMenuData {
     pub composite_root: CompositeTreeRef,
 }
 
+#[derive(Clone)]
+pub struct Normalized2DStaticMeshTexture {
+    pub vertices: &'static [[f32; 2]],
+    pub indices: &'static [u16],
+    pub width: f32,
+    pub height: f32,
+}
+
 pub enum RenderMessage {
     NewWindow(NewWindowData),
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
     NewContextMenu(NewContextMenuData),
     DestroyContextMenu(FlyoutSurfaceHandle, std::sync::mpsc::Sender<()>),
     RegisterNormalized2DStaticMeshTexture {
-        id: usize,
-        vertices: &'static [[f32; 2]],
-        indices: &'static [u16],
-        width: f32,
-        height: f32,
+        id: TextureID,
+        data: Normalized2DStaticMeshTexture,
     },
 }
 
@@ -72,26 +78,31 @@ pub struct RendererSync {
     pub composite_buffer: CompositeTreeSyncBuffer<SyncEvent>,
 }
 
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TextureID(NonZeroUsize);
+impl TextureID {
+    #[inline(always)]
+    pub(self) const fn rect_index(&self) -> usize {
+        self.0.get() - 1
+    }
+}
+
 pub struct MainThreadTextureIDIssuer {
-    next_id: usize,
+    next_id: NonZeroUsize,
 }
 impl MainThreadTextureIDIssuer {
     pub fn new() -> Self {
-        Self { next_id: 0 }
+        Self {
+            next_id: unsafe { NonZeroUsize::new_unchecked(1) },
+        }
     }
 
-    pub fn issue(&mut self) -> usize {
+    pub fn issue(&mut self) -> TextureID {
         let id = self.next_id;
-        self.next_id += 1;
-        id
+        self.next_id = self.next_id.checked_add(1).expect("too many textures");
+        TextureID(id)
     }
-}
-
-struct Normalized2DStaticMeshTextureEntry {
-    width: f32,
-    height: f32,
-    vertices: &'static [[f32; 2]],
-    indices: &'static [u16],
 }
 
 crate::perf_event!(SYNCPOINT = "RenderSyncPoint");
@@ -164,8 +175,8 @@ impl<'main> RenderThread<'main> {
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
         let mut context_menus: HashMap<FlyoutSurfaceHandle, ContextMenuRenderer> = HashMap::new();
         let mut normalized_2d_static_mesh_textures: HashMap<
-            usize,
-            Normalized2DStaticMeshTextureEntry,
+            TextureID,
+            Normalized2DStaticMeshTexture,
         > = HashMap::new();
 
         let mut shared_update_cp = br::CommandPoolObject::new(
@@ -308,22 +319,8 @@ impl<'main> RenderThread<'main> {
                             tracing::error!(reason = %e, "done_event_bus.send");
                         }
                     }
-                    Ok(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                        id,
-                        vertices,
-                        indices,
-                        width,
-                        height,
-                    }) => {
-                        normalized_2d_static_mesh_textures.insert(
-                            id,
-                            Normalized2DStaticMeshTextureEntry {
-                                width,
-                                height,
-                                vertices,
-                                indices,
-                            },
-                        );
+                    Ok(RenderMessage::RegisterNormalized2DStaticMeshTexture { id, data }) => {
+                        normalized_2d_static_mesh_textures.insert(id, data);
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
                         break;
@@ -514,7 +511,8 @@ impl<'main> RenderThread<'main> {
                     .expect("invalid state");
                 // TODO: ここも重いようならあとで改善する
                 for (&id, e) in &normalized_2d_static_mesh_textures {
-                    if glyph_atlas_mgr.atlas_rects.get(id).is_none_or(|x| {
+                    let rect_index = id.rect_index();
+                    if glyph_atlas_mgr.atlas_rects.get(rect_index).is_none_or(|x| {
                         x == &AtlasRect {
                             left: 0,
                             top: 0,
@@ -522,23 +520,23 @@ impl<'main> RenderThread<'main> {
                             bottom: 0,
                         }
                     }) {
-                        tracing::trace!(id, "rasterize mesh");
+                        tracing::trace!(?id, "rasterize mesh");
                         let rect = glyph_atlas_mgr.manager.acquire(
                             (e.width * x.active_scale().value()).ceil() as _,
                             (e.height * x.active_scale().value()).ceil() as _,
                         );
-                        if glyph_atlas_mgr.atlas_rects.len() <= id {
+                        if glyph_atlas_mgr.atlas_rects.len() <= rect_index {
                             // extend with zero
                             glyph_atlas_mgr
                                 .atlas_rects
-                                .resize_with(id + 1, || AtlasRect {
+                                .resize_with(rect_index + 1, || AtlasRect {
                                     left: 0,
                                     top: 0,
                                     right: 0,
                                     bottom: 0,
                                 });
                         }
-                        glyph_atlas_mgr.atlas_rects[id] = rect;
+                        glyph_atlas_mgr.atlas_rects[rect_index] = rect;
                         if glyph_atlas_mgr
                             .vector_raster_state
                             .normalized_2d_mesh_requests
@@ -663,7 +661,8 @@ impl<'main> RenderThread<'main> {
                     .expect("invalid state");
                 // TODO: ここも重いようならあとで改善する
                 for (&id, e) in &normalized_2d_static_mesh_textures {
-                    if glyph_atlas_mgr.atlas_rects.get(id).is_none_or(|x| {
+                    let rect_index = id.rect_index();
+                    if glyph_atlas_mgr.atlas_rects.get(rect_index).is_none_or(|x| {
                         x == &AtlasRect {
                             left: 0,
                             top: 0,
@@ -671,23 +670,23 @@ impl<'main> RenderThread<'main> {
                             bottom: 0,
                         }
                     }) {
-                        tracing::trace!(id, "rasterize mesh");
+                        tracing::trace!(?id, "rasterize mesh");
                         let rect = glyph_atlas_mgr.manager.acquire(
                             (e.width * x.active_scale.value()).ceil() as _,
                             (e.height * x.active_scale.value()).ceil() as _,
                         );
-                        if glyph_atlas_mgr.atlas_rects.len() <= id {
+                        if glyph_atlas_mgr.atlas_rects.len() <= rect_index {
                             // extend with zero
                             glyph_atlas_mgr
                                 .atlas_rects
-                                .resize_with(id + 1, || AtlasRect {
+                                .resize_with(rect_index + 1, || AtlasRect {
                                     left: 0,
                                     top: 0,
                                     right: 0,
                                     bottom: 0,
                                 });
                         }
-                        glyph_atlas_mgr.atlas_rects[id] = rect;
+                        glyph_atlas_mgr.atlas_rects[rect_index] = rect;
                         if glyph_atlas_mgr
                             .vector_raster_state
                             .normalized_2d_mesh_requests
@@ -2448,7 +2447,7 @@ impl<'d> MaskTextureAtlasManager<'d> {
         formats: &GlyphAtlasRenderingFormats,
         common_res: &GlyphAtlasManagerCommonResources,
         render_worker_queue: &mut (impl br::QueueMut + ?Sized),
-        normalized_2d_static_mesh_textures: &HashMap<usize, Normalized2DStaticMeshTextureEntry>,
+        normalized_2d_static_mesh_textures: &HashMap<TextureID, Normalized2DStaticMeshTexture>,
         scale: f32,
     ) {
         // TODO: 最適化はあとで

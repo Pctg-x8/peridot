@@ -31,7 +31,8 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
+        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
+        RenderMessageSender, RenderThread, RendererSync, TextureID,
         composite::{
             self, AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig,
             CompositeMode, CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -1468,19 +1469,22 @@ impl AppMenuViewEventHandler {
 }
 
 pub struct SharedCheckIcon {
-    check_icon: usize,
+    check_icon: TextureID,
 }
 impl SharedCheckIcon {
-    const CHECK_ICON_SIZE: f32 = 12.0;
-    const CHECK_ICON_VERTICES: &[[f32; 2]] = &[
-        [0.0, 0.4],
-        [0.0, 0.6],
-        [0.4, 0.7],
-        [0.4, 0.9],
-        [1.0, 0.1],
-        [1.0, 0.3],
-    ];
-    const CHECK_ICON_INDICES: &[u16] = &[0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4, 5];
+    const CHECK_ICON: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+        width: 12.0,
+        height: 12.0,
+        vertices: &[
+            [0.0, 0.4],
+            [0.0, 0.6],
+            [0.4, 0.7],
+            [0.4, 0.9],
+            [1.0, 0.1],
+            [1.0, 0.3],
+        ],
+        indices: &[0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4, 5],
+    };
 
     pub fn new(
         mt_texid_issuer: &mut MainThreadTextureIDIssuer,
@@ -1490,10 +1494,7 @@ impl SharedCheckIcon {
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: check_icon,
-                vertices: Self::CHECK_ICON_VERTICES,
-                indices: Self::CHECK_ICON_INDICES,
-                width: Self::CHECK_ICON_SIZE,
-                height: Self::CHECK_ICON_SIZE,
+                data: Self::CHECK_ICON,
             })
             .expect("rt_sender.send");
 
@@ -1545,12 +1546,12 @@ impl ToggleButtonView {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [
                 AnimatableFloat::Value(6.0),
-                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON_SIZE * 0.5),
+                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
             ],
             relative_offset_adjustment: [0.0, 0.5],
             size: [
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
             ],
             pivot: [0.5, 0.5],
             has_bitmap: true,
@@ -1738,14 +1739,14 @@ impl CheckboxView {
         let ct_check = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [
-                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON_SIZE * 0.5),
-                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON_SIZE * 0.5),
+                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.width * 0.5),
+                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
             ],
             relative_offset_adjustment: [0.5, 0.5],
             pivot: [0.5, 0.5],
             size: [
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
             ],
             has_bitmap: true,
             texatlas_rect_id: Some(shared_res.check_icon),
@@ -3654,11 +3655,7 @@ impl MenuSession {
             0,
             surface_pos,
             |render_scale| {
-                crate::uikit::MenuItemLayout::build(
-                    items.iter().cloned(),
-                    system_link.font_set(),
-                    render_scale,
-                )
+                crate::uikit::MenuItemLayout::build(items.iter().cloned(), system_link.font_set())
             },
             |layout, h, view_init_ctx| {
                 view_init_ctx.ui_scale_factor = h.render_scale();
@@ -3741,7 +3738,6 @@ impl MenuSession {
                             crate::uikit::MenuItemLayout::build(
                                 items.into_iter().cloned(),
                                 system_link.font_set(),
-                                render_scale,
                             )
                         },
                         |layout, h, view_init_ctx| {
@@ -3827,7 +3823,6 @@ impl MenuSession {
                 crate::uikit::MenuItemLayout::build(
                     items.into_iter().cloned(),
                     system_link.font_set(),
-                    render_scale,
                 )
             },
             |layout, h, view_init_ctx| {

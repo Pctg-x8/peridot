@@ -10,7 +10,8 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
+        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
+        RenderMessageSender, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -24,23 +25,22 @@ use crate::{
 };
 
 struct SharedResources {
-    down_arrow_tex: usize,
+    down_arrow_tex: TextureID,
 }
 impl SharedResources {
-    const DOWN_ARROW_TEX_SIZE: f32 = 16.0;
-    const DOWN_ARROW_TEX_VERTICES: &'static [[f32; 2]] =
-        &[[0.25, 0.375], [0.75, 0.375], [0.5, 0.625]];
-    const DOWN_ARROW_TEX_INDICES: &'static [u16] = &[0, 1, 2];
+    const DOWN_ARROW: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+        vertices: &[[0.25, 0.375], [0.75, 0.375], [0.5, 0.625]],
+        indices: &[0, 1, 2],
+        width: 16.0,
+        height: 16.0,
+    };
 
     fn new(id_issuer: &mut MainThreadTextureIDIssuer, rt_sender: &RenderMessageSender) -> Self {
         let down_arrow_tex = id_issuer.issue();
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: down_arrow_tex,
-                vertices: Self::DOWN_ARROW_TEX_VERTICES,
-                indices: Self::DOWN_ARROW_TEX_INDICES,
-                width: Self::DOWN_ARROW_TEX_SIZE,
-                height: Self::DOWN_ARROW_TEX_SIZE,
+                data: Self::DOWN_ARROW,
             })
             .expect("rt_sender.send");
 
@@ -126,8 +126,8 @@ impl View {
             offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
             relative_offset_adjustment: [1.0, 0.5],
             size: [
-                AnimatableFloat::Value(SharedResources::DOWN_ARROW_TEX_SIZE),
-                AnimatableFloat::Value(SharedResources::DOWN_ARROW_TEX_SIZE),
+                AnimatableFloat::Value(SharedResources::DOWN_ARROW.width),
+                AnimatableFloat::Value(SharedResources::DOWN_ARROW.height),
             ],
             has_bitmap: true,
             composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),

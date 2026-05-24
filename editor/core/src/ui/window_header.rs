@@ -10,7 +10,8 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
+        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
+        RenderMessageSender, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
@@ -283,60 +284,73 @@ impl SystemCommandButtonView {
     const ICON_SIZE: f32 = 10.0;
     const WIDTH: f32 = 48.0;
 
-    const CLOSE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0 + 0.5 / Self::ICON_SIZE, 0.0 - 0.5 / Self::ICON_SIZE],
-        [0.0 - 0.5 / Self::ICON_SIZE, 0.0 + 0.5 / Self::ICON_SIZE],
-        [1.0 - 0.5 / Self::ICON_SIZE, 1.0 + 0.5 / Self::ICON_SIZE],
-        [1.0 + 0.5 / Self::ICON_SIZE, 1.0 - 0.5 / Self::ICON_SIZE],
-        [1.0 + 0.5 / Self::ICON_SIZE, 0.0 + 0.5 / Self::ICON_SIZE],
-        [1.0 - 0.5 / Self::ICON_SIZE, 0.0 - 0.5 / Self::ICON_SIZE],
-        [0.0 - 0.5 / Self::ICON_SIZE, 1.0 - 0.5 / Self::ICON_SIZE],
-        [0.0 + 0.5 / Self::ICON_SIZE, 1.0 + 0.5 / Self::ICON_SIZE],
-    ];
-    const CLOSE_ICON_INDICES: &'static [u16] = &[0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4];
-
-    const MINIMIZE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0, 1.0 - 1.5 / Self::ICON_SIZE],
-        [0.0, 1.0],
-        [1.0, 1.0],
-        [1.0, 1.0 - 1.5 / Self::ICON_SIZE],
-    ];
-    const MINIMIZE_ICON_INDICES: &'static [u16] = &[0, 1, 2, 2, 3, 0];
-
-    const MAXIMIZE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0, 0.0],
-        [0.0 + 1.5 / Self::ICON_SIZE, 0.0 + 1.5 / Self::ICON_SIZE],
-        [1.0, 0.0],
-        [1.0 - 1.5 / Self::ICON_SIZE, 0.0 + 1.5 / Self::ICON_SIZE],
-        [1.0, 1.0],
-        [1.0 - 1.5 / Self::ICON_SIZE, 1.0 - 1.5 / Self::ICON_SIZE],
-        [0.0, 1.0],
-        [0.0 + 1.5 / Self::ICON_SIZE, 1.0 - 1.5 / Self::ICON_SIZE],
-    ];
-    const MAXIMIZE_ICON_INDICES: &'static [u16] = &[
-        0, 2, 3, 3, 1, 0, 2, 4, 5, 5, 3, 2, 4, 6, 7, 7, 5, 4, 6, 0, 1, 1, 7, 6,
-    ];
-
-    const RESTORE_ICON_VERTICES: &'static [[f32; 2]] = &[
-        [0.0, 2.0 / Self::ICON_SIZE],
-        [1.0 - 2.0 / Self::ICON_SIZE, 2.0 / Self::ICON_SIZE],
-        [1.0 - 2.0 / Self::ICON_SIZE, 1.0],
-        [0.0, 1.0],
-        [1.0 / Self::ICON_SIZE, 3.0 / Self::ICON_SIZE],
-        [1.0 - 3.0 / Self::ICON_SIZE, 3.0 / Self::ICON_SIZE],
-        [1.0 - 3.0 / Self::ICON_SIZE, 1.0 - 1.0 / Self::ICON_SIZE],
-        [1.0 / Self::ICON_SIZE, 1.0 - 1.0 / Self::ICON_SIZE],
-        [3.0 / Self::ICON_SIZE, 0.0],
-        [1.0, 0.0],
-        [1.0, 1.0 - 3.0 / Self::ICON_SIZE],
-        [3.0 / Self::ICON_SIZE, 1.0 / Self::ICON_SIZE],
-        [1.0 - 1.0 / Self::ICON_SIZE, 1.0 / Self::ICON_SIZE],
-        [1.0 - 1.0 / Self::ICON_SIZE, 1.0 - 3.0 / Self::ICON_SIZE],
-    ];
-    const RESTORE_ICON_INDICES: &'static [u16] = &[
-        0, 1, 4, 4, 1, 5, 1, 2, 5, 5, 2, 6, 2, 3, 6, 6, 3, 7, 3, 0, 7, 7, 0, 4, 8, 9, 11, 11, 9,
-        12, 9, 10, 12, 12, 10, 13,
-    ];
+    const CLOSE_ICON: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+        vertices: &[
+            [0.0 + 0.5 / Self::ICON_SIZE, 0.0 - 0.5 / Self::ICON_SIZE],
+            [0.0 - 0.5 / Self::ICON_SIZE, 0.0 + 0.5 / Self::ICON_SIZE],
+            [1.0 - 0.5 / Self::ICON_SIZE, 1.0 + 0.5 / Self::ICON_SIZE],
+            [1.0 + 0.5 / Self::ICON_SIZE, 1.0 - 0.5 / Self::ICON_SIZE],
+            [1.0 + 0.5 / Self::ICON_SIZE, 0.0 + 0.5 / Self::ICON_SIZE],
+            [1.0 - 0.5 / Self::ICON_SIZE, 0.0 - 0.5 / Self::ICON_SIZE],
+            [0.0 - 0.5 / Self::ICON_SIZE, 1.0 - 0.5 / Self::ICON_SIZE],
+            [0.0 + 0.5 / Self::ICON_SIZE, 1.0 + 0.5 / Self::ICON_SIZE],
+        ],
+        indices: &[0, 1, 2, 2, 3, 0, 4, 5, 6, 6, 7, 4],
+        width: Self::ICON_SIZE as _,
+        height: Self::ICON_SIZE as _,
+    };
+    const MINIMIZE_ICON: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+        vertices: &[
+            [0.0, 1.0 - 1.5 / Self::ICON_SIZE],
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 1.0 - 1.5 / Self::ICON_SIZE],
+        ],
+        indices: &[0, 1, 2, 2, 3, 0],
+        width: Self::ICON_SIZE as _,
+        height: Self::ICON_SIZE as _,
+    };
+    const MAXIMIZE_ICON: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+        vertices: &[
+            [0.0, 0.0],
+            [0.0 + 1.5 / Self::ICON_SIZE, 0.0 + 1.5 / Self::ICON_SIZE],
+            [1.0, 0.0],
+            [1.0 - 1.5 / Self::ICON_SIZE, 0.0 + 1.5 / Self::ICON_SIZE],
+            [1.0, 1.0],
+            [1.0 - 1.5 / Self::ICON_SIZE, 1.0 - 1.5 / Self::ICON_SIZE],
+            [0.0, 1.0],
+            [0.0 + 1.5 / Self::ICON_SIZE, 1.0 - 1.5 / Self::ICON_SIZE],
+        ],
+        indices: &[
+            0, 2, 3, 3, 1, 0, 2, 4, 5, 5, 3, 2, 4, 6, 7, 7, 5, 4, 6, 0, 1, 1, 7, 6,
+        ],
+        width: Self::ICON_SIZE as _,
+        height: Self::ICON_SIZE as _,
+    };
+    const RESTORE_ICON: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+        vertices: &[
+            [0.0, 2.0 / Self::ICON_SIZE],
+            [1.0 - 2.0 / Self::ICON_SIZE, 2.0 / Self::ICON_SIZE],
+            [1.0 - 2.0 / Self::ICON_SIZE, 1.0],
+            [0.0, 1.0],
+            [1.0 / Self::ICON_SIZE, 3.0 / Self::ICON_SIZE],
+            [1.0 - 3.0 / Self::ICON_SIZE, 3.0 / Self::ICON_SIZE],
+            [1.0 - 3.0 / Self::ICON_SIZE, 1.0 - 1.0 / Self::ICON_SIZE],
+            [1.0 / Self::ICON_SIZE, 1.0 - 1.0 / Self::ICON_SIZE],
+            [3.0 / Self::ICON_SIZE, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0 - 3.0 / Self::ICON_SIZE],
+            [3.0 / Self::ICON_SIZE, 1.0 / Self::ICON_SIZE],
+            [1.0 - 1.0 / Self::ICON_SIZE, 1.0 / Self::ICON_SIZE],
+            [1.0 - 1.0 / Self::ICON_SIZE, 1.0 - 3.0 / Self::ICON_SIZE],
+        ],
+        indices: &[
+            0, 1, 4, 4, 1, 5, 1, 2, 5, 5, 2, 6, 2, 3, 6, 6, 3, 7, 3, 0, 7, 7, 0, 4, 8, 9, 11, 11,
+            9, 12, 9, 10, 12, 12, 10, 13,
+        ],
+        width: Self::ICON_SIZE as _,
+        height: Self::ICON_SIZE as _,
+    };
 
     fn new(
         init_ctx: &mut ViewInitContext,
@@ -481,10 +495,10 @@ impl SystemCommand {
 }
 
 pub struct SystemCommandTextureIDSet {
-    close: usize,
-    minimize: usize,
-    maximize: usize,
-    restore: usize,
+    close: TextureID,
+    minimize: TextureID,
+    maximize: TextureID,
+    restore: TextureID,
 }
 impl SystemCommandTextureIDSet {
     pub fn new(
@@ -495,40 +509,28 @@ impl SystemCommandTextureIDSet {
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: close,
-                vertices: SystemCommandButtonView::CLOSE_ICON_VERTICES,
-                indices: SystemCommandButtonView::CLOSE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
+                data: SystemCommandButtonView::CLOSE_ICON,
             })
             .expect("rt_sender.send");
         let minimize = tid_issuer.issue();
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: minimize,
-                vertices: SystemCommandButtonView::MINIMIZE_ICON_VERTICES,
-                indices: SystemCommandButtonView::MINIMIZE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
+                data: SystemCommandButtonView::MINIMIZE_ICON,
             })
             .expect("rt_sender.send");
         let maximize = tid_issuer.issue();
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: maximize,
-                vertices: SystemCommandButtonView::MAXIMIZE_ICON_VERTICES,
-                indices: SystemCommandButtonView::MAXIMIZE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
+                data: SystemCommandButtonView::MAXIMIZE_ICON,
             })
             .expect("rt_sender.send");
         let restore = tid_issuer.issue();
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: restore,
-                vertices: SystemCommandButtonView::RESTORE_ICON_VERTICES,
-                indices: SystemCommandButtonView::RESTORE_ICON_INDICES,
-                width: SystemCommandButtonView::ICON_SIZE as _,
-                height: SystemCommandButtonView::ICON_SIZE as _,
+                data: SystemCommandButtonView::RESTORE_ICON,
             })
             .expect("rt_sender.send");
 
@@ -541,7 +543,7 @@ impl SystemCommandTextureIDSet {
     }
 
     #[inline(always)]
-    const fn select(&self, cmd: SystemCommand) -> usize {
+    const fn select(&self, cmd: SystemCommand) -> TextureID {
         match cmd {
             SystemCommand::Close => self.close,
             SystemCommand::Minimize => self.minimize,
