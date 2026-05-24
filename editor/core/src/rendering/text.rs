@@ -814,6 +814,8 @@ impl TextLayout {
                             line_left_offset = 0.0;
                         }
 
+                        // TODO: そもそも1セクションも長すぎる場合に強制折り返しをさせる
+
                         #[cfg(feature = "harfbuzz")]
                         let last_line = lines.last_mut().expect("empty lines");
                         last_line.buffers.extend(section_buffers);

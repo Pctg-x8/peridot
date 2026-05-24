@@ -2,6 +2,7 @@ use core::{pin::Pin, ptr::NonNull, sync::atomic::AtomicBool};
 use std::sync::Mutex;
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
+use bitflags::bitflags;
 use peridot_tp_dbus as dbus;
 use peridot_tp_wayland::{self as wl, ProxyObject};
 
@@ -241,6 +242,7 @@ struct CommittedState {
     active_buffer_scale: f32,
     active_size: Size<PixelsUnit>,
     active_size_logical: Size<LogicalUnit>,
+    decoration_edge: DecorationEdge,
     maximized: bool,
 }
 
@@ -273,6 +275,7 @@ struct EventListener {
     pending_configure_buffer_scale: Option<f32>,
     pending_activated_changes: Option<bool>,
     pending_maximized_changes: Option<bool>,
+    pending_decoration_edge_changes: Option<DecorationEdge>,
     event_dispatcher: LogicFiberEventDispatcher,
 }
 impl wl::SurfaceEventListener for EventListener {
@@ -344,6 +347,24 @@ impl wl::XdgToplevelEventListener for EventListener {
 
         let states = unsafe { states.as_slice::<wl::XdgToplevelState>() };
 
+        let mut decoration_edge_changes = DecorationEdge::empty();
+        if !states.contains(&wl::XdgToplevelState::TiledLeft) {
+            decoration_edge_changes |= DecorationEdge::Left;
+        }
+        if !states.contains(&wl::XdgToplevelState::TiledTop) {
+            decoration_edge_changes |= DecorationEdge::Top;
+        }
+        if !states.contains(&wl::XdgToplevelState::TiledRight) {
+            decoration_edge_changes |= DecorationEdge::Right;
+        }
+        if !states.contains(&wl::XdgToplevelState::TiledBottom) {
+            decoration_edge_changes |= DecorationEdge::Bottom;
+        }
+        if states.contains(&wl::XdgToplevelState::Maximized) {
+            // no decorations when maximized
+            decoration_edge_changes = DecorationEdge::empty();
+        }
+
         self.pending_configure_size = (
             if width == 0 {
                 self.pending_configure_size.0
@@ -356,22 +377,9 @@ impl wl::XdgToplevelEventListener for EventListener {
                 Some(height)
             },
         );
-        if let Some(ref d) = self.decoration {
-            if states.contains(&wl::XdgToplevelState::Maximized) {
-                d.hide();
-            } else {
-                d.show();
-
-                if states.contains(&wl::XdgToplevelState::Activated) {
-                    d.active();
-                } else {
-                    d.inactive();
-                }
-            }
-        }
-
         self.pending_activated_changes = Some(states.contains(&wl::XdgToplevelState::Activated));
         self.pending_maximized_changes = Some(states.contains(&wl::XdgToplevelState::Maximized));
+        self.pending_decoration_edge_changes = Some(decoration_edge_changes);
     }
 
     #[tracing::instrument(name = "xdg_toplevel::configure_bounds", skip(self, _sender))]
@@ -421,6 +429,7 @@ impl EventListener {
 
         let mut committed_state_ref = self.state.data.committed_state.lock().expect("poisoned");
         let mut rescaled = false;
+        let mut should_update_decoration = false;
         if let Some(s) = self.pending_configure_buffer_scale.take() {
             match self.scaling {
                 SurfaceScaling::Automatic => {
@@ -450,6 +459,11 @@ impl EventListener {
             rescaled = true;
         }
 
+        if let Some(e) = self.pending_decoration_edge_changes.take() {
+            committed_state_ref.decoration_edge = e;
+            should_update_decoration = true;
+        }
+
         let (w, h) = (
             self.pending_configure_size.0.take(),
             self.pending_configure_size.1.take(),
@@ -468,10 +482,6 @@ impl EventListener {
                     .set_window_geometry(0, 0, logical_size.width as _, logical_size.height as _)
                     .expect("xdg_surface.set_window_geometry");
 
-                if let Some(ref d) = self.decoration {
-                    d.adjust_for_frame(logical_size.width as _, logical_size.height as _);
-                }
-
                 committed_state_ref.active_size = pixels_size;
                 committed_state_ref.active_size_logical = logical_size;
                 self.state
@@ -483,6 +493,7 @@ impl EventListener {
                     window: Handle(self.state.data.surface_ptr),
                     size: logical_size,
                 });
+                should_update_decoration = true;
             }
         }
 
@@ -495,6 +506,25 @@ impl EventListener {
                 is_maximized: new_maximized,
             });
         }
+
+        if let Some(activated) = self.pending_activated_changes
+            && let Some(ref d) = self.decoration
+        {
+            if activated {
+                d.active();
+            } else {
+                d.inactive();
+            }
+        }
+
+        if should_update_decoration && let Some(ref d) = self.decoration {
+            d.adjust_for_frame(
+                committed_state_ref.active_size_logical.width as _,
+                committed_state_ref.active_size_logical.height as _,
+                committed_state_ref.decoration_edge,
+            );
+        }
+
         drop(committed_state_ref);
 
         if let Some(ref d) = self.decoration {
@@ -587,28 +617,28 @@ impl NativeWindow {
             None
         };
 
-        // memo: HyprlandのViewporterはsrcの座標範囲の判定が間違っているので特殊判定して影を出さないようにする
-        let (deco, decoration) = if let Some(ref dm) =
-            dpsv.global_interfaces.zxdg_decoration_manager
-            && !dpsv.global_interfaces.is_hyprland
-        {
+        let deco = if let Some(ref dm) = dpsv.global_interfaces.zxdg_decoration_manager {
             let d = dm
                 .get_toplevel_decoration(&xdg_toplevel)
                 .expect("decoration.get_toplevel");
             d.set_mode(wl::ZxdgToplevelDecorationV1Mode::ClientSide)
                 .expect("decoration.set_mode");
 
-            (
-                Some(d),
-                Some(Decoration::new(
-                    &dpsv.global_interfaces,
-                    deco_pixbuf.expect("pixbuf required"),
-                    &surface,
-                    &xdg_toplevel,
-                )),
-            )
+            Some(d)
         } else {
-            (None, None)
+            None
+        };
+        // memo: HyprlandのViewporterはsrcの座標範囲の判定が間違っているので特殊判定して影を出さないようにする
+        // (将来的になおったら外す)
+        let decoration = if !dpsv.global_interfaces.is_hyprland {
+            Some(Decoration::new(
+                &dpsv.global_interfaces,
+                deco_pixbuf.expect("pixbuf required"),
+                &surface,
+                &xdg_toplevel,
+            ))
+        } else {
+            None
         };
 
         let mut window_scaling =
@@ -670,6 +700,7 @@ impl NativeWindow {
                         active_buffer_scale: 1.0,
                         active_size: Size::new_pixels(640, 480),
                         active_size_logical: Size::new_logical(640.0, 480.0),
+                        decoration_edge: DecorationEdge::all(),
                         maximized: false,
                     }),
                     swapchain_externally_invalidation_signal: std::sync::atomic::AtomicBool::new(
@@ -688,6 +719,7 @@ impl NativeWindow {
             pending_configure_buffer_scale: None,
             pending_activated_changes: None,
             pending_maximized_changes: None,
+            pending_decoration_edge_changes: None,
             event_dispatcher,
         });
         surface
@@ -989,6 +1021,16 @@ impl DecorationEdgeSurface {
 
     fn hide(&self) {
         self.surface.attach(None, 0, 0).expect("surface.attach");
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct DecorationEdge : u8 {
+        const Left = 1 << 0;
+        const Top = 1 << 1;
+        const Right = 1 << 2;
+        const Bottom = 1 << 3;
     }
 }
 
@@ -1312,19 +1354,93 @@ impl Decoration {
         Box::into_pin(this)
     }
 
-    fn adjust_for_frame(&self, parent_width: i32, parent_height: i32) {
+    fn adjust_for_frame(&self, parent_width: i32, parent_height: i32, edge: DecorationEdge) {
         tracing::debug!("adjust_for_frame");
+
+        // show/hide by edge
+        if edge.contains(DecorationEdge::Left) {
+            self.left.show(&unsafe { &*self.pixbuf_ptr }.buffer_edge);
+        } else {
+            self.left.hide();
+        }
+        if edge.contains(DecorationEdge::Right) {
+            self.right.show(&unsafe { &*self.pixbuf_ptr }.buffer_edge);
+        } else {
+            self.right.hide();
+        }
+        if edge.contains(DecorationEdge::Top) {
+            self.top.show(&unsafe { &*self.pixbuf_ptr }.buffer_edge);
+        } else {
+            self.top.hide();
+        }
+        if edge.contains(DecorationEdge::Bottom) {
+            self.bottom.show(&unsafe { &*self.pixbuf_ptr }.buffer_edge);
+        } else {
+            self.bottom.hide();
+        }
+        if edge.contains(DecorationEdge::Left | DecorationEdge::Top) {
+            self.lt.show(&unsafe { &*self.pixbuf_ptr }.buffer_corner);
+        } else {
+            self.lt.hide();
+        }
+        if edge.contains(DecorationEdge::Right | DecorationEdge::Top) {
+            self.rt.show(&unsafe { &*self.pixbuf_ptr }.buffer_corner);
+        } else {
+            self.rt.hide();
+        }
+        if edge.contains(DecorationEdge::Left | DecorationEdge::Bottom) {
+            self.lb.show(&unsafe { &*self.pixbuf_ptr }.buffer_corner);
+        } else {
+            self.lb.hide();
+        }
+        if edge.contains(DecorationEdge::Right | DecorationEdge::Bottom) {
+            self.rb.show(&unsafe { &*self.pixbuf_ptr }.buffer_corner);
+        } else {
+            self.rb.hide();
+        }
+
+        let shadow_edge_top = if edge.contains(DecorationEdge::Top) {
+            Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32
+        } else {
+            0
+        };
+        let shadow_edge_bottom = if edge.contains(DecorationEdge::Bottom) {
+            parent_height - Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32
+        } else {
+            parent_height
+        };
+        let shadow_edge_left = if edge.contains(DecorationEdge::Left) {
+            Self::INSET as i32
+        } else {
+            0
+        };
+        let shadow_edge_right = if edge.contains(DecorationEdge::Right) {
+            parent_width - Self::INSET as i32
+        } else {
+            parent_width
+        };
 
         // positioning
         let rp = parent_width - Self::INSET as i32;
         let bp = parent_height - Self::INSET as i32;
+        self.left
+            .subsurface
+            .set_position(-(Self::SIZE as i32) + Self::INSET as i32, shadow_edge_top)
+            .expect("subsurface.set_position");
+        self.top
+            .subsurface
+            .set_position(
+                shadow_edge_left,
+                -(Self::SIZE as i32) + Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32,
+            )
+            .expect("subsurface.set_position");
         self.right
             .subsurface
-            .set_position(rp, Self::INSET as i32 + Self::SHIFT_DOWN_AMOUNT as i32)
+            .set_position(rp, shadow_edge_top)
             .expect("subsurface.set_position");
         self.bottom
             .subsurface
-            .set_position(Self::INSET as i32, bp + Self::SHIFT_DOWN_AMOUNT as i32)
+            .set_position(shadow_edge_left, bp + Self::SHIFT_DOWN_AMOUNT as i32)
             .expect("subsurface.set_position");
         self.rt
             .subsurface
@@ -1348,19 +1464,19 @@ impl Decoration {
         // sizing
         self.left
             .viewport
-            .set_destination(Self::SIZE as _, parent_height - Self::INSET as i32 * 2)
+            .set_destination(Self::SIZE as _, shadow_edge_bottom - shadow_edge_top)
             .expect("viewport.set_destination");
         self.right
             .viewport
-            .set_destination(Self::SIZE as _, parent_height - Self::INSET as i32 * 2)
+            .set_destination(Self::SIZE as _, shadow_edge_bottom - shadow_edge_top)
             .expect("viewport.set_destination");
         self.top
             .viewport
-            .set_destination(parent_width - Self::INSET as i32 * 2, Self::SIZE as _)
+            .set_destination(shadow_edge_right - shadow_edge_left, Self::SIZE as _)
             .expect("viewport.set_destination");
         self.bottom
             .viewport
-            .set_destination(parent_width - Self::INSET as i32 * 2, Self::SIZE as _)
+            .set_destination(shadow_edge_right - shadow_edge_left, Self::SIZE as _)
             .expect("viewport.set_destination");
 
         // adjsut input region
@@ -1370,7 +1486,7 @@ impl Decoration {
                 Self::SIZE as i32 - Self::INSET as i32 - Self::INTERACT_SIZE as i32,
                 0,
                 Self::INTERACT_SIZE as i32,
-                parent_height - Self::INSET as i32 * 2,
+                shadow_edge_right - shadow_edge_left,
             )
             .expect("edge_surface.set_input_rect");
         self.right
@@ -1379,7 +1495,7 @@ impl Decoration {
                 Self::INSET as i32,
                 0,
                 Self::INTERACT_SIZE as i32,
-                parent_height - Self::INSET as i32 * 2,
+                shadow_edge_right - shadow_edge_left,
             )
             .expect("edge_surface.set_input_rect");
         self.top
@@ -1390,7 +1506,7 @@ impl Decoration {
                     - Self::INSET as i32
                     - Self::INTERACT_SIZE as i32
                     - Self::SHIFT_DOWN_AMOUNT as i32,
-                parent_width - Self::INSET as i32 * 2,
+                shadow_edge_bottom - shadow_edge_top,
                 Self::INTERACT_SIZE as i32,
             )
             .expect("edge_surface.set_input_rect");
@@ -1399,7 +1515,7 @@ impl Decoration {
                 unsafe { &*self.compositor_ptr },
                 0,
                 Self::INSET as i32 - Self::SHIFT_DOWN_AMOUNT as i32,
-                parent_width - Self::INSET as i32 * 2,
+                shadow_edge_bottom - shadow_edge_top,
                 Self::INTERACT_SIZE as i32,
             )
             .expect("edge_surface.set_input_rect");
@@ -1429,7 +1545,7 @@ impl Decoration {
         self.rb.inactive();
     }
 
-    fn show(&self) {
+    /*fn show(&self) {
         self.left.show(unsafe { &(*self.pixbuf_ptr).buffer_edge });
         self.right.show(unsafe { &(*self.pixbuf_ptr).buffer_edge });
         self.top.show(unsafe { &(*self.pixbuf_ptr).buffer_edge });
@@ -1449,7 +1565,7 @@ impl Decoration {
         self.rt.hide();
         self.lb.hide();
         self.rb.hide();
-    }
+    }*/
 
     fn commit_all(&self) {
         self.left.surface.commit().expect("surface.commit");
