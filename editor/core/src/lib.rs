@@ -1,3 +1,4 @@
+use core::cell::Cell;
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
@@ -1466,6 +1467,213 @@ impl AppMenuViewEventHandler {
     }
 }
 
+pub struct ToggleButtonSharedResources {
+    check_icon: usize,
+}
+impl ToggleButtonSharedResources {
+    const CHECK_ICON_SIZE: f32 = 12.0;
+    const CHECK_ICON_VERTICES: &[[f32; 2]] = &[
+        [0.0, 0.4],
+        [0.0, 0.6],
+        [0.4, 0.7],
+        [0.4, 0.9],
+        [1.0, 0.1],
+        [1.0, 0.3],
+    ];
+    const CHECK_ICON_INDICES: &[u16] = &[0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4, 5];
+
+    pub fn new(
+        mt_texid_issuer: &mut MainThreadTextureIDIssuer,
+        rt_sender: &RenderMessageSender,
+    ) -> Self {
+        let check_icon = mt_texid_issuer.issue();
+        rt_sender
+            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
+                id: check_icon,
+                vertices: Self::CHECK_ICON_VERTICES,
+                indices: Self::CHECK_ICON_INDICES,
+                width: Self::CHECK_ICON_SIZE,
+                height: Self::CHECK_ICON_SIZE,
+            })
+            .expect("rt_sender.send");
+
+        Self { check_icon }
+    }
+}
+
+pub struct ToggleButtonView {
+    eh: Rc<ToggleButtonEventHandler>,
+}
+impl ToggleButtonView {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        shared_res: &ToggleButtonSharedResources,
+        rect: Rect<LogicalUnit>,
+        label: String,
+    ) -> Self {
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(rect.left),
+                AnimatableFloat::Value(rect.top),
+            ],
+            size: [
+                AnimatableFloat::Value(rect.width),
+                AnimatableFloat::Value(rect.height),
+            ],
+            has_bitmap: true,
+            border: Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0; 4]),
+                ..Default::default()
+            }),
+            corner_radius: CornerRadius::all(8.0),
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: label,
+                    font_id: FontID::UIDefault,
+                    color: AnimatableColor::Value([1.0; 4]),
+                    ..Default::default()
+                }],
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                offset: [20.0, 0.0],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ct_check = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(6.0),
+                AnimatableFloat::Value(-ToggleButtonSharedResources::CHECK_ICON_SIZE * 0.5),
+            ],
+            relative_offset_adjustment: [0.0, 0.5],
+            size: [
+                AnimatableFloat::Value(ToggleButtonSharedResources::CHECK_ICON_SIZE),
+                AnimatableFloat::Value(ToggleButtonSharedResources::CHECK_ICON_SIZE),
+            ],
+            has_bitmap: true,
+            texatlas_rect_id: Some(shared_res.check_icon),
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0; 4])),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        ctx.composite_tree.add_child(ct_root, ct_check);
+
+        let eh = Rc::new(ToggleButtonEventHandler {
+            ct_root,
+            ct_check,
+            ht_root,
+            current: Cell::new(false),
+        });
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+        Self { eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty_all(self.eh.ct_root);
+        composite_tree.get_mut(self.eh.ct_check).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_check);
+    }
+}
+
+struct ToggleButtonEventHandler {
+    ct_root: CompositeTreeRef,
+    ct_check: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    current: Cell<bool>,
+}
+impl HitTestTreeActionHandler for ToggleButtonEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context.composite_tree.get_mut(self.ct_root).composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.25],
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            });
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context.composite_tree.get_mut(self.ct_root).composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.25],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            });
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.current.update(|x| !x);
+
+        if self.current.get() {
+            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
+                from_value: 0.0,
+                to_value: 1.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+        } else {
+            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 0.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+        }
+        context.composite_tree.mark_dirty(self.ct_check);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -1968,6 +2176,21 @@ async fn run<'sys>(
         view_init_ctx.keyboard_focus_registry,
     );
 
+    let toggle_button_shared_res = ToggleButtonSharedResources::new(
+        view_init_ctx.main_thread_texture_id_issuer,
+        system_link.rt_sender(),
+    );
+    let toggle_button = ToggleButtonView::new(
+        &mut view_init_ctx,
+        &toggle_button_shared_res,
+        Rect::from_lt_size(
+            Point::new_logical(500.0, 128.0),
+            Size::new_logical(64.0, 24.0),
+        ),
+        "Toggle".into(),
+    );
+    toggle_button.mount(&mut view_init_ctx, &main_window);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
@@ -2128,6 +2351,7 @@ async fn run<'sys>(
                         &ht_manager,
                         &system_link,
                     );
+                    toggle_button.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
