@@ -560,14 +560,8 @@ impl TextLayout {
                             break;
                         }
 
-                        let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
-                            || peridot_tp_unicode_properties::script::is_katakana(c)
-                            || peridot_tp_unicode_properties::script::is_han(c)
-                            || peridot_tp_unicode_properties::script::is_thai(c)
-                            // 一部Commonにあるらしいので特別対応
-                            || c as u32 == 0x30fc || c as u32 == 0xff70;
-
-                        if is_budou_cluster_c != in_budou_cluster {
+                        if in_budou_cluster != crate::utils::is_budou_cluster_char(c) {
+                            // breaking method boundary
                             break;
                         }
 

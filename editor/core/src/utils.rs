@@ -100,3 +100,17 @@ pub const fn rup2(x: usize, a: usize) -> usize {
 pub const fn rup2_u64(x: u64, a: u64) -> u64 {
     (x + a - 1) & !(a - 1)
 }
+
+#[cfg(unix)]
+#[inline(always)]
+pub fn is_budou_cluster_char(c: char) -> bool {
+    // 一部Commonにあるらしいので特別対応
+    c as u32 == 0x30fc
+        || c as u32 == 0xff70
+        || peridot_tp_icu::get_script(c as _).is_ok_and(|s| {
+            s == peridot_tp_icu::c::USCRIPT_HIRAGANA
+                || s == peridot_tp_icu::c::USCRIPT_KATAKANA
+                || s == peridot_tp_icu::c::USCRIPT_HAN
+                || s == peridot_tp_icu::c::USCRIPT_THAI
+        })
+}

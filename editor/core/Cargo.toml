@@ -31,7 +31,6 @@ peridot-tp-freetype = { path = "../../thirdparty/freetype", optional = true }
 peridot-tp-fontconfig = { path = "../../thirdparty/fontconfig", optional = true }
 peridot-tp-harfbuzz = { path = "../../thirdparty/harfbuzz", optional = true }
 peridot-tp-budoux = { path = "../../thirdparty/budoux", features = ["embedded-ja_knbc"] }
-peridot-tp-unicode-properties = { path = "../../thirdparty/unicode-properties" }
 bitflags = "2.10.0"
 uuid = { version = "1.22.0", features = ["v4"] }
 unicode-segmentation = "1"

@@ -99,3 +99,14 @@ impl Iterator for BreakIter<'_> {
         return self.iterator.next();
     }
 }
+
+#[inline(always)]
+pub fn get_script(codepoint: c::UChar32) -> Result<c::UScriptCode, Error> {
+    let mut e = 0;
+    let r = unsafe { c::uscript_getScript(codepoint, &mut e) };
+    if c::U_FAILURE(e) {
+        Err(Error(e))
+    } else {
+        Ok(r)
+    }
+}

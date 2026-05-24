@@ -676,13 +676,9 @@ impl RawTextInputViewEventHandler {
             let mut same_cluster_range = 0..0;
             let mut cb = 0;
             while let Some(c) = chars.next() {
-                let is_budou_cluster_c = peridot_tp_unicode_properties::script::is_hiragana(c)
-                        || peridot_tp_unicode_properties::script::is_katakana(c)
-                        || peridot_tp_unicode_properties::script::is_han(c)
-                        || peridot_tp_unicode_properties::script::is_thai(c)
-                        // 一部Commonにあるらしいので特別対応
-                        || c as u32 == 0x30fc || c as u32 == 0xff70;
-                if is_budou_cluster_c != is_budou_cluster {
+                let is_budou_cluster_c = crate::utils::is_budou_cluster_char(c);
+                if is_budou_cluster != is_budou_cluster_c {
+                    // breaking method boundary
                     if !same_cluster_range.is_empty() {
                         if !is_budou_cluster {
                             words.extend(
