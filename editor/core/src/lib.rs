@@ -1161,313 +1161,6 @@ impl Popup for AlertDialogPresenter {
     }
 }
 
-pub struct AppMenuItemView {
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    width: f32,
-    items: Vec<MenuItem>,
-    lit: core::cell::Cell<bool>,
-}
-impl AppMenuItemView {
-    const ITEM_HEIGHT: f32 = 20.0;
-    const PADDING_INLINE: f32 = 8.0;
-
-    pub fn new(ctx: &mut ViewInitContext, label: String, left: f32, items: Vec<MenuItem>) -> Self {
-        let text_width =
-            TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
-
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
-            offset: [AnimatableFloat::Value(left), AnimatableFloat::Value(0.0)],
-            size: [
-                AnimatableFloat::Value(text_width + Self::PADDING_INLINE * 2.0),
-                AnimatableFloat::Value(AppMenuItemView::ITEM_HEIGHT),
-            ],
-            has_bitmap: true,
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: label,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left,
-            width: text_width + Self::PADDING_INLINE * 2.0,
-            height: AppMenuItemView::ITEM_HEIGHT,
-            ..Default::default()
-        });
-
-        Self {
-            ct_root,
-            ht_root,
-            width: text_width,
-            items,
-            lit: core::cell::Cell::new(false),
-        }
-    }
-
-    #[inline(always)]
-    fn bind_event_handler(
-        &self,
-        event_handler: &Rc<AppMenuViewEventHandler>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
-        ht_manager.set_action_handler(self.ht_root, event_handler);
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty_all(self.ct_root);
-    }
-
-    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        if self.lit.replace(true) {
-            // already lit
-            return;
-        }
-
-        composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.0],
-                to_value: [1.0, 1.0, 1.0, 0.25],
-                start_sec: current_sec,
-                end_sec: current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            });
-        composite_tree.mark_dirty(self.ct_root);
-    }
-
-    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        if !self.lit.replace(false) {
-            // already unlit
-            return;
-        }
-
-        composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.25],
-                to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: current_sec,
-                end_sec: current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            });
-        composite_tree.mark_dirty(self.ct_root);
-    }
-}
-
-pub struct AppMenuView {
-    eh: Rc<AppMenuViewEventHandler>,
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-}
-impl AppMenuView {
-    pub fn new(ctx: &mut ViewInitContext, top: f32, labels: Vec<(String, Vec<MenuItem>)>) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(top)],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(AppMenuItemView::ITEM_HEIGHT),
-            ],
-            relative_size_adjustment: [1.0, 0.0],
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            top,
-            height: AppMenuItemView::ITEM_HEIGHT,
-            width_adjustment_factor: 1.0,
-            ..Default::default()
-        });
-
-        let mut item_views = Vec::with_capacity(labels.len());
-        let mut item_left = 0.0;
-        for (label, items) in labels {
-            let v = AppMenuItemView::new(ctx, label, item_left, items);
-            v.mount(ctx, &RawMountTarget { ct_root, ht_root });
-            item_left += v.width + AppMenuItemView::PADDING_INLINE * 2.0;
-            item_views.push(v);
-        }
-
-        let eh = Rc::new(AppMenuViewEventHandler {
-            items: item_views,
-            opening: core::cell::Cell::new(false),
-            last_lit_index: core::cell::Cell::new(None),
-            ignore_next_pointer_down_event: core::cell::Cell::new(false),
-        });
-        for x in eh.items.iter() {
-            x.bind_event_handler(&eh, ctx.ht_manager);
-        }
-
-        Self {
-            eh,
-            ct_root,
-            ht_root,
-        }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.ct_root);
-
-        for x in self.eh.items.iter() {
-            x.rescale(new_scale, composite_tree);
-        }
-    }
-}
-
-struct AppMenuViewEventHandler {
-    items: Vec<AppMenuItemView>,
-    opening: core::cell::Cell<bool>,
-    last_lit_index: core::cell::Cell<Option<usize>>,
-    ignore_next_pointer_down_event: core::cell::Cell<bool>,
-}
-impl HitTestTreeActionHandler for AppMenuViewEventHandler {
-    fn on_pointer_enter(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        let mut new_lit_index = None;
-        for (n, x) in self.items.iter().enumerate() {
-            if x.ht_root == sender {
-                new_lit_index = Some(n);
-                break;
-            }
-        }
-
-        let last_lit = self.last_lit_index.replace(new_lit_index);
-        if last_lit != new_lit_index {
-            if self.opening.get()
-                && let Some(x) = last_lit
-            {
-                self.items[x].unlit(context.composite_tree, context.current_sec);
-            }
-            if let Some(x) = new_lit_index {
-                self.items[x].lit(context.composite_tree, context.current_sec);
-                if self.opening.get() {
-                    for (n, v) in self.items.iter().enumerate() {
-                        if n != x {
-                            v.unlit(context.composite_tree, context.current_sec);
-                        }
-                    }
-
-                    let items = self.items[x].items.clone();
-                    let parent = context
-                        .ht_manager
-                        .query_root_window(self.items[x].ht_root)
-                        .expect("not mounted?");
-                    let (x, y, _, h, _) = context
-                        .ht_manager
-                        .compute_global_rect_autoroot(self.items[x].ht_root);
-                    context.system_link.dispatch_event(Event::MenuReopen {
-                        parent,
-                        items,
-                        surface_pos: Point::new_logical(x, y + h),
-                    });
-                }
-            }
-        }
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_leave(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        self.last_lit_index.set(None);
-
-        if self.opening.get() {
-            // メニュー開いてるときはunlitしない
-            return EventContinueControl::STOP_PROPAGATION;
-        }
-
-        for x in self.items.iter() {
-            if x.ht_root == sender {
-                x.unlit(context.composite_tree, context.current_sec);
-                break;
-            }
-        }
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_down(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        if self.ignore_next_pointer_down_event.replace(false) {
-            return EventContinueControl::STOP_PROPAGATION;
-        }
-
-        self.opening.set(true);
-        let (x, y, _, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
-        context.system_link.dispatch_event(Event::MenuOpen {
-            parent: context
-                .ht_manager
-                .query_root_window(sender)
-                .expect("not mounted?"),
-            items: self
-                .items
-                .iter()
-                .find(|x| x.ht_root == sender)
-                .expect("invalid sender")
-                .items
-                .clone(),
-            surface_pos: Point::new_logical(x, y + h),
-        });
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-}
-impl AppMenuViewEventHandler {
-    pub fn on_global_mouse_click<E>(
-        &self,
-        composite_tree: &mut CompositeTree<E>,
-        current_sec: f32,
-    ) {
-        self.on_close_all(composite_tree, current_sec);
-        if self.last_lit_index.get().is_some() {
-            // 連続で開いちゃうので次のPointerDownを無視する
-            self.ignore_next_pointer_down_event.set(true);
-        }
-    }
-
-    pub fn on_close_all<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        self.opening.set(false);
-
-        if self.last_lit_index.get().is_none() {
-            for x in self.items.iter() {
-                x.unlit(composite_tree, current_sec);
-            }
-        }
-    }
-}
-
 pub struct SharedCheckIcon {
     check_icon: TextureID,
 }
@@ -2001,7 +1694,7 @@ async fn run<'sys>(
     );
     window_header_view.mount(&mut view_init_ctx, &main_window);
 
-    let app_menu_view = AppMenuView::new(
+    let app_menu_view = ui::app_menu_bar::View::new(
         &mut view_init_ctx,
         ui::window_header::View::THICKNESS,
         vec![
@@ -2535,7 +2228,7 @@ async fn run<'sys>(
                 // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
                 if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
                     if window == main_window {
-                        app_menu_view.eh.on_close_all(
+                        app_menu_view.on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -2644,7 +2337,7 @@ async fn run<'sys>(
                 {
                     // フォーカスロストした時もコンテキストメニューを閉じる
                     if window == main_window {
-                        app_menu_view.eh.on_close_all(
+                        app_menu_view.on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -2665,7 +2358,7 @@ async fn run<'sys>(
                 if !activated {
                     if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
                         if window == main_window {
-                            app_menu_view.eh.on_close_all(
+                            app_menu_view.on_close_all(
                                 &mut composite_tree,
                                 global_time_base.elapsed().as_secs_f32(),
                             );
@@ -3085,7 +2778,7 @@ async fn run<'sys>(
             Event::MenuCloseAll => {
                 if let Some(c) = current_active_menu_session.take() {
                     if c.parent == main_window {
-                        app_menu_view.eh.on_close_all(
+                        app_menu_view.on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -3300,7 +2993,7 @@ async fn run<'sys>(
                 // コマンド選択したらとじる
                 if let Some(c) = current_active_menu_session.take() {
                     if c.parent == main_window {
-                        app_menu_view.eh.on_close_all(
+                        app_menu_view.on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -3349,7 +3042,7 @@ async fn run<'sys>(
                 if !system_link.any_pointer_on_context_menu() {
                     if let Some(c) = current_active_menu_session.take() {
                         if c.parent == main_window {
-                            app_menu_view.eh.on_global_mouse_click(
+                            app_menu_view.on_global_mouse_click(
                                 &mut composite_tree,
                                 global_time_base.elapsed().as_secs_f32(),
                             );
