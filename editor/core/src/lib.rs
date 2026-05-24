@@ -1467,10 +1467,10 @@ impl AppMenuViewEventHandler {
     }
 }
 
-pub struct ToggleButtonSharedResources {
+pub struct SharedCheckIcon {
     check_icon: usize,
 }
-impl ToggleButtonSharedResources {
+impl SharedCheckIcon {
     const CHECK_ICON_SIZE: f32 = 12.0;
     const CHECK_ICON_VERTICES: &[[f32; 2]] = &[
         [0.0, 0.4],
@@ -1507,7 +1507,7 @@ pub struct ToggleButtonView {
 impl ToggleButtonView {
     pub fn new(
         ctx: &mut ViewInitContext,
-        shared_res: &ToggleButtonSharedResources,
+        shared_res: &SharedCheckIcon,
         rect: Rect<LogicalUnit>,
         label: String,
     ) -> Self {
@@ -1545,13 +1545,14 @@ impl ToggleButtonView {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [
                 AnimatableFloat::Value(6.0),
-                AnimatableFloat::Value(-ToggleButtonSharedResources::CHECK_ICON_SIZE * 0.5),
+                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON_SIZE * 0.5),
             ],
             relative_offset_adjustment: [0.0, 0.5],
             size: [
-                AnimatableFloat::Value(ToggleButtonSharedResources::CHECK_ICON_SIZE),
-                AnimatableFloat::Value(ToggleButtonSharedResources::CHECK_ICON_SIZE),
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
             ],
+            pivot: [0.5, 0.5],
             has_bitmap: true,
             texatlas_rect_id: Some(shared_res.check_icon),
             composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0; 4])),
@@ -1658,6 +1659,22 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
             };
+            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
+                from_value: 1.5,
+                to_value: 1.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_IN,
+                event_on_complete: None,
+            };
+            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
+                from_value: 1.5,
+                to_value: 1.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_IN,
+                event_on_complete: None,
+            };
         } else {
             context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
                 from_value: 1.0,
@@ -1665,6 +1682,226 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
                 start_sec: context.current_sec,
                 end_sec: context.current_sec + 0.1,
                 curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 1.5,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_IN,
+                event_on_complete: None,
+            };
+            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 1.5,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_IN,
+                event_on_complete: None,
+            };
+        }
+        context.composite_tree.mark_dirty(self.ct_check);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+
+pub struct CheckboxView {
+    eh: Rc<CheckboxEventHandler>,
+}
+impl CheckboxView {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        shared_res: &SharedCheckIcon,
+        rect: Rect<LogicalUnit>,
+    ) -> Self {
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(rect.left),
+                AnimatableFloat::Value(rect.top),
+            ],
+            size: [
+                AnimatableFloat::Value(rect.width),
+                AnimatableFloat::Value(rect.height),
+            ],
+            has_bitmap: true,
+            border: Some(Border {
+                thickness: 0.5,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+                ..Default::default()
+            }),
+            corner_radius: CornerRadius::all(2.0),
+            ..Default::default()
+        });
+        let ct_check = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON_SIZE * 0.5),
+                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON_SIZE * 0.5),
+            ],
+            relative_offset_adjustment: [0.5, 0.5],
+            pivot: [0.5, 0.5],
+            size: [
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
+                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON_SIZE),
+            ],
+            has_bitmap: true,
+            texatlas_rect_id: Some(shared_res.check_icon),
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0; 4])),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        ctx.composite_tree.add_child(ct_root, ct_check);
+
+        let eh = Rc::new(CheckboxEventHandler {
+            ct_root,
+            ct_check,
+            ht_root,
+            current: Cell::new(false),
+        });
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+        Self { eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty_all(self.eh.ct_root);
+        composite_tree.get_mut(self.eh.ct_check).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_check);
+    }
+}
+
+struct CheckboxEventHandler {
+    ct_root: CompositeTreeRef,
+    ct_check: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    current: Cell<bool>,
+}
+impl HitTestTreeActionHandler for CheckboxEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .get_mut(self.ct_root)
+            .border
+            .as_mut()
+            .expect("no border?")
+            .color = AnimatableColor::Animated {
+            from_value: [1.0, 1.0, 1.0, 0.5],
+            to_value: [1.0, 1.0, 1.0, 1.0],
+            start_sec: context.current_sec,
+            end_sec: context.current_sec + 0.1,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .get_mut(self.ct_root)
+            .border
+            .as_mut()
+            .expect("no border?")
+            .color = AnimatableColor::Animated {
+            from_value: [1.0, 1.0, 1.0, 1.0],
+            to_value: [1.0, 1.0, 1.0, 0.5],
+            start_sec: context.current_sec,
+            end_sec: context.current_sec + 0.1,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.current.update(|x| !x);
+
+        if self.current.get() {
+            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
+                from_value: 0.0,
+                to_value: 1.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
+                from_value: 1.5,
+                to_value: 1.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_IN,
+                event_on_complete: None,
+            };
+            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
+                from_value: 1.5,
+                to_value: 1.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_IN,
+                event_on_complete: None,
+            };
+        } else {
+            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 0.0,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 1.5,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_OUT,
+                event_on_complete: None,
+            };
+            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 1.5,
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.15,
+                curve: AnimationCurve::EASE_OUT,
                 event_on_complete: None,
             };
         }
@@ -2176,13 +2413,13 @@ async fn run<'sys>(
         view_init_ctx.keyboard_focus_registry,
     );
 
-    let toggle_button_shared_res = ToggleButtonSharedResources::new(
+    let check_icon = SharedCheckIcon::new(
         view_init_ctx.main_thread_texture_id_issuer,
         system_link.rt_sender(),
     );
     let toggle_button = ToggleButtonView::new(
         &mut view_init_ctx,
-        &toggle_button_shared_res,
+        &check_icon,
         Rect::from_lt_size(
             Point::new_logical(500.0, 128.0),
             Size::new_logical(64.0, 24.0),
@@ -2190,6 +2427,16 @@ async fn run<'sys>(
         "Toggle".into(),
     );
     toggle_button.mount(&mut view_init_ctx, &main_window);
+
+    let checkbox = CheckboxView::new(
+        &mut view_init_ctx,
+        &check_icon,
+        Rect::from_lt_size(
+            Point::new_logical(580.0, 128.0 + 4.0),
+            Size::new_logical(16.0, 16.0),
+        ),
+    );
+    checkbox.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -2352,6 +2599,7 @@ async fn run<'sys>(
                         &system_link,
                     );
                     toggle_button.rescale(new_scale, &mut composite_tree);
+                    checkbox.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
