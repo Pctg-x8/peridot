@@ -1605,6 +1605,173 @@ impl HitTestTreeActionHandler for CheckboxEventHandler {
     }
 }
 
+pub struct RadioButtonView {
+    eh: Rc<RadioButtonEventHandler>,
+}
+impl RadioButtonView {
+    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(rect.left),
+                AnimatableFloat::Value(rect.top),
+            ],
+            size: [
+                AnimatableFloat::Value(rect.width),
+                AnimatableFloat::Value(rect.height),
+            ],
+            has_bitmap: true,
+            border: Some(Border {
+                thickness: 0.5,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+                ..Default::default()
+            }),
+            corner_radius: CornerRadius::all(8.0),
+            ..Default::default()
+        });
+        let ct_mark = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(4.0), AnimatableFloat::Value(4.0)],
+            size: [
+                AnimatableFloat::Value(rect.width - 8.0),
+                AnimatableFloat::Value(rect.height - 8.0),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            corner_radius: CornerRadius::all(4.0),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        ctx.composite_tree.add_child(ct_root, ct_mark);
+
+        let eh = Rc::new(RadioButtonEventHandler {
+            ct_root,
+            ct_mark,
+            ht_root,
+            current: Cell::new(false),
+        });
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+        Self { eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_root);
+        composite_tree.get_mut(self.eh.ct_mark).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_mark);
+    }
+}
+
+struct RadioButtonEventHandler {
+    ct_root: CompositeTreeRef,
+    ct_mark: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    current: Cell<bool>,
+}
+impl HitTestTreeActionHandler for RadioButtonEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .get_mut(self.ct_root)
+            .border
+            .as_mut()
+            .expect("no border?")
+            .color = AnimatableColor::Animated {
+            from_value: [1.0, 1.0, 1.0, 0.5],
+            to_value: [1.0, 1.0, 1.0, 1.0],
+            start_sec: context.current_sec,
+            end_sec: context.current_sec + 0.1,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .get_mut(self.ct_root)
+            .border
+            .as_mut()
+            .expect("no border?")
+            .color = AnimatableColor::Animated {
+            from_value: [1.0, 1.0, 1.0, 1.0],
+            to_value: [1.0, 1.0, 1.0, 0.5],
+            start_sec: context.current_sec,
+            end_sec: context.current_sec + 0.1,
+            curve: AnimationCurve::Linear,
+            event_on_complete: None,
+        };
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.current.update(|x| !x);
+        self.update_mark(context.composite_tree, context.current_sec);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl RadioButtonEventHandler {
+    fn update_mark<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if self.current.get() {
+            composite_tree.get_mut(self.ct_mark).opacity = AnimatableFloat::Animated {
+                from_value: 0.0,
+                to_value: 1.0,
+                start_sec: current_sec,
+                end_sec: current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+        } else {
+            composite_tree.get_mut(self.ct_mark).opacity = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 0.0,
+                start_sec: current_sec,
+                end_sec: current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+        }
+        composite_tree.mark_dirty(self.ct_mark);
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -2132,6 +2299,15 @@ async fn run<'sys>(
     );
     checkbox.mount(&mut view_init_ctx, &main_window);
 
+    let radio_button = RadioButtonView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(640.0, 128.0 + 4.0),
+            Size::new_logical(16.0, 16.0),
+        ),
+    );
+    radio_button.mount(&mut view_init_ctx, &main_window);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
@@ -2294,6 +2470,7 @@ async fn run<'sys>(
                     );
                     toggle_button.rescale(new_scale, &mut composite_tree);
                     checkbox.rescale(new_scale, &mut composite_tree);
+                    radio_button.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
