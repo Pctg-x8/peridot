@@ -1609,7 +1609,11 @@ pub struct RadioButtonView {
     eh: Rc<RadioButtonEventHandler>,
 }
 impl RadioButtonView {
-    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        rect: Rect<LogicalUnit>,
+        group_controller: &Rc<RadioButtonGroupController>,
+    ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [
@@ -1653,13 +1657,16 @@ impl RadioButtonView {
 
         ctx.composite_tree.add_child(ct_root, ct_mark);
 
-        let eh = Rc::new(RadioButtonEventHandler {
+        let eh = Rc::new_cyclic(|thisref| RadioButtonEventHandler {
+            thisref: thisref.clone(),
             ct_root,
             ct_mark,
             ht_root,
+            group_controller: Rc::downgrade(group_controller),
             current: Cell::new(false),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
+        unsafe { &mut *group_controller.views.get() }.push(Rc::downgrade(&eh));
 
         Self { eh }
     }
@@ -1679,9 +1686,11 @@ impl RadioButtonView {
 }
 
 struct RadioButtonEventHandler {
+    thisref: std::rc::Weak<RadioButtonEventHandler>,
     ct_root: CompositeTreeRef,
     ct_mark: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    group_controller: std::rc::Weak<RadioButtonGroupController>,
     current: Cell<bool>,
 }
 impl HitTestTreeActionHandler for RadioButtonEventHandler {
@@ -1741,8 +1750,9 @@ impl HitTestTreeActionHandler for RadioButtonEventHandler {
         context: &mut InputEventContext,
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.current.update(|x| !x);
-        self.update_mark(context.composite_tree, context.current_sec);
+        if let Some(ref x) = self.group_controller.upgrade() {
+            x.select(&self.thisref, context.composite_tree, context.current_sec);
+        }
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -1769,6 +1779,41 @@ impl RadioButtonEventHandler {
             };
         }
         composite_tree.mark_dirty(self.ct_mark);
+    }
+
+    fn set_current<E>(&self, value: bool, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if self.current.replace(value) != value {
+            // changed
+            self.update_mark(composite_tree, current_sec);
+        }
+    }
+}
+
+pub struct RadioButtonGroupController {
+    views: core::cell::UnsafeCell<Vec<std::rc::Weak<RadioButtonEventHandler>>>,
+}
+impl RadioButtonGroupController {
+    pub fn new() -> Self {
+        Self {
+            views: core::cell::UnsafeCell::new(Vec::new()),
+        }
+    }
+
+    fn select<E>(
+        &self,
+        target: &std::rc::Weak<RadioButtonEventHandler>,
+        composite_tree: &mut CompositeTree<E>,
+        current_sec: f32,
+    ) {
+        for x in unsafe { &*self.views.get() }.iter() {
+            if let Some(ref x1) = x.upgrade() {
+                x1.set_current(
+                    std::rc::Weak::ptr_eq(x, target),
+                    composite_tree,
+                    current_sec,
+                );
+            }
+        }
     }
 }
 
@@ -2299,14 +2344,44 @@ async fn run<'sys>(
     );
     checkbox.mount(&mut view_init_ctx, &main_window);
 
+    let rgc1 = Rc::new(RadioButtonGroupController::new());
+    let rgc2 = Rc::new(RadioButtonGroupController::new());
     let radio_button = RadioButtonView::new(
         &mut view_init_ctx,
         Rect::from_lt_size(
             Point::new_logical(640.0, 128.0 + 4.0),
             Size::new_logical(16.0, 16.0),
         ),
+        &rgc1,
     );
     radio_button.mount(&mut view_init_ctx, &main_window);
+    let radio_button2 = RadioButtonView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(660.0, 128.0 + 4.0),
+            Size::new_logical(16.0, 16.0),
+        ),
+        &rgc1,
+    );
+    radio_button2.mount(&mut view_init_ctx, &main_window);
+    let radio_button3 = RadioButtonView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(680.0, 128.0 + 4.0),
+            Size::new_logical(16.0, 16.0),
+        ),
+        &rgc1,
+    );
+    radio_button3.mount(&mut view_init_ctx, &main_window);
+    let radio_button4 = RadioButtonView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(700.0, 128.0 + 4.0),
+            Size::new_logical(16.0, 16.0),
+        ),
+        &rgc2,
+    );
+    radio_button4.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -2471,6 +2546,9 @@ async fn run<'sys>(
                     toggle_button.rescale(new_scale, &mut composite_tree);
                     checkbox.rescale(new_scale, &mut composite_tree);
                     radio_button.rescale(new_scale, &mut composite_tree);
+                    radio_button2.rescale(new_scale, &mut composite_tree);
+                    radio_button3.rescale(new_scale, &mut composite_tree);
+                    radio_button4.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
