@@ -57,6 +57,7 @@ impl RawTextInputView {
                 AnimatableFloat::Value(rect.top),
             ],
             has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             border: Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
@@ -82,6 +83,7 @@ impl RawTextInputView {
         let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             ..Default::default()
         });
         let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {

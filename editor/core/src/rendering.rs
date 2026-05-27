@@ -12,15 +12,16 @@ use bedrock::{
 use crate::{
     FlyoutSurfaceHandle, SyncEvent, SyncEventBus, WindowHandle,
     graphics::{
-        BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP,
+        BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP, MS_STATE_EMPTY,
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
         VulkanSurface, VulkanSwapchain,
     },
     rendering::{
-        atlas::{AtlasRect, TextureAtlas},
+        atlas::{AtlasRect, ColorTextureAtlas, TextureAtlas},
         composite::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
-            CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
+            CompositeStreamingData, CompositeTree, CompositeTreeRef, CompositeTreeRender,
+            CompositeTreeSyncBuffer, CustomRenderToken,
         },
         text::FontSet,
         vg::VectorRasterizationState,
@@ -61,6 +62,13 @@ pub struct Normalized2DStaticMeshTexture {
     pub height: f32,
 }
 
+#[derive(Clone)]
+pub struct ShaderTexture {
+    pub width: f32,
+    pub height: f32,
+    pub shader_path: String,
+}
+
 pub enum RenderMessage {
     NewWindow(NewWindowData),
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
@@ -69,6 +77,10 @@ pub enum RenderMessage {
     RegisterNormalized2DStaticMeshTexture {
         id: TextureID,
         data: Normalized2DStaticMeshTexture,
+    },
+    RegisterShaderTexture {
+        id: TextureID,
+        data: ShaderTexture,
     },
 }
 
@@ -132,6 +144,7 @@ pub struct RenderThread<'main> {
     pub d3d12_present_counter: u64,
 }
 impl<'main> RenderThread<'main> {
+    #[allow(unused_mut)]
     pub fn run(mut self) {
         tracing::info!("Starting RenderThread...");
 
@@ -167,9 +180,41 @@ impl<'main> RenderThread<'main> {
             GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
         struct GlyphAtlasDataPerDpi<'d> {
             manager: MaskTextureAtlasManager<'d>,
+            color_manager: ColorTextureAtlasManager<'d>,
             atlas_rects: Vec<AtlasRect>,
             vector_raster_state: VectorRasterizationState,
+            shader_texture_rasterize_requests: Vec<(AtlasRect, ShaderTexture)>,
             ref_count: u64,
+        }
+        impl<'d> GlyphAtlasDataPerDpi<'d> {
+            pub fn new(
+                common_res: &GlyphAtlasManagerCommonResources<'d>,
+                render_queue: &mut (impl br::QueueMut + ?Sized),
+            ) -> Self {
+                Self {
+                    manager: MaskTextureAtlasManager::new(
+                        common_res,
+                        render_queue,
+                        common_res.device.present_queue_family_index(),
+                    ),
+                    color_manager: ColorTextureAtlasManager::new(
+                        common_res,
+                        render_queue,
+                        common_res.device.present_queue_family_index(),
+                    ),
+                    atlas_rects: Vec::new(),
+                    vector_raster_state: VectorRasterizationState::new(),
+                    shader_texture_rasterize_requests: Vec::new(),
+                    ref_count: 0,
+                }
+            }
+
+            pub fn ready_for_reuse(&mut self) {
+                self.manager.clear();
+                self.color_manager.clear();
+                self.atlas_rects.clear();
+                self.ref_count = 0;
+            }
         }
         let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
@@ -178,6 +223,7 @@ impl<'main> RenderThread<'main> {
             TextureID,
             Normalized2DStaticMeshTexture,
         > = HashMap::new();
+        let mut shader_textures = HashMap::<TextureID, ShaderTexture>::new();
 
         let mut shared_update_cp = br::CommandPoolObject::new(
             self.vk_device,
@@ -224,16 +270,10 @@ impl<'main> RenderThread<'main> {
                             std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
                             // create new one
                             std::collections::hash_map::Entry::Vacant(x) => {
-                                x.insert(GlyphAtlasDataPerDpi {
-                                    manager: MaskTextureAtlasManager::new(
-                                        &glyph_atlas_manager_common_resources,
-                                        &mut render_queue,
-                                        self.vk_device.present_queue_family_index(),
-                                    ),
-                                    atlas_rects: Vec::new(),
-                                    vector_raster_state: VectorRasterizationState::new(),
-                                    ref_count: 0,
-                                })
+                                x.insert(GlyphAtlasDataPerDpi::new(
+                                    &glyph_atlas_manager_common_resources,
+                                    &mut render_queue,
+                                ))
                             }
                         };
                         window_glyph_atlas.ref_count += 1;
@@ -245,6 +285,7 @@ impl<'main> RenderThread<'main> {
                                 wd,
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
+                                window_glyph_atlas.color_manager.atlas(),
                                 self.font_set,
                                 self.event_bus,
                             ),
@@ -275,16 +316,10 @@ impl<'main> RenderThread<'main> {
                             std::collections::hash_map::Entry::Occupied(x) => x.into_mut(),
                             // create new one
                             std::collections::hash_map::Entry::Vacant(x) => {
-                                x.insert(GlyphAtlasDataPerDpi {
-                                    manager: MaskTextureAtlasManager::new(
-                                        &glyph_atlas_manager_common_resources,
-                                        &mut render_queue,
-                                        self.vk_device.present_queue_family_index(),
-                                    ),
-                                    atlas_rects: Vec::new(),
-                                    vector_raster_state: VectorRasterizationState::new(),
-                                    ref_count: 0,
-                                })
+                                x.insert(GlyphAtlasDataPerDpi::new(
+                                    &glyph_atlas_manager_common_resources,
+                                    &mut render_queue,
+                                ))
                             }
                         };
                         window_glyph_atlas.ref_count += 1;
@@ -296,6 +331,7 @@ impl<'main> RenderThread<'main> {
                                 create_data,
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
+                                window_glyph_atlas.color_manager.atlas(),
                                 self.font_set,
                                 self.event_bus,
                                 #[cfg(windows)]
@@ -321,6 +357,9 @@ impl<'main> RenderThread<'main> {
                     }
                     Ok(RenderMessage::RegisterNormalized2DStaticMeshTexture { id, data }) => {
                         normalized_2d_static_mesh_textures.insert(id, data);
+                    }
+                    Ok(RenderMessage::RegisterShaderTexture { id, data }) => {
+                        shader_textures.insert(id, data);
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
                         break;
@@ -475,22 +514,14 @@ impl<'main> RenderThread<'main> {
                         std::collections::hash_map::Entry::Vacant(v) => match removed {
                             // reuse existing with clear
                             Some(mut data) => {
-                                data.manager.clear();
-                                data.atlas_rects.clear();
-                                data.ref_count = 0;
+                                data.ready_for_reuse();
                                 v.insert(data)
                             }
                             // new one
-                            None => v.insert(GlyphAtlasDataPerDpi {
-                                manager: MaskTextureAtlasManager::new(
-                                    &glyph_atlas_manager_common_resources,
-                                    &mut render_queue,
-                                    self.vk_device.present_queue_family_index(),
-                                ),
-                                atlas_rects: Vec::new(),
-                                vector_raster_state: VectorRasterizationState::new(),
-                                ref_count: 0,
-                            }),
+                            None => v.insert(GlyphAtlasDataPerDpi::new(
+                                &glyph_atlas_manager_common_resources,
+                                &mut render_queue,
+                            )),
                         },
                     };
                     new_atlas_mgr.ref_count += 1;
@@ -500,6 +531,7 @@ impl<'main> RenderThread<'main> {
                     let mut descriptor_writes = Vec::with_capacity(1);
                     x.composite_renderer.rebind_glyph_atlas(
                         new_atlas_mgr.manager.atlas().as_image_view(),
+                        new_atlas_mgr.color_manager.atlas().as_image_view(),
                         &mut descriptor_writes,
                     );
                     self.vk_device
@@ -549,6 +581,39 @@ impl<'main> RenderThread<'main> {
                                 .updated_rects
                                 .push(rect.vk_rect());
                         }
+                    }
+                }
+                for (&id, e) in &shader_textures {
+                    let rect_index = id.rect_index();
+                    if glyph_atlas_mgr.atlas_rects.get(rect_index).is_none_or(|x| {
+                        x == &AtlasRect {
+                            left: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                        }
+                    }) {
+                        let rect = glyph_atlas_mgr.color_manager.acquire(
+                            (e.width * x.active_scale.value()).ceil() as _,
+                            (e.height * x.active_scale.value()).ceil() as _,
+                        );
+                        if glyph_atlas_mgr.atlas_rects.len() <= rect_index {
+                            // extend with zero
+                            glyph_atlas_mgr
+                                .atlas_rects
+                                .resize_with(rect_index + 1, || AtlasRect {
+                                    left: 0,
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                });
+                        }
+                        glyph_atlas_mgr.atlas_rects[rect_index] = rect;
+                        tracing::trace!(?id, ?rect, "reserve rasterize shader tex");
+                        // TODO: clone負荷が気になるようであればそのときに改修する
+                        glyph_atlas_mgr
+                            .shader_texture_rasterize_requests
+                            .push((rect, e.clone()));
                     }
                 }
                 let needs_update_command = x.update(
@@ -625,22 +690,14 @@ impl<'main> RenderThread<'main> {
                         std::collections::hash_map::Entry::Vacant(v) => match removed {
                             // reuse existing with clear
                             Some(mut data) => {
-                                data.manager.clear();
-                                data.atlas_rects.clear();
-                                data.ref_count = 0;
+                                data.ready_for_reuse();
                                 v.insert(data)
                             }
                             // new one
-                            None => v.insert(GlyphAtlasDataPerDpi {
-                                manager: MaskTextureAtlasManager::new(
-                                    &glyph_atlas_manager_common_resources,
-                                    &mut render_queue,
-                                    self.vk_device.present_queue_family_index(),
-                                ),
-                                atlas_rects: Vec::new(),
-                                vector_raster_state: VectorRasterizationState::new(),
-                                ref_count: 0,
-                            }),
+                            None => v.insert(GlyphAtlasDataPerDpi::new(
+                                &glyph_atlas_manager_common_resources,
+                                &mut render_queue,
+                            )),
                         },
                     };
                     new_atlas_mgr.ref_count += 1;
@@ -650,6 +707,7 @@ impl<'main> RenderThread<'main> {
                     let mut descriptor_writes = Vec::with_capacity(1);
                     x.composite_renderer.rebind_glyph_atlas(
                         new_atlas_mgr.manager.atlas().as_image_view(),
+                        new_atlas_mgr.color_manager.atlas().as_image_view(),
                         &mut descriptor_writes,
                     );
                     self.vk_device
@@ -701,6 +759,39 @@ impl<'main> RenderThread<'main> {
                         }
                     }
                 }
+                for (&id, e) in &shader_textures {
+                    let rect_index = id.rect_index();
+                    if glyph_atlas_mgr.atlas_rects.get(rect_index).is_none_or(|x| {
+                        x == &AtlasRect {
+                            left: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                        }
+                    }) {
+                        let rect = glyph_atlas_mgr.color_manager.acquire(
+                            (e.width * x.active_scale.value()).ceil() as _,
+                            (e.height * x.active_scale.value()).ceil() as _,
+                        );
+                        if glyph_atlas_mgr.atlas_rects.len() <= rect_index {
+                            // extend with zero
+                            glyph_atlas_mgr
+                                .atlas_rects
+                                .resize_with(rect_index + 1, || AtlasRect {
+                                    left: 0,
+                                    top: 0,
+                                    right: 0,
+                                    bottom: 0,
+                                });
+                        }
+                        glyph_atlas_mgr.atlas_rects[rect_index] = rect;
+                        tracing::trace!(?id, ?rect, "reserve rasterize shader tex");
+                        // TODO: clone負荷が気になるようであればそのときに改修する
+                        glyph_atlas_mgr
+                            .shader_texture_rasterize_requests
+                            .push((rect, e.clone()));
+                    }
+                }
                 let needs_update_command = x.update(
                     current_t.as_secs_f32(),
                     &mut composite_tree,
@@ -749,22 +840,30 @@ impl<'main> RenderThread<'main> {
                 }
             }
 
-            for (s, x) in glyph_atlas_per_scale.iter() {
-                crate::perf_scope!(RENDER_VG_MASK);
-
-                if x.vector_raster_state.is_empty() {
-                    // no vector rasterization required
-                    continue;
+            for (s, x) in glyph_atlas_per_scale.iter_mut() {
+                if !x.vector_raster_state.is_empty() {
+                    // vector rasterization required
+                    crate::perf_scope!(RENDER_VG_MASK);
+                    x.manager.perform_render(
+                        &x.vector_raster_state,
+                        &vg_render_formats,
+                        &glyph_atlas_manager_common_resources,
+                        &mut render_queue,
+                        &normalized_2d_static_mesh_textures,
+                        s.value(),
+                    );
+                    x.vector_raster_state.clear();
                 }
 
-                x.manager.perform_render(
-                    &x.vector_raster_state,
-                    &vg_render_formats,
-                    &glyph_atlas_manager_common_resources,
-                    &mut render_queue,
-                    &normalized_2d_static_mesh_textures,
-                    s.value(),
-                );
+                if !x.shader_texture_rasterize_requests.is_empty() {
+                    x.color_manager.perform_render(
+                        &x.shader_texture_rasterize_requests,
+                        s.value(),
+                        self.vk_device,
+                        &mut render_queue,
+                    );
+                    x.shader_texture_rasterize_requests.clear();
+                }
             }
 
             crate::perf_begin!(perf = POST_QUEUE);
@@ -949,6 +1048,7 @@ impl<'d> ContextMenuRenderer<'d> {
         create_data: NewContextMenuData,
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
+        color_atlas: &ColorTextureAtlas,
         root_font_set: &'d FontSet,
         event_bus: &SyncEventBus,
         #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
@@ -1126,6 +1226,7 @@ impl<'d> ContextMenuRenderer<'d> {
             device,
             shared_buffers,
             glyph_atlas.view(),
+            color_atlas.view(),
             #[cfg(not(windows))]
             surface.format(),
             #[cfg(windows)]
@@ -1502,6 +1603,7 @@ impl<'d> WindowRenderer<'d> {
         create_data: NewWindowData,
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
+        color_atlas: &ColorTextureAtlas,
         root_font_set: &'d FontSet,
         event_bus: &SyncEventBus,
     ) -> Self {
@@ -1555,6 +1657,7 @@ impl<'d> WindowRenderer<'d> {
             device,
             shared_buffers,
             glyph_atlas.view(),
+            color_atlas.view(),
             surface.format(),
             vk_swapchain.size(),
             vk_swapchain.image_view_refs(),
@@ -2859,5 +2962,259 @@ impl<'d> MaskTextureAtlasManager<'d> {
     pub fn clear(&mut self) {
         self.atlas.clear();
         self.acquired_glyph_rects.clear();
+    }
+}
+
+pub struct ColorTextureAtlasManager<'d> {
+    device: &'d VulkanDevice<'d>,
+    atlas: ColorTextureAtlas,
+}
+impl Drop for ColorTextureAtlasManager<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.atlas.drop(self.device);
+        }
+    }
+}
+impl<'d> ColorTextureAtlasManager<'d> {
+    pub fn new(
+        common_res: &GlyphAtlasManagerCommonResources<'d>,
+        init_worker_queue: &mut (impl br::QueueMut + ?Sized),
+        init_worker_queue_family_index: u32,
+    ) -> Self {
+        let atlas = ColorTextureAtlas::new(common_res.device);
+
+        let init_rp = br::RenderPassObject::new(
+            common_res.device,
+            &br::RenderPassCreateInfo::new(
+                &[br::vk::VkAttachmentDescription::new(
+                    atlas.format(),
+                    br::ImageLayout::Undefined,
+                    br::ImageLayout::ShaderReadOnlyOpt,
+                )
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
+                &[br::SubpassDescription::new().color_attachments(
+                    &[br::vk::VkAttachmentReference::new(
+                        0,
+                        br::ImageLayout::ColorAttachmentOpt,
+                    )],
+                    &[],
+                )],
+                &[br::vk::VkSubpassDependency {
+                    srcSubpass: 0,
+                    dstSubpass: br::vk::VK_SUBPASS_EXTERNAL,
+                    srcAccessMask: br::AccessFlags::COLOR_ATTACHMENT.write,
+                    dstAccessMask: br::AccessFlags::SHADER.read,
+                    srcStageMask: br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT.0,
+                    dstStageMask: br::PipelineStageFlags::FRAGMENT_SHADER.0,
+                    dependencyFlags: br::vk::VK_DEPENDENCY_BY_REGION_BIT,
+                }],
+            ),
+        )
+        .expect("init_rp.create");
+        let init_fb = br::FramebufferObject::new(
+            common_res.device,
+            &br::FramebufferCreateInfo::new(
+                &init_rp,
+                &[atlas.as_image_view().as_transparent_ref()],
+                atlas.size().width,
+                atlas.size().height,
+            ),
+        )
+        .expect("init_fb.create");
+
+        let mut init_cp = br::CommandPoolObject::new(
+            common_res.device,
+            &br::CommandPoolCreateInfo::new(init_worker_queue_family_index),
+        )
+        .expect("init_cp.create");
+        let [mut init_cb] = br::CommandBufferObject::alloc_array(
+            common_res.device,
+            &br::CommandBufferFixedCountAllocateInfo::new(
+                &mut init_cp,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("init_cb.create");
+        unsafe {
+            init_cb
+                .begin(&br::CommandBufferBeginInfo::new())
+                .expect("init_cb.begin")
+        }
+        .begin_render_pass(
+            &br::RenderPassBeginInfo::new(
+                &init_rp,
+                &init_fb,
+                atlas.size().into_rect(br::Offset2D::ZERO),
+                &[br::ClearValue::color_f32([0.0; 4])],
+            ),
+            br::SubpassContents::Inline,
+        )
+        .end_render_pass()
+        .end()
+        .expect("init_cb.end");
+        unsafe {
+            init_worker_queue
+                .submit_raw(
+                    &[br::SubmitInfo::new(
+                        &[],
+                        &[],
+                        &[init_cb.as_transparent_ref()],
+                        &[],
+                    )],
+                    None,
+                )
+                .expect("init_cb.submit");
+            init_worker_queue.wait().expect("init_cb.wait");
+        }
+
+        Self {
+            device: common_res.device,
+            atlas,
+        }
+    }
+
+    #[inline(always)]
+    pub fn acquire(&mut self, width: u32, height: u32) -> AtlasRect {
+        self.atlas.acquire(width, height)
+    }
+
+    fn perform_render(
+        &self,
+        shader_texture_rasterize_requests: &[(AtlasRect, ShaderTexture)],
+        render_scale: f32,
+        vk_device: &VulkanDevice,
+        render_worker_queue: &mut (impl br::QueueMut + ?Sized),
+    ) {
+        // TODO: 最適化はあとで
+        let pipeline_layout =
+            br::PipelineLayoutObject::new(vk_device, &br::PipelineLayoutCreateInfo::new(&[], &[]))
+                .expect("pipeline_layout.create");
+        let render_pass = br::RenderPassObject::new(
+            vk_device,
+            &br::RenderPassCreateInfo2::new(
+                &[br::AttachmentDescription2::new(self.atlas.format())
+                    .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store)
+                    .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined())],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .by_region()
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::SHADER.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::FRAGMENT_SHADER,
+                )],
+            ),
+        )
+        .expect("render_pass.create");
+        let fb = br::FramebufferObject::new(
+            vk_device,
+            &br::FramebufferCreateInfo::new(
+                &render_pass,
+                &[self.atlas.as_image_view().as_transparent_ref()],
+                self.atlas.size().width,
+                self.atlas.size().height,
+            ),
+        )
+        .expect("fb.create");
+        let render_resources = shader_texture_rasterize_requests
+            .iter()
+            .map(|(r, s)| {
+                let shader = vk_device.require_shader(&s.shader_path);
+                let viewport = [r.vk_rect().make_viewport(0.0..1.0)];
+                let scissor = [r.vk_rect()];
+                let [pipeline] = vk_device
+                    .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
+                        &pipeline_layout,
+                        render_pass.subpass(0),
+                        &[
+                            shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                            shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                        ],
+                        VI_STATE_EMPTY,
+                        IA_STATE_TRILIST,
+                        &br::PipelineViewportStateCreateInfo::new(&viewport, &scissor),
+                        RASTER_STATE_DEFAULT_FILL_NOCULL,
+                        BLEND_STATE_SINGLE_NONE,
+                    )
+                    .set_multisample_state(MS_STATE_EMPTY)])
+                    .expect("pipeline.create");
+
+                (shader, pipeline)
+            })
+            .collect::<Vec<_>>();
+
+        let mut cp = br::CommandPoolObject::new(
+            vk_device,
+            &br::CommandPoolCreateInfo::new(vk_device.present_queue_family_index()).transient(),
+        )
+        .expect("cp.create");
+        let [mut cb] = br::CommandBufferObject::alloc_array(
+            vk_device,
+            &br::CommandBufferFixedCountAllocateInfo::new(&mut cp, br::CommandBufferLevel::Primary),
+        )
+        .expect("cb.alloc");
+        unsafe {
+            cb.begin(&br::CommandBufferBeginInfo::new().onetime_submit())
+                .expect("cb.begin")
+        }
+        .inject(|r| {
+            vk_device.cmd_begin_render_pass(
+                r,
+                &br::RenderPassBeginInfo::new(
+                    &render_pass,
+                    &fb,
+                    self.atlas.size().into_rect(br::Offset2D::ZERO),
+                    &[],
+                ),
+            )
+        })
+        .inject(|r| {
+            render_resources
+                .iter()
+                .zip(shader_texture_rasterize_requests.iter())
+                .fold(r, |r, (res, tex)| {
+                    tracing::debug!(path = ?tex.1.shader_path, rect = ?tex.0, "raster shader tex");
+                    r.bind_pipeline(br::PipelineBindPoint::Graphics, &res.1)
+                        .draw(3, 1, 0, 0)
+                })
+        })
+        .inject(|r| vk_device.cmd_end_render_pass(r))
+        .end()
+        .expect("cb.end");
+
+        unsafe {
+            render_worker_queue
+                .submit_raw(
+                    &[br::SubmitInfo::new(
+                        &[],
+                        &[],
+                        &[cb.as_transparent_ref()],
+                        &[],
+                    )],
+                    None,
+                )
+                .expect("vector render submit");
+        }
+        render_worker_queue.wait().expect("vector render wait");
+    }
+
+    pub const fn atlas(&self) -> &ColorTextureAtlas {
+        &self.atlas
+    }
+
+    pub fn atlas_mut(&mut self) -> &mut ColorTextureAtlas {
+        &mut self.atlas
+    }
+
+    pub fn clear(&mut self) {
+        self.atlas.clear();
     }
 }

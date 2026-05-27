@@ -49,7 +49,7 @@ pub struct CompositeInstanceData {
     pub border_thickness: f32,
     pub softedge: f32,
     pub gradient_data_index: f32,
-    pub _padding: f32,
+    pub source_texture_index: f32,
     pub border_break_pattern: [f32; 2],
     pub _padding2: [f32; 2],
 }
@@ -613,6 +613,21 @@ impl<Event> Default for Border<Event> {
 }
 
 #[derive(Debug, Clone)]
+pub enum TextureType {
+    Mask,
+    Color,
+}
+impl TextureType {
+    #[inline(always)]
+    const fn to_index(&self) -> u32 {
+        match self {
+            Self::Mask => 0,
+            Self::Color => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CompositeRect<Event> {
     pub has_bitmap: bool,
     pub base_scale_factor: f32,
@@ -625,6 +640,7 @@ pub struct CompositeRect<Event> {
     pub relative_size_adjustment: [f32; 2],
     pub clip_child: Option<ClipConfig>,
     pub texatlas_rect_id: Option<TextureID>,
+    pub texture_type: TextureType,
     pub slice_borders: [f32; 4],
     pub composite_mode: CompositeMode<Event>,
     pub custom_render_token: Option<CustomRenderToken>,
@@ -650,6 +666,7 @@ impl<Event> Default for CompositeRect<Event> {
             relative_size_adjustment: [0.0, 0.0],
             clip_child: None,
             texatlas_rect_id: None,
+            texture_type: TextureType::Mask,
             slice_borders: [0.0, 0.0, 0.0, 0.0],
             composite_mode: CompositeMode::DirectSourceOver,
             custom_render_token: None,
@@ -1809,7 +1826,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 | CompositeMode::FillRadialGradient(x) => x.0 as f32,
                                 _ => 0.0,
                             },
-                            _padding: 0.0,
+                            source_texture_index: r.texture_type.to_index() as _,
                             border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
                                 [
                                     b.break_pattern[0] * r.base_scale_factor,
@@ -1914,7 +1931,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 border_color: [0.0; 4],
                                 softedge: 0.0,
                                 gradient_data_index: 0.0,
-                                _padding: 0.0,
+                                source_texture_index: 0.0, // force mono
                                 border_break_pattern: [0.0, 0.0],
                                 _padding2: [0.0, 0.0],
                             },
@@ -2329,9 +2346,9 @@ impl CompositeDescriptorSet {
         br::DescriptorType::UniformBuffer
             .make_binding(2, 1)
             .only_for_vertex(),
-        // texture atlas
+        // texture atlas(mono/color)
         br::DescriptorType::CombinedImageSampler
-            .make_binding(3, 1)
+            .make_binding(3, 2)
             .only_for_fragment(),
     ];
 
@@ -2365,10 +2382,13 @@ impl CompositeDescriptorSet {
     #[inline(always)]
     pub fn set_texture_atlas<'s>(
         set: br::DescriptorSet,
-        info: br::DescriptorImageInfo<'s>,
+        info_mono: br::DescriptorImageInfo<'s>,
+        info_color: br::DescriptorImageInfo<'s>,
     ) -> br::DescriptorSetWriteInfo<'s> {
         set.binding_at(3)
-            .write(br::DescriptorContents::CombinedImageSampler(vec![info]))
+            .write(br::DescriptorContents::CombinedImageSampler(vec![
+                info_mono, info_color,
+            ]))
     }
 }
 
@@ -2512,6 +2532,7 @@ impl CompositeRenderer {
         gfx: &VulkanDevice,
         shared_buffers: &CompositeSharedBuffers,
         mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
+        color_atlas: br::VkHandleRef<br::vk::VkImageView>,
         rt_format: br::Format,
         rt_buffers: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
         rt_size: br::Extent2D,
@@ -2816,7 +2837,7 @@ impl CompositeRenderer {
                 (1 + backdrop_fx_blur_processor.fixed_descriptor_set_count()) as _,
                 &[
                     br::DescriptorType::CombinedImageSampler.make_size(
-                        (1 + backdrop_fx_blur_processor.fixed_descriptor_set_count()) as _,
+                        (2 + backdrop_fx_blur_processor.fixed_descriptor_set_count()) as _,
                     ),
                     br::DescriptorType::UniformBuffer.make_size(1),
                     br::DescriptorType::StorageBuffer.make_size(2),
@@ -2857,6 +2878,8 @@ impl CompositeRenderer {
             CompositeDescriptorSet::set_texture_atlas(
                 alphamask_group_input_descriptor_set,
                 br::DescriptorImageInfo::new(&mask_atlas, br::ImageLayout::ShaderReadOnlyOpt)
+                    .with_sampler(&sampler),
+                br::DescriptorImageInfo::new(&color_atlas, br::ImageLayout::ShaderReadOnlyOpt)
                     .with_sampler(&sampler),
             ),
         ];
@@ -3484,11 +3507,14 @@ impl CompositeRenderer {
     pub fn rebind_glyph_atlas<'r>(
         &'r self,
         new_atlas: &'r (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        new_color_atlas: &'r (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
         descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'r>>,
     ) {
         descriptor_writes.push(CompositeDescriptorSet::set_texture_atlas(
             self.alphamask_group_input_descriptor_set,
             br::DescriptorImageInfo::new(new_atlas, br::ImageLayout::ShaderReadOnlyOpt)
+                .with_sampler(br::VkHandleRef::from_raw_ref(&self.sampler)),
+            br::DescriptorImageInfo::new(new_color_atlas, br::ImageLayout::ShaderReadOnlyOpt)
                 .with_sampler(br::VkHandleRef::from_raw_ref(&self.sampler)),
         ));
     }
@@ -3913,6 +3939,7 @@ impl<'d> BoundCompositeRenderer<'d> {
         device: &'d VulkanDevice,
         shared_buffers: &CompositeSharedBuffers,
         mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
+        color_atlas: br::VkHandleRef<br::vk::VkImageView>,
         rt_format: br::Format,
         rt_size: br::Extent2D,
         back_buffer_views: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
@@ -3922,6 +3949,7 @@ impl<'d> BoundCompositeRenderer<'d> {
                 device,
                 shared_buffers,
                 mask_atlas,
+                color_atlas,
                 rt_format,
                 back_buffer_views,
                 rt_size,

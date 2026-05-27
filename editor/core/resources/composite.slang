@@ -42,7 +42,7 @@ struct CompositeInstanceData {
   /// lt, rt, lb, rb (in pixels)
   float4 cornerRadiusY;
   float4 borderColor;
-  /// border_thickness, softedge, gradientDataIndex, ..
+  /// border_thickness, softedge, gradientDataIndex, sourceTextureIndex
   float4 miscValues2;
   /// border_break_pattern_x, border_break_pattern_y, .., ..
   float4 miscValues3;
@@ -91,7 +91,7 @@ StructuredBuffer<GradientData> gradientDataArray;
 [vk::binding(2, 0)]
 ConstantBuffer<StreamingData> streamingData;
 [vk::binding(3, 0)]
-Sampler2D<float4> texture;
+Sampler2D<float4> texture[2];
 [vk::binding(0, 1)]
 Sampler2D<float4> backdropTexture;
 
@@ -133,6 +133,7 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
   vo.fragmentInput.packedValues4.x = instanceDataArray[iindex].borderThickness;
   vo.fragmentInput.packedValues4.y = instanceDataArray[iindex].softedge;
   vo.fragmentInput.packedValues4.z = instanceDataArray[iindex].miscValues2.z;
+  vo.fragmentInput.packedValues4.w = instanceDataArray[iindex].miscValues2.w;
   vo.fragmentInput.packedValues5.xy = instanceDataArray[iindex].miscValues3.xy;
 
   return vo;
@@ -145,7 +146,7 @@ struct FragmentInput {
   float4 packedValues2;
   /// relativePixelCoord.xy, renderSizePixels.xy
   float4 packedValues3;
-  /// borderThickness, softedge, gradientDataIndex, ..
+  /// borderThickness, softedge, gradientDataIndex, sourceTextureIndex
   float4 packedValues4;
   /// borderBreakPatternX, borderBreakPatternY, .., ..
   float4 packedValues5;
@@ -197,6 +198,10 @@ struct FragmentInput {
 
   property cornerRadiusRB : float2 {
     inline get { return float2(cornerRadiusX.w, cornerRadiusY.w); }
+  }
+
+  property sourceTextureIndex : uint {
+    inline get { return uint(this.packedValues4.w); }
   }
 
   property textureUV : float2 {
@@ -275,7 +280,8 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   case CompositeMode.ColorTintBackdropBlur:
     // assuming texture is r8 format
     col = input.colorTint *
-          float4(1.0, 1.0, 1.0, texture.Sample(input.textureUV).x);
+          float4(1.0, 1.0, 1.0,
+                 texture[input.sourceTextureIndex].Sample(input.textureUV).x);
     break;
   case CompositeMode.FillColor:
   case CompositeMode.FillColorBackdropBlur:
@@ -307,7 +313,7 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   case CompositeMode.DirectSourceOver:
   default:
     // fallback: direct source-over
-    col = input.colorTint;
+    col = texture[input.sourceTextureIndex].Sample(input.textureUV);
   }
 
   // compute distance from edge

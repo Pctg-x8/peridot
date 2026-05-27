@@ -32,12 +32,13 @@ use crate::{
     },
     rendering::{
         MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
-        RenderMessageSender, RenderThread, RendererSync, TextureID,
+        RenderMessageSender, RenderThread, RendererSync, ShaderTexture, TextureID,
         composite::{
             self, AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig,
             CompositeMode, CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
-            CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
+            CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, CustomRenderToken, Gradient,
+            TextureType,
         },
         text::{FontID, FontSet, TextLayout, TextRun},
     },
@@ -1216,6 +1217,7 @@ impl ToggleButtonView {
                 AnimatableFloat::Value(rect.height),
             ],
             has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
             border: Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Value([1.0; 4]),
@@ -1421,6 +1423,7 @@ impl CheckboxView {
                 AnimatableFloat::Value(rect.height),
             ],
             has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
             border: Some(Border {
                 thickness: 0.5,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
@@ -1625,6 +1628,7 @@ impl RadioButtonView {
                 AnimatableFloat::Value(rect.height),
             ],
             has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
             border: Some(Border {
                 thickness: 0.5,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
@@ -1814,6 +1818,62 @@ impl RadioButtonGroupController {
                 );
             }
         }
+    }
+}
+
+pub struct ColorPickerSharedResources {
+    ring_tex_id: TextureID,
+}
+impl ColorPickerSharedResources {
+    pub fn new(
+        texid_issuer: &mut MainThreadTextureIDIssuer,
+        rt_sender: &RenderMessageSender,
+    ) -> Self {
+        let ring_tex_id = texid_issuer.issue();
+        rt_sender
+            .send(RenderMessage::RegisterShaderTexture {
+                id: ring_tex_id,
+                data: ShaderTexture {
+                    width: 128.0,
+                    height: 128.0,
+                    shader_path: "color_picker_ring.spv".into(),
+                },
+            })
+            .expect("rt_sender.send");
+
+        Self { ring_tex_id }
+    }
+}
+
+pub struct ColorPickerView {
+    ct_root: CompositeTreeRef,
+}
+impl ColorPickerView {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        lt: Point<LogicalUnit>,
+        shared: &ColorPickerSharedResources,
+    ) -> Self {
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(lt.x), AnimatableFloat::Value(lt.y)],
+            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
+            has_bitmap: true,
+            texatlas_rect_id: Some(shared.ring_tex_id),
+            texture_type: TextureType::Color,
+            ..Default::default()
+        });
+
+        Self { ct_root }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.ct_root);
     }
 }
 
@@ -2383,6 +2443,17 @@ async fn run<'sys>(
     );
     radio_button4.mount(&mut view_init_ctx, &main_window);
 
+    let color_picker_shared_res = ColorPickerSharedResources::new(
+        view_init_ctx.main_thread_texture_id_issuer,
+        view_init_ctx.system_link.rt_sender(),
+    );
+    let color_picker = ColorPickerView::new(
+        &mut view_init_ctx,
+        Point::new_logical(8.0, 64.0),
+        &color_picker_shared_res,
+    );
+    color_picker.mount(&mut view_init_ctx, &main_window);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
 
@@ -2549,6 +2620,7 @@ async fn run<'sys>(
                     radio_button2.rescale(new_scale, &mut composite_tree);
                     radio_button3.rescale(new_scale, &mut composite_tree);
                     radio_button4.rescale(new_scale, &mut composite_tree);
+                    color_picker.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");

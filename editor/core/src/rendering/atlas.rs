@@ -166,6 +166,138 @@ impl br::VkHandle for TextureAtlasAsImageView {
 }
 impl br::ImageView for TextureAtlasAsImageView {}
 
+pub struct ColorTextureAtlas {
+    res: br::vk::VkImage,
+    mem: br::vk::VkDeviceMemory,
+    view: br::vk::VkImageView,
+    max: br::Extent2D,
+    internal: DynamicAtlasManager,
+}
+impl ColorTextureAtlas {
+    const INIT_SIZE: u32 = 512;
+    const SPACING: u32 = 1;
+    const FORMAT: br::Format = br::vk::VK_FORMAT_R8G8B8A8_UNORM;
+
+    pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
+        unsafe {
+            br::vkfn_wrapper::destroy_image_view(gfx.native_ptr(), self.view, None);
+            br::vkfn_wrapper::destroy_image(gfx.native_ptr(), self.res, None);
+            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.mem, None);
+        }
+    }
+
+    pub fn new(gfx: &VulkanDevice) -> Self {
+        let size = br::Extent2D::spread1(Self::INIT_SIZE);
+
+        let mut res = br::ImageObject::new(
+            gfx,
+            &br::ImageCreateInfo::new(size, Self::FORMAT)
+                .set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT),
+        )
+        .expect("res create");
+        let memory_requirements = res.requirements();
+        let mem = br::DeviceMemoryObject::new(
+            gfx,
+            &br::MemoryAllocateInfo::new(
+                memory_requirements.size,
+                gfx.find_device_local_memory_index(memory_requirements.memoryTypeBits)
+                    .expect("no suitable memory"),
+            ),
+        )
+        .expect("res malloc");
+        res.bind(&mem, 0).expect("res mem bind");
+        let view = br::ImageViewBuilder::new(
+            res,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .expect("res view create");
+
+        gfx.dbg_set_name(view.image(), c"Color Texture Atlas");
+        gfx.dbg_set_name(&view, c"Color Texture Atlas [View]");
+        gfx.dbg_set_name(&mem, c"Color Texture Atlas [Backing Memory]");
+
+        let mut internal = DynamicAtlasManager::new();
+        internal.free(AtlasRect {
+            left: 0,
+            top: 0,
+            right: size.width,
+            bottom: size.height,
+        });
+
+        let (view, res) = view.unmanage();
+        let (res, _, _, _, _) = res.unmanage();
+        let (mem, _) = mem.unmanage();
+        Self {
+            res,
+            mem,
+            view,
+            internal,
+            max: size,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.internal.clear();
+        // register entire region as free
+        self.internal.free(AtlasRect {
+            left: 0,
+            top: 0,
+            right: self.max.width,
+            bottom: self.max.height,
+        });
+        // TODO: clear atlas content?
+    }
+
+    pub fn acquire(&mut self, width: u32, height: u32) -> AtlasRect {
+        self.internal
+            .alloc(width + Self::SPACING, height + Self::SPACING)
+            .expect("no space left")
+    }
+
+    #[inline(always)]
+    pub const fn format(&self) -> br::Format {
+        Self::FORMAT
+    }
+
+    #[inline(always)]
+    pub const fn size(&self) -> &br::Extent2D {
+        &self.max
+    }
+
+    #[inline(always)]
+    pub const fn image<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImage> {
+        unsafe { br::VkHandleRef::dangling(self.res) }
+    }
+
+    #[inline(always)]
+    pub const fn image_range_entire(&self) -> br::ImageSubresourceRange {
+        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1)
+    }
+
+    #[inline(always)]
+    pub const fn view<'s>(&'s self) -> br::VkHandleRef<'s, br::vk::VkImageView> {
+        unsafe { br::VkHandleRef::dangling(self.view) }
+    }
+
+    #[inline(always)]
+    pub const fn as_image_view<'a>(&'a self) -> &'a impl br::ImageView {
+        unsafe { core::mem::transmute::<_, &ColorTextureAtlasAsImageView>(self) }
+    }
+}
+
+#[repr(transparent)]
+pub struct ColorTextureAtlasAsImageView(ColorTextureAtlas);
+impl br::VkHandle for ColorTextureAtlasAsImageView {
+    type Handle = br::vk::VkImageView;
+
+    #[inline(always)]
+    fn native_ptr(&self) -> Self::Handle {
+        self.0.view
+    }
+}
+impl br::ImageView for ColorTextureAtlasAsImageView {}
+
 pub struct DynamicAtlasManager {
     /// width -> (height -> [rect])
     available_regions: Vec<(u32, Vec<(u32, AtlasRect)>)>,
