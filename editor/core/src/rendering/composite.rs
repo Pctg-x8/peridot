@@ -17,7 +17,7 @@ use crate::{
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, VulkanDevice,
     },
     rendering::{
-        MaskTextureAtlasManager, TextureID,
+        ColorTextureAtlasManager, MaskTextureAtlasManager, TextureID,
         atlas::{AtlasRect, DynamicAtlasManager},
         text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
         vg::VectorRasterizationState,
@@ -1644,6 +1644,7 @@ impl<Event> CompositeTreeRender<Event> {
         mapped_head: *mut core::ffi::c_void,
         font_set: &FontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
+        color_atlas: &ColorTextureAtlasManager,
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
         mut on_event: impl FnMut(Event),
@@ -1761,6 +1762,11 @@ impl<Event> CompositeTreeRender<Event> {
                 // Custom Renderがある場合はそっちのみ
                 inst_builder.insert_custom_render_commands(t);
             } else if r.has_bitmap {
+                let texatlas_size = match r.texture_type {
+                    TextureType::Mask => mask_atlas.atlas().size(),
+                    TextureType::Color => color_atlas.atlas().size(),
+                };
+
                 unsafe {
                     core::ptr::write(
                         mapped_head
@@ -1770,20 +1776,15 @@ impl<Event> CompositeTreeRender<Event> {
                             pos_st: [w, h, 0.0, 0.0],
                             uv_st: [
                                 ((texatlas_rect.right as f32 - texatlas_rect.left as f32) - 1.0)
-                                    / mask_atlas.atlas().size().width as f32,
+                                    / texatlas_size.width as f32,
                                 ((texatlas_rect.bottom as f32 - texatlas_rect.top as f32) - 1.0)
-                                    / mask_atlas.atlas().size().height as f32,
-                                (texatlas_rect.left as f32 + 0.5)
-                                    / mask_atlas.atlas().size().width as f32,
-                                (texatlas_rect.top as f32 + 0.5)
-                                    / mask_atlas.atlas().size().height as f32,
+                                    / texatlas_size.height as f32,
+                                (texatlas_rect.left as f32 + 0.5) / texatlas_size.width as f32,
+                                (texatlas_rect.top as f32 + 0.5) / texatlas_size.height as f32,
                             ],
                             position_modifier_matrix: matrix.clone().transpose(),
                             slice_borders: r.slice_borders,
-                            tex_size_pixels: [
-                                mask_atlas.atlas().size().width as _,
-                                mask_atlas.atlas().size().height as _,
-                            ],
+                            tex_size_pixels: [texatlas_size.width as _, texatlas_size.height as _],
                             composite_mode: r.composite_mode.shader_mode_value(),
                             opacity,
                             color_tint: match r.composite_mode {
@@ -2950,6 +2951,7 @@ impl CompositeRenderer {
         rt_size: br::Extent2D,
         font_set: &FontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
+        color_atlas: &ColorTextureAtlasManager,
         mask_atlas_rects: &[AtlasRect],
         vector_raster_state: &mut VectorRasterizationState,
         on_event: impl FnMut(Event),
@@ -2982,6 +2984,7 @@ impl CompositeRenderer {
                 ptr.ptr(),
                 font_set,
                 mask_atlas,
+                color_atlas,
                 mask_atlas_rects,
                 vector_raster_state,
                 on_event,
