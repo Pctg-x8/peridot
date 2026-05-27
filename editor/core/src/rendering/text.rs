@@ -1122,7 +1122,7 @@ impl TextLayout {
                 .CreateTextLayout(
                     &run_str_utf16s,
                     font_set.select(FontID::UIDefault),
-                    max_width,
+                    max_width.unwrap_or(f32::MAX),
                     f32::MAX,
                 )
                 .expect("dwrite.layout.create")
