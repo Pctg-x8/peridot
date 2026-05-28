@@ -478,13 +478,30 @@ impl<'h> HitTestTreeManager<'h> {
             return Some(t);
         }
 
-        if d.opaque && effective_global_rect.point_in_inclusive(global_pos) {
-            // 自分にヒット(不透明の場合のみ 透過で指定されている場合はヒットしてない扱いにする)
-            return Some(root);
+        if !d.opaque {
+            // not opaque
+            return None;
         }
 
-        // なににもヒットしなかった
-        None
+        if !effective_global_rect.point_in_inclusive(global_pos) {
+            // out of bounds
+            return None;
+        }
+
+        if d.action_handler().is_some_and(|a| {
+            !a.hittest(
+                root,
+                &HitTestArgs {
+                    tree_local_x: global_pos.x - effective_global_rect.left,
+                    tree_local_y: global_pos.y - effective_global_rect.top,
+                },
+            )
+        }) {
+            // hittest failed
+            return None;
+        }
+
+        Some(root)
     }
 }
 
@@ -569,7 +586,17 @@ pub struct GrabDeltaMoveActionArgs {
     pub delta: Point<LogicalUnit>,
 }
 
+pub struct HitTestArgs {
+    pub tree_local_x: f32,
+    pub tree_local_y: f32,
+}
+
 pub trait HitTestTreeActionHandler {
+    #[allow(unused_variables)]
+    fn hittest(&self, target: HitTestTreeRef, args: &HitTestArgs) -> bool {
+        true
+    }
+
     #[allow(unused_variables)]
     fn on_pointer_enter(
         &self,

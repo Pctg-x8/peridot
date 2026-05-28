@@ -103,6 +103,10 @@ pub enum CompositeMode<Event> {
     FillLinearGradient(GradientRef),
     /// 円形グラデーションで矩形を塗りつぶし
     FillRadialGradient(GradientRef),
+    // TODO: このへんの特殊対応はなんか汎用化したい シェーダ指定できるようにするか......？
+    /// 特殊対応: ColorPicker用 内部のグラデーションボックス
+    /// 引数には左上の色（ベースカラー）を入れる
+    ColorPickerGradientBox(AnimatableColor<Event>),
 }
 impl<Event> CompositeMode<Event> {
     const fn shader_mode_value(&self) -> f32 {
@@ -114,6 +118,7 @@ impl<Event> CompositeMode<Event> {
             Self::FillColorBackdropBlur(_, _) => 4.0,
             Self::FillLinearGradient(_) => 5.0,
             Self::FillRadialGradient(_) => 6.0,
+            Self::ColorPickerGradientBox(_) => 7.0,
         }
     }
 }
@@ -1737,6 +1742,9 @@ impl<Event> CompositeTreeRender<Event> {
                 }
                 CompositeMode::FillLinearGradient(_) => {}
                 CompositeMode::FillRadialGradient(_) => {}
+                CompositeMode::ColorPickerGradientBox(ref mut t) => {
+                    t.process_on_complete(current_sec, &mut on_event);
+                }
             }
             if let Some(ref mut b) = r.border {
                 b.color.process_on_complete(current_sec, &mut on_event);
@@ -1803,6 +1811,9 @@ impl<Event> CompositeTreeRender<Event> {
                                 }
                                 CompositeMode::FillLinearGradient(_) => [0.0; 4],
                                 CompositeMode::FillRadialGradient(_) => [0.0; 4],
+                                CompositeMode::ColorPickerGradientBox(ref t) => {
+                                    t.evaluate(current_sec, &self.parameter_store)
+                                }
                             },
                             corner_radius_x: [
                                 r.corner_radius.left_top[0] * r.base_scale_factor,

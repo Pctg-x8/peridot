@@ -26,8 +26,9 @@ use crate::{
         KeyboardFocusTokenRegistry, ModifierKey, NativeDesktopSurface, PointerInputManager,
         PointerInputUnit,
         hittest::{
-            CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
-            HitTestTreeRef, PointerActionArgs, PointerButton, PointerButtonActionArgs,
+            CursorShape, HitTestArgs, HitTestTreeActionHandler, HitTestTreeData,
+            HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButton,
+            PointerButtonActionArgs,
         },
     },
     rendering::{
@@ -1217,7 +1218,7 @@ impl ToggleButtonView {
                 AnimatableFloat::Value(rect.height),
             ],
             has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             border: Some(Border {
                 thickness: 1.0,
                 color: AnimatableColor::Value([1.0; 4]),
@@ -1423,7 +1424,7 @@ impl CheckboxView {
                 AnimatableFloat::Value(rect.height),
             ],
             has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             border: Some(Border {
                 thickness: 0.5,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
@@ -1628,7 +1629,7 @@ impl RadioButtonView {
                 AnimatableFloat::Value(rect.height),
             ],
             has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             border: Some(Border {
                 thickness: 0.5,
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
@@ -1846,9 +1847,13 @@ impl ColorPickerSharedResources {
 }
 
 pub struct ColorPickerView {
-    ct_root: CompositeTreeRef,
+    eh: Rc<ColorPickerEventHandler>,
 }
 impl ColorPickerView {
+    const RING_THICKNESS: f32 = 12.0;
+    const GRADIENT_BOX_MARGIN: f32 = 4.0;
+    const POINTER_SIZE: f32 = 12.0;
+
     pub fn new(
         ctx: &mut ViewInitContext,
         lt: Point<LogicalUnit>,
@@ -1863,17 +1868,326 @@ impl ColorPickerView {
             texture_type: TextureType::Color,
             ..Default::default()
         });
+        let gradient_box_size =
+            2.0 * (64.0 - Self::RING_THICKNESS - Self::GRADIENT_BOX_MARGIN) / 2.0f32.sqrt();
+        let ct_sat_light_box = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(-gradient_box_size * 0.5),
+                AnimatableFloat::Value(-gradient_box_size * 0.5),
+            ],
+            relative_offset_adjustment: [0.5, 0.5],
+            size: [
+                AnimatableFloat::Value(gradient_box_size),
+                AnimatableFloat::Value(gradient_box_size),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([
+                1.0, 0.5, 0.0, 1.0,
+            ])),
+            ..Default::default()
+        });
+        let ct_pointer = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
+            size: [
+                AnimatableFloat::Value(Self::POINTER_SIZE),
+                AnimatableFloat::Value(Self::POINTER_SIZE),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            corner_radius: CornerRadius::all(Self::POINTER_SIZE * 0.5),
+            border: Some(Border {
+                thickness: 2.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ct_pointer_dark = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
+            size: [
+                AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
+                AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            corner_radius: CornerRadius::all((Self::POINTER_SIZE - 4.0) * 0.5),
+            border: Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([0.0, 0.0, 0.0, 0.5]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left: lt.x,
+            top: lt.y,
+            width: 128.0,
+            height: 128.0,
+            ..Default::default()
+        });
+        let ht_sat_light_box = ctx.ht_manager.create(HitTestTreeData {
+            left: -gradient_box_size * 0.5,
+            top: -gradient_box_size * 0.5,
+            left_adjustment_factor: 0.5,
+            top_adjustment_factor: 0.5,
+            width: gradient_box_size,
+            height: gradient_box_size,
+            ..Default::default()
+        });
 
-        Self { ct_root }
+        ctx.composite_tree.add_child(ct_root, ct_sat_light_box);
+        ctx.composite_tree.add_child(ct_pointer, ct_pointer_dark);
+        ctx.composite_tree.add_child(ct_sat_light_box, ct_pointer);
+        ctx.ht_manager.add_child(ht_root, ht_sat_light_box);
+
+        let eh = Rc::new(ColorPickerEventHandler {
+            ct_root,
+            ct_sat_light_box,
+            ct_pointer,
+            ct_pointer_dark,
+            ht_root,
+            ht_sat_light_box,
+            ring_selecting: Cell::new(false),
+            box_selecting: Cell::new(false),
+        });
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+        ctx.ht_manager.set_action_handler(ht_sat_light_box, &eh);
+
+        eh.move_cursor(0.0, 0.0, ctx.composite_tree);
+
+        Self { eh }
     }
 
     pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
     }
 
     pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_root);
+        composite_tree
+            .get_mut(self.eh.ct_sat_light_box)
+            .base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_sat_light_box);
+        composite_tree.get_mut(self.eh.ct_pointer).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_pointer);
+        composite_tree
+            .get_mut(self.eh.ct_pointer_dark)
+            .base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_pointer_dark);
+    }
+}
+
+struct ColorPickerEventHandler {
+    ct_root: CompositeTreeRef,
+    ct_sat_light_box: CompositeTreeRef,
+    ct_pointer: CompositeTreeRef,
+    ct_pointer_dark: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    ht_sat_light_box: HitTestTreeRef,
+    ring_selecting: Cell<bool>,
+    box_selecting: Cell<bool>,
+}
+impl HitTestTreeActionHandler for ColorPickerEventHandler {
+    fn hittest(&self, target: HitTestTreeRef, args: &HitTestArgs) -> bool {
+        if target == self.ht_sat_light_box {
+            return true;
+        }
+
+        if target == self.ht_root {
+            let dcenter_x = args.tree_local_x - 64.0;
+            let dcenter_y = args.tree_local_y - 64.0;
+            let dcenter = (dcenter_x * dcenter_x + dcenter_y * dcenter_y).sqrt();
+
+            return (64.0 - ColorPickerView::RING_THICKNESS) <= dcenter && dcenter <= 64.0;
+        }
+
+        false
+    }
+
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        if sender == self.ht_root {
+            // ring
+            let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_root,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let dcenter_x = local_x - 64.0;
+            let dcenter_y = local_y - 64.0;
+            let hue =
+                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 + 30.0;
+            self.update_sat_light_box(hue, context.composite_tree);
+            self.ring_selecting.set(true);
+
+            return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
+        }
+
+        if sender == self.ht_sat_light_box {
+            let (local_x, local_y, w, h) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_sat_light_box,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let local_x = local_x.clamp(0.0, w);
+            let local_y = local_y.clamp(0.0, h);
+            self.move_cursor(local_x, local_y, context.composite_tree);
+
+            self.box_selecting.set(true);
+            return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
+        }
+
+        EventContinueControl::empty()
+    }
+
+    fn on_pointer_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        if sender == self.ht_root && self.ring_selecting.get() {
+            // ring
+            let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_root,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let dcenter_x = local_x - 64.0;
+            let dcenter_y = local_y - 64.0;
+            let hue =
+                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 + 30.0;
+            self.update_sat_light_box(hue, context.composite_tree);
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        if sender == self.ht_sat_light_box && self.box_selecting.get() {
+            let (local_x, local_y, w, h) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_sat_light_box,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let local_x = local_x.clamp(0.0, w);
+            let local_y = local_y.clamp(0.0, h);
+            self.move_cursor(local_x, local_y, context.composite_tree);
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        EventContinueControl::empty()
+    }
+
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        if sender == self.ht_root {
+            // ring
+            let (local_x, local_y, _, _) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_root,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let dcenter_x = local_x - 64.0;
+            let dcenter_y = local_y - 64.0;
+            let hue =
+                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 + 30.0;
+            self.update_sat_light_box(hue, context.composite_tree);
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        if sender == self.ht_sat_light_box {
+            let (local_x, local_y, w, h) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_sat_light_box,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let local_x = local_x.clamp(0.0, w);
+            let local_y = local_y.clamp(0.0, h);
+            self.move_cursor(local_x, local_y, context.composite_tree);
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        EventContinueControl::empty()
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        if sender == self.ht_root {
+            self.ring_selecting.set(false);
+            return EventContinueControl::STOP_PROPAGATION
+                | EventContinueControl::RELEASE_CAPTURE_ELEMENT;
+        }
+
+        if sender == self.ht_sat_light_box {
+            self.box_selecting.set(false);
+            return EventContinueControl::STOP_PROPAGATION
+                | EventContinueControl::RELEASE_CAPTURE_ELEMENT;
+        }
+
+        EventContinueControl::empty()
+    }
+}
+impl ColorPickerEventHandler {
+    fn move_cursor<E>(&self, x: f32, y: f32, composite_tree: &mut CompositeTree<E>) {
+        let ct_pointer = composite_tree.get_mut(self.ct_pointer);
+        ct_pointer.offset = [
+            AnimatableFloat::Value(x - ColorPickerView::POINTER_SIZE * 0.5),
+            AnimatableFloat::Value(y - ColorPickerView::POINTER_SIZE * 0.5),
+        ];
+        composite_tree.mark_dirty(self.ct_pointer);
+    }
+
+    fn update_sat_light_box<E>(&self, hue: f32, composite_tree: &mut CompositeTree<E>) {
+        let r = hue_to_rgb_wave(hue);
+        let g = hue_to_rgb_wave(hue - 120.0);
+        let b = hue_to_rgb_wave(hue - 240.0);
+
+        composite_tree.get_mut(self.ct_sat_light_box).composite_mode =
+            CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([r, g, b, 1.0]));
+        composite_tree.mark_dirty(self.ct_sat_light_box);
+    }
+}
+
+const fn hue_to_rgb_wave(hue: f32) -> f32 {
+    // generate ／￣￣＼＿＿ wave
+    let phase = (hue / 60.0) % 6.0;
+    match phase {
+        0.0..1.0 => phase,
+        1.0..3.0 => 1.0,
+        3.0..4.0 => 4.0 - phase,
+        _ => 0.0,
     }
 }
 

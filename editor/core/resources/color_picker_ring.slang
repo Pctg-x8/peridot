@@ -5,7 +5,7 @@ struct VertexOutput {
 
 static const float PI = 3.14159265358979323846;
 
-static const float RING_THICKNESS = 20.0;
+static const float RING_THICKNESS = 12.0;
 [vk::constant_id(0)]
 const float RENDER_WIDTH_PX = 128.0;
 [vk::constant_id(1)]
@@ -24,9 +24,10 @@ VertexOutput vertMain(uint vid: SV_VertexID) {
 
 [shader("fragment")]
 float4 fragMain(float2 uv: TEXCOORD0) : SV_Target {
-  let hue = 360.0 * (atan2(uv.y - 0.5, uv.x - 0.5) / (2.0 * PI) + 0.5) + 30.0;
-  let col = float3(hueToRGBWave(hue), hueToRGBWave(hue + 120.0),
-                   hueToRGBWave(hue + 240.0));
+  let hue =
+      360.0 * (atan2(uv.y - 0.5, uv.x - 0.5) / (2.0 * PI) + 0.5) + 360.0 + 30.0;
+  let col = float3(hueToRGBWave(hue), hueToRGBWave(hue - 120.0),
+                   hueToRGBWave(hue - 240.0));
 
   // needs gamma collection?
   return float4(pow(col, 2.2), 1.0) * ringOpacity(uv);
@@ -35,9 +36,8 @@ float4 fragMain(float2 uv: TEXCOORD0) : SV_Target {
 inline func ringOpacity(float2 uv)->float {
   let d = length(uv - 0.5);
   let out = smoothstep(0.5, 0.5 + 1.0 / RENDER_WIDTH_PX, d);
-  let in =
-      smoothstep(0.5 - RING_THICKNESS / RENDER_WIDTH_PX - 1.0 / RENDER_WIDTH_PX,
-                 0.5 - RING_THICKNESS / RENDER_WIDTH_PX, d);
+  let in = smoothstep(0.5 - RING_THICKNESS / 128.0 - 1.0 / RENDER_WIDTH_PX,
+                      0.5 - RING_THICKNESS / 128.0, d);
 
   return (1.0 - out) * in;
 }

@@ -17,6 +17,7 @@ enum CompositeMode : uint {
   FillColorBackdropBlur,
   FillLinearGradient,
   FillRadialGradient,
+  ColorPickerGradientBox,
 }
 extension CompositeMode {
   property requiresBackdropComposition : bool {
@@ -168,6 +169,10 @@ struct FragmentInput {
     inline get { return this.packedValues3.zw; }
   }
 
+  property localUV : float2 {
+    inline get { return this.relativePixelCoord / this.renderSizePixels; }
+  }
+
   property renderingPixelCoordLeft : float {
     inline get { return this.relativePixelCoord.x; }
   }
@@ -308,6 +313,13 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
                         gradientDataArray[input.gradientDataIndex].params.zw));
     col = lerp(gradientDataArray[input.gradientDataIndex].startColor,
                gradientDataArray[input.gradientDataIndex].endColor, a);
+    break;
+  }
+  case CompositeMode.ColorPickerGradientBox: {
+    let l = 1.0 - input.localUV.y;
+    let s = input.localUV.x;
+    col = float4(
+        pow(lerp(float3(1.0, 1.0, 1.0), input.colorTint.xyz, s) * l, 2.2), 1.0);
     break;
   }
   case CompositeMode.DirectSourceOver:
