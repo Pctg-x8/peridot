@@ -35,6 +35,14 @@ use crate::{
 #[cfg(target_os = "macos")]
 use crate::{Event, LogicFiberEventDispatcher, input::hittest::HitTestTreeManager};
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct RawTextInputViewCreateFlags : u8 {
+        /// HitTestを外部ツリーに移譲しない（常にRawTextInputViewでポインタ入力を扱う）
+        const NON_DELEGATED_HT = 1 << 0;
+    }
+}
+
 pub struct RawTextInputView {
     ct_text_clip: CompositeTreeRef,
     eh: Rc<RawTextInputViewEventHandler>,
@@ -45,6 +53,7 @@ impl RawTextInputView {
         rect: Rect<LogicalUnit>,
         init_content: String,
         keyboard_focus_token: FocusTargetToken,
+        flags: RawTextInputViewCreateFlags,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
@@ -127,7 +136,7 @@ impl RawTextInputView {
                 height: rect.height,
                 cursor_shape: CursorShape::IBeam,
                 keyboard_focus: Some(keyboard_focus_token),
-                active: false,
+                active: flags.contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT),
                 ..Default::default()
             }),
             ct_root,
@@ -152,6 +161,7 @@ impl RawTextInputView {
             ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
             pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
             event_dispatcher: ctx.system_link.event_dispatcher,
+            creation_flags: flags,
         });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.ht_manager
@@ -203,9 +213,52 @@ impl RawTextInputView {
         TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT
     }
 
+    pub fn perform_rescale<E>(
+        &self,
+        new_scale: f32,
+        ct: &mut CompositeTree<E>,
+        syslink: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+    ) {
+        self.eh.update_views(
+            self.rescale(ct, new_scale),
+            ct,
+            syslink,
+            ht_manager,
+            0.0, // not interested in scale change
+        );
+    }
+
+    pub fn set_focus_lazy(&self) {
+        self.eh
+            .pending_update_mask
+            .update(|x| x | self.eh.set_focus());
+    }
+
+    pub fn release_focus_lazy(&self) {
+        self.eh
+            .pending_update_mask
+            .update(|x| x | self.eh.release_focus());
+    }
+
+    pub fn set_content_lazy(&self, content: String) {
+        self.eh
+            .pending_update_mask
+            .update(|x| x | self.set_content(content));
+    }
+
     pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
+        let mut update_mask = TextInputViewUpdateMask::empty();
+        if self.eh.cursor_pos_bytes.get() > content.len() {
+            self.eh.cursor_pos_bytes.set(content.len());
+            update_mask |= TextInputViewUpdateMask::CURSOR;
+        }
+        if self.eh.selection_begin_bytes.get() > content.len() {
+            self.eh.selection_begin_bytes.set(content.len());
+            update_mask |= TextInputViewUpdateMask::CURSOR;
+        }
         *self.eh.content.borrow_mut() = content;
-        TextInputViewUpdateMask::TEXT
+        update_mask | TextInputViewUpdateMask::TEXT
     }
 
     pub fn content<'a>(&'a self) -> Ref<'a, String> {
@@ -366,6 +419,16 @@ impl RawTextInputView {
             context.current_sec,
         );
     }
+
+    #[inline(always)]
+    pub fn fwd_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.eh.on_pointer_down(sender, context, args)
+    }
 }
 
 struct RawTextInputViewEventHandler {
@@ -390,6 +453,7 @@ struct RawTextInputViewEventHandler {
     ht_manager_ptr: *const HitTestTreeManager<'static>,
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
+    creation_flags: RawTextInputViewCreateFlags,
 }
 impl HitTestTreeScreenRepositionHandler for RawTextInputViewEventHandler {
     fn on_screen_reposition_required(
@@ -937,7 +1001,11 @@ impl RawTextInputViewEventHandler {
             current_sec,
         );
 
-        if update_mask.contains(TextInputViewUpdateMask::FOCUS) {
+        if update_mask.contains(TextInputViewUpdateMask::FOCUS)
+            && !self
+                .creation_flags
+                .contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT)
+        {
             ht_manager.get_data_mut(self.ht_root).active = self.has_focus.get();
         }
     }
@@ -971,7 +1039,7 @@ impl RawTextInputViewEventHandler {
             // needs update text
             self.update_text(composite_tree);
         }
-        if mask.contains(TextInputViewUpdateMask::CURSOR) {
+        if mask.intersects(TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::TEXT) {
             // needs update cursor position and selection highlight
             self.update_cursor_position(composite_tree, system_link, ht_manager);
             self.update_selection(composite_tree, system_link);
@@ -1669,7 +1737,13 @@ impl TextInputView {
             keyboard_focus: Some(kf_token),
             ..Default::default()
         });
-        let raw = RawTextInputView::new(ctx, rect, "".into(), kf_token);
+        let raw = RawTextInputView::new(
+            ctx,
+            rect,
+            "".into(),
+            kf_token,
+            RawTextInputViewCreateFlags::empty(),
+        );
         let eh = Rc::new(TextInputViewEventHandler {
             raw,
             id: ctx.view_registry.alloc(),
@@ -1792,7 +1866,13 @@ impl NumericInputView {
             keyboard_focus: Some(kf_token),
             ..Default::default()
         });
-        let raw = RawTextInputView::new(ctx, rect, "0".into(), kf_token);
+        let raw = RawTextInputView::new(
+            ctx,
+            rect,
+            "0".into(),
+            kf_token,
+            RawTextInputViewCreateFlags::empty(),
+        );
         let eh = Rc::new(NumericInputViewEventHandler {
             value: Cell::new(0),
             raw,

@@ -28,6 +28,8 @@ extension CompositeMode {
   }
 }
 
+enum TextureMappingMode : uint { Stretch, Repeat }
+
 struct CompositeInstanceData {
   /// scale_x(width), scale_y(height), translate_x(left), translate_y(top)
   float4 posSTStatic;
@@ -45,11 +47,11 @@ struct CompositeInstanceData {
   float4 borderColor;
   /// border_thickness, softedge, gradientDataIndex, sourceTextureIndex
   float4 miscValues2;
-  /// border_break_pattern_x, border_break_pattern_y, .., ..
+  /// border_break_pattern_x, border_break_pattern_y, textureMappingMode, ..
   float4 miscValues3;
 
   property texSlicedSizedPixels : float2 {
-    inline get { return this.uvSTStatic.xy * this.uvSTStatic.zw; }
+    inline get { return this.uvSTStatic.xy * this.miscValues.xy; }
   }
 
   property borderThickness : float {
@@ -136,6 +138,7 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
   vo.fragmentInput.packedValues4.z = instanceDataArray[iindex].miscValues2.z;
   vo.fragmentInput.packedValues4.w = instanceDataArray[iindex].miscValues2.w;
   vo.fragmentInput.packedValues5.xy = instanceDataArray[iindex].miscValues3.xy;
+  vo.fragmentInput.packedValues5.z = instanceDataArray[iindex].miscValues3.z;
 
   return vo;
 }
@@ -149,7 +152,7 @@ struct FragmentInput {
   float4 packedValues3;
   /// borderThickness, softedge, gradientDataIndex, sourceTextureIndex
   float4 packedValues4;
-  /// borderBreakPatternX, borderBreakPatternY, .., ..
+  /// borderBreakPatternX, borderBreakPatternY, textureMappingMode, ..
   float4 packedValues5;
   float4 sliceBordersLTRB;
   float4 colorTint;
@@ -163,6 +166,10 @@ struct FragmentInput {
 
   property relativePixelCoord : float2 {
     inline get { return this.packedValues3.xy; }
+  }
+
+  property texSizePixels : float2 {
+    inline get { return this.packedValues2.zw; }
   }
 
   property renderSizePixels : float2 {
@@ -209,11 +216,22 @@ struct FragmentInput {
     inline get { return uint(this.packedValues4.w); }
   }
 
+  property textureMappingMode : TextureMappingMode {
+    inline get { return TextureMappingMode(this.packedValues5.z); }
+  }
+
   property textureUV : float2 {
     inline get {
       if (all(this.sliceBordersLTRB == float4(0.0))) {
         // no 9slices
-        return this.packedValues.xy;
+        switch (this.textureMappingMode) {
+        case TextureMappingMode.Stretch:
+          return this.packedValues.xy;
+        case TextureMappingMode.Repeat:
+          return this.packedValues2.xy +
+                 ((this.relativePixelCoord % this.texSlicedSizePixels.xy) /
+                  this.texSizePixels);
+        }
       }
 
       let uvOffset = this.packedValues2.xy;

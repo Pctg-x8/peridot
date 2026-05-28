@@ -25,9 +25,9 @@ VertexOutput vertMain(uint vid: SV_VertexID) {
 [shader("fragment")]
 float4 fragMain(float2 uv: TEXCOORD0) : SV_Target {
   let hue =
-      360.0 * (atan2(uv.y - 0.5, uv.x - 0.5) / (2.0 * PI) + 0.5) + 360.0 + 30.0;
-  let col = float3(hueToRGBWave(hue), hueToRGBWave(hue - 120.0),
-                   hueToRGBWave(hue - 240.0));
+      360.0 * (atan2(uv.y - 0.5, uv.x - 0.5) / (2.0 * PI) + 0.5) + 360.0 - 90.0;
+  let col = float3(hueToRGBWave(hue + 120.0), hueToRGBWave(hue),
+                   hueToRGBWave(hue - 120.0));
 
   // needs gamma collection?
   return float4(pow(col, 2.2), 1.0) * ringOpacity(uv);

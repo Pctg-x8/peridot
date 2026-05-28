@@ -51,7 +51,8 @@ pub struct CompositeInstanceData {
     pub gradient_data_index: f32,
     pub source_texture_index: f32,
     pub border_break_pattern: [f32; 2],
-    pub _padding2: [f32; 2],
+    pub texture_mapping_mode: f32,
+    pub _padding: f32,
 }
 
 #[repr(C)]
@@ -119,6 +120,20 @@ impl<Event> CompositeMode<Event> {
             Self::FillLinearGradient(_) => 5.0,
             Self::FillRadialGradient(_) => 6.0,
             Self::ColorPickerGradientBox(_) => 7.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum TextureMappingMode {
+    Stretch,
+    Repeat,
+}
+impl TextureMappingMode {
+    const fn shader_mode_value(&self) -> f32 {
+        match self {
+            Self::Stretch => 0.0,
+            Self::Repeat => 1.0,
         }
     }
 }
@@ -646,6 +661,7 @@ pub struct CompositeRect<Event> {
     pub clip_child: Option<ClipConfig>,
     pub texatlas_rect_id: Option<TextureID>,
     pub texture_type: TextureType,
+    pub texture_mapping_mode: TextureMappingMode,
     pub slice_borders: [f32; 4],
     pub composite_mode: CompositeMode<Event>,
     pub custom_render_token: Option<CustomRenderToken>,
@@ -672,6 +688,7 @@ impl<Event> Default for CompositeRect<Event> {
             clip_child: None,
             texatlas_rect_id: None,
             texture_type: TextureType::Mask,
+            texture_mapping_mode: TextureMappingMode::Stretch,
             slice_borders: [0.0, 0.0, 0.0, 0.0],
             composite_mode: CompositeMode::DirectSourceOver,
             custom_render_token: None,
@@ -1845,7 +1862,8 @@ impl<Event> CompositeTreeRender<Event> {
                                     b.break_pattern[1] * r.base_scale_factor,
                                 ]
                             }),
-                            _padding2: [0.0, 0.0],
+                            texture_mapping_mode: r.texture_mapping_mode.shader_mode_value(),
+                            _padding: 0.0,
                         },
                     );
                 }
@@ -1945,7 +1963,9 @@ impl<Event> CompositeTreeRender<Event> {
                                 gradient_data_index: 0.0,
                                 source_texture_index: 0.0, // force mono
                                 border_break_pattern: [0.0, 0.0],
-                                _padding2: [0.0, 0.0],
+                                texture_mapping_mode: TextureMappingMode::Stretch
+                                    .shader_mode_value(),
+                                _padding: 0.0,
                             },
                         );
                     }
@@ -2240,6 +2260,11 @@ impl<Event> CompositeTree<Event> {
         &mut self.rects[index.0]
     }
 
+    pub fn set_gradient(&mut self, r: GradientRef, data: Gradient) {
+        self.gradients[r.0 as usize] = data;
+        self.dirty_gradients.insert(r.0);
+    }
+
     pub fn mark_dirty(&mut self, index: CompositeTreeRef) {
         self.dirty_flags[index.0].dirty = true;
         self.dirty_rects.insert(index.0, DirtyRect::Modified);
@@ -2300,8 +2325,8 @@ impl<Event> CompositeTree<Event> {
         }
         for n in self.dirty_gradients.drain() {
             sync_buffer
-                .pushed_gradients
-                .push(self.gradients[n as usize].clone());
+                .dirty_gradients
+                .push((n, self.gradients[n as usize].clone()));
         }
 
         self.parameter_store

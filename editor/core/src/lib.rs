@@ -1,3 +1,4 @@
+use bedrock::vkfn::queue_bind_sparse;
 use core::cell::Cell;
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
@@ -22,9 +23,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use crate::{
     graphics::VulkanDevice,
     input::{
-        EventContinueControl, InputEventContext, KeyInputCode, KeyboardFocusGroupRef,
-        KeyboardFocusTokenRegistry, ModifierKey, NativeDesktopSurface, PointerInputManager,
-        PointerInputUnit,
+        EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
+        KeyInputEventHandler, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
+        NativeDesktopSurface, PointerInputManager, PointerInputUnit,
         hittest::{
             CursorShape, HitTestArgs, HitTestTreeActionHandler, HitTestTreeData,
             HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButton,
@@ -39,7 +40,7 @@ use crate::{
             CompositeMode, CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, CustomRenderToken, Gradient,
-            TextureType,
+            GradientRef, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout, TextRun},
     },
@@ -47,8 +48,8 @@ use crate::{
         MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
         MenuItemView, MountContext, MountTarget, NumericInputView, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
-        ScrollContainer, SimpleButtonView, TextInputView, ViewIdentifier, ViewInitContext,
-        ViewRegistry, ViewUpdateContext,
+        ScrollContainer, SimpleButtonView, TextInputView, ViewEventHandler, ViewIdentifier,
+        ViewInitContext, ViewRegistry, ViewUpdateContext,
     },
     utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -1824,6 +1825,7 @@ impl RadioButtonGroupController {
 
 pub struct ColorPickerSharedResources {
     ring_tex_id: TextureID,
+    alpha_slider_bg_tex_id: TextureID,
 }
 impl ColorPickerSharedResources {
     pub fn new(
@@ -1841,8 +1843,22 @@ impl ColorPickerSharedResources {
                 },
             })
             .expect("rt_sender.send");
+        let alpha_slider_bg_tex_id = texid_issuer.issue();
+        rt_sender
+            .send(RenderMessage::RegisterShaderTexture {
+                id: alpha_slider_bg_tex_id,
+                data: ShaderTexture {
+                    width: 16.0,
+                    height: 16.0,
+                    shader_path: "checkerboard.spv".into(),
+                },
+            })
+            .expect("rt_sender.send");
 
-        Self { ring_tex_id }
+        Self {
+            ring_tex_id,
+            alpha_slider_bg_tex_id,
+        }
     }
 }
 
@@ -1853,6 +1869,7 @@ impl ColorPickerView {
     const RING_THICKNESS: f32 = 12.0;
     const GRADIENT_BOX_MARGIN: f32 = 4.0;
     const POINTER_SIZE: f32 = 12.0;
+    const ALPHA_SLIDER_THUMB_THICKNESS: f32 = 3.0;
 
     pub fn new(
         ctx: &mut ViewInitContext,
@@ -1883,7 +1900,7 @@ impl ColorPickerView {
             ],
             has_bitmap: true,
             composite_mode: CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([
-                1.0, 0.5, 0.0, 1.0,
+                1.0, 0.0, 0.0, 1.0,
             ])),
             ..Default::default()
         });
@@ -1921,6 +1938,76 @@ impl ColorPickerView {
             }),
             ..Default::default()
         });
+        let alpha_slider_content_gradient =
+            ctx.mount_context
+                .composite_tree
+                .create_gradient(Gradient::Linear {
+                    start_color: [1.0, 0.0, 0.0, 0.0],
+                    end_color: [1.0, 0.0, 0.0, 1.0],
+                    start_pos_relative: [0.0, 0.0],
+                    end_pos_relative: [1.0, 0.0],
+                });
+        let ct_alpha_slider_base = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(128.0 + 8.0),
+            ],
+            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(16.0)],
+            has_bitmap: true,
+            composite_mode: CompositeMode::DirectSourceOver,
+            texture_mapping_mode: TextureMappingMode::Repeat,
+            texture_type: TextureType::Color,
+            texatlas_rect_id: Some(shared.alpha_slider_bg_tex_id),
+            ..Default::default()
+        });
+        let ct_alpha_slider_content = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillLinearGradient(alpha_slider_content_gradient),
+            ..Default::default()
+        });
+        let ct_alpha_slider_thumb = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(128.0 - Self::ALPHA_SLIDER_THUMB_THICKNESS * 0.5),
+                AnimatableFloat::Value(0.0),
+            ],
+            size: [
+                AnimatableFloat::Value(Self::ALPHA_SLIDER_THUMB_THICKNESS),
+                AnimatableFloat::Value(0.0),
+            ],
+            relative_size_adjustment: [0.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.1, 0.1, 1.0])),
+            border: Some(Border {
+                thickness: 0.5,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ct_hex_label = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(128.0 + 32.0 + 16.0),
+            ],
+            size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
+            has_bitmap: false,
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "HEX".into(),
+                    font_id: FontID::UIDefault,
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             left: lt.x,
             top: lt.y,
@@ -1937,26 +2024,60 @@ impl ColorPickerView {
             height: gradient_box_size,
             ..Default::default()
         });
+        let ht_alpha_slider = ctx.ht_manager.create(HitTestTreeData {
+            left: 0.0,
+            top: 128.0 + 8.0,
+            width: 128.0,
+            height: 16.0,
+            ..Default::default()
+        });
 
         ctx.composite_tree.add_child(ct_root, ct_sat_light_box);
         ctx.composite_tree.add_child(ct_pointer, ct_pointer_dark);
         ctx.composite_tree.add_child(ct_sat_light_box, ct_pointer);
+        ctx.composite_tree
+            .add_child(ct_alpha_slider_base, ct_alpha_slider_content);
+        ctx.composite_tree
+            .add_child(ct_alpha_slider_base, ct_alpha_slider_thumb);
+        ctx.composite_tree.add_child(ct_root, ct_alpha_slider_base);
+        ctx.composite_tree.add_child(ct_root, ct_hex_label);
         ctx.ht_manager.add_child(ht_root, ht_sat_light_box);
+        ctx.ht_manager.add_child(ht_root, ht_alpha_slider);
 
-        let eh = Rc::new(ColorPickerEventHandler {
+        let eh = Rc::new_cyclic(|thisref| ColorPickerEventHandler {
             ct_root,
             ct_sat_light_box,
             ct_pointer,
             ct_pointer_dark,
+            ct_alpha_slider_content,
+            ct_alpha_slider_thumb,
+            alpha_slider_content_gradient,
+            ct_hex_label,
             ht_root,
             ht_sat_light_box,
+            ht_alpha_slider,
+            sat_light_box_size: Size::new_logical(gradient_box_size, gradient_box_size),
             ring_selecting: Cell::new(false),
             box_selecting: Cell::new(false),
+            alpha_sliding: Cell::new(false),
+            current_hue: Cell::new(0.0),
+            current_light: Cell::new(1.0),
+            current_saturation: Cell::new(0.0),
+            current_alpha: Cell::new(1.0),
+            hex_text_input_view: ColorPickerHexTextInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(32.0, 128.0 + 32.0 + 16.0),
+                    Size::new_logical(128.0 - 32.0, 20.0),
+                ),
+                thisref,
+            ),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
         ctx.ht_manager.set_action_handler(ht_sat_light_box, &eh);
+        ctx.ht_manager.set_action_handler(ht_alpha_slider, &eh);
 
-        eh.move_cursor(0.0, 0.0, ctx.composite_tree);
+        eh.move_cursor(0.0, 0.0, ctx.mount_context.composite_tree, ctx.system_link);
 
         Self { eh }
     }
@@ -1965,9 +2086,24 @@ impl ColorPickerView {
         ctx.composite_tree
             .add_child(target.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+
+        // これだけ遅延させる必要がある（ScreenPositionInterestsどうしようか......）
+        self.eh.hex_text_input_view.mount(
+            ctx,
+            &uikit::RawMountTarget {
+                ht_root: self.eh.ht_root,
+                ct_root: self.eh.ct_root,
+            },
+        );
     }
 
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+    pub fn rescale<E>(
+        &self,
+        new_scale: f32,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &HitTestTreeManager,
+        syslink: &SystemLink,
+    ) {
         composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
         composite_tree.mark_dirty(self.eh.ct_root);
         composite_tree
@@ -1980,6 +2116,18 @@ impl ColorPickerView {
             .get_mut(self.eh.ct_pointer_dark)
             .base_scale_factor = new_scale;
         composite_tree.mark_dirty(self.eh.ct_pointer_dark);
+        composite_tree
+            .get_mut(self.eh.ct_alpha_slider_content)
+            .base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_alpha_slider_content);
+        composite_tree
+            .get_mut(self.eh.ct_hex_label)
+            .base_scale_factor = new_scale;
+        composite_tree.mark_dirty_all(self.eh.ct_hex_label);
+
+        self.eh
+            .hex_text_input_view
+            .rescale(new_scale, composite_tree, ht_manager, syslink);
     }
 }
 
@@ -1988,17 +2136,25 @@ struct ColorPickerEventHandler {
     ct_sat_light_box: CompositeTreeRef,
     ct_pointer: CompositeTreeRef,
     ct_pointer_dark: CompositeTreeRef,
+    ct_alpha_slider_content: CompositeTreeRef,
+    ct_alpha_slider_thumb: CompositeTreeRef,
+    alpha_slider_content_gradient: GradientRef,
+    ct_hex_label: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     ht_sat_light_box: HitTestTreeRef,
+    ht_alpha_slider: HitTestTreeRef,
+    sat_light_box_size: Size<LogicalUnit>,
     ring_selecting: Cell<bool>,
     box_selecting: Cell<bool>,
+    alpha_sliding: Cell<bool>,
+    current_hue: Cell<f32>,
+    current_light: Cell<f32>,
+    current_saturation: Cell<f32>,
+    current_alpha: Cell<f32>,
+    hex_text_input_view: ColorPickerHexTextInputView,
 }
 impl HitTestTreeActionHandler for ColorPickerEventHandler {
     fn hittest(&self, target: HitTestTreeRef, args: &HitTestArgs) -> bool {
-        if target == self.ht_sat_light_box {
-            return true;
-        }
-
         if target == self.ht_root {
             let dcenter_x = args.tree_local_x - 64.0;
             let dcenter_y = args.tree_local_y - 64.0;
@@ -2007,7 +2163,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             return (64.0 - ColorPickerView::RING_THICKNESS) <= dcenter && dcenter <= 64.0;
         }
 
-        false
+        true
     }
 
     fn on_pointer_down(
@@ -2028,8 +2184,8 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             let dcenter_x = local_x - 64.0;
             let dcenter_y = local_y - 64.0;
             let hue =
-                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 + 30.0;
-            self.update_sat_light_box(hue, context.composite_tree);
+                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 - 90.0;
+            self.select_hue(hue, context.composite_tree, context.system_link);
             self.ring_selecting.set(true);
 
             return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
@@ -2045,9 +2201,39 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             );
             let local_x = local_x.clamp(0.0, w);
             let local_y = local_y.clamp(0.0, h);
-            self.move_cursor(local_x, local_y, context.composite_tree);
+            self.move_cursor(
+                local_x,
+                local_y,
+                context.composite_tree,
+                context.system_link,
+            );
 
             self.box_selecting.set(true);
+            return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
+        }
+
+        if sender == self.ht_alpha_slider {
+            let (local_x, _, w, _) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_alpha_slider,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let new_alpha = local_x.clamp(0.0, w) / w;
+            self.current_alpha.set(new_alpha);
+            self.color_changed(context.system_link, context.composite_tree);
+            context
+                .composite_tree
+                .get_mut(self.ct_alpha_slider_thumb)
+                .offset[0] = AnimatableFloat::Value(
+                new_alpha * w - ColorPickerView::ALPHA_SLIDER_THUMB_THICKNESS * 0.5,
+            );
+            context
+                .composite_tree
+                .mark_dirty(self.ct_alpha_slider_thumb);
+
+            self.alpha_sliding.set(true);
             return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
         }
 
@@ -2072,8 +2258,8 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             let dcenter_x = local_x - 64.0;
             let dcenter_y = local_y - 64.0;
             let hue =
-                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 + 30.0;
-            self.update_sat_light_box(hue, context.composite_tree);
+                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 - 90.0;
+            self.select_hue(hue, context.composite_tree, context.system_link);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -2088,7 +2274,36 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             );
             let local_x = local_x.clamp(0.0, w);
             let local_y = local_y.clamp(0.0, h);
-            self.move_cursor(local_x, local_y, context.composite_tree);
+            self.move_cursor(
+                local_x,
+                local_y,
+                context.composite_tree,
+                context.system_link,
+            );
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        if sender == self.ht_alpha_slider && self.alpha_sliding.get() {
+            let (local_x, _, w, _) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_alpha_slider,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let new_alpha = local_x.clamp(0.0, w) / w;
+            self.current_alpha.set(new_alpha);
+            self.color_changed(context.system_link, context.composite_tree);
+            context
+                .composite_tree
+                .get_mut(self.ct_alpha_slider_thumb)
+                .offset[0] = AnimatableFloat::Value(
+                new_alpha * w - ColorPickerView::ALPHA_SLIDER_THUMB_THICKNESS * 0.5,
+            );
+            context
+                .composite_tree
+                .mark_dirty(self.ct_alpha_slider_thumb);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -2114,8 +2329,8 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             let dcenter_x = local_x - 64.0;
             let dcenter_y = local_y - 64.0;
             let hue =
-                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 + 30.0;
-            self.update_sat_light_box(hue, context.composite_tree);
+                360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 - 90.0;
+            self.select_hue(hue, context.composite_tree, context.system_link);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -2130,7 +2345,36 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             );
             let local_x = local_x.clamp(0.0, w);
             let local_y = local_y.clamp(0.0, h);
-            self.move_cursor(local_x, local_y, context.composite_tree);
+            self.move_cursor(
+                local_x,
+                local_y,
+                context.composite_tree,
+                context.system_link,
+            );
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        if sender == self.ht_alpha_slider {
+            let (local_x, _, w, _) = context.ht_manager.translate_client_to_tree_local(
+                self.ht_alpha_slider,
+                args.client_pos.x,
+                args.client_pos.y,
+                args.client_size.width,
+                args.client_size.height,
+            );
+            let new_alpha = local_x.clamp(0.0, w) / w;
+            self.current_alpha.set(new_alpha);
+            self.color_changed(context.system_link, context.composite_tree);
+            context
+                .composite_tree
+                .get_mut(self.ct_alpha_slider_thumb)
+                .offset[0] = AnimatableFloat::Value(
+                new_alpha * w - ColorPickerView::ALPHA_SLIDER_THUMB_THICKNESS * 0.5,
+            );
+            context
+                .composite_tree
+                .mark_dirty(self.ct_alpha_slider_thumb);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -2156,11 +2400,29 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
                 | EventContinueControl::RELEASE_CAPTURE_ELEMENT;
         }
 
+        if sender == self.ht_alpha_slider {
+            self.alpha_sliding.set(false);
+            return EventContinueControl::STOP_PROPAGATION
+                | EventContinueControl::RELEASE_CAPTURE_ELEMENT;
+        }
+
         EventContinueControl::empty()
     }
 }
 impl ColorPickerEventHandler {
-    fn move_cursor<E>(&self, x: f32, y: f32, composite_tree: &mut CompositeTree<E>) {
+    fn move_cursor<E>(
+        &self,
+        x: f32,
+        y: f32,
+        composite_tree: &mut CompositeTree<E>,
+        syslink: &SystemLink,
+    ) {
+        self.current_light
+            .set(1.0 - y / self.sat_light_box_size.height);
+        self.current_saturation
+            .set(x / self.sat_light_box_size.width);
+        self.color_changed(syslink, composite_tree);
+
         let ct_pointer = composite_tree.get_mut(self.ct_pointer);
         ct_pointer.offset = [
             AnimatableFloat::Value(x - ColorPickerView::POINTER_SIZE * 0.5),
@@ -2169,14 +2431,117 @@ impl ColorPickerEventHandler {
         composite_tree.mark_dirty(self.ct_pointer);
     }
 
-    fn update_sat_light_box<E>(&self, hue: f32, composite_tree: &mut CompositeTree<E>) {
-        let r = hue_to_rgb_wave(hue);
-        let g = hue_to_rgb_wave(hue - 120.0);
-        let b = hue_to_rgb_wave(hue - 240.0);
+    fn select_hue<E>(&self, hue: f32, composite_tree: &mut CompositeTree<E>, syslink: &SystemLink) {
+        self.current_hue.set(hue);
+        self.color_changed(syslink, composite_tree);
+
+        let r = hue_to_rgb_wave(hue + 120.0);
+        let g = hue_to_rgb_wave(hue);
+        let b = hue_to_rgb_wave(hue - 120.0);
 
         composite_tree.get_mut(self.ct_sat_light_box).composite_mode =
             CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([r, g, b, 1.0]));
         composite_tree.mark_dirty(self.ct_sat_light_box);
+    }
+
+    fn color_changed<E>(&self, syslink: &SystemLink, composite_tree: &mut CompositeTree<E>) {
+        const fn lerp(a: f32, b: f32, t: f32) -> f32 {
+            a + (b - a) * t
+        }
+
+        let r = lerp(
+            1.0,
+            hue_to_rgb_wave(self.current_hue.get() + 120.0),
+            self.current_saturation.get(),
+        ) * self.current_light.get();
+        let g = lerp(
+            1.0,
+            hue_to_rgb_wave(self.current_hue.get() - 0.0),
+            self.current_saturation.get(),
+        ) * self.current_light.get();
+        let b = lerp(
+            1.0,
+            hue_to_rgb_wave(self.current_hue.get() - 120.0),
+            self.current_saturation.get(),
+        ) * self.current_light.get();
+
+        self.hex_text_input_view.set_value(
+            gen_rgba(
+                (r * 255.0) as _,
+                (g * 255.0) as _,
+                (b * 255.0) as _,
+                (self.current_alpha.get() * 255.0) as _,
+            ),
+            syslink,
+        );
+
+        composite_tree.set_gradient(
+            self.alpha_slider_content_gradient,
+            Gradient::Linear {
+                start_color: [r, g, b, 0.0],
+                end_color: [r, g, b, 1.0],
+                start_pos_relative: [0.0, 0.0],
+                end_pos_relative: [1.0, 0.0],
+            },
+        );
+    }
+
+    fn set_by_color<E>(&self, color: u32, composite_tree: &mut CompositeTree<E>) {
+        let r = color as u8 as f32 / 255.0;
+        let g = (color >> 8) as u8 as f32 / 255.0;
+        let b = (color >> 16) as u8 as f32 / 255.0;
+        let a = (color >> 24) as u8 as f32 / 255.0;
+
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let d = max - min;
+        let hue = if d == 0.0 {
+            0.0
+        } else if max == r {
+            60.0 * (g - b) / d
+        } else if max == g {
+            120.0 + 60.0 * (b - r) / d
+        } else {
+            240.0 + 60.0 * (r - g) / d
+        };
+        let hue = if hue < 0.0 { 360.0 + hue } else { hue };
+        let saturation = (max - min) / max;
+        let light = max;
+
+        self.current_hue.set(hue);
+        self.current_light.set(light);
+        self.current_saturation.set(saturation);
+        self.current_alpha.set(a);
+
+        let r = hue_to_rgb_wave(hue + 120.0);
+        let g = hue_to_rgb_wave(hue);
+        let b = hue_to_rgb_wave(hue - 120.0);
+
+        composite_tree.get_mut(self.ct_sat_light_box).composite_mode =
+            CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([r, g, b, 1.0]));
+        composite_tree.mark_dirty(self.ct_sat_light_box);
+
+        let pointer_x = saturation * self.sat_light_box_size.width;
+        let pointer_y = (1.0 - light) * self.sat_light_box_size.height;
+        let ct_pointer = composite_tree.get_mut(self.ct_pointer);
+        ct_pointer.offset = [
+            AnimatableFloat::Value(pointer_x - ColorPickerView::POINTER_SIZE * 0.5),
+            AnimatableFloat::Value(pointer_y - ColorPickerView::POINTER_SIZE * 0.5),
+        ];
+        composite_tree.mark_dirty(self.ct_pointer);
+        composite_tree.get_mut(self.ct_alpha_slider_thumb).offset[0] =
+            AnimatableFloat::Value(a * 128.0 - ColorPickerView::ALPHA_SLIDER_THUMB_THICKNESS * 0.5);
+        composite_tree.mark_dirty(self.ct_alpha_slider_thumb);
+
+        composite_tree.set_gradient(
+            self.alpha_slider_content_gradient,
+            Gradient::Linear {
+                start_color: [r, g, b, 0.0],
+                end_color: [r, g, b, 1.0],
+                start_pos_relative: [0.0, 0.0],
+                end_pos_relative: [1.0, 0.0],
+            },
+        );
     }
 }
 
@@ -2188,6 +2553,212 @@ const fn hue_to_rgb_wave(hue: f32) -> f32 {
         1.0..3.0 => 1.0,
         3.0..4.0 => 4.0 - phase,
         _ => 0.0,
+    }
+}
+
+const fn gen_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    r as u32 | ((g as u32) << 8) | ((b as u32) << 16) | ((a as u32) << 24)
+}
+
+struct ColorPickerHexTextInputView {
+    eh: Rc<ColorPickerHexTextInputEventHandler>,
+}
+impl ColorPickerHexTextInputView {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        rect: Rect<LogicalUnit>,
+        parent_view_handler: &std::rc::Weak<ColorPickerEventHandler>,
+    ) -> Self {
+        let kf_token = ctx.keyboard_focus_registry.acquire_token();
+        let raw = uikit::RawTextInputView::new(
+            ctx,
+            rect,
+            "00000000".into(),
+            kf_token,
+            uikit::RawTextInputViewCreateFlags::NON_DELEGATED_HT,
+        );
+        let eh = Rc::new(ColorPickerHexTextInputEventHandler {
+            value: Cell::new(0),
+            raw,
+            id: ctx.view_registry.alloc(),
+            token: kf_token,
+            parent_view_handler: parent_view_handler.clone(),
+        });
+        ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
+        ctx.view_registry.set_event_handler(eh.id, &eh);
+
+        Self { eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
+        self.eh.raw.mount(ctx, parent);
+    }
+
+    pub fn set_keyboard_focus_group(
+        &self,
+        group: KeyboardFocusGroupRef,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        keyboard_focus_registry.join_group(group, self.eh.token);
+    }
+
+    pub fn rescale<E>(
+        &self,
+        new_scale: f32,
+        ct: &mut CompositeTree<E>,
+        ht_manager: &HitTestTreeManager,
+        syslink: &SystemLink,
+    ) {
+        self.eh
+            .raw
+            .perform_rescale(new_scale, ct, syslink, ht_manager);
+    }
+
+    fn set_value(&self, value: u32, syslink: &SystemLink) {
+        self.eh.value.set(value);
+        self.eh
+            .raw
+            .set_content_lazy(ColorPickerHexTextInputEventHandler::fmt(value));
+        syslink.dispatch_event(Event::UpdateView { id: self.eh.id });
+    }
+}
+
+struct ColorPickerHexTextInputEventHandler {
+    value: Cell<u32>,
+    raw: uikit::RawTextInputView,
+    id: ViewIdentifier,
+    token: FocusTargetToken,
+    parent_view_handler: std::rc::Weak<ColorPickerEventHandler>,
+}
+impl ViewEventHandler for ColorPickerHexTextInputEventHandler {
+    #[inline(always)]
+    fn update(&self, context: &mut ViewUpdateContext) {
+        self.raw.fwd_view_update(context);
+    }
+}
+impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
+    fn focus_taken(&self, context: &mut InputEventContext) {
+        // HitTestTreeへの変更がはいるので遅延させる
+        self.raw.set_focus_lazy();
+        context
+            .system_link
+            .dispatch_event(Event::UpdateView { id: self.id });
+    }
+
+    fn focus_released(&self, context: &mut InputEventContext) {
+        self.raw.release_focus_lazy();
+        self.confirm_direct_input(context.system_link, context.composite_tree);
+    }
+
+    #[inline(always)]
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        if code == KeyInputCode::Enter {
+            // 確定or入力開始
+            self.confirm_direct_input(context.system_link, context.composite_tree);
+            return;
+        }
+
+        if code == KeyInputCode::Esc {
+            // 入力キャンセル
+            self.cancel_direct_input(context.system_link);
+            return;
+        }
+
+        self.raw.fwd_keydown(context, code, modifier);
+    }
+
+    #[inline(always)]
+    #[cfg(feature = "wayland")]
+    fn ime_state_changes(
+        &self,
+        context: &mut InputEventContext,
+        new_committed_string: &str,
+        new_preedit_string: &str,
+    ) {
+        self.raw
+            .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
+    }
+}
+impl ColorPickerHexTextInputEventHandler {
+    fn parse(text: &str) -> Option<u32> {
+        const fn parse_ascii_hexdigit(c: u8) -> Option<u8> {
+            match c {
+                b'0'..=b'9' => Some(c - b'0'),
+                b'A'..=b'F' => Some(c - b'A' + 10),
+                b'a'..=b'f' => Some(c - b'a' + 10),
+                _ => None,
+            }
+        }
+
+        match text.as_bytes() {
+            // RGB
+            &[r, g, b] => {
+                let r = parse_ascii_hexdigit(r)?;
+                let g = parse_ascii_hexdigit(g)?;
+                let b = parse_ascii_hexdigit(b)?;
+
+                Some(gen_rgba(r | r << 4, g | g << 4, b | b << 4, 255))
+            }
+            // RGBA
+            &[r, g, b, a] => {
+                let r = parse_ascii_hexdigit(r)?;
+                let g = parse_ascii_hexdigit(g)?;
+                let b = parse_ascii_hexdigit(b)?;
+                let a = parse_ascii_hexdigit(a)?;
+
+                Some(gen_rgba(r | r << 4, g | g << 4, b | b << 4, a | a << 4))
+            }
+            // RRGGBB
+            &[r0, r1, g0, g1, b0, b1] => {
+                let r = parse_ascii_hexdigit(r1)? | parse_ascii_hexdigit(r0)? << 4;
+                let g = parse_ascii_hexdigit(g1)? | parse_ascii_hexdigit(g0)? << 4;
+                let b = parse_ascii_hexdigit(b1)? | parse_ascii_hexdigit(b0)? << 4;
+
+                Some(gen_rgba(r, g, b, 255))
+            }
+            // RRGGBBAA
+            &[r0, r1, g0, g1, b0, b1, a0, a1] => {
+                let r = parse_ascii_hexdigit(r1)? | parse_ascii_hexdigit(r0)? << 4;
+                let g = parse_ascii_hexdigit(g1)? | parse_ascii_hexdigit(g0)? << 4;
+                let b = parse_ascii_hexdigit(b1)? | parse_ascii_hexdigit(b0)? << 4;
+                let a = parse_ascii_hexdigit(a1)? | parse_ascii_hexdigit(a0)? << 4;
+
+                Some(gen_rgba(r, g, b, a))
+            }
+            // unknown
+            _ => None,
+        }
+    }
+
+    fn fmt(rgba: u32) -> String {
+        let r = rgba as u8;
+        let g = (rgba >> 8) as u8;
+        let b = (rgba >> 16) as u8;
+        let a = (rgba >> 24) as u8;
+
+        format!("{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
+
+    fn confirm_direct_input<E>(&self, syslink: &SystemLink, composite_tree: &mut CompositeTree<E>) {
+        let current_value = self.value.get();
+        let new_value = Self::parse(&self.raw.content()).unwrap_or(current_value);
+        self.value.set(new_value);
+
+        // HitTestTreeへの変更がはいるので遅延させる
+        self.raw.set_content_lazy(Self::fmt(new_value));
+        syslink.dispatch_event(Event::UpdateView { id: self.id });
+
+        if current_value != new_value {
+            // notify changed
+            if let Some(parent) = self.parent_view_handler.upgrade() {
+                parent.set_by_color(new_value, composite_tree);
+            }
+        }
+    }
+
+    fn cancel_direct_input(&self, syslink: &SystemLink) {
+        self.raw.set_content_lazy(Self::fmt(self.value.get()));
+        syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 }
 
@@ -2934,7 +3505,7 @@ async fn run<'sys>(
                     radio_button2.rescale(new_scale, &mut composite_tree);
                     radio_button3.rescale(new_scale, &mut composite_tree);
                     radio_button4.rescale(new_scale, &mut composite_tree);
-                    color_picker.rescale(new_scale, &mut composite_tree);
+                    color_picker.rescale(new_scale, &mut composite_tree, &ht_manager, &system_link);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
