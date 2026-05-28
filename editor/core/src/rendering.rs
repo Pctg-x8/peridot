@@ -6,7 +6,8 @@ use std::{
 
 use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut,
-    ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, Swapchain, VkHandle, VkHandleMut,
+    ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, SpecializationConstants,
+    Swapchain, VkHandle, VkHandleMut,
 };
 
 use crate::{
@@ -3092,6 +3093,14 @@ impl<'d> ColorTextureAtlasManager<'d> {
         vk_device: &VulkanDevice,
         render_worker_queue: &mut (impl br::QueueMut + ?Sized),
     ) {
+        #[derive(SpecializationConstants)]
+        struct SpecConstantStorage {
+            #[constant_id = 0]
+            render_width_px: f32,
+            #[constant_id = 1]
+            render_height_px: f32,
+        }
+
         // TODO: 最適化はあとで
         let pipeline_layout =
             br::PipelineLayoutObject::new(vk_device, &br::PipelineLayoutCreateInfo::new(&[], &[]))
@@ -3136,13 +3145,25 @@ impl<'d> ColorTextureAtlasManager<'d> {
                 let shader = vk_device.require_shader(&s.shader_path);
                 let viewport = [r.vk_rect().make_viewport(0.0..1.0)];
                 let scissor = [r.vk_rect()];
+                let spec_const = SpecConstantStorage {
+                    render_width_px: r.width() as _,
+                    render_height_px: r.height() as _,
+                };
                 let [pipeline] = vk_device
                     .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
                         &pipeline_layout,
                         render_pass.subpass(0),
                         &[
-                            shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                            shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                            shader
+                                .on_stage(br::ShaderStage::Vertex, c"vertMain")
+                                .with_specialization_info(&br::SpecializationInfo::new(
+                                    &spec_const,
+                                )),
+                            shader
+                                .on_stage(br::ShaderStage::Fragment, c"fragMain")
+                                .with_specialization_info(&br::SpecializationInfo::new(
+                                    &spec_const,
+                                )),
                         ],
                         VI_STATE_EMPTY,
                         IA_STATE_TRILIST,
