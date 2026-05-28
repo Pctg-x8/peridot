@@ -51,7 +51,10 @@ use crate::{
         ScrollContainer, SimpleButtonView, TextInputView, ViewEventHandler, ViewIdentifier,
         ViewInitContext, ViewRegistry, ViewUpdateContext,
     },
-    utils::{Color32, LogicalUnit, Point, Rect, SafeF32, Size},
+    utils::{
+        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, SafeF32, Size,
+        UnsafeMainThreadOnlyOnceCell,
+    },
 };
 
 #[cfg(windows)]
@@ -823,6 +826,11 @@ pub enum Event {
     PopupClose {
         id: PopupID,
     },
+    OpenCustomViewFlyout {
+        parent: WindowHandle,
+        surface_pos: Point<LogicalUnit>,
+        view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfaceViewConstructor>>>,
+    },
     MenuOpen {
         parent: WindowHandle,
         items: Vec<MenuItem>,
@@ -934,6 +942,7 @@ impl Event {
             Self::SubWindowClose { .. } => "SubWindowClose",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
             Self::PopupClose { .. } => "PopupClose",
+            Self::OpenCustomViewFlyout { .. } => "OpenCustomViewFlyout",
             Self::MenuOpen { .. } => "MenuOpen",
             Self::MenuReopen { .. } => "MenuReopen",
             Self::DropdownMenuOpen { .. } => "DropdownMenuOpen",
@@ -1862,6 +1871,9 @@ impl ColorPickerSharedResources {
     }
 }
 
+static COLOR_PICKER_SHARED_RES: UnsafeMainThreadOnlyOnceCell<ColorPickerSharedResources> =
+    UnsafeMainThreadOnlyOnceCell(core::cell::OnceCell::new());
+
 pub struct ColorPickerView {
     eh: Rc<ColorPickerEventHandler>,
 }
@@ -1871,11 +1883,14 @@ impl ColorPickerView {
     const POINTER_SIZE: f32 = 12.0;
     const ALPHA_SLIDER_THUMB_THICKNESS: f32 = 3.0;
 
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        lt: Point<LogicalUnit>,
-        shared: &ColorPickerSharedResources,
-    ) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, lt: Point<LogicalUnit>) -> Self {
+        let shared = COLOR_PICKER_SHARED_RES.0.get_or_init(|| {
+            ColorPickerSharedResources::new(
+                ctx.main_thread_texture_id_issuer,
+                ctx.system_link.rt_sender(),
+            )
+        });
+
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             base_scale_factor: ctx.ui_scale_factor,
             offset: [AnimatableFloat::Value(lt.x), AnimatableFloat::Value(lt.y)],
@@ -2762,6 +2777,179 @@ impl ColorPickerHexTextInputEventHandler {
     }
 }
 
+pub struct EditableColorButtonView {
+    eh: Rc<EditableColorButtonEventHandler>,
+}
+impl EditableColorButtonView {
+    const COLOR_PREVIEW_MARGIN: f32 = 6.0;
+
+    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>, init_color: u32) -> Self {
+        let shared = COLOR_PICKER_SHARED_RES.0.get_or_init(|| {
+            ColorPickerSharedResources::new(
+                ctx.main_thread_texture_id_issuer,
+                ctx.system_link.rt_sender(),
+            )
+        });
+
+        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(rect.left),
+                AnimatableFloat::Value(rect.top),
+            ],
+            size: [
+                AnimatableFloat::Value(rect.width),
+                AnimatableFloat::Value(rect.height),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            border: Some(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            }),
+            corner_radius: CornerRadius::all(8.0),
+            ..Default::default()
+        });
+        let ct_color_base = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            offset: [
+                AnimatableFloat::Value(Self::COLOR_PREVIEW_MARGIN),
+                AnimatableFloat::Value(Self::COLOR_PREVIEW_MARGIN),
+            ],
+            size: [
+                AnimatableFloat::Value(-Self::COLOR_PREVIEW_MARGIN * 2.0),
+                AnimatableFloat::Value(-Self::COLOR_PREVIEW_MARGIN * 2.0),
+            ],
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::DirectSourceOver,
+            texatlas_rect_id: Some(shared.alpha_slider_bg_tex_id),
+            texture_type: TextureType::Color,
+            texture_mapping_mode: TextureMappingMode::Repeat,
+            ..Default::default()
+        });
+        let ct_color = ctx.mount_context.composite_tree.create(CompositeRect {
+            base_scale_factor: ctx.ui_scale_factor,
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                init_color as u8 as f32 / 255.0,
+                (init_color >> 8) as u8 as f32 / 255.0,
+                (init_color >> 16) as u8 as f32 / 255.0,
+                (init_color >> 24) as u8 as f32 / 255.0,
+            ])),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        ctx.composite_tree.add_child(ct_color_base, ct_color);
+        ctx.composite_tree.add_child(ct_root, ct_color_base);
+
+        let eh = Rc::new(EditableColorButtonEventHandler {
+            ct_root,
+            ht_root,
+            ct_color_base,
+            ct_color,
+        });
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+        Self { eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    }
+
+    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
+        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_root);
+        composite_tree
+            .get_mut(self.eh.ct_color_base)
+            .base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_color_base);
+        composite_tree.get_mut(self.eh.ct_color).base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_color);
+    }
+}
+
+struct EditableColorButtonEventHandler {
+    ct_root: CompositeTreeRef,
+    ct_color_base: CompositeTreeRef,
+    ct_color: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl HitTestTreeActionHandler for EditableColorButtonEventHandler {
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        let vc = Box::new(EditableColorButtonPickerFlyoutViewConstructor {});
+        let (gl, gt, gw, gh, _) = context.ht_manager.compute_global_rect_autoroot(sender);
+        context
+            .system_link
+            .dispatch_event(Event::OpenCustomViewFlyout {
+                parent: context
+                    .ht_manager
+                    .query_root_window(sender)
+                    .expect("not mounted"),
+                surface_pos: Point::new_logical(gl + gw * 0.5 - vc.size().width * 0.5, gt + gh),
+                view_constructor: NonCloneable(DummyDebug(vc)),
+            });
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+
+pub struct EditableColorButtonPickerFlyoutView {
+    inner_view: ColorPickerView,
+}
+impl EditableColorButtonPickerFlyoutView {
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        Self {
+            inner_view: ColorPickerView::new(ctx, Point::new_logical(8.0, 8.0)),
+        }
+    }
+}
+impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
+    fn mount(&self, mount_context: &mut MountContext, surface: FlyoutSurfaceHandle) {
+        self.inner_view.mount(mount_context, &surface);
+    }
+
+    fn rescale(
+        &self,
+        new_scale: f32,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &HitTestTreeManager,
+        system_link: &SystemLink,
+    ) {
+        self.inner_view
+            .rescale(new_scale, composite_tree, ht_manager, system_link);
+    }
+}
+
+pub struct EditableColorButtonPickerFlyoutViewConstructor {}
+impl FlyoutSurfaceViewConstructor for EditableColorButtonPickerFlyoutViewConstructor {
+    fn size(&self) -> Size<LogicalUnit> {
+        Size::new_logical(128.0 + 16.0, 128.0 + 32.0 + 16.0 + 20.0 + 16.0)
+    }
+
+    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView> {
+        Box::new(EditableColorButtonPickerFlyoutView::new(ctx))
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -2817,6 +3005,7 @@ async fn run<'sys>(
     );
     let mut current_active_menu_session = None::<MenuSession>;
     let mut current_active_dropdown_menu_session = None::<DropdownMenuSession>;
+    let mut custom_view_flyout_session = None::<CustomViewFlyoutSession>;
 
     let mut main_window = system_link.create_main_window(
         &mut composite_tree,
@@ -3328,16 +3517,18 @@ async fn run<'sys>(
     );
     radio_button4.mount(&mut view_init_ctx, &main_window);
 
-    let color_picker_shared_res = ColorPickerSharedResources::new(
-        view_init_ctx.main_thread_texture_id_issuer,
-        view_init_ctx.system_link.rt_sender(),
-    );
-    let color_picker = ColorPickerView::new(
-        &mut view_init_ctx,
-        Point::new_logical(8.0, 64.0),
-        &color_picker_shared_res,
-    );
+    let color_picker = ColorPickerView::new(&mut view_init_ctx, Point::new_logical(8.0, 64.0));
     color_picker.mount(&mut view_init_ctx, &main_window);
+
+    let editable_color_button = EditableColorButtonView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(500.0, 128.0 + 32.0),
+            Size::new_logical(32.0, 20.0),
+        ),
+        0xffffffff,
+    );
+    editable_color_button.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -3506,6 +3697,7 @@ async fn run<'sys>(
                     radio_button3.rescale(new_scale, &mut composite_tree);
                     radio_button4.rescale(new_scale, &mut composite_tree);
                     color_picker.rescale(new_scale, &mut composite_tree, &ht_manager, &system_link);
+                    editable_color_button.rescale(new_scale, &mut composite_tree);
                 }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
@@ -3891,6 +4083,29 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
+            Event::OpenCustomViewFlyout {
+                parent,
+                surface_pos,
+                view_constructor,
+            } => {
+                custom_view_flyout_session = Some(CustomViewFlyoutSession::new(
+                    parent,
+                    surface_pos,
+                    view_constructor.0.0,
+                    &mut ViewInitContext {
+                        mount_context: MountContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                        },
+                        view_registry: &mut view_registry,
+                        ui_scale_factor: main_window.ui_scale_factor(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                    },
+                ));
+            }
             Event::MenuOpen {
                 parent,
                 items,
@@ -4017,6 +4232,11 @@ async fn run<'sys>(
 
                 if let Some(ref c) = current_active_dropdown_menu_session {
                     c.rescale(scale, &mut composite_tree);
+                    should_commit_ct = true;
+                }
+
+                if let Some(ref c) = custom_view_flyout_session {
+                    c.rescale(scale, &mut composite_tree, &ht_manager, &system_link);
                     should_commit_ct = true;
                 }
 
@@ -4284,6 +4504,19 @@ async fn run<'sys>(
                     }
                 }
 
+                if !system_link.any_pointer_on_dropdown_menu() {
+                    if let Some(c) = custom_view_flyout_session.take() {
+                        c.terminate(
+                            &system_link,
+                            &mut composite_tree,
+                            &mut ht_manager,
+                            &mut keyboard_focus_registry,
+                        );
+
+                        should_commit_ct = true;
+                    }
+                }
+
                 if should_commit_ct {
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -4427,6 +4660,84 @@ async fn run<'sys>(
     #[cfg(windows)]
     unsafe {
         platform::windows::unlocate_non_client_hittest_managers();
+    }
+}
+
+pub trait FlyoutSurfaceView {
+    fn mount(&self, mount_context: &mut MountContext, surface: FlyoutSurfaceHandle);
+    fn rescale(
+        &self,
+        new_scale: f32,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &HitTestTreeManager,
+        system_link: &SystemLink,
+    );
+}
+pub trait FlyoutSurfaceViewConstructor {
+    fn size(&self) -> Size<LogicalUnit>;
+    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView>;
+}
+pub struct CustomViewFlyoutSurface {
+    native_surface: FlyoutSurfaceHandle,
+    view: Box<dyn FlyoutSurfaceView>,
+}
+pub struct CustomViewFlyoutSession {
+    parent: WindowHandle,
+    opening_surface: CustomViewFlyoutSurface,
+}
+impl CustomViewFlyoutSession {
+    pub fn new(
+        parent: WindowHandle,
+        pos: Point<LogicalUnit>,
+        view_constructor: Box<dyn FlyoutSurfaceViewConstructor>,
+        view_init_context: &mut ViewInitContext,
+    ) -> Self {
+        let surface = view_init_context.system_link.new_flyout_surface(
+            parent,
+            pos,
+            view_constructor.size(),
+            view_init_context.mount_context.composite_tree,
+            view_init_context.mount_context.ht_manager,
+            view_init_context.mount_context.keyboard_focus_registry,
+        );
+        view_init_context.ui_scale_factor = surface.render_scale();
+        let view = view_constructor.create(view_init_context);
+        view.mount(view_init_context, surface);
+
+        Self {
+            parent,
+            opening_surface: CustomViewFlyoutSurface {
+                native_surface: surface,
+                view,
+            },
+        }
+    }
+
+    pub fn rescale(
+        &self,
+        new_scale: f32,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &HitTestTreeManager,
+        system_link: &SystemLink,
+    ) {
+        self.opening_surface
+            .view
+            .rescale(new_scale, composite_tree, ht_manager, system_link);
+    }
+
+    pub fn terminate(
+        self,
+        syslink: &SystemLink,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        self.opening_surface.native_surface.close(
+            syslink,
+            composite_tree,
+            ht_manager,
+            keyboard_focus_registry,
+        );
     }
 }
 

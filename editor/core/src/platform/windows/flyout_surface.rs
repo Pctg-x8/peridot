@@ -18,7 +18,10 @@ use windows::{
         UI::{
             Controls::WM_MOUSELEAVE,
             HiDpi::GetDpiForWindow,
-            Input::KeyboardAndMouse::{TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
+            Input::KeyboardAndMouse::{
+                ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+                TrackMouseEvent,
+            },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
                 GetWindowLongPtrW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
@@ -41,6 +44,7 @@ use crate::{
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
+        ShellPointerActions,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
     platform::windows::ApplicationContext,
@@ -166,6 +170,21 @@ impl Handle {
         )
         .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
         .with_offset(state(self.0).spawned_surface_pos)
+    }
+}
+impl ShellPointerActions for Handle {
+    #[inline(always)]
+    fn capture_pointer(&self) {
+        unsafe {
+            SetCapture(self.0);
+        }
+    }
+
+    #[inline(always)]
+    fn release_pointer(&self) {
+        if let Err(e) = unsafe { ReleaseCapture() } {
+            tracing::error!(reason = %e, "release_capture");
+        }
     }
 }
 

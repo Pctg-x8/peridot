@@ -66,6 +66,26 @@ unsafe impl<T> Sync for UnsafeMainThreadOnlyOnceCell<T> {}
 unsafe impl<T> Send for UnsafeMainThreadOnlyOnceCell<T> {}
 
 #[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DummyDebug<T>(pub T);
+impl<T> core::fmt::Debug for DummyDebug<T> {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("Hidden<{}>", std::any::type_name::<T>()))
+            .finish_non_exhaustive()
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NonCloneable<T>(pub T);
+impl<T> Clone for NonCloneable<T> {
+    fn clone(&self) -> Self {
+        panic!("cannot clone this type: {}", std::any::type_name::<T>())
+    }
+}
+
+#[repr(transparent)]
 pub struct ByteLengthFormatter(pub usize);
 impl core::fmt::Display for ByteLengthFormatter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

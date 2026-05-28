@@ -183,6 +183,8 @@ impl RawTextInputView {
             .add_child(parent.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
 
+        // TODO: これ見直したほうがよさそう(入力メソッドのポップをウィンドウ移動に追従させるために機構 ウィンドウ移動を毎回全Viewに流すと流石に重いと思うのでなんかいい感じに絞りたい)
+        /*
         #[cfg(windows)]
         unsafe {
             ctx.ht_manager
@@ -191,7 +193,7 @@ impl RawTextInputView {
                 .extra_data_mut::<crate::PerWindowData>()
                 .screen_reposition_interests
                 .insert(self.eh.ht_root);
-        }
+        }*/
     }
 
     pub fn rescale<E>(&self, ct: &mut CompositeTree<E>, new_scale: f32) -> TextInputViewUpdateMask {

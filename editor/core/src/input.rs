@@ -108,9 +108,7 @@ impl ShellPointerActions for NativeDesktopSurface {
     fn capture_pointer(&self) {
         match self {
             Self::Window(w) => w.capture_pointer(),
-            Self::ContextMenu(_) => {
-                unimplemented!("not implemented for context menu")
-            }
+            Self::ContextMenu(w) => w.capture_pointer(),
         }
     }
 
@@ -118,9 +116,7 @@ impl ShellPointerActions for NativeDesktopSurface {
     fn release_pointer(&self) {
         match self {
             Self::Window(w) => w.release_pointer(),
-            Self::ContextMenu(_) => {
-                unimplemented!("not implemented for context menu")
-            }
+            Self::ContextMenu(w) => w.release_pointer(),
         }
     }
 }
