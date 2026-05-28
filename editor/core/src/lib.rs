@@ -1883,7 +1883,11 @@ impl ColorPickerView {
     const POINTER_SIZE: f32 = 12.0;
     const ALPHA_SLIDER_THUMB_THICKNESS: f32 = 3.0;
 
-    pub fn new(ctx: &mut ViewInitContext, lt: Point<LogicalUnit>) -> Self {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        lt: Point<LogicalUnit>,
+        backing_store: &std::rc::Weak<impl ColorPickerBackingStoreEvent + 'static>,
+    ) -> Self {
         let shared = COLOR_PICKER_SHARED_RES.0.get_or_init(|| {
             ColorPickerSharedResources::new(
                 ctx.main_thread_texture_id_issuer,
@@ -2060,6 +2064,7 @@ impl ColorPickerView {
         ctx.ht_manager.add_child(ht_root, ht_alpha_slider);
 
         let eh = Rc::new_cyclic(|thisref| ColorPickerEventHandler {
+            backing_store: backing_store.clone(),
             ct_root,
             ct_sat_light_box,
             ct_pointer,
@@ -2092,7 +2097,12 @@ impl ColorPickerView {
         ctx.ht_manager.set_action_handler(ht_sat_light_box, &eh);
         ctx.ht_manager.set_action_handler(ht_alpha_slider, &eh);
 
-        eh.move_cursor(0.0, 0.0, ctx.mount_context.composite_tree, ctx.system_link);
+        if let Some(e) = backing_store.upgrade() {
+            let v = e.value();
+
+            eh.set_by_color(v, ctx.composite_tree);
+            eh.hex_text_input_view.set_value(v, ctx.system_link);
+        }
 
         Self { eh }
     }
@@ -2147,6 +2157,7 @@ impl ColorPickerView {
 }
 
 struct ColorPickerEventHandler {
+    backing_store: std::rc::Weak<dyn ColorPickerBackingStoreEvent>,
     ct_root: CompositeTreeRef,
     ct_sat_light_box: CompositeTreeRef,
     ct_pointer: CompositeTreeRef,
@@ -2479,16 +2490,14 @@ impl ColorPickerEventHandler {
             hue_to_rgb_wave(self.current_hue.get() - 120.0),
             self.current_saturation.get(),
         ) * self.current_light.get();
-
-        self.hex_text_input_view.set_value(
-            gen_rgba(
-                (r * 255.0) as _,
-                (g * 255.0) as _,
-                (b * 255.0) as _,
-                (self.current_alpha.get() * 255.0) as _,
-            ),
-            syslink,
+        let rgba = gen_rgba(
+            (r * 255.0) as _,
+            (g * 255.0) as _,
+            (b * 255.0) as _,
+            (self.current_alpha.get() * 255.0) as _,
         );
+
+        self.hex_text_input_view.set_value(rgba, syslink);
 
         composite_tree.set_gradient(
             self.alpha_slider_content_gradient,
@@ -2499,6 +2508,10 @@ impl ColorPickerEventHandler {
                 end_pos_relative: [1.0, 0.0],
             },
         );
+
+        if let Some(e) = self.backing_store.upgrade() {
+            e.new_value(rgba, syslink.event_dispatcher());
+        }
     }
 
     fn set_by_color<E>(&self, color: u32, composite_tree: &mut CompositeTree<E>) {
@@ -2528,12 +2541,13 @@ impl ColorPickerEventHandler {
         self.current_saturation.set(saturation);
         self.current_alpha.set(a);
 
-        let r = hue_to_rgb_wave(hue + 120.0);
-        let g = hue_to_rgb_wave(hue);
-        let b = hue_to_rgb_wave(hue - 120.0);
-
         composite_tree.get_mut(self.ct_sat_light_box).composite_mode =
-            CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([r, g, b, 1.0]));
+            CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([
+                hue_to_rgb_wave(hue + 120.0),
+                hue_to_rgb_wave(hue),
+                hue_to_rgb_wave(hue - 120.0),
+                1.0,
+            ]));
         composite_tree.mark_dirty(self.ct_sat_light_box);
 
         let pointer_x = saturation * self.sat_light_box_size.width;
@@ -2767,6 +2781,10 @@ impl ColorPickerHexTextInputEventHandler {
             // notify changed
             if let Some(parent) = self.parent_view_handler.upgrade() {
                 parent.set_by_color(new_value, composite_tree);
+
+                if let Some(e) = parent.backing_store.upgrade() {
+                    e.new_value(new_value, syslink.event_dispatcher());
+                }
             }
         }
     }
@@ -2775,6 +2793,11 @@ impl ColorPickerHexTextInputEventHandler {
         self.raw.set_content_lazy(Self::fmt(self.value.get()));
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
+}
+
+pub trait ColorPickerBackingStoreEvent {
+    fn value(&self) -> u32;
+    fn new_value(&self, value: u32, event_dispatcher: &LogicFiberEventDispatcher);
 }
 
 pub struct EditableColorButtonView {
@@ -2853,13 +2876,17 @@ impl EditableColorButtonView {
         ctx.composite_tree.add_child(ct_color_base, ct_color);
         ctx.composite_tree.add_child(ct_root, ct_color_base);
 
-        let eh = Rc::new(EditableColorButtonEventHandler {
+        let eh = Rc::new_cyclic(|thisref| EditableColorButtonEventHandler {
+            thisref: thisref.clone(),
+            view_id: ctx.view_registry.alloc(),
             ct_root,
             ht_root,
             ct_color_base,
             ct_color,
+            color: Cell::new(init_color),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
+        ctx.view_registry.set_event_handler(eh.view_id, &eh);
 
         Self { eh }
     }
@@ -2883,10 +2910,25 @@ impl EditableColorButtonView {
 }
 
 struct EditableColorButtonEventHandler {
+    thisref: std::rc::Weak<EditableColorButtonEventHandler>,
+    view_id: ViewIdentifier,
     ct_root: CompositeTreeRef,
     ct_color_base: CompositeTreeRef,
     ct_color: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    color: Cell<u32>,
+}
+impl ViewEventHandler for EditableColorButtonEventHandler {
+    fn update(&self, context: &mut ViewUpdateContext) {
+        context.composite_tree.get_mut(self.ct_color).composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Value([
+                self.color.get() as u8 as f32 / 255.0,
+                (self.color.get() >> 8) as u8 as f32 / 255.0,
+                (self.color.get() >> 16) as u8 as f32 / 255.0,
+                (self.color.get() >> 24) as u8 as f32 / 255.0,
+            ]));
+        context.composite_tree.mark_dirty(self.ct_color);
+    }
 }
 impl HitTestTreeActionHandler for EditableColorButtonEventHandler {
     fn on_click(
@@ -2895,7 +2937,9 @@ impl HitTestTreeActionHandler for EditableColorButtonEventHandler {
         context: &mut InputEventContext,
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        let vc = Box::new(EditableColorButtonPickerFlyoutViewConstructor {});
+        let vc = Box::new(EditableColorButtonPickerFlyoutViewConstructor {
+            backing_store: self.thisref.clone(),
+        });
         let (gl, gt, gw, gh, _) = context.ht_manager.compute_global_rect_autoroot(sender);
         context
             .system_link
@@ -2911,14 +2955,27 @@ impl HitTestTreeActionHandler for EditableColorButtonEventHandler {
         EventContinueControl::STOP_PROPAGATION
     }
 }
+impl ColorPickerBackingStoreEvent for EditableColorButtonEventHandler {
+    fn value(&self) -> u32 {
+        self.color.get()
+    }
 
-pub struct EditableColorButtonPickerFlyoutView {
+    fn new_value(&self, value: u32, event_dispatcher: &LogicFiberEventDispatcher) {
+        self.color.set(value);
+        event_dispatcher.dispatch(Event::UpdateView { id: self.view_id });
+    }
+}
+
+struct EditableColorButtonPickerFlyoutView {
     inner_view: ColorPickerView,
 }
 impl EditableColorButtonPickerFlyoutView {
-    pub fn new(ctx: &mut ViewInitContext) -> Self {
+    fn new(
+        ctx: &mut ViewInitContext,
+        backing_store: &std::rc::Weak<EditableColorButtonEventHandler>,
+    ) -> Self {
         Self {
-            inner_view: ColorPickerView::new(ctx, Point::new_logical(8.0, 8.0)),
+            inner_view: ColorPickerView::new(ctx, Point::new_logical(8.0, 8.0), backing_store),
         }
     }
 }
@@ -2939,14 +2996,19 @@ impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
     }
 }
 
-pub struct EditableColorButtonPickerFlyoutViewConstructor {}
+pub struct EditableColorButtonPickerFlyoutViewConstructor {
+    backing_store: std::rc::Weak<EditableColorButtonEventHandler>,
+}
 impl FlyoutSurfaceViewConstructor for EditableColorButtonPickerFlyoutViewConstructor {
     fn size(&self) -> Size<LogicalUnit> {
         Size::new_logical(128.0 + 16.0, 128.0 + 32.0 + 16.0 + 20.0 + 16.0)
     }
 
     fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView> {
-        Box::new(EditableColorButtonPickerFlyoutView::new(ctx))
+        Box::new(EditableColorButtonPickerFlyoutView::new(
+            ctx,
+            &self.backing_store,
+        ))
     }
 }
 
@@ -3006,11 +3068,13 @@ async fn run<'sys>(
     let mut current_active_menu_session = None::<MenuSession>;
     let mut current_active_dropdown_menu_session = None::<DropdownMenuSession>;
     let mut custom_view_flyout_session = None::<CustomViewFlyoutSession>;
+    let mut delayed_render_messages = Vec::new();
 
     let mut main_window = system_link.create_main_window(
         &mut composite_tree,
         &mut ht_manager,
         &mut keyboard_focus_registry,
+        &mut delayed_render_messages,
     );
 
     composite_tree.get_mut(main_window.ct_root()).composite_mode =
@@ -3517,7 +3581,25 @@ async fn run<'sys>(
     );
     radio_button4.mount(&mut view_init_ctx, &main_window);
 
-    let color_picker = ColorPickerView::new(&mut view_init_ctx, Point::new_logical(8.0, 64.0));
+    struct ColorPickerTestBackingStore {
+        color: Cell<u32>,
+    }
+    impl ColorPickerBackingStoreEvent for ColorPickerTestBackingStore {
+        fn value(&self) -> u32 {
+            self.color.get()
+        }
+        fn new_value(&self, value: u32, _event_dispatcher: &LogicFiberEventDispatcher) {
+            self.color.set(value);
+        }
+    }
+    let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
+        color: Cell::new(0xffffffff),
+    });
+    let color_picker = ColorPickerView::new(
+        &mut view_init_ctx,
+        Point::new_logical(8.0, 64.0),
+        &Rc::downgrade(&color_picker_backing_store),
+    );
     color_picker.mount(&mut view_init_ctx, &main_window);
 
     let editable_color_button = EditableColorButtonView::new(
@@ -3532,6 +3614,9 @@ async fn run<'sys>(
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
+    for msg in delayed_render_messages.drain(..) {
+        system_link.rt_sender().send(msg).expect("rt_sender.send");
+    }
 
     system_link.prelaunch(main_window);
     crate::perf_end!(perf);
@@ -3546,6 +3631,7 @@ async fn run<'sys>(
                     &mut composite_tree,
                     &mut ht_manager,
                     &mut keyboard_focus_registry,
+                    &mut delayed_render_messages,
                     |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
                         ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
 
@@ -3644,6 +3730,15 @@ async fn run<'sys>(
                     current_active_dropdown_menu_session.take_if(|x| x.parent == window)
                 {
                     c.close_all(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
+                }
+
+                if let Some(c) = custom_view_flyout_session.take_if(|x| x.parent == window) {
+                    c.terminate(
                         &system_link,
                         &mut composite_tree,
                         &mut ht_manager,
@@ -4104,6 +4199,7 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
+                    &mut delayed_render_messages,
                 ));
             }
             Event::MenuOpen {
@@ -4128,6 +4224,7 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
+                    &mut delayed_render_messages,
                     &context_menu_common_resources,
                 ));
 
@@ -4165,6 +4262,7 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
+                    &mut delayed_render_messages,
                     &context_menu_common_resources,
                 ));
 
@@ -4194,6 +4292,7 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
+                    &mut delayed_render_messages,
                     surface_pos,
                     min_width,
                     items,
@@ -4316,6 +4415,7 @@ async fn run<'sys>(
                             system_link: &system_link,
                             main_thread_texture_id_issuer: &mut texture_id_issuer,
                         },
+                        &mut delayed_render_messages,
                         &context_menu_common_resources,
                     );
 
@@ -4654,6 +4754,10 @@ async fn run<'sys>(
                 }
             }
         }
+
+        for msg in delayed_render_messages.drain(..) {
+            system_link.rt_sender().send(msg).expect("rt_sender.send");
+        }
     }
 
     tracing::info!("app finish");
@@ -4691,6 +4795,7 @@ impl CustomViewFlyoutSession {
         pos: Point<LogicalUnit>,
         view_constructor: Box<dyn FlyoutSurfaceViewConstructor>,
         view_init_context: &mut ViewInitContext,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
         let surface = view_init_context.system_link.new_flyout_surface(
             parent,
@@ -4699,6 +4804,7 @@ impl CustomViewFlyoutSession {
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
+            delayed_render_messages,
         );
         view_init_context.ui_scale_factor = surface.render_scale();
         let view = view_constructor.create(view_init_context);
@@ -4756,6 +4862,7 @@ impl DropdownMenuSession {
         parent: WindowHandle,
         syslink: &SystemLink,
         view_init_context: &mut ViewInitContext,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         pos: Point<LogicalUnit>,
         min_width: f32,
         items: Vec<uikit::dropdown_box::MenuItem>,
@@ -4771,6 +4878,7 @@ impl DropdownMenuSession {
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
+            delayed_render_messages,
         );
         view_init_context.ui_scale_factor = root_surface.render_scale();
 
@@ -4860,6 +4968,7 @@ impl MenuSession {
         system_link: &SystemLink,
         surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         common_res: &MenuItemCommonResources,
     ) -> Self {
         #[cfg(target_os = "macos")]
@@ -4873,6 +4982,7 @@ impl MenuSession {
             |render_scale| {
                 crate::uikit::MenuItemLayout::build(items.iter().cloned(), system_link.font_set())
             },
+            delayed_render_messages,
             |layout, h, view_init_ctx| {
                 view_init_ctx.ui_scale_factor = h.render_scale();
                 let views = crate::uikit::MenuItemLayout::instantiate(
@@ -4916,6 +5026,7 @@ impl MenuSession {
         &mut self,
         system_link: &SystemLink,
         view_init_context: &mut ViewInitContext,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         common_res: &MenuItemCommonResources,
     ) {
         match self.active_selection {
@@ -4956,6 +5067,7 @@ impl MenuSession {
                                 system_link.font_set(),
                             )
                         },
+                        delayed_render_messages,
                         |layout, h, view_init_ctx| {
                             view_init_ctx.ui_scale_factor = h.render_scale();
                             let views = crate::uikit::MenuItemLayout::instantiate(
@@ -5001,6 +5113,7 @@ impl MenuSession {
         index: usize,
         system_link: &SystemLink,
         view_init_context: &mut ViewInitContext,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         common_res: &MenuItemCommonResources,
     ) {
         while self.opening_surfaces.len() > depth + 1 {
@@ -5041,6 +5154,7 @@ impl MenuSession {
                     system_link.font_set(),
                 )
             },
+            delayed_render_messages,
             |layout, h, view_init_ctx| {
                 view_init_ctx.ui_scale_factor = h.render_scale();
                 let views = crate::uikit::MenuItemLayout::instantiate(

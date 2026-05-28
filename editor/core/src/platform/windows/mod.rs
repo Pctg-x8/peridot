@@ -1539,6 +1539,11 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
+    pub fn event_dispatcher(&self) -> &LogicFiberEventDispatcher {
+        unsafe { &*self.event_dispatcher }
+    }
+
+    #[inline(always)]
     pub fn rt_sender(&self) -> &RenderMessageSender {
         &self.rt_sender
     }
@@ -1553,6 +1558,7 @@ impl SystemLink<'_> {
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> WindowHandle {
         let ht = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
@@ -1574,12 +1580,10 @@ impl SystemLink<'_> {
         ht_manager.get_data_mut(ht).root_of_window = Some(h);
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
-        self.rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                key: h,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            }))
-            .expect("rt_sender.send");
+        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
+            key: h,
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+        }));
 
         h
     }
@@ -1595,6 +1599,7 @@ impl SystemLink<'_> {
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager<'h>,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             WindowHandle,
             &mut CompositeTree<SyncEvent>,
@@ -1621,12 +1626,10 @@ impl SystemLink<'_> {
         let h = w.make_handle();
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
-        self.rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                key: h,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            }))
-            .expect("rt_sender.send");
+        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
+            key: h,
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+        }));
 
         setup_contents(h, composite_tree, hit_tree, keyboard_focus_registry, self);
         unsafe {

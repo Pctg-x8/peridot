@@ -604,7 +604,14 @@ impl SharedState {
 }
 
 impl super::SystemLink<'_> {
-    #[tracing::instrument(skip(self, parent, composite_tree, ht_manager, keyboard_focus_registry))]
+    #[tracing::instrument(skip(
+        self,
+        parent,
+        composite_tree,
+        ht_manager,
+        keyboard_focus_registry,
+        delayed_render_messages
+    ))]
     pub fn new_flyout_surface<E>(
         &self,
         parent: WindowHandle,
@@ -613,6 +620,7 @@ impl super::SystemLink<'_> {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Handle {
         let render_scale = parent.ui_scale_factor();
         let mut ps = [pos.to_pixels_round(render_scale).to_win32()];
@@ -794,14 +802,12 @@ impl super::SystemLink<'_> {
                 pointer_focus: false,
             }),
         );
-        self.rt_sender
-            .send(RenderMessage::NewContextMenu(NewContextMenuData {
-                w: Handle(h),
-                // composition_surface_handle: SendableCompositionSurfaceHandle(dcomp_surface_handle),
-                swapchain,
-                composite_root,
-            }))
-            .expect("rt_sender.send");
+        delayed_render_messages.push(RenderMessage::NewContextMenu(NewContextMenuData {
+            w: Handle(h),
+            // composition_surface_handle: SendableCompositionSurfaceHandle(dcomp_surface_handle),
+            swapchain,
+            composite_root,
+        }));
 
         let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
         Handle(h)
@@ -814,6 +820,7 @@ impl super::SystemLink<'_> {
         depth: usize,
         surface_pos: Point<LogicalUnit>,
         layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
             Handle,
@@ -832,6 +839,7 @@ impl super::SystemLink<'_> {
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
+            delayed_render_messages,
         );
 
         let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
