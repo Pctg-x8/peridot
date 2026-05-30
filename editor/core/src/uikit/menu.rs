@@ -9,8 +9,8 @@ use crate::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, Gradient,
-            GradientRef,
+            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
+            Gradient, GradientRef, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
@@ -518,8 +518,14 @@ impl SubMenuView {
                 AnimatableFloat::Value(-Self::ICON_SIZE.height * 0.5),
             ],
             has_bitmap: true,
-            texatlas_rect_id: Some(common_res.tid_submenu_arrow),
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
+            composite_mode: CompositeMode::ColorTint(
+                AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                CompositeTexture {
+                    id: common_res.tid_submenu_arrow,
+                    r#type: TextureType::Mask,
+                    mapping: TextureMappingMode::Stretch,
+                },
+            ),
             ..Default::default()
         });
         let ct_light = ctx.composite_tree.create(CompositeRect {

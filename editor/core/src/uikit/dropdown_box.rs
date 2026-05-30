@@ -15,8 +15,8 @@ use crate::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
-            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
-            CompositeTreeRef, CornerRadius,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTree, CompositeTreeRef, CornerRadius, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
@@ -130,8 +130,14 @@ impl View {
                 AnimatableFloat::Value(SharedResources::DOWN_ARROW.height),
             ],
             has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
-            texatlas_rect_id: Some(shared_res.down_arrow_tex),
+            composite_mode: CompositeMode::ColorTint(
+                AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                CompositeTexture {
+                    id: shared_res.down_arrow_tex,
+                    r#type: TextureType::Mask,
+                    mapping: TextureMappingMode::Stretch,
+                },
+            ),
             ..Default::default()
         });
         ctx.composite_tree.add_child(ct_text_clip, ct_text);

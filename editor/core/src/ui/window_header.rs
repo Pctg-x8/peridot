@@ -15,7 +15,8 @@ use crate::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
+            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
+            TextureMappingMode, TextureType,
         },
         text::FontID,
     },
@@ -394,8 +395,14 @@ impl SystemCommandButtonView {
                 AnimatableFloat::Value(Self::ICON_SIZE),
             ],
             has_bitmap: true,
-            texatlas_rect_id: Some(texture_id_set.select(init_cmd)),
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([0.9, 0.9, 0.9, 1.0])),
+            composite_mode: CompositeMode::ColorTint(
+                AnimatableColor::Value([0.9, 0.9, 0.9, 1.0]),
+                CompositeTexture {
+                    id: texture_id_set.select(init_cmd),
+                    r#type: TextureType::Mask,
+                    mapping: TextureMappingMode::Stretch,
+                },
+            ),
             ..Default::default()
         });
 
@@ -448,8 +455,14 @@ impl SystemCommandButtonView {
         texture_id_set: &SystemCommandTextureIDSet,
         ui_scale_factor: f32,
     ) {
-        composite_tree.get_mut(self.ct_icon).texatlas_rect_id =
-            Some(texture_id_set.select(self.action_handler.cmd.get()));
+        composite_tree.get_mut(self.ct_icon).composite_mode = CompositeMode::ColorTint(
+            AnimatableColor::Value([0.9, 0.9, 0.9, 1.0]),
+            CompositeTexture {
+                id: texture_id_set.select(self.action_handler.cmd.get()),
+                r#type: TextureType::Mask,
+                mapping: TextureMappingMode::Stretch,
+            },
+        );
         composite_tree.get_mut(self.ct_icon).base_scale_factor = ui_scale_factor;
         composite_tree.get_mut(self.ct_root).base_scale_factor = ui_scale_factor;
         composite_tree.mark_dirty(self.ct_icon);
@@ -467,8 +480,14 @@ impl SystemCommandButtonView {
             // no changes
             return;
         }
-
-        composite_tree.get_mut(self.ct_icon).texatlas_rect_id = Some(texture_id_set.select(cmd));
+        composite_tree.get_mut(self.ct_icon).composite_mode = CompositeMode::ColorTint(
+            AnimatableColor::Value([0.9, 0.9, 0.9, 1.0]),
+            CompositeTexture {
+                id: texture_id_set.select(cmd),
+                r#type: TextureType::Mask,
+                mapping: TextureMappingMode::Stretch,
+            },
+        );
         composite_tree.mark_dirty(self.ct_icon);
         composite_tree.mark_dirty(self.ct_hover);
         ht_manager.get_data_mut(self.action_handler.ht_root).role = cmd.role();

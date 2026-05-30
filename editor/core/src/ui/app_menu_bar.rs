@@ -243,7 +243,6 @@ impl ItemView {
                 AnimatableFloat::Value(ItemView::ITEM_HEIGHT),
             ],
             has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             text: Some(CompositeRectText {
                 runs: vec![CompositeRectTextRun {
                     font_id: FontID::UIDefault,

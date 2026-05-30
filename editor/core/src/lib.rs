@@ -38,9 +38,9 @@ use crate::{
         composite::{
             self, AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig,
             CompositeMode, CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
-            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
-            CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, CustomRenderToken, Gradient,
-            GradientRef, TextureMappingMode, TextureType,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius,
+            CustomRenderToken, Gradient, GradientRef, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout, TextRun},
     },
@@ -1261,8 +1261,14 @@ impl ToggleButtonView {
             ],
             pivot: [0.5, 0.5],
             has_bitmap: true,
-            texatlas_rect_id: Some(shared_res.check_icon),
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0; 4])),
+            composite_mode: CompositeMode::ColorTint(
+                AnimatableColor::Value([1.0; 4]),
+                CompositeTexture {
+                    id: shared_res.check_icon,
+                    r#type: TextureType::Mask,
+                    mapping: TextureMappingMode::Stretch,
+                },
+            ),
             opacity: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
@@ -1456,8 +1462,14 @@ impl CheckboxView {
                 AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
             ],
             has_bitmap: true,
-            texatlas_rect_id: Some(shared_res.check_icon),
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0; 4])),
+            composite_mode: CompositeMode::ColorTint(
+                AnimatableColor::Value([1.0; 4]),
+                CompositeTexture {
+                    id: shared_res.check_icon,
+                    r#type: TextureType::Mask,
+                    mapping: TextureMappingMode::Stretch,
+                },
+            ),
             opacity: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
@@ -1900,8 +1912,11 @@ impl ColorPickerView {
             offset: [AnimatableFloat::Value(lt.x), AnimatableFloat::Value(lt.y)],
             size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
             has_bitmap: true,
-            texatlas_rect_id: Some(shared.ring_tex_id),
-            texture_type: TextureType::Color,
+            composite_mode: CompositeMode::DirectSourceOver(CompositeTexture {
+                id: shared.ring_tex_id,
+                r#type: TextureType::Color,
+                mapping: TextureMappingMode::Stretch,
+            }),
             ..Default::default()
         });
         let gradient_box_size =
@@ -1931,7 +1946,6 @@ impl ColorPickerView {
                 AnimatableFloat::Value(Self::POINTER_SIZE),
             ],
             has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             corner_radius: CornerRadius::all(Self::POINTER_SIZE * 0.5),
             border: Some(Border {
                 thickness: 2.0,
@@ -1948,7 +1962,6 @@ impl ColorPickerView {
                 AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
             ],
             has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
             corner_radius: CornerRadius::all((Self::POINTER_SIZE - 4.0) * 0.5),
             border: Some(Border {
                 thickness: 1.0,
@@ -1974,10 +1987,11 @@ impl ColorPickerView {
             ],
             size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(16.0)],
             has_bitmap: true,
-            composite_mode: CompositeMode::DirectSourceOver,
-            texture_mapping_mode: TextureMappingMode::Repeat,
-            texture_type: TextureType::Color,
-            texatlas_rect_id: Some(shared.alpha_slider_bg_tex_id),
+            composite_mode: CompositeMode::DirectSourceOver(CompositeTexture {
+                id: shared.alpha_slider_bg_tex_id,
+                r#type: TextureType::Color,
+                mapping: TextureMappingMode::Repeat,
+            }),
             ..Default::default()
         });
         let ct_alpha_slider_content = ctx.mount_context.composite_tree.create(CompositeRect {
@@ -2856,10 +2870,11 @@ impl EditableColorButtonView {
             ],
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
-            composite_mode: CompositeMode::DirectSourceOver,
-            texatlas_rect_id: Some(shared.alpha_slider_bg_tex_id),
-            texture_type: TextureType::Color,
-            texture_mapping_mode: TextureMappingMode::Repeat,
+            composite_mode: CompositeMode::DirectSourceOver(CompositeTexture {
+                id: shared.alpha_slider_bg_tex_id,
+                r#type: TextureType::Color,
+                mapping: TextureMappingMode::Repeat,
+            }),
             ..Default::default()
         });
         let ct_color = ctx.mount_context.composite_tree.create(CompositeRect {

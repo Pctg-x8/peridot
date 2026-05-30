@@ -89,15 +89,26 @@ pub struct CompositeStreamingData {
 }
 
 #[derive(Debug, Clone)]
+pub struct CompositeTexture {
+    pub id: TextureID,
+    pub r#type: TextureType,
+    pub mapping: TextureMappingMode,
+}
+
+#[derive(Debug, Clone)]
 pub enum CompositeMode<Event> {
     /// テクスチャの内容を直接描画
-    DirectSourceOver,
+    DirectSourceOver(CompositeTexture),
     /// マスクテクスチャに色を付けて描画
-    ColorTint(AnimatableColor<Event>),
+    ColorTint(AnimatableColor<Event>, CompositeTexture),
     /// 矩形を塗りつぶし
     FillColor(AnimatableColor<Event>),
     /// マスクテクスチャに色を付けて描画 背景ブラーと合成
-    ColorTintBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
+    ColorTintBackdropBlur(
+        AnimatableColor<Event>,
+        AnimatableFloat<Event>,
+        CompositeTexture,
+    ),
     /// 矩形を塗りつぶし 背景ブラーと合成
     FillColorBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
     /// 直線グラデーションで矩形を塗りつぶし
@@ -106,25 +117,38 @@ pub enum CompositeMode<Event> {
     FillRadialGradient(GradientRef),
     // TODO: このへんの特殊対応はなんか汎用化したい シェーダ指定できるようにするか......？
     /// 特殊対応: ColorPicker用 内部のグラデーションボックス
-    /// 引数には左上の色（ベースカラー）を入れる
+    /// 引数には右上の色（ベースカラー）を入れる
     ColorPickerGradientBox(AnimatableColor<Event>),
 }
 impl<Event> CompositeMode<Event> {
     const fn shader_mode_value(&self) -> f32 {
         match self {
-            Self::DirectSourceOver => 0.0,
-            Self::ColorTint(_) => 1.0,
+            Self::DirectSourceOver(_) => 0.0,
+            Self::ColorTint(_, _) => 1.0,
             Self::FillColor(_) => 2.0,
-            Self::ColorTintBackdropBlur(_, _) => 3.0,
+            Self::ColorTintBackdropBlur(_, _, _) => 3.0,
             Self::FillColorBackdropBlur(_, _) => 4.0,
             Self::FillLinearGradient(_) => 5.0,
             Self::FillRadialGradient(_) => 6.0,
             Self::ColorPickerGradientBox(_) => 7.0,
         }
     }
+
+    const fn texture(&self) -> Option<&CompositeTexture> {
+        match self {
+            Self::DirectSourceOver(t)
+            | Self::ColorTint(_, t)
+            | Self::ColorTintBackdropBlur(_, _, t) => Some(t),
+            Self::FillColor(_)
+            | Self::FillColorBackdropBlur(_, _)
+            | Self::FillLinearGradient(_)
+            | Self::FillRadialGradient(_)
+            | Self::ColorPickerGradientBox(_) => None,
+        }
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TextureMappingMode {
     Stretch,
     Repeat,
@@ -632,7 +656,7 @@ impl<Event> Default for Border<Event> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TextureType {
     Mask,
     Color,
@@ -659,9 +683,6 @@ pub struct CompositeRect<Event> {
     pub relative_offset_adjustment: [f32; 2],
     pub relative_size_adjustment: [f32; 2],
     pub clip_child: Option<ClipConfig>,
-    pub texatlas_rect_id: Option<TextureID>,
-    pub texture_type: TextureType,
-    pub texture_mapping_mode: TextureMappingMode,
     pub slice_borders: [f32; 4],
     pub composite_mode: CompositeMode<Event>,
     pub custom_render_token: Option<CustomRenderToken>,
@@ -686,11 +707,8 @@ impl<Event> Default for CompositeRect<Event> {
             relative_offset_adjustment: [0.0, 0.0],
             relative_size_adjustment: [0.0, 0.0],
             clip_child: None,
-            texatlas_rect_id: None,
-            texture_type: TextureType::Mask,
-            texture_mapping_mode: TextureMappingMode::Stretch,
             slice_borders: [0.0, 0.0, 0.0, 0.0],
-            composite_mode: CompositeMode::DirectSourceOver,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
             custom_render_token: None,
             opacity: AnimatableFloat::Value(1.0),
             pivot: [0.5; 2],
@@ -1742,14 +1760,14 @@ impl<Event> CompositeTreeRender<Event> {
             r.scale_x.process_on_complete(current_sec, &mut on_event);
             r.scale_y.process_on_complete(current_sec, &mut on_event);
             match r.composite_mode {
-                CompositeMode::DirectSourceOver => (),
-                CompositeMode::ColorTint(ref mut t) => {
+                CompositeMode::DirectSourceOver(_) => (),
+                CompositeMode::ColorTint(ref mut t, _) => {
                     t.process_on_complete(current_sec, &mut on_event)
                 }
                 CompositeMode::FillColor(ref mut t) => {
                     t.process_on_complete(current_sec, &mut on_event)
                 }
-                CompositeMode::ColorTintBackdropBlur(ref mut t, ref mut stdev) => {
+                CompositeMode::ColorTintBackdropBlur(ref mut t, ref mut stdev, _) => {
                     t.process_on_complete(current_sec, &mut on_event);
                     stdev.process_on_complete(current_sec, &mut on_event);
                 }
@@ -1773,21 +1791,24 @@ impl<Event> CompositeTreeRender<Event> {
                 inst_builder.clear_clip();
             }
 
-            let texatlas_rect = r.texatlas_rect_id.map_or(
-                &AtlasRect {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                },
-                |n| &mask_atlas_rects[n.rect_index()],
-            );
-
             if let Some(t) = r.custom_render_token {
                 // Custom Renderがある場合はそっちのみ
                 inst_builder.insert_custom_render_commands(t);
             } else if r.has_bitmap {
-                let texatlas_size = match r.texture_type {
+                let (texatlas_rect, tex_type, tex_mapping_mode) = match r.composite_mode.texture() {
+                    Some(t) => (&mask_atlas_rects[t.id.rect_index()], t.r#type, t.mapping),
+                    None => (
+                        &AtlasRect {
+                            left: 0,
+                            top: 0,
+                            right: 0,
+                            bottom: 0,
+                        },
+                        TextureType::Mask,
+                        TextureMappingMode::Stretch,
+                    ),
+                };
+                let texatlas_size = match tex_type {
                     TextureType::Mask => mask_atlas.atlas().size(),
                     TextureType::Color => color_atlas.atlas().size(),
                 };
@@ -1813,24 +1834,16 @@ impl<Event> CompositeTreeRender<Event> {
                             composite_mode: r.composite_mode.shader_mode_value(),
                             opacity,
                             color_tint: match r.composite_mode {
-                                CompositeMode::DirectSourceOver => [0.0; 4],
-                                CompositeMode::ColorTint(ref t) => {
+                                CompositeMode::ColorTint(ref t, _)
+                                | CompositeMode::FillColor(ref t)
+                                | CompositeMode::ColorTintBackdropBlur(ref t, _, _)
+                                | CompositeMode::FillColorBackdropBlur(ref t, _)
+                                | CompositeMode::ColorPickerGradientBox(ref t) => {
                                     t.evaluate(current_sec, &self.parameter_store)
                                 }
-                                CompositeMode::FillColor(ref t) => {
-                                    t.evaluate(current_sec, &self.parameter_store)
-                                }
-                                CompositeMode::ColorTintBackdropBlur(ref t, _) => {
-                                    t.evaluate(current_sec, &self.parameter_store)
-                                }
-                                CompositeMode::FillColorBackdropBlur(ref t, _) => {
-                                    t.evaluate(current_sec, &self.parameter_store)
-                                }
-                                CompositeMode::FillLinearGradient(_) => [0.0; 4],
-                                CompositeMode::FillRadialGradient(_) => [0.0; 4],
-                                CompositeMode::ColorPickerGradientBox(ref t) => {
-                                    t.evaluate(current_sec, &self.parameter_store)
-                                }
+                                CompositeMode::DirectSourceOver(_)
+                                | CompositeMode::FillLinearGradient(_)
+                                | CompositeMode::FillRadialGradient(_) => [0.0; 4],
                             },
                             corner_radius_x: [
                                 r.corner_radius.left_top[0] * r.base_scale_factor,
@@ -1855,21 +1868,21 @@ impl<Event> CompositeTreeRender<Event> {
                                 | CompositeMode::FillRadialGradient(x) => x.0 as f32,
                                 _ => 0.0,
                             },
-                            source_texture_index: r.texture_type.to_index() as _,
+                            source_texture_index: tex_type.to_index() as _,
                             border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
                                 [
                                     b.break_pattern[0] * r.base_scale_factor,
                                     b.break_pattern[1] * r.base_scale_factor,
                                 ]
                             }),
-                            texture_mapping_mode: r.texture_mapping_mode.shader_mode_value(),
+                            texture_mapping_mode: tex_mapping_mode.shader_mode_value(),
                             _padding: 0.0,
                         },
                     );
                 }
 
                 let backdrop_buffer_index = match r.composite_mode {
-                    CompositeMode::ColorTintBackdropBlur(_, ref stdev)
+                    CompositeMode::ColorTintBackdropBlur(_, ref stdev, _)
                     | CompositeMode::FillColorBackdropBlur(_, ref stdev) => {
                         let stdev = stdev.evaluate(current_sec, &self.parameter_store);
 
@@ -1971,7 +1984,7 @@ impl<Event> CompositeTreeRender<Event> {
                     }
 
                     let backdrop_buffer_index = match r.composite_mode {
-                        CompositeMode::ColorTintBackdropBlur(_, ref stdev)
+                        CompositeMode::ColorTintBackdropBlur(_, ref stdev, _)
                         | CompositeMode::FillColorBackdropBlur(_, ref stdev) => {
                             let stdev = stdev.evaluate(current_sec, &self.parameter_store);
 
