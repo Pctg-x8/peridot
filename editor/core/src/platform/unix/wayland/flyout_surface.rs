@@ -9,6 +9,7 @@ use crate::{
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
+        ShellPointerActions,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     },
     platform::unix::wayland::{SurfaceScaling, SurfaceState, SurfaceStateTag},
@@ -165,6 +166,17 @@ impl MountTarget for Handle {
     #[inline(always)]
     fn ht_root(&self) -> HitTestTreeRef {
         self.data().ht_root
+    }
+}
+impl ShellPointerActions for Handle {
+    #[inline(always)]
+    fn capture_pointer(&self) {
+        // Waylandはなし(勝手にキャプチャ状態になってるらしい)
+    }
+
+    #[inline(always)]
+    fn release_pointer(&self) {
+        // Waylandはなし(勝手にキャプチャ状態になってるらしい)
     }
 }
 
@@ -372,6 +384,7 @@ pub fn new_surface<E>(
     composite_tree: &mut CompositeTree<E>,
     ht_manager: &mut HitTestTreeManager,
     keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    delayed_render_messages: &mut Vec<RenderMessage>,
     ref_scale_factor: f32,
 ) -> Handle {
     let mut surface = unsafe { &*syslink.display_server.context }
@@ -505,14 +518,11 @@ pub fn new_surface<E>(
         .expect("vk_surface.create")
     };
     let vk_surface = VulkanSurface::new(unsafe { &*syslink.vk_device }, vk_surface);
-    syslink
-        .rt_sender
-        .send(RenderMessage::NewContextMenu(NewContextMenuData {
-            w: Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            composite_root: ct_root,
-        }))
-        .expect("rt_sender.send");
+    delayed_render_messages.push(RenderMessage::NewContextMenu(NewContextMenuData {
+        w: Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
+        vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+        composite_root: ct_root,
+    }));
 
     surface.commit().expect("surface.commit");
     Handle(surface.unwrap())

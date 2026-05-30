@@ -587,7 +587,7 @@ impl NativeWindow {
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         deco_pixbuf: Option<&DecorationPixbuf>,
         vk_device: &VulkanDevice,
-        rt_sender: &RenderMessageSender,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
         let mut surface = dpsv
             .global_interfaces
@@ -755,23 +755,21 @@ impl NativeWindow {
         surface.commit().expect("wl_surface.commit");
 
         // ready for rendering
-        rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                key: Handle::from_mut(&mut surface),
-                vk_surface: NewWindowVulkanSurface(
-                    VulkanSurface::new(vk_device, unsafe {
-                        br::WaylandSurfaceCreateInfo::new(
-                            dpsv.dp.as_raw().cast(),
-                            surface.as_raw().cast(),
-                        )
-                        .execute(vk_device.instance(), None)
-                        .expect("vk_surface.create")
-                    })
-                    .unbound()
-                    .1,
-                ),
-            }))
-            .expect("rt_sender.send");
+        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
+            key: Handle::from_mut(&mut surface),
+            vk_surface: NewWindowVulkanSurface(
+                VulkanSurface::new(vk_device, unsafe {
+                    br::WaylandSurfaceCreateInfo::new(
+                        dpsv.dp.as_raw().cast(),
+                        surface.as_raw().cast(),
+                    )
+                    .execute(vk_device.instance(), None)
+                    .expect("vk_surface.create")
+                })
+                .unbound()
+                .1,
+            ),
+        }));
 
         Self { surface }
     }

@@ -2069,6 +2069,7 @@ impl ColorPickerView {
             ct_sat_light_box,
             ct_pointer,
             ct_pointer_dark,
+            ct_alpha_slider_base,
             ct_alpha_slider_content,
             ct_alpha_slider_thumb,
             alpha_slider_content_gradient,
@@ -2142,9 +2143,17 @@ impl ColorPickerView {
             .base_scale_factor = new_scale;
         composite_tree.mark_dirty(self.eh.ct_pointer_dark);
         composite_tree
+            .get_mut(self.eh.ct_alpha_slider_base)
+            .base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_alpha_slider_base);
+        composite_tree
             .get_mut(self.eh.ct_alpha_slider_content)
             .base_scale_factor = new_scale;
         composite_tree.mark_dirty(self.eh.ct_alpha_slider_content);
+        composite_tree
+            .get_mut(self.eh.ct_alpha_slider_thumb)
+            .base_scale_factor = new_scale;
+        composite_tree.mark_dirty(self.eh.ct_alpha_slider_thumb);
         composite_tree
             .get_mut(self.eh.ct_hex_label)
             .base_scale_factor = new_scale;
@@ -2162,6 +2171,7 @@ struct ColorPickerEventHandler {
     ct_sat_light_box: CompositeTreeRef,
     ct_pointer: CompositeTreeRef,
     ct_pointer_dark: CompositeTreeRef,
+    ct_alpha_slider_base: CompositeTreeRef,
     ct_alpha_slider_content: CompositeTreeRef,
     ct_alpha_slider_thumb: CompositeTreeRef,
     alpha_slider_content_gradient: GradientRef,
@@ -5268,6 +5278,11 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
+    pub fn event_dispatcher(&self) -> &LogicFiberEventDispatcher {
+        unsafe { &*self.event_dispatcher }
+    }
+
+    #[inline(always)]
     pub const fn font_set(&self) -> &FontSet {
         unsafe { &*self.font_set }
     }
@@ -5287,6 +5302,7 @@ impl SystemLink<'_> {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> FlyoutSurfaceHandle {
         platform::unix::wayland::flyout_surface::new_surface(
             parent,
@@ -5296,6 +5312,7 @@ impl SystemLink<'_> {
             composite_tree,
             ht_manager,
             keyboard_focus_registry,
+            delayed_render_messages,
             parent.ui_scale_factor(),
         )
     }
@@ -5308,6 +5325,7 @@ impl SystemLink<'_> {
         depth: usize,
         surface_pos: Point<LogicalUnit>,
         layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
             FlyoutSurfaceHandle,
@@ -5330,6 +5348,7 @@ impl SystemLink<'_> {
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
+            delayed_render_messages,
         );
 
         let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
@@ -5352,13 +5371,9 @@ pub enum WindowType {
 
 #[cfg(target_os = "macos")]
 pub type PointerID = platform::mac::PointerID;
-#[cfg(feature = "wayland")]
-pub type PointerID = platform::unix::wayland::PointerID;
 
 #[cfg(target_os = "macos")]
 pub type DragPreviewPopoverHandle = platform::mac::DragPreviewPopoverHandle;
-#[cfg(feature = "wayland")]
-pub type DragPreviewPopoverHandle = platform::unix::wayland::DragPreviewPopoverHandle;
 
 #[cfg(windows)]
 pub use platform::windows::{
@@ -5368,12 +5383,12 @@ pub use platform::windows::{
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]
-pub type WindowHandle = platform::unix::wayland::ToplevelHandle;
+pub use platform::unix::wayland::{
+    DragPreviewPopoverHandle, FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle,
+};
 
 #[cfg(target_os = "macos")]
 pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
-#[cfg(feature = "wayland")]
-pub type FlyoutSurfaceHandle = platform::unix::wayland::FlyoutSurfaceHandle;
 
 pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,

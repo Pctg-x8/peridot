@@ -317,6 +317,7 @@ impl crate::SystemLink<'_> {
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> toplevel::Handle {
         toplevel::NativeWindow::new(
             WindowType::Main {
@@ -333,7 +334,7 @@ impl crate::SystemLink<'_> {
                 .window_decoration
                 .as_ref(),
             unsafe { &*self.vk_device },
-            &self.rt_sender,
+            delayed_render_messages,
         )
         .into_handle()
     }
@@ -343,6 +344,7 @@ impl crate::SystemLink<'_> {
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             toplevel::Handle,
             &mut CompositeTree<SyncEvent>,
@@ -363,7 +365,7 @@ impl crate::SystemLink<'_> {
                 .window_decoration
                 .as_ref(),
             unsafe { &*self.vk_device },
-            &self.rt_sender,
+            delayed_render_messages,
         );
 
         setup_contents(
