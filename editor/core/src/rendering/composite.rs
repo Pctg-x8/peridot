@@ -720,6 +720,46 @@ impl<Event> Default for CompositeRect<Event> {
         }
     }
 }
+impl<Event> CompositeRect<Event> {
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        mut on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        self.offset[0].process_on_complete(current_sec, &mut on_event);
+        self.offset[1].process_on_complete(current_sec, &mut on_event);
+        self.size[0].process_on_complete(current_sec, &mut on_event);
+        self.size[1].process_on_complete(current_sec, &mut on_event);
+        self.opacity.process_on_complete(current_sec, &mut on_event);
+        self.scale_x.process_on_complete(current_sec, &mut on_event);
+        self.scale_y.process_on_complete(current_sec, &mut on_event);
+        match self.composite_mode {
+            CompositeMode::DirectSourceOver(_) => (),
+            CompositeMode::ColorTint(ref mut t, _) => {
+                t.process_on_complete(current_sec, &mut on_event)
+            }
+            CompositeMode::FillColor(ref mut t) => {
+                t.process_on_complete(current_sec, &mut on_event)
+            }
+            CompositeMode::ColorTintBackdropBlur(ref mut t, ref mut stdev, _) => {
+                t.process_on_complete(current_sec, &mut on_event);
+                stdev.process_on_complete(current_sec, &mut on_event);
+            }
+            CompositeMode::FillColorBackdropBlur(ref mut t, ref mut stdev) => {
+                t.process_on_complete(current_sec, &mut on_event);
+                stdev.process_on_complete(current_sec, &mut on_event);
+            }
+            CompositeMode::FillLinearGradient(_) => {}
+            CompositeMode::FillRadialGradient(_) => {}
+            CompositeMode::ColorPickerGradientBox(ref mut t) => {
+                t.process_on_complete(current_sec, &mut on_event);
+            }
+        }
+        if let Some(ref mut b) = self.border {
+            b.color.process_on_complete(current_sec, &mut on_event);
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Gradient {
@@ -1752,38 +1792,7 @@ impl<Event> CompositeTreeRender<Event> {
                 None => [0.0; 4],
             };
 
-            r.offset[0].process_on_complete(current_sec, &mut on_event);
-            r.offset[1].process_on_complete(current_sec, &mut on_event);
-            r.size[0].process_on_complete(current_sec, &mut on_event);
-            r.size[1].process_on_complete(current_sec, &mut on_event);
-            r.opacity.process_on_complete(current_sec, &mut on_event);
-            r.scale_x.process_on_complete(current_sec, &mut on_event);
-            r.scale_y.process_on_complete(current_sec, &mut on_event);
-            match r.composite_mode {
-                CompositeMode::DirectSourceOver(_) => (),
-                CompositeMode::ColorTint(ref mut t, _) => {
-                    t.process_on_complete(current_sec, &mut on_event)
-                }
-                CompositeMode::FillColor(ref mut t) => {
-                    t.process_on_complete(current_sec, &mut on_event)
-                }
-                CompositeMode::ColorTintBackdropBlur(ref mut t, ref mut stdev, _) => {
-                    t.process_on_complete(current_sec, &mut on_event);
-                    stdev.process_on_complete(current_sec, &mut on_event);
-                }
-                CompositeMode::FillColorBackdropBlur(ref mut t, ref mut stdev) => {
-                    t.process_on_complete(current_sec, &mut on_event);
-                    stdev.process_on_complete(current_sec, &mut on_event);
-                }
-                CompositeMode::FillLinearGradient(_) => {}
-                CompositeMode::FillRadialGradient(_) => {}
-                CompositeMode::ColorPickerGradientBox(ref mut t) => {
-                    t.process_on_complete(current_sec, &mut on_event);
-                }
-            }
-            if let Some(ref mut b) = r.border {
-                b.color.process_on_complete(current_sec, &mut on_event);
-            }
+            r.perform_complete_event(current_sec, &mut on_event);
 
             if let Some((clip_rect_px, clip_config)) = p.active_clip {
                 inst_builder.set_clip(&clip_rect_px, &clip_config);
@@ -1798,12 +1807,7 @@ impl<Event> CompositeTreeRender<Event> {
                 let (texatlas_rect, tex_type, tex_mapping_mode) = match r.composite_mode.texture() {
                     Some(t) => (&mask_atlas_rects[t.id.rect_index()], t.r#type, t.mapping),
                     None => (
-                        &AtlasRect {
-                            left: 0,
-                            top: 0,
-                            right: 0,
-                            bottom: 0,
-                        },
+                        &AtlasRect::EMPTY,
                         TextureType::Mask,
                         TextureMappingMode::Stretch,
                     ),

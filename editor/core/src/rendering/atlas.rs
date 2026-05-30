@@ -10,6 +10,13 @@ pub struct AtlasRect {
     pub bottom: u32,
 }
 impl AtlasRect {
+    pub const EMPTY: Self = Self {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+
     pub const fn width(&self) -> u32 {
         self.right.abs_diff(self.left)
     }
