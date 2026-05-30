@@ -31,7 +31,8 @@ pub trait Popup {
         group: KeyboardFocusGroupRef,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     );
-    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>);
+    #[allow(unused_variables)]
+    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {}
     fn close(
         &self,
         composite_tree: &mut CompositeTree<SyncEvent>,

@@ -1163,8 +1163,6 @@ impl Popup for AlertDialogPresenter {
         ctx.composite_tree.free_all(self.mask.ct_root());
         ctx.ht_manager.free_all(self.mask.ht_root());
     }
-
-    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {}
 }
 
 pub struct SharedCheckIcon {
@@ -2922,15 +2920,6 @@ impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
     fn mount(&self, mount_context: &mut MountContext, surface: FlyoutSurfaceHandle) {
         self.inner_view.mount(mount_context, &surface);
     }
-
-    fn rescale(
-        &self,
-        new_scale: f32,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &HitTestTreeManager,
-        system_link: &SystemLink,
-    ) {
-    }
 }
 
 pub struct EditableColorButtonPickerFlyoutViewConstructor {
@@ -4657,13 +4646,16 @@ async fn run<'sys>(
 
 pub trait FlyoutSurfaceView {
     fn mount(&self, mount_context: &mut MountContext, surface: FlyoutSurfaceHandle);
+
+    #[allow(unused_variables)]
     fn rescale(
         &self,
         new_scale: f32,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &HitTestTreeManager,
         system_link: &SystemLink,
-    );
+    ) {
+    }
 }
 pub trait FlyoutSurfaceViewConstructor {
     fn size(&self) -> Size<LogicalUnit>;

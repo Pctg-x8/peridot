@@ -18,7 +18,7 @@ use crate::{
         SurfaceScaling, SurfaceState, SurfaceStateTag,
     },
     rendering::{
-        NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderMessageSender,
+        NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     utils::{LogicalUnit, PixelsUnit, Size},

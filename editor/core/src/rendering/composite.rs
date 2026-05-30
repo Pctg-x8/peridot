@@ -1789,6 +1789,7 @@ impl<Event> CompositeTreeRender<Event> {
             active_clip: Option<([SafeF32; 4], ClipConfig)>,
         }
 
+        let instances_head = mapped_head.cast::<CompositeInstanceData>();
         let mut instance_slot_index = 0;
         let mut processes = vec![Process {
             r: root,
@@ -1878,9 +1879,7 @@ impl<Event> CompositeTreeRender<Event> {
 
                 unsafe {
                     core::ptr::write(
-                        mapped_head
-                            .cast::<CompositeInstanceData>()
-                            .add(instance_slot_index),
+                        instances_head.add(instance_slot_index),
                         CompositeInstanceData {
                             pos_st: [w, h, 0.0, 0.0],
                             uv_st: [
@@ -2022,9 +2021,7 @@ impl<Event> CompositeTreeRender<Event> {
                 for b in cache.text_rects.iter() {
                     unsafe {
                         core::ptr::write(
-                            mapped_head
-                                .cast::<CompositeInstanceData>()
-                                .add(instance_slot_index),
+                            instances_head.add(instance_slot_index),
                             CompositeInstanceData {
                                 pos_st: [
                                     b.width as f32,
@@ -2046,6 +2043,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 ],
                                 composite_mode: 1.0,
                                 opacity,
+                                // TODO: color by run
                                 color_tint: t.runs[0]
                                     .color
                                     .evaluate(current_sec, &self.parameter_store),

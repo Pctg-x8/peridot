@@ -13,7 +13,7 @@ use crate::{
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessageSender,
+        MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},
     },
 };

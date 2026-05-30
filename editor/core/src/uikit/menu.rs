@@ -242,7 +242,6 @@ pub struct HeadingView {
 }
 impl HeadingView {
     pub fn new(ctx: &mut ViewInitContext, label: String, placement_y: f32) -> Self {
-        let base_scale_factor = ctx.ui_scale_factor;
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 0.0],
@@ -295,7 +294,6 @@ impl CommandView {
         animation_delay: f32,
         placement_y: f32,
     ) -> Self {
-        let base_scale_factor = ctx.ui_scale_factor;
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height: ITEM_HEIGHT,
@@ -421,7 +419,6 @@ impl SubMenuView {
         animation_delay: f32,
         placement_y: f32,
     ) -> Self {
-        let base_scale_factor = ctx.ui_scale_factor;
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height: ITEM_HEIGHT,
@@ -544,7 +541,6 @@ pub struct SeparatorView {
 }
 impl SeparatorView {
     pub fn new(ctx: &mut ViewInitContext, placement_y: f32) -> Self {
-        let base_scale_factor = ctx.ui_scale_factor;
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 0.0],

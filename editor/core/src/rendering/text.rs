@@ -382,10 +382,12 @@ pub struct TextRun<'s> {
     pub spacing_inline_start: f32,
 }
 
+#[cfg(target_os = "macos")]
 struct FontUniquifyStorage {
     key_to_id: UnsafeCell<HashMap<String, usize>>,
     last_id: UnsafeCell<usize>,
 }
+#[cfg(target_os = "macos")]
 impl FontUniquifyStorage {
     fn new() -> Self {
         Self {
@@ -405,6 +407,7 @@ impl FontUniquifyStorage {
     }
 }
 
+#[cfg(target_os = "macos")]
 thread_local! {
     static FONT_UNIQUIFY_STORAGE: FontUniquifyStorage = FontUniquifyStorage::new();
 }
