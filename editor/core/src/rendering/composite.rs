@@ -1934,16 +1934,31 @@ impl<Event> CompositeTreeRender<Event> {
                     || cache.text_render_scale != scale_factor
                     || cache.text_max_width != wrap_width
                 {
-                    Self::populate_text_layout_cache(
-                        cache,
-                        t,
-                        scale_factor,
+                    tracing::trace!(layout_max_width = wrap_width, "relayout text");
+
+                    let text_layout = TextLayout::new(
+                        t.runs.iter().map(|r| TextRun {
+                            content: &r.content,
+                            font: r.font_id,
+                            spacing_inline_start: r.spacing_inline_start,
+                        }),
                         font_set,
                         t.horizontal_alignment,
-                        wrap_width,
-                        mask_atlas,
-                        vector_raster_state,
+                        Some(wrap_width / scale_factor),
                     );
+                    cache.text_rects.clear();
+                    cache
+                        .text_rects
+                        .extend(text_layout.rasterize_and_place_glyphs(
+                            font_set,
+                            vector_raster_state,
+                            mask_atlas,
+                            scale_factor,
+                        ));
+                    cache.text_width = text_layout.visual_width(font_set) * scale_factor;
+                    cache.text_height = text_layout.height() * scale_factor;
+                    cache.text_max_width = wrap_width;
+                    cache.text_render_scale = scale_factor;
                     self.dirty_flags[p.r.0].text_layout_dirty = false;
                 }
 
@@ -2042,44 +2057,6 @@ impl<Event> CompositeTreeRender<Event> {
                 },
             }));
         }
-    }
-
-    #[tracing::instrument(skip(text_layout, cache, font_set, glyph_atlas, vector_raster_state))]
-    fn populate_text_layout_cache(
-        cache: &mut CompositeRectCache,
-        text_layout: &CompositeRectText<Event>,
-        scale_factor: f32,
-        font_set: &FontSet,
-        alignment: CompositeRectTextHorizontalAlignment,
-        layout_max_width: f32,
-        glyph_atlas: &mut MaskTextureAtlasManager,
-        vector_raster_state: &mut VectorRasterizationState,
-    ) {
-        tracing::trace!(layout_max_width, "relayout text");
-
-        let text_layout = TextLayout::new(
-            text_layout.runs.iter().map(|r| TextRun {
-                content: &r.content,
-                font: r.font_id,
-                spacing_inline_start: r.spacing_inline_start,
-            }),
-            font_set,
-            alignment,
-            Some(layout_max_width / scale_factor),
-        );
-        cache.text_rects.clear();
-        cache
-            .text_rects
-            .extend(text_layout.rasterize_and_place_glyphs(
-                font_set,
-                vector_raster_state,
-                glyph_atlas,
-                scale_factor,
-            ));
-        cache.text_width = text_layout.visual_width(font_set) * scale_factor;
-        cache.text_height = text_layout.height() * scale_factor;
-        cache.text_max_width = layout_max_width;
-        cache.text_render_scale = scale_factor;
     }
 }
 
