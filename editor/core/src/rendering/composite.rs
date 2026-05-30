@@ -1983,34 +1983,7 @@ impl<Event> CompositeTreeRender<Event> {
                         );
                     }
 
-                    let backdrop_buffer_index = match r.composite_mode {
-                        CompositeMode::ColorTintBackdropBlur(_, ref stdev, _)
-                        | CompositeMode::FillColorBackdropBlur(_, ref stdev) => {
-                            let stdev = stdev.evaluate(current_sec, &self.parameter_store);
-
-                            if stdev > 0.0 {
-                                inst_builder.request_backdrop_blur(
-                                    unsafe { SafeF32::new_unchecked(stdev) },
-                                    br::Rect2D {
-                                        offset: br::Offset2D {
-                                            x: left as _,
-                                            y: top as _,
-                                        },
-                                        extent: br::Extent2D {
-                                            width: w as _,
-                                            height: h as _,
-                                        },
-                                    },
-                                )
-                            } else {
-                                0
-                            }
-                        }
-                        // とりあえず0
-                        _ => 0,
-                    };
-
-                    inst_builder.draw_instance(instance_slot_index, backdrop_buffer_index);
+                    inst_builder.draw_instance(instance_slot_index, 0);
                     instance_slot_index += 1;
                 }
             }
