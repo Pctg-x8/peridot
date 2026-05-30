@@ -20,9 +20,9 @@ use crate::{
     rendering::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
-            CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
-            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
-            CompositeTreeRef,
+            CompositeRect, CompositeRectScaleFactor, CompositeRectText,
+            CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
         },
         text::{FontID, FontSet, TextLayout},
     },
@@ -56,7 +56,7 @@ impl RawTextInputView {
         flags: RawTextInputViewCreateFlags,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             size: [
                 AnimatableFloat::Value(rect.width),
                 AnimatableFloat::Value(rect.height),
@@ -74,7 +74,7 @@ impl RawTextInputView {
             ..Default::default()
         });
         let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             size: [
                 AnimatableFloat::Value(rect.width - 4.0),
                 AnimatableFloat::Value(rect.height - 4.0),
@@ -89,11 +89,11 @@ impl RawTextInputView {
             ..Default::default()
         });
         let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             ..Default::default()
         });
         let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
             has_bitmap: true,
@@ -102,7 +102,7 @@ impl RawTextInputView {
             ..Default::default()
         });
         let ct_preedit_underline = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(1.0)],
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(14.0)],
             has_bitmap: true,
@@ -111,7 +111,7 @@ impl RawTextInputView {
             ..Default::default()
         });
         let ct_selection_bg = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(16.0)],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.2, 0.4, 1.0, 0.25])),
@@ -191,41 +191,6 @@ impl RawTextInputView {
                 .screen_reposition_interests
                 .insert(self.eh.ht_root);
         }*/
-    }
-
-    pub fn rescale<E>(&self, ct: &mut CompositeTree<E>, new_scale: f32) -> TextInputViewUpdateMask {
-        self.eh.render_scale.set(new_scale);
-
-        ct.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        ct.mark_dirty_all(self.eh.ct_root);
-        ct.get_mut(self.eh.ct_text).base_scale_factor = new_scale;
-        ct.mark_dirty_all(self.eh.ct_text);
-        ct.get_mut(self.eh.ct_cursor).base_scale_factor = new_scale;
-        ct.mark_dirty_all(self.eh.ct_cursor);
-        ct.get_mut(self.eh.ct_preedit_underline).base_scale_factor = new_scale;
-        ct.mark_dirty_all(self.eh.ct_preedit_underline);
-        ct.get_mut(self.ct_text_clip).base_scale_factor = new_scale;
-        ct.mark_dirty_all(self.ct_text_clip);
-        ct.get_mut(self.eh.ct_selection_bg).base_scale_factor = new_scale;
-        ct.mark_dirty_all(self.eh.ct_selection_bg);
-
-        TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::PREEDIT
-    }
-
-    pub fn perform_rescale<E>(
-        &self,
-        new_scale: f32,
-        ct: &mut CompositeTree<E>,
-        syslink: &SystemLink,
-        ht_manager: &HitTestTreeManager,
-    ) {
-        self.eh.update_views(
-            self.rescale(ct, new_scale),
-            ct,
-            syslink,
-            ht_manager,
-            0.0, // not interested in scale change
-        );
     }
 
     pub fn set_focus_lazy(&self) {
@@ -1768,22 +1733,6 @@ impl TextInputView {
     ) {
         keyboard_focus_registry.join_group(group, self.eh.token);
     }
-
-    pub fn rescale<E>(
-        &self,
-        ct: &mut CompositeTree<E>,
-        syslink: &SystemLink,
-        ht_manager: &HitTestTreeManager,
-        new_scale: f32,
-    ) {
-        self.eh.raw.eh.update_views(
-            self.eh.raw.rescale(ct, new_scale),
-            ct,
-            syslink,
-            ht_manager,
-            0.0, // not interested in scale change
-        );
-    }
 }
 
 struct TextInputViewEventHandler {
@@ -1901,22 +1850,6 @@ impl NumericInputView {
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         keyboard_focus_registry.join_group(group, self.eh.token);
-    }
-
-    pub fn rescale<E>(
-        &self,
-        new_scale: f32,
-        ct: &mut CompositeTree<E>,
-        ht_manager: &HitTestTreeManager,
-        syslink: &SystemLink,
-    ) {
-        self.eh.raw.eh.update_views(
-            self.eh.raw.rescale(ct, new_scale),
-            ct,
-            syslink,
-            ht_manager,
-            0.0, // not interested in scale change
-        );
     }
 }
 

@@ -14,9 +14,9 @@ use crate::{
         RenderMessageSender, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
-            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
-            TextureMappingMode, TextureType,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTree, CompositeTreeRef, TextureMappingMode, TextureType,
         },
         text::FontID,
     },
@@ -47,7 +47,7 @@ impl View {
     ) -> Self {
         let ct_root = init_ctx.mount_context.composite_tree.create(CompositeRect {
             has_bitmap: true,
-            base_scale_factor: init_ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
                 1.0, 1.0, 1.0, 0.125,
             ])),
@@ -133,21 +133,6 @@ impl View {
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
-    }
-
-    pub fn rescale(
-        &self,
-        scale_factor: f32,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        texture_id_set: &SystemCommandTextureIDSet,
-    ) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = scale_factor;
-        composite_tree.mark_dirty_all(self.ct_root);
-        if let Some(ref xs) = self.command_buttons {
-            for c in xs {
-                c.rescale(composite_tree, texture_id_set, scale_factor);
-            }
-        }
     }
 
     pub fn set_maximize_state(
@@ -360,7 +345,7 @@ impl SystemCommandButtonView {
         init_cmd: SystemCommand,
     ) -> Self {
         let ct_root = init_ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: init_ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_offset_adjustment: [1.0, 0.0],
             offset: [
                 AnimatableFloat::Value(-right_offset - Self::WIDTH),
@@ -384,7 +369,7 @@ impl SystemCommandButtonView {
             ..Default::default()
         });
         let ct_icon = init_ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: init_ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(-Self::ICON_SIZE * 0.5),
                 AnimatableFloat::Value(-Self::ICON_SIZE * 0.5),
@@ -447,26 +432,6 @@ impl SystemCommandButtonView {
         ctx.composite_tree.add_child(ct_parent, self.ct_root);
         ctx.ht_manager
             .add_child(ht_parent, self.action_handler.ht_root);
-    }
-
-    fn rescale(
-        &self,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        texture_id_set: &SystemCommandTextureIDSet,
-        ui_scale_factor: f32,
-    ) {
-        composite_tree.get_mut(self.ct_icon).composite_mode = CompositeMode::ColorTint(
-            AnimatableColor::Value([0.9, 0.9, 0.9, 1.0]),
-            CompositeTexture {
-                id: texture_id_set.select(self.action_handler.cmd.get()),
-                r#type: TextureType::Mask,
-                mapping: TextureMappingMode::Stretch,
-            },
-        );
-        composite_tree.get_mut(self.ct_icon).base_scale_factor = ui_scale_factor;
-        composite_tree.get_mut(self.ct_root).base_scale_factor = ui_scale_factor;
-        composite_tree.mark_dirty(self.ct_icon);
-        composite_tree.mark_dirty(self.ct_root);
     }
 
     fn replace_cmd(

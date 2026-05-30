@@ -11,8 +11,7 @@ use crate::{
         },
     },
     rendering::composite::{
-        AnimatableColor, AnimatableFloat, AnimationCurve, ClipConfig, CompositeMode, CompositeRect,
-        CompositeTree, CompositeTreeRef, CornerRadius,
+        AnimatableColor, AnimatableFloat, AnimationCurve, ClipConfig, CompositeMode, CompositeRect, CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius
     },
     uikit::{
         MountContext, MountTarget, ViewEventHandler, ViewIdentifier, ViewInitContext,
@@ -36,7 +35,7 @@ pub struct ScrollContainer {
 impl ScrollContainer {
     pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(rect.left),
                 AnimatableFloat::Value(rect.top),
@@ -66,7 +65,7 @@ impl ScrollContainer {
             ..Default::default()
         });
         let ct_content_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
             size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
             ..Default::default()
@@ -80,7 +79,7 @@ impl ScrollContainer {
         });
 
         let ct_scroll_bar_vert = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(-ACTIVE_SCROLL_BAR_THICKNESS),
                 AnimatableFloat::Value(0.0),
@@ -98,7 +97,7 @@ impl ScrollContainer {
             ..Default::default()
         });
         let ct_scroll_thumb_vert = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(-SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS),
                 AnimatableFloat::Value(SCROLL_THUMB_SPACING),
@@ -132,7 +131,7 @@ impl ScrollContainer {
         });
 
         let ct_scroll_bar_horz = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(0.0),
                 AnimatableFloat::Value(-ACTIVE_SCROLL_BAR_THICKNESS),
@@ -150,7 +149,7 @@ impl ScrollContainer {
             ..Default::default()
         });
         let ct_scroll_thumb_horz = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(SCROLL_THUMB_SPACING),
                 AnimatableFloat::Value(-SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS),

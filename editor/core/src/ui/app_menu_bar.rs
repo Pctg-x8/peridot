@@ -13,8 +13,9 @@ use crate::{
     rendering::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
-            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
+            CompositeTreeRef,
         },
         text::{FontID, TextLayout},
     },
@@ -30,7 +31,7 @@ pub struct View {
 impl View {
     pub fn new(ctx: &mut ViewInitContext, top: f32, labels: Vec<(String, Vec<MenuItem>)>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(top)],
             size: [
                 AnimatableFloat::Value(0.0),
@@ -75,15 +76,6 @@ impl View {
     pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.ct_root);
-
-        for x in self.eh.items.iter() {
-            x.rescale(new_scale, composite_tree);
-        }
     }
 
     pub fn on_global_mouse_click<E>(
@@ -236,7 +228,7 @@ impl ItemView {
             TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
 
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(left), AnimatableFloat::Value(0.0)],
             size: [
                 AnimatableFloat::Value(text_width + Self::PADDING_INLINE * 2.0),
@@ -284,11 +276,6 @@ impl ItemView {
     fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty_all(self.ct_root);
     }
 
     fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {

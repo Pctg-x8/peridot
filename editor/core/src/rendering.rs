@@ -21,8 +21,7 @@ use crate::{
         atlas::{AtlasRect, ColorTextureAtlas, TextureAtlas},
         composite::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
-            CompositeStreamingData, CompositeTree, CompositeTreeRef, CompositeTreeRender,
-            CompositeTreeSyncBuffer, CustomRenderToken,
+            CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
         },
         text::FontSet,
         vg::VectorRasterizationState,
@@ -1345,6 +1344,7 @@ impl<'d> ContextMenuRenderer<'d> {
             self.swapchain.size(),
             #[cfg(windows)]
             self.presentation_size,
+            self.w.render_scale(),
             font_set,
             glyph_atlas,
             color_atlas,
@@ -1751,6 +1751,7 @@ impl<'d> WindowRenderer<'d> {
             composite_tree,
             self.composite_root,
             self.swapchain.size(),
+            self.w.ui_scale_factor(),
             font_set,
             glyph_atlas,
             color_atlas,

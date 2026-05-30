@@ -8,9 +8,10 @@ use crate::{
         RenderMessageSender, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
-            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
-            Gradient, GradientRef, TextureMappingMode, TextureType,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTree, CompositeTreeRef, Gradient, GradientRef, TextureMappingMode,
+            TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
@@ -41,15 +42,6 @@ impl MenuItemView {
             MenuItemView::Command(command) => command.mount(ctx, target),
             MenuItemView::SubMenu(submenu) => submenu.mount(ctx, target),
             MenuItemView::Separator(separator) => separator.mount(ctx, target),
-        }
-    }
-
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        match self {
-            MenuItemView::Heading(heading) => heading.rescale(scale, composite_tree),
-            MenuItemView::Command(command) => command.rescale(scale, composite_tree),
-            MenuItemView::SubMenu(submenu) => submenu.rescale(scale, composite_tree),
-            MenuItemView::Separator(separator) => separator.rescale(scale, composite_tree),
         }
     }
 
@@ -252,7 +244,7 @@ impl HeadingView {
     pub fn new(ctx: &mut ViewInitContext, label: String, placement_y: f32) -> Self {
         let base_scale_factor = ctx.ui_scale_factor;
         let ct_root = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 0.0],
             size: [
                 AnimatableFloat::Value(0.0),
@@ -284,11 +276,6 @@ impl HeadingView {
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
     }
-
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
-        composite_tree.mark_dirty(self.ct_root);
-    }
 }
 
 pub struct CommandView {
@@ -318,7 +305,7 @@ impl CommandView {
         });
         let animation_base_time = ctx.current_sec + animation_delay;
         let ct_root = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 0.0],
             size: [
                 AnimatableFloat::Value(0.0),
@@ -346,7 +333,7 @@ impl CommandView {
             ..Default::default()
         });
         let ct_label = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             offset: [
                 AnimatableFloat::Value(TEXT_INLINE_MARGIN),
@@ -370,7 +357,7 @@ impl CommandView {
             ..Default::default()
         });
         let ct_light = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: common_res.composite_mode_light(),
@@ -398,17 +385,6 @@ impl CommandView {
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
-    }
-
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
-        composite_tree.mark_dirty(self.ct_root);
-        composite_tree.get_mut(self.ct_label).base_scale_factor = scale;
-        composite_tree.mark_dirty(self.ct_label);
-        composite_tree
-            .get_mut(self.event_handler.ct_light)
-            .base_scale_factor = scale;
-        composite_tree.mark_dirty(self.event_handler.ct_light);
     }
 }
 
@@ -455,7 +431,7 @@ impl SubMenuView {
         });
         let animation_base_time = ctx.current_sec + animation_delay;
         let ct_root = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 0.0],
             size: [
                 AnimatableFloat::Value(0.0),
@@ -483,7 +459,7 @@ impl SubMenuView {
             ..Default::default()
         });
         let ct_label = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             offset: [
                 AnimatableFloat::Value(TEXT_INLINE_MARGIN),
@@ -507,7 +483,7 @@ impl SubMenuView {
             ..Default::default()
         });
         let ct_arrow = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_offset_adjustment: [1.0, 0.5],
             size: [
                 AnimatableFloat::Value(Self::ICON_SIZE.width),
@@ -529,7 +505,7 @@ impl SubMenuView {
             ..Default::default()
         });
         let ct_light = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: common_res.composite_mode_light(),
@@ -560,19 +536,6 @@ impl SubMenuView {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
         ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
-
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
-        composite_tree.mark_dirty(self.ct_root);
-        composite_tree.get_mut(self.ct_label).base_scale_factor = scale;
-        composite_tree.mark_dirty(self.ct_label);
-        composite_tree.get_mut(self.ct_arrow).base_scale_factor = scale;
-        composite_tree.mark_dirty(self.ct_arrow);
-        composite_tree
-            .get_mut(self.event_handler.ct_light)
-            .base_scale_factor = scale;
-        composite_tree.mark_dirty(self.event_handler.ct_light);
-    }
 }
 
 pub struct SeparatorView {
@@ -582,7 +545,7 @@ impl SeparatorView {
     pub fn new(ctx: &mut ViewInitContext, placement_y: f32) -> Self {
         let base_scale_factor = ctx.ui_scale_factor;
         let ct_root = ctx.composite_tree.create(CompositeRect {
-            base_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 0.0],
             size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
             offset: [
@@ -599,11 +562,6 @@ impl SeparatorView {
 
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
-    }
-
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
-        composite_tree.mark_dirty(self.ct_root);
     }
 }
 

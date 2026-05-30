@@ -671,10 +671,16 @@ impl TextureType {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CompositeRectScaleFactor {
+    NoScale,
+    UI,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompositeRect<Event> {
     pub has_bitmap: bool,
-    pub base_scale_factor: f32,
+    pub scale_factor: CompositeRectScaleFactor,
     pub corner_radius: CornerRadius,
     pub border: Option<Border<Event>>,
     pub softedge: f32,
@@ -698,7 +704,7 @@ impl<Event> Default for CompositeRect<Event> {
     fn default() -> Self {
         Self {
             has_bitmap: false,
-            base_scale_factor: 1.0,
+            scale_factor: CompositeRectScaleFactor::NoScale,
             corner_radius: CornerRadius::default(),
             border: None,
             softedge: 0.0,
@@ -1587,6 +1593,7 @@ impl CompositeRenderingInstructionBuilder {
 }
 
 struct CompositeRectCache {
+    text_render_scale: f32,
     text_rects: Vec<GlyphPlacementBox>,
     text_width: f32,
     text_height: f32,
@@ -1595,6 +1602,7 @@ struct CompositeRectCache {
 impl CompositeRectCache {
     fn new() -> Self {
         Self {
+            text_render_scale: 1.0,
             text_rects: Vec::new(),
             text_width: 0.0,
             text_height: 0.0,
@@ -1720,6 +1728,7 @@ impl<Event> CompositeTreeRender<Event> {
         root: CompositeTreeRef,
         inst_builder: &mut CompositeRenderingInstructionBuilder,
         size: br::Extent2D,
+        ui_render_scale: f32,
         current_sec: f32,
         mapped_head: *mut core::ffi::c_void,
         font_set: &FontSet,
@@ -1756,14 +1765,17 @@ impl<Event> CompositeTreeRender<Event> {
             let r = &mut self.rects[p.r.0];
             self.dirty_flags[p.r.0].dirty = false;
 
+            let scale_factor = match r.scale_factor {
+                CompositeRectScaleFactor::NoScale => 1.0,
+                CompositeRectScaleFactor::UI => ui_render_scale,
+            };
+
             let local_left =
-                r.offset[0].evaluate(current_sec, &self.parameter_store) * r.base_scale_factor;
-            let local_top =
-                r.offset[1].evaluate(current_sec, &self.parameter_store) * r.base_scale_factor;
-            let local_width =
-                r.size[0].evaluate(current_sec, &self.parameter_store) * r.base_scale_factor;
+                r.offset[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_top = r.offset[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_width = r.size[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
             let local_height =
-                r.size[1].evaluate(current_sec, &self.parameter_store) * r.base_scale_factor;
+                r.size[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
 
             let left = p.effective_base_left
                 + (p.effective_width * r.relative_offset_adjustment[0])
@@ -1850,23 +1862,23 @@ impl<Event> CompositeTreeRender<Event> {
                                 | CompositeMode::FillRadialGradient(_) => [0.0; 4],
                             },
                             corner_radius_x: [
-                                r.corner_radius.left_top[0] * r.base_scale_factor,
-                                r.corner_radius.right_top[0] * r.base_scale_factor,
-                                r.corner_radius.left_bottom[0] * r.base_scale_factor,
-                                r.corner_radius.right_bottom[0] * r.base_scale_factor,
+                                r.corner_radius.left_top[0] * scale_factor,
+                                r.corner_radius.right_top[0] * scale_factor,
+                                r.corner_radius.left_bottom[0] * scale_factor,
+                                r.corner_radius.right_bottom[0] * scale_factor,
                             ],
                             corner_radius_y: [
-                                r.corner_radius.left_top[1] * r.base_scale_factor,
-                                r.corner_radius.right_top[1] * r.base_scale_factor,
-                                r.corner_radius.left_bottom[1] * r.base_scale_factor,
-                                r.corner_radius.right_bottom[1] * r.base_scale_factor,
+                                r.corner_radius.left_top[1] * scale_factor,
+                                r.corner_radius.right_top[1] * scale_factor,
+                                r.corner_radius.left_bottom[1] * scale_factor,
+                                r.corner_radius.right_bottom[1] * scale_factor,
                             ],
                             border_color,
                             border_thickness: r
                                 .border
                                 .as_ref()
-                                .map_or(0.0, |b| b.thickness * r.base_scale_factor),
-                            softedge: r.softedge * r.base_scale_factor,
+                                .map_or(0.0, |b| b.thickness * scale_factor),
+                            softedge: r.softedge * scale_factor,
                             gradient_data_index: match r.composite_mode {
                                 CompositeMode::FillLinearGradient(x)
                                 | CompositeMode::FillRadialGradient(x) => x.0 as f32,
@@ -1875,8 +1887,8 @@ impl<Event> CompositeTreeRender<Event> {
                             source_texture_index: tex_type.to_index() as _,
                             border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
                                 [
-                                    b.break_pattern[0] * r.base_scale_factor,
-                                    b.break_pattern[1] * r.base_scale_factor,
+                                    b.break_pattern[0] * scale_factor,
+                                    b.break_pattern[1] * scale_factor,
                                 ]
                             }),
                             texture_mapping_mode: tex_mapping_mode.shader_mode_value(),
@@ -1918,11 +1930,14 @@ impl<Event> CompositeTreeRender<Event> {
 
             if let Some(ref mut t) = r.text {
                 let wrap_width = if t.allow_wrapping { w } else { f32::MAX };
-                if self.dirty_flags[p.r.0].text_layout_dirty || cache.text_max_width != wrap_width {
+                if self.dirty_flags[p.r.0].text_layout_dirty
+                    || cache.text_render_scale != scale_factor
+                    || cache.text_max_width != wrap_width
+                {
                     Self::populate_text_layout_cache(
                         cache,
                         t,
-                        r.base_scale_factor,
+                        scale_factor,
                         font_set,
                         t.horizontal_alignment,
                         wrap_width,
@@ -1936,12 +1951,12 @@ impl<Event> CompositeTreeRender<Event> {
                     CompositeRectTextHorizontalAlignment::Start => 0.0,
                     CompositeRectTextHorizontalAlignment::End => w - cache.text_width,
                     CompositeRectTextHorizontalAlignment::Middle => (w - cache.text_width) * 0.5,
-                } + t.offset[0] * r.base_scale_factor;
+                } + t.offset[0] * scale_factor;
                 let y_offset = match t.vertical_alignment {
                     CompositeRectTextVerticalAlignment::Start => 0.0,
                     CompositeRectTextVerticalAlignment::End => h - cache.text_height,
                     CompositeRectTextVerticalAlignment::Middle => (h - cache.text_height) * 0.5,
-                } + t.offset[1] * r.base_scale_factor;
+                } + t.offset[1] * scale_factor;
                 for b in cache.text_rects.iter() {
                     unsafe {
                         core::ptr::write(
@@ -2064,6 +2079,7 @@ impl<Event> CompositeTreeRender<Event> {
         cache.text_width = text_layout.visual_width(font_set) * scale_factor;
         cache.text_height = text_layout.height() * scale_factor;
         cache.text_max_width = layout_max_width;
+        cache.text_render_scale = scale_factor;
     }
 }
 
@@ -2975,6 +2991,7 @@ impl CompositeRenderer {
         tree: &mut CompositeTreeRender<Event>,
         root: CompositeTreeRef,
         rt_size: br::Extent2D,
+        ui_render_scale: f32,
         font_set: &FontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
         color_atlas: &ColorTextureAtlasManager,
@@ -3006,6 +3023,7 @@ impl CompositeRenderer {
                 root,
                 &mut inst_builder,
                 rt_size,
+                ui_render_scale,
                 current_sec,
                 ptr.ptr(),
                 font_set,

@@ -14,9 +14,10 @@ use crate::{
         RenderMessageSender, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
-            CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
-            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
-            CompositeTree, CompositeTreeRef, CornerRadius, TextureMappingMode, TextureType,
+            CompositeRect, CompositeRectScaleFactor, CompositeRectText,
+            CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
+            CornerRadius, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
@@ -69,7 +70,7 @@ impl View {
         });
 
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(placement.left),
                 AnimatableFloat::Value(placement.top),
@@ -89,7 +90,7 @@ impl View {
             ..Default::default()
         });
         let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             size: [AnimatableFloat::Value(-12.0), AnimatableFloat::Value(0.0)],
             clip_child: Some(ClipConfig {
@@ -101,7 +102,7 @@ impl View {
             ..Default::default()
         });
         let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             text: Some(CompositeRectText {
                 runs: vec![CompositeRectTextRun {
@@ -122,7 +123,7 @@ impl View {
             ..Default::default()
         });
         let ct_down_arrow = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
             relative_offset_adjustment: [1.0, 0.5],
             size: [
@@ -170,20 +171,6 @@ impl View {
         ctx.composite_tree
             .add_child(target.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.get_mut(self.ct_text_clip).base_scale_factor = new_scale;
-        composite_tree.get_mut(self.eh.ct_text).base_scale_factor = new_scale;
-        composite_tree
-            .get_mut(self.eh.ct_down_arrow)
-            .base_scale_factor = new_scale;
-
-        composite_tree.mark_dirty(self.eh.ct_root);
-        composite_tree.mark_dirty_all(self.ct_text_clip);
-        composite_tree.mark_dirty_all(self.eh.ct_text);
-        composite_tree.mark_dirty(self.eh.ct_down_arrow);
     }
 }
 
@@ -406,7 +393,7 @@ impl MenuItemView {
         y_pos: f32,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(y_pos)],
             relative_size_adjustment: [1.0, 0.0],
             size: [
@@ -449,11 +436,6 @@ impl MenuItemView {
         ctx.composite_tree
             .add_child(target.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty_all(self.eh.ct_root);
     }
 }
 

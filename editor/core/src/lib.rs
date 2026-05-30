@@ -1,4 +1,3 @@
-use bedrock::vkfn::queue_bind_sparse;
 use core::cell::Cell;
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
@@ -36,13 +35,13 @@ use crate::{
         MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
         RenderMessageSender, RenderThread, RendererSync, ShaderTexture, TextureID,
         composite::{
-            self, AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig,
-            CompositeMode, CompositeRect, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
-            CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius,
-            CustomRenderToken, Gradient, GradientRef, TextureMappingMode, TextureType,
+            CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
+            GradientRef, TextureMappingMode, TextureType,
         },
-        text::{FontID, FontSet, TextLayout, TextRun},
+        text::{FontID, FontSet, TextLayout},
     },
     uikit::{
         MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
@@ -52,7 +51,7 @@ use crate::{
         ViewInitContext, ViewRegistry, ViewUpdateContext,
     },
     utils::{
-        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, SafeF32, Size,
+        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
         UnsafeMainThreadOnlyOnceCell,
     },
 };
@@ -1071,7 +1070,7 @@ impl AlertDialogPresenter {
             Some(Event::PopupClose { id: popup_id }),
         );
         let ct_message = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             size: [
                 AnimatableFloat::Value(text_width),
                 AnimatableFloat::Value(16.0),
@@ -1136,13 +1135,6 @@ impl Popup for AlertDialogPresenter {
             .set_keyboard_focus_group(group, keyboard_focus_registry);
     }
 
-    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
-        self.frame.rescale(scale, composite_tree);
-        self.confirm_button.rescale(scale, composite_tree);
-        composite_tree.get_mut(self.ct_message).base_scale_factor = scale;
-        composite_tree.mark_dirty_all(self.ct_message);
-    }
-
     fn unmount(&self, ctx: &mut MountContext) {
         self.mask.unmount(ctx);
     }
@@ -1171,6 +1163,8 @@ impl Popup for AlertDialogPresenter {
         ctx.composite_tree.free_all(self.mask.ct_root());
         ctx.ht_manager.free_all(self.mask.ht_root());
     }
+
+    fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {}
 }
 
 pub struct SharedCheckIcon {
@@ -1218,7 +1212,7 @@ impl ToggleButtonView {
         label: String,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(rect.left),
                 AnimatableFloat::Value(rect.top),
@@ -1249,7 +1243,7 @@ impl ToggleButtonView {
             ..Default::default()
         });
         let ct_check = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(6.0),
                 AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
@@ -1298,13 +1292,6 @@ impl ToggleButtonView {
         ctx.composite_tree
             .add_child(target.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty_all(self.eh.ct_root);
-        composite_tree.get_mut(self.eh.ct_check).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_check);
     }
 }
 
@@ -1430,7 +1417,7 @@ impl CheckboxView {
         rect: Rect<LogicalUnit>,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(rect.left),
                 AnimatableFloat::Value(rect.top),
@@ -1450,7 +1437,7 @@ impl CheckboxView {
             ..Default::default()
         });
         let ct_check = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.width * 0.5),
                 AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
@@ -1499,13 +1486,6 @@ impl CheckboxView {
         ctx.composite_tree
             .add_child(target.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty_all(self.eh.ct_root);
-        composite_tree.get_mut(self.eh.ct_check).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_check);
     }
 }
 
@@ -1641,7 +1621,7 @@ impl RadioButtonView {
         group_controller: &Rc<RadioButtonGroupController>,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(rect.left),
                 AnimatableFloat::Value(rect.top),
@@ -1661,7 +1641,7 @@ impl RadioButtonView {
             ..Default::default()
         });
         let ct_mark = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(4.0), AnimatableFloat::Value(4.0)],
             size: [
                 AnimatableFloat::Value(rect.width - 8.0),
@@ -1702,13 +1682,6 @@ impl RadioButtonView {
         ctx.composite_tree
             .add_child(target.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_root);
-        composite_tree.get_mut(self.eh.ct_mark).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_mark);
     }
 }
 
@@ -1908,7 +1881,7 @@ impl ColorPickerView {
         });
 
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(lt.x), AnimatableFloat::Value(lt.y)],
             size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
             has_bitmap: true,
@@ -1922,7 +1895,7 @@ impl ColorPickerView {
         let gradient_box_size =
             2.0 * (64.0 - Self::RING_THICKNESS - Self::GRADIENT_BOX_MARGIN) / 2.0f32.sqrt();
         let ct_sat_light_box = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(-gradient_box_size * 0.5),
                 AnimatableFloat::Value(-gradient_box_size * 0.5),
@@ -1939,7 +1912,7 @@ impl ColorPickerView {
             ..Default::default()
         });
         let ct_pointer = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
             size: [
                 AnimatableFloat::Value(Self::POINTER_SIZE),
@@ -1955,7 +1928,7 @@ impl ColorPickerView {
             ..Default::default()
         });
         let ct_pointer_dark = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
             size: [
                 AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
@@ -1980,7 +1953,7 @@ impl ColorPickerView {
                     end_pos_relative: [1.0, 0.0],
                 });
         let ct_alpha_slider_base = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(0.0),
                 AnimatableFloat::Value(128.0 + 8.0),
@@ -1995,14 +1968,14 @@ impl ColorPickerView {
             ..Default::default()
         });
         let ct_alpha_slider_content = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillLinearGradient(alpha_slider_content_gradient),
             ..Default::default()
         });
         let ct_alpha_slider_thumb = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(128.0 - Self::ALPHA_SLIDER_THUMB_THICKNESS * 0.5),
                 AnimatableFloat::Value(0.0),
@@ -2022,7 +1995,7 @@ impl ColorPickerView {
             ..Default::default()
         });
         let ct_hex_label = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(0.0),
                 AnimatableFloat::Value(128.0 + 32.0 + 16.0),
@@ -2135,47 +2108,6 @@ impl ColorPickerView {
                 ct_root: self.eh.ct_root,
             },
         );
-    }
-
-    pub fn rescale<E>(
-        &self,
-        new_scale: f32,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &HitTestTreeManager,
-        syslink: &SystemLink,
-    ) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_root);
-        composite_tree
-            .get_mut(self.eh.ct_sat_light_box)
-            .base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_sat_light_box);
-        composite_tree.get_mut(self.eh.ct_pointer).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_pointer);
-        composite_tree
-            .get_mut(self.eh.ct_pointer_dark)
-            .base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_pointer_dark);
-        composite_tree
-            .get_mut(self.eh.ct_alpha_slider_base)
-            .base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_alpha_slider_base);
-        composite_tree
-            .get_mut(self.eh.ct_alpha_slider_content)
-            .base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_alpha_slider_content);
-        composite_tree
-            .get_mut(self.eh.ct_alpha_slider_thumb)
-            .base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_alpha_slider_thumb);
-        composite_tree
-            .get_mut(self.eh.ct_hex_label)
-            .base_scale_factor = new_scale;
-        composite_tree.mark_dirty_all(self.eh.ct_hex_label);
-
-        self.eh
-            .hex_text_input_view
-            .rescale(new_scale, composite_tree, ht_manager, syslink);
     }
 }
 
@@ -2655,18 +2587,6 @@ impl ColorPickerHexTextInputView {
         keyboard_focus_registry.join_group(group, self.eh.token);
     }
 
-    pub fn rescale<E>(
-        &self,
-        new_scale: f32,
-        ct: &mut CompositeTree<E>,
-        ht_manager: &HitTestTreeManager,
-        syslink: &SystemLink,
-    ) {
-        self.eh
-            .raw
-            .perform_rescale(new_scale, ct, syslink, ht_manager);
-    }
-
     fn set_value(&self, value: u32, syslink: &SystemLink) {
         self.eh.value.set(value);
         self.eh
@@ -2839,7 +2759,7 @@ impl EditableColorButtonView {
         });
 
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(rect.left),
                 AnimatableFloat::Value(rect.top),
@@ -2859,7 +2779,7 @@ impl EditableColorButtonView {
             ..Default::default()
         });
         let ct_color_base = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [
                 AnimatableFloat::Value(Self::COLOR_PREVIEW_MARGIN),
                 AnimatableFloat::Value(Self::COLOR_PREVIEW_MARGIN),
@@ -2878,7 +2798,7 @@ impl EditableColorButtonView {
             ..Default::default()
         });
         let ct_color = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -2920,17 +2840,6 @@ impl EditableColorButtonView {
         ctx.composite_tree
             .add_child(target.ct_root(), self.eh.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        composite_tree.get_mut(self.eh.ct_root).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_root);
-        composite_tree
-            .get_mut(self.eh.ct_color_base)
-            .base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_color_base);
-        composite_tree.get_mut(self.eh.ct_color).base_scale_factor = new_scale;
-        composite_tree.mark_dirty(self.eh.ct_color);
     }
 }
 
@@ -3016,8 +2925,6 @@ impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
         ht_manager: &HitTestTreeManager,
         system_link: &SystemLink,
     ) {
-        self.inner_view
-            .rescale(new_scale, composite_tree, ht_manager, system_link);
     }
 }
 
@@ -3218,7 +3125,7 @@ async fn run<'sys>(
     // tab view
     let tab_main = view_init_ctx.composite_tree.create(CompositeRect {
         has_bitmap: true,
-        base_scale_factor: main_window.ui_scale_factor(),
+        scale_factor: CompositeRectScaleFactor::UI,
         composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
         size: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(36.0)],
         offset: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(100.0)],
@@ -3244,7 +3151,7 @@ async fn run<'sys>(
             radius: [0.5, 0.1],
         });
     let tab_bg = view_init_ctx.composite_tree.create(CompositeRect {
-        base_scale_factor: main_window.ui_scale_factor(),
+        scale_factor: CompositeRectScaleFactor::UI,
         relative_size_adjustment: [1.0, 1.0],
         has_bitmap: true,
         composite_mode: CompositeMode::FillRadialGradient(tab_bg_grad),
@@ -3774,51 +3681,8 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
-            Event::WindowRescaleUI {
-                mut window,
-                new_scale,
-            } => {
-                let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
-                wd.header
-                    .rescale(new_scale, &mut composite_tree, &texture_id_set);
-
+            Event::WindowRescaleUI { window, new_scale } => {
                 popup_manager.rescale(window, new_scale, &mut composite_tree);
-
-                if window == main_window {
-                    // TODO: このへんそろそろいい感じに自動でやりたい スクロールコンテナとかは子Viewを含むのでまた木構造を組む必要がある
-                    app_menu_view.rescale(new_scale, &mut composite_tree);
-                    composite_tree.get_mut(tab_main).base_scale_factor = new_scale;
-                    composite_tree.mark_dirty_all(tab_main);
-                    test_alert_btn.rescale(new_scale, &mut composite_tree);
-                    test_alert_btn2.rescale(new_scale, &mut composite_tree);
-                    text_input_view.rescale(
-                        &mut composite_tree,
-                        &system_link,
-                        &ht_manager,
-                        new_scale,
-                    );
-                    text_input_view2.rescale(
-                        &mut composite_tree,
-                        &system_link,
-                        &ht_manager,
-                        new_scale,
-                    );
-                    dropdown_box.rescale(new_scale, &mut composite_tree);
-                    numeric_input_view.rescale(
-                        new_scale,
-                        &mut composite_tree,
-                        &ht_manager,
-                        &system_link,
-                    );
-                    toggle_button.rescale(new_scale, &mut composite_tree);
-                    checkbox.rescale(new_scale, &mut composite_tree);
-                    radio_button.rescale(new_scale, &mut composite_tree);
-                    radio_button2.rescale(new_scale, &mut composite_tree);
-                    radio_button3.rescale(new_scale, &mut composite_tree);
-                    radio_button4.rescale(new_scale, &mut composite_tree);
-                    color_picker.rescale(new_scale, &mut composite_tree, &ht_manager, &system_link);
-                    editable_color_button.rescale(new_scale, &mut composite_tree);
-                }
 
                 let mut renderer_sync = renderer_sync.lock().expect("poisoned");
                 composite_tree.commit(&mut renderer_sync.composite_buffer);
@@ -4349,13 +4213,7 @@ async fn run<'sys>(
             Event::MenuRescale { scale } => {
                 let mut should_commit_ct = false;
 
-                if let Some(ref c) = current_active_menu_session {
-                    c.rescale(scale, &mut composite_tree);
-                    should_commit_ct = true;
-                }
-
                 if let Some(ref c) = current_active_dropdown_menu_session {
-                    c.rescale(scale, &mut composite_tree);
                     should_commit_ct = true;
                 }
 
@@ -4922,14 +4780,6 @@ impl DropdownMenuSession {
         }
     }
 
-    pub fn rescale<E>(&self, new_scale: f32, composite_tree: &mut CompositeTree<E>) {
-        for x in self.opening_surfaces.iter() {
-            for x in x.item_views.iter() {
-                x.rescale(new_scale, composite_tree);
-            }
-        }
-    }
-
     pub fn close_all<E>(
         &mut self,
         syslink: &SystemLink,
@@ -5035,15 +4885,6 @@ impl MenuSession {
                 current_selecting: None,
             }],
             active_selection: None,
-        }
-    }
-
-    pub fn rescale<E>(&self, scale: f32, composite_tree: &mut CompositeTree<E>) {
-        #[cfg(not(target_os = "macos"))]
-        for s in self.opening_surfaces.iter() {
-            for v in s.item_views.iter() {
-                v.rescale(scale, composite_tree);
-            }
         }
     }
 

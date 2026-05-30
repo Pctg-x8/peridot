@@ -13,8 +13,9 @@ use crate::{
     rendering::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
-            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, CornerRadius,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
+            CompositeTreeRef, CornerRadius,
         },
         text::FontID,
     },
@@ -36,7 +37,7 @@ impl SimpleButtonView {
         click_event: Option<Event>,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             size: [
                 AnimatableFloat::Value(size.width),
                 AnimatableFloat::Value(size.height),
@@ -63,7 +64,7 @@ impl SimpleButtonView {
             ..Default::default()
         });
         let ct_focus = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(3.0), AnimatableFloat::Value(3.0)],
             size: [AnimatableFloat::Value(-6.0), AnimatableFloat::Value(-6.0)],
             relative_size_adjustment: [1.0, 1.0],
@@ -130,13 +131,6 @@ impl SimpleButtonView {
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
         keyboard_focus_registry.join_group(group, self.kf_token);
-    }
-
-    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
-        composite_tree
-            .get_mut(self.action_handler.ct_root)
-            .base_scale_factor = scale;
-        composite_tree.mark_dirty_all(self.action_handler.ct_root);
     }
 
     pub fn locate(

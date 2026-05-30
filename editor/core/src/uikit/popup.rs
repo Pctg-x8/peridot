@@ -8,7 +8,7 @@ use crate::{
     },
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
-        CompositeTree, CompositeTreeRef, CornerRadius,
+        CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
     },
     uikit::{MountContext, MountTarget, RawMountTarget, ViewInitContext},
     utils::{LogicalUnit, Size},
@@ -253,7 +253,7 @@ impl OverlayPopupBasicFrameView {
 
     pub fn new(ctx: &mut ViewInitContext, size: Size<LogicalUnit>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_offset_adjustment: [0.5, 0.5],
             size: [
                 AnimatableFloat::Value(size.width),
@@ -266,7 +266,7 @@ impl OverlayPopupBasicFrameView {
             ..Default::default()
         });
         let ct_shadow = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(64.0)],
             offset: [
@@ -280,7 +280,7 @@ impl OverlayPopupBasicFrameView {
             ..Default::default()
         });
         let ct_visual = ctx.mount_context.composite_tree.create(CompositeRect {
-            base_scale_factor: ctx.ui_scale_factor,
+            scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -419,15 +419,5 @@ impl OverlayPopupBasicFrameView {
             event_on_complete: Some(event_on_complete),
         };
         composite_tree.mark_dirty(self.ct_root);
-    }
-
-    pub fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {
-        composite_tree.get_mut(self.ct_root).base_scale_factor = scale;
-        composite_tree.get_mut(self.ct_shadow).base_scale_factor = scale;
-        composite_tree.get_mut(self.ct_visual).base_scale_factor = scale;
-
-        composite_tree.mark_dirty_all(self.ct_root);
-        composite_tree.mark_dirty_all(self.ct_shadow);
-        composite_tree.mark_dirty_all(self.ct_visual);
     }
 }
