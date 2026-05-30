@@ -208,3 +208,6 @@ mod scroll;
 pub use self::scroll::ScrollContainer;
 
 pub mod dropdown_box;
+
+pub mod checkbox;
+pub use self::checkbox::{CheckboxView, ToggleButtonView};
