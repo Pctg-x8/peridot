@@ -500,6 +500,7 @@ impl SubMenuView {
                     id: common_res.tid_submenu_arrow,
                     r#type: TextureType::Mask,
                     mapping: TextureMappingMode::Stretch,
+                    slice_borders: [0.0; 4],
                 },
             ),
             ..Default::default()

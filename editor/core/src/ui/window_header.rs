@@ -386,6 +386,7 @@ impl SystemCommandButtonView {
                     id: texture_id_set.select(init_cmd),
                     r#type: TextureType::Mask,
                     mapping: TextureMappingMode::Stretch,
+                    slice_borders: [0.0; 4],
                 },
             ),
             ..Default::default()
@@ -451,6 +452,7 @@ impl SystemCommandButtonView {
                 id: texture_id_set.select(cmd),
                 r#type: TextureType::Mask,
                 mapping: TextureMappingMode::Stretch,
+                slice_borders: [0.0; 4],
             },
         );
         composite_tree.mark_dirty(self.ct_icon);

@@ -1261,6 +1261,7 @@ impl ToggleButtonView {
                     id: shared_res.check_icon,
                     r#type: TextureType::Mask,
                     mapping: TextureMappingMode::Stretch,
+                    slice_borders: [0.0; 4],
                 },
             ),
             opacity: AnimatableFloat::Value(0.0),
@@ -1455,6 +1456,7 @@ impl CheckboxView {
                     id: shared_res.check_icon,
                     r#type: TextureType::Mask,
                     mapping: TextureMappingMode::Stretch,
+                    slice_borders: [0.0; 4],
                 },
             ),
             opacity: AnimatableFloat::Value(0.0),
@@ -1889,6 +1891,7 @@ impl ColorPickerView {
                 id: shared.ring_tex_id,
                 r#type: TextureType::Color,
                 mapping: TextureMappingMode::Stretch,
+                slice_borders: [0.0; 4],
             }),
             ..Default::default()
         });
@@ -1964,6 +1967,7 @@ impl ColorPickerView {
                 id: shared.alpha_slider_bg_tex_id,
                 r#type: TextureType::Color,
                 mapping: TextureMappingMode::Repeat,
+                slice_borders: [0.0; 4],
             }),
             ..Default::default()
         });
@@ -2794,6 +2798,7 @@ impl EditableColorButtonView {
                 id: shared.alpha_slider_bg_tex_id,
                 r#type: TextureType::Color,
                 mapping: TextureMappingMode::Repeat,
+                slice_borders: [0.0; 4],
             }),
             ..Default::default()
         });

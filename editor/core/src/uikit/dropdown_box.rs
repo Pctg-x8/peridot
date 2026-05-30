@@ -137,6 +137,7 @@ impl View {
                     id: shared_res.down_arrow_tex,
                     r#type: TextureType::Mask,
                     mapping: TextureMappingMode::Stretch,
+                    slice_borders: [0.0; 4],
                 },
             ),
             ..Default::default()

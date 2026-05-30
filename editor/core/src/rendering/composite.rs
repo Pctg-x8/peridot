@@ -88,80 +88,6 @@ pub struct CompositeStreamingData {
     pub current_sec: f32,
 }
 
-#[derive(Debug, Clone)]
-pub struct CompositeTexture {
-    pub id: TextureID,
-    pub r#type: TextureType,
-    pub mapping: TextureMappingMode,
-}
-
-#[derive(Debug, Clone)]
-pub enum CompositeMode<Event> {
-    /// テクスチャの内容を直接描画
-    DirectSourceOver(CompositeTexture),
-    /// マスクテクスチャに色を付けて描画
-    ColorTint(AnimatableColor<Event>, CompositeTexture),
-    /// 矩形を塗りつぶし
-    FillColor(AnimatableColor<Event>),
-    /// マスクテクスチャに色を付けて描画 背景ブラーと合成
-    ColorTintBackdropBlur(
-        AnimatableColor<Event>,
-        AnimatableFloat<Event>,
-        CompositeTexture,
-    ),
-    /// 矩形を塗りつぶし 背景ブラーと合成
-    FillColorBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
-    /// 直線グラデーションで矩形を塗りつぶし
-    FillLinearGradient(GradientRef),
-    /// 円形グラデーションで矩形を塗りつぶし
-    FillRadialGradient(GradientRef),
-    // TODO: このへんの特殊対応はなんか汎用化したい シェーダ指定できるようにするか......？
-    /// 特殊対応: ColorPicker用 内部のグラデーションボックス
-    /// 引数には右上の色（ベースカラー）を入れる
-    ColorPickerGradientBox(AnimatableColor<Event>),
-}
-impl<Event> CompositeMode<Event> {
-    const fn shader_mode_value(&self) -> f32 {
-        match self {
-            Self::DirectSourceOver(_) => 0.0,
-            Self::ColorTint(_, _) => 1.0,
-            Self::FillColor(_) => 2.0,
-            Self::ColorTintBackdropBlur(_, _, _) => 3.0,
-            Self::FillColorBackdropBlur(_, _) => 4.0,
-            Self::FillLinearGradient(_) => 5.0,
-            Self::FillRadialGradient(_) => 6.0,
-            Self::ColorPickerGradientBox(_) => 7.0,
-        }
-    }
-
-    const fn texture(&self) -> Option<&CompositeTexture> {
-        match self {
-            Self::DirectSourceOver(t)
-            | Self::ColorTint(_, t)
-            | Self::ColorTintBackdropBlur(_, _, t) => Some(t),
-            Self::FillColor(_)
-            | Self::FillColorBackdropBlur(_, _)
-            | Self::FillLinearGradient(_)
-            | Self::FillRadialGradient(_)
-            | Self::ColorPickerGradientBox(_) => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum TextureMappingMode {
-    Stretch,
-    Repeat,
-}
-impl TextureMappingMode {
-    const fn shader_mode_value(&self) -> f32 {
-        match self {
-            Self::Stretch => 0.0,
-            Self::Repeat => 1.0,
-        }
-    }
-}
-
 const fn lerp(x: f32, a: f32, b: f32) -> f32 {
     a + (b - a) * x
 }
@@ -590,6 +516,15 @@ impl<Event> Default for CompositeRectTextRun<Event> {
         }
     }
 }
+impl<Event> CompositeRectTextRun<Event> {
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        self.color.process_on_complete(current_sec, on_event);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CompositeRectText<Event> {
@@ -607,6 +542,17 @@ impl<Event> Default for CompositeRectText<Event> {
             vertical_alignment: Default::default(),
             offset: [0.0, 0.0],
             allow_wrapping: false,
+        }
+    }
+}
+impl<Event> CompositeRectText<Event> {
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        mut on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        for r in self.runs.iter_mut() {
+            r.perform_complete_event(current_sec, &mut on_event);
         }
     }
 }
@@ -655,6 +601,101 @@ impl<Event> Default for Border<Event> {
         }
     }
 }
+impl<Event> Border<Event> {
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        self.color.process_on_complete(current_sec, on_event);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CompositeMode<Event> {
+    /// テクスチャの内容を直接描画
+    DirectSourceOver(CompositeTexture),
+    /// マスクテクスチャに色を付けて描画
+    ColorTint(AnimatableColor<Event>, CompositeTexture),
+    /// 矩形を塗りつぶし
+    FillColor(AnimatableColor<Event>),
+    /// マスクテクスチャに色を付けて描画 背景ブラーと合成
+    ColorTintBackdropBlur(
+        AnimatableColor<Event>,
+        AnimatableFloat<Event>,
+        CompositeTexture,
+    ),
+    /// 矩形を塗りつぶし 背景ブラーと合成
+    FillColorBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
+    /// 直線グラデーションで矩形を塗りつぶし
+    FillLinearGradient(GradientRef),
+    /// 円形グラデーションで矩形を塗りつぶし
+    FillRadialGradient(GradientRef),
+    // TODO: このへんの特殊対応はなんか汎用化したい シェーダ指定できるようにするか......？
+    /// 特殊対応: ColorPicker用 内部のグラデーションボックス
+    /// 引数には右上の色（ベースカラー）を入れる
+    ColorPickerGradientBox(AnimatableColor<Event>),
+}
+impl<Event> CompositeMode<Event> {
+    const fn shader_mode_value(&self) -> f32 {
+        match self {
+            Self::DirectSourceOver(_) => 0.0,
+            Self::ColorTint(_, _) => 1.0,
+            Self::FillColor(_) => 2.0,
+            Self::ColorTintBackdropBlur(_, _, _) => 3.0,
+            Self::FillColorBackdropBlur(_, _) => 4.0,
+            Self::FillLinearGradient(_) => 5.0,
+            Self::FillRadialGradient(_) => 6.0,
+            Self::ColorPickerGradientBox(_) => 7.0,
+        }
+    }
+
+    const fn texture(&self) -> Option<&CompositeTexture> {
+        match self {
+            Self::DirectSourceOver(t)
+            | Self::ColorTint(_, t)
+            | Self::ColorTintBackdropBlur(_, _, t) => Some(t),
+            Self::FillColor(_)
+            | Self::FillColorBackdropBlur(_, _)
+            | Self::FillLinearGradient(_)
+            | Self::FillRadialGradient(_)
+            | Self::ColorPickerGradientBox(_) => None,
+        }
+    }
+
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        mut on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        match self {
+            Self::DirectSourceOver(_) => (),
+            Self::ColorTint(t, _) => t.process_on_complete(current_sec, on_event),
+            Self::FillColor(t) => t.process_on_complete(current_sec, on_event),
+            Self::ColorTintBackdropBlur(t, stdev, _) => {
+                t.process_on_complete(current_sec, &mut on_event);
+                stdev.process_on_complete(current_sec, &mut on_event);
+            }
+            Self::FillColorBackdropBlur(t, stdev) => {
+                t.process_on_complete(current_sec, &mut on_event);
+                stdev.process_on_complete(current_sec, &mut on_event);
+            }
+            Self::FillLinearGradient(_) => {}
+            Self::FillRadialGradient(_) => {}
+            Self::ColorPickerGradientBox(t) => {
+                t.process_on_complete(current_sec, on_event);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeTexture {
+    pub id: TextureID,
+    pub r#type: TextureType,
+    pub mapping: TextureMappingMode,
+    pub slice_borders: [f32; 4],
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum TextureType {
@@ -672,6 +713,20 @@ impl TextureType {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum TextureMappingMode {
+    Stretch,
+    Repeat,
+}
+impl TextureMappingMode {
+    const fn shader_mode_value(&self) -> f32 {
+        match self {
+            Self::Stretch => 0.0,
+            Self::Repeat => 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum CompositeRectScaleFactor {
     NoScale,
     UI,
@@ -679,26 +734,29 @@ pub enum CompositeRectScaleFactor {
 
 #[derive(Debug, Clone)]
 pub struct CompositeRect<Event> {
-    pub has_bitmap: bool,
+    // transform
     pub scale_factor: CompositeRectScaleFactor,
-    pub corner_radius: CornerRadius,
-    pub border: Option<Border<Event>>,
-    pub softedge: f32,
     pub offset: [AnimatableFloat<Event>; 2],
     pub size: [AnimatableFloat<Event>; 2],
     pub relative_offset_adjustment: [f32; 2],
     pub relative_size_adjustment: [f32; 2],
-    pub clip_child: Option<ClipConfig>,
-    pub slice_borders: [f32; 4],
-    pub composite_mode: CompositeMode<Event>,
-    pub custom_render_token: Option<CustomRenderToken>,
-    pub opacity: AnimatableFloat<Event>,
     pub pivot: [f32; 2],
     pub scale_x: AnimatableFloat<Event>,
     pub scale_y: AnimatableFloat<Event>,
-    pub text: Option<CompositeRectText<Event>>,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
+    // visual
+    pub has_bitmap: bool,
+    pub composite_mode: CompositeMode<Event>,
+    pub custom_render_token: Option<CustomRenderToken>,
+    pub corner_radius: CornerRadius,
+    pub border: Option<Border<Event>>,
+    pub softedge: f32,
+    pub opacity: AnimatableFloat<Event>,
+    // text
+    pub text: Option<CompositeRectText<Event>>,
+    // clip
+    pub clip_child: Option<ClipConfig>,
 }
 impl<Event> Default for CompositeRect<Event> {
     fn default() -> Self {
@@ -713,7 +771,6 @@ impl<Event> Default for CompositeRect<Event> {
             relative_offset_adjustment: [0.0, 0.0],
             relative_size_adjustment: [0.0, 0.0],
             clip_child: None,
-            slice_borders: [0.0, 0.0, 0.0, 0.0],
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
             custom_render_token: None,
             opacity: AnimatableFloat::Value(1.0),
@@ -739,30 +796,13 @@ impl<Event> CompositeRect<Event> {
         self.opacity.process_on_complete(current_sec, &mut on_event);
         self.scale_x.process_on_complete(current_sec, &mut on_event);
         self.scale_y.process_on_complete(current_sec, &mut on_event);
-        match self.composite_mode {
-            CompositeMode::DirectSourceOver(_) => (),
-            CompositeMode::ColorTint(ref mut t, _) => {
-                t.process_on_complete(current_sec, &mut on_event)
-            }
-            CompositeMode::FillColor(ref mut t) => {
-                t.process_on_complete(current_sec, &mut on_event)
-            }
-            CompositeMode::ColorTintBackdropBlur(ref mut t, ref mut stdev, _) => {
-                t.process_on_complete(current_sec, &mut on_event);
-                stdev.process_on_complete(current_sec, &mut on_event);
-            }
-            CompositeMode::FillColorBackdropBlur(ref mut t, ref mut stdev) => {
-                t.process_on_complete(current_sec, &mut on_event);
-                stdev.process_on_complete(current_sec, &mut on_event);
-            }
-            CompositeMode::FillLinearGradient(_) => {}
-            CompositeMode::FillRadialGradient(_) => {}
-            CompositeMode::ColorPickerGradientBox(ref mut t) => {
-                t.process_on_complete(current_sec, &mut on_event);
-            }
-        }
+        self.composite_mode
+            .perform_complete_event(current_sec, &mut on_event);
         if let Some(ref mut b) = self.border {
-            b.color.process_on_complete(current_sec, &mut on_event);
+            b.perform_complete_event(current_sec, &mut on_event);
+        }
+        if let Some(ref mut t) = self.text {
+            t.perform_complete_event(current_sec, &mut on_event);
         }
     }
 }
@@ -1816,14 +1856,21 @@ impl<Event> CompositeTreeRender<Event> {
                 // Custom Renderがある場合はそっちのみ
                 inst_builder.insert_custom_render_commands(t);
             } else if r.has_bitmap {
-                let (texatlas_rect, tex_type, tex_mapping_mode) = match r.composite_mode.texture() {
-                    Some(t) => (&mask_atlas_rects[t.id.rect_index()], t.r#type, t.mapping),
-                    None => (
-                        &AtlasRect::EMPTY,
-                        TextureType::Mask,
-                        TextureMappingMode::Stretch,
-                    ),
-                };
+                let (texatlas_rect, tex_type, tex_mapping_mode, slice_borders) =
+                    match r.composite_mode.texture() {
+                        Some(t) => (
+                            &mask_atlas_rects[t.id.rect_index()],
+                            t.r#type,
+                            t.mapping,
+                            t.slice_borders,
+                        ),
+                        None => (
+                            &AtlasRect::EMPTY,
+                            TextureType::Mask,
+                            TextureMappingMode::Stretch,
+                            [0.0; 4],
+                        ),
+                    };
                 let texatlas_size = match tex_type {
                     TextureType::Mask => mask_atlas.atlas().size(),
                     TextureType::Color => color_atlas.atlas().size(),
@@ -1845,7 +1892,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 (texatlas_rect.top as f32 + 0.5) / texatlas_size.height as f32,
                             ],
                             position_modifier_matrix: matrix.clone().transpose(),
-                            slice_borders: r.slice_borders,
+                            slice_borders,
                             tex_size_pixels: [texatlas_size.width as _, texatlas_size.height as _],
                             composite_mode: r.composite_mode.shader_mode_value(),
                             opacity,
