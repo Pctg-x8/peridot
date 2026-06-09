@@ -1998,6 +1998,7 @@ impl TextLayout {
         .height()
     }
 
+    #[tracing::instrument(skip(text, font, font_set))]
     pub fn measure_cursor_rect(text: &str, font: FontID, font_set: &FontSet) -> Rect<LogicalUnit> {
         // TODO: 最適化はあとで
         let layout = Self::new_single(
@@ -2039,6 +2040,90 @@ impl TextLayout {
             ),
             Size::new_logical(0.0, last_line_height),
         )
+    }
+
+    #[tracing::instrument(skip(text, range, font, font_set))]
+    pub fn measure_line_rects(
+        text: &str,
+        range: core::ops::Range<usize>,
+        font: FontID,
+        font_set: &FontSet,
+    ) -> Vec<Rect<LogicalUnit>> {
+        // TODO: 最適化はあとで
+        let layout = Self::new_single(
+            text,
+            font,
+            font_set,
+            CompositeRectTextHorizontalAlignment::Start,
+            None,
+        );
+
+        // TODO: RTLサポート
+        #[cfg(feature = "harfbuzz")]
+        let mut rects = Vec::new();
+        #[cfg(feature = "harfbuzz")]
+        for l in layout.lines.iter() {
+            let mut line_min_x = f32::MAX;
+            let mut line_max_x = 0.0f32;
+
+            for tr in l.buffers.iter() {
+                let overlapping_range =
+                    tr.byte_range.start.max(range.start)..tr.byte_range.end.min(range.end);
+                if overlapping_range.is_empty() {
+                    // not overlapping
+                    continue;
+                }
+
+                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
+                let glyph_infos = unsafe {
+                    hb::ffi::hb_buffer_get_glyph_infos(tr.buffer, glyph_infos_len.as_mut_ptr())
+                };
+                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                let glyph_positions = unsafe {
+                    hb::ffi::hb_buffer_get_glyph_positions(
+                        tr.buffer,
+                        glyph_positions_len.as_mut_ptr(),
+                    )
+                };
+                let glyph_infos = unsafe {
+                    core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
+                };
+                let glyph_positions = unsafe {
+                    core::slice::from_raw_parts(
+                        glyph_positions,
+                        glyph_positions_len.assume_init() as _,
+                    )
+                };
+                assert_eq!(glyph_infos.len(), glyph_positions.len());
+
+                let mut bytes = tr.byte_range.start;
+                let mut left_cursor = tr.left_offset;
+                for (glyph_position, glyph_info) in glyph_positions.iter().zip(glyph_infos.iter()) {
+                    if range.contains(&bytes) {
+                        line_min_x = line_min_x.min(left_cursor);
+                        line_max_x =
+                            line_max_x.max(left_cursor + glyph_position.x_advance as f32 / 64.0);
+                    }
+
+                    left_cursor += glyph_position.x_advance as f32 / 64.0;
+                    bytes += text[bytes..]
+                        .chars()
+                        .next()
+                        .expect("out of range")
+                        .len_utf8();
+                }
+            }
+
+            if line_min_x < line_max_x {
+                rects.push(Rect::from_lt_size(
+                    Point::new_logical(line_min_x, l.line_top_offset),
+                    Size::new_logical(line_max_x - line_min_x, l.height),
+                ));
+            }
+        }
+
+        #[cfg(feature = "harfbuzz")]
+        rects
     }
 
     #[tracing::instrument(skip(text, font, font_set))]
@@ -2196,6 +2281,11 @@ impl TextLayout {
         font: FontID,
         font_set: &FontSet,
     ) -> usize {
+        if text.is_empty() {
+            // empty content
+            return 0;
+        }
+
         // TODO: 最適化はあとで
         let layout = Self::new_single(
             text,
@@ -2207,13 +2297,53 @@ impl TextLayout {
 
         // TODO: RTLサポート
         #[cfg(feature = "harfbuzz")]
-        for l in layout.lines.iter() {
-            if y < l.line_top_offset || l.line_top_offset + l.height < y {
-                // never across with this line
-                continue;
+        let mut bytes = 0;
+        #[cfg(feature = "harfbuzz")]
+        for (n, l) in layout.lines.iter().enumerate() {
+            if n == 0 {
+                // first line check
+                if layout.lines[n + 1].line_top_offset < y {
+                    // never across with this line
+                    bytes = l
+                        .buffers
+                        .iter()
+                        .map(|x| x.byte_range.end)
+                        .max()
+                        .unwrap_or(bytes)
+                        + 1;
+                    continue;
+                }
+            } else if n == layout.lines.len() - 1 {
+                // last line check
+                if y < l.line_top_offset {
+                    // never across with this line
+                    bytes = l
+                        .buffers
+                        .iter()
+                        .map(|x| x.byte_range.end)
+                        .max()
+                        .unwrap_or(bytes)
+                        + 1;
+                    continue;
+                }
+            } else {
+                let next_line_top = layout
+                    .lines
+                    .get(n + 1)
+                    .map_or(l.line_top_offset + l.height, |l| l.line_top_offset);
+                if y < l.line_top_offset || next_line_top < y {
+                    // never across with this line
+                    bytes = l
+                        .buffers
+                        .iter()
+                        .map(|x| x.byte_range.end)
+                        .max()
+                        .unwrap_or(bytes)
+                        + 1;
+                    continue;
+                }
             }
 
-            let mut bytes = 0;
             for tr in l.buffers.iter() {
                 let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
                 let glyph_positions = unsafe {
@@ -2266,62 +2396,8 @@ impl TextLayout {
             return bytes;
         }
 
-        // try for last line
         #[cfg(feature = "harfbuzz")]
-        let Some(last_line) = layout.lines.last() else {
-            // no lines
-            return 0;
-        };
-        #[cfg(feature = "harfbuzz")]
-        let mut bytes = 0;
-        #[cfg(feature = "harfbuzz")]
-        for tr in last_line.buffers.iter() {
-            let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-            let glyph_positions = unsafe {
-                hb::ffi::hb_buffer_get_glyph_positions(tr.buffer, glyph_positions_len.as_mut_ptr())
-            };
-            let mut left_cursor = tr.left_offset;
-            bytes = tr.byte_range.start;
-            for n in 0..unsafe { glyph_positions_len.assume_init() } {
-                let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
-
-                let left = left_cursor;
-                let right = left + glyph_position.x_advance as f32 / 64.0;
-                let mid = (left + right) / 2.0;
-
-                if x < left {
-                    // overshoot
-                    return bytes;
-                }
-
-                if x <= mid {
-                    // left
-                    return bytes;
-                }
-
-                if x <= right {
-                    // right
-                    let mut next_boundary_bytes = bytes.saturating_add(1);
-                    while next_boundary_bytes < text.len()
-                        && !text.is_char_boundary(next_boundary_bytes)
-                    {
-                        next_boundary_bytes += 1;
-                    }
-
-                    return next_boundary_bytes;
-                }
-
-                left_cursor += glyph_position.x_advance as f32 / 64.0;
-                bytes += text[bytes..]
-                    .chars()
-                    .next()
-                    .expect("out of range")
-                    .len_utf8();
-            }
-        }
-
-        // beyond
-        return bytes;
+        unreachable!();
 
         #[cfg(windows)]
         let mut is_trailing_hit = core::mem::MaybeUninit::uninit();

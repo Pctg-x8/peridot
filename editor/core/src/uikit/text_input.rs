@@ -2140,7 +2140,13 @@ impl MultilineTextInputView {
             opacity: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
+        let ct_selection_base = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            ..Default::default()
+        });
 
+        ctx.composite_tree
+            .add_child(ct_text_clip, ct_selection_base);
         ctx.composite_tree.add_child(ct_text_clip, ct_text);
         ctx.composite_tree.add_child(ct_text_clip, ct_cursor);
         ctx.composite_tree
@@ -2163,6 +2169,7 @@ impl MultilineTextInputView {
             ct_text,
             ct_cursor,
             ct_preedit_underline,
+            ct_selection_base,
             ct_selection_bgs: core::cell::RefCell::new(Vec::new()),
             has_focus: core::cell::Cell::new(false),
             render_scale: core::cell::Cell::new(ctx.ui_scale_factor),
@@ -2428,6 +2435,7 @@ struct MultilineTextInputEventHandler {
     ct_text: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
     ct_preedit_underline: CompositeTreeRef,
+    ct_selection_base: CompositeTreeRef,
     ct_selection_bgs: core::cell::RefCell<Vec<CompositeTreeRef>>,
     has_focus: core::cell::Cell<bool>,
     render_scale: core::cell::Cell<f32>,
@@ -3113,20 +3121,20 @@ impl MultilineTextInputEventHandler {
             return;
         }
 
-        let o = TextLayout::measure_total_advances(
-            &self.content.borrow()[..preedit_range.start],
-            FontID::UIDefault,
-            system_link.font_set(),
-        );
-        let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[preedit_range],
+        let rects = TextLayout::measure_line_rects(
+            &self.content.borrow(),
+            preedit_range,
             FontID::UIDefault,
             system_link.font_set(),
         );
 
+        // TODO: multiline preedit?
         let underline_rect = composite_tree.get_mut(self.ct_preedit_underline);
-        underline_rect.offset[0] = AnimatableFloat::Value(o + self.content_h_offset.get());
-        underline_rect.size[0] = AnimatableFloat::Value(tw);
+        underline_rect.offset[0] =
+            AnimatableFloat::Value(rects[0].left + self.content_h_offset.get());
+        underline_rect.offset[1] =
+            AnimatableFloat::Value(rects[0].bottom() + self.content_v_offset.get());
+        underline_rect.size[0] = AnimatableFloat::Value(rects[0].width);
         underline_rect.opacity = AnimatableFloat::Value(1.0);
 
         composite_tree.mark_dirty(self.ct_preedit_underline);
@@ -3144,22 +3152,41 @@ impl MultilineTextInputEventHandler {
             return;
         }
 
-        /*let o = TextLayout::measure_total_advances(
-            &self.content.borrow()[..selection_range.start],
+        let rects = TextLayout::measure_line_rects(
+            &self.content.borrow(),
+            selection_range.clone(),
             FontID::UIDefault,
             system_link.font_set(),
         );
-        let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[..selection_range.end],
-            FontID::UIDefault,
-            system_link.font_set(),
-        );
+        tracing::debug!(?selection_range, ?rects, "selection rects");
 
-        let ct = composite_tree.get_mut(self.ct_selection_bg);
-        ct.offset[0] = AnimatableFloat::Value(o + self.content_h_offset.get());
-        ct.size[0] = AnimatableFloat::Value(tw - o);
+        // TODO: いったん雑に全部作り直す 最適化はあとで
+        for x in self.ct_selection_bgs.borrow_mut().drain(..) {
+            composite_tree.remove_child(x);
+            composite_tree.free(x);
+        }
 
-        composite_tree.mark_dirty(self.ct_selection_bg);*/
+        self.ct_selection_bgs.borrow_mut().reserve(rects.len());
+        for r in rects {
+            let ct = composite_tree.create(CompositeRect {
+                scale_factor: CompositeRectScaleFactor::UI,
+                offset: [
+                    AnimatableFloat::Value(r.left + self.content_h_offset.get()),
+                    AnimatableFloat::Value(r.top + self.content_v_offset.get()),
+                ],
+                size: [
+                    AnimatableFloat::Value(r.width),
+                    AnimatableFloat::Value(r.height),
+                ],
+                has_bitmap: true,
+                composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                    0.0, 0.0, 0.0, 0.5,
+                ])),
+                ..Default::default()
+            });
+            composite_tree.add_child(self.ct_selection_base, ct);
+            self.ct_selection_bgs.borrow_mut().push(ct);
+        }
     }
 
     pub fn process_pending_updates_with_ht_mutation<E>(
