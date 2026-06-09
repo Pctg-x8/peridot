@@ -1637,7 +1637,7 @@ struct CompositeRectCache {
     text_rects: Vec<GlyphPlacementBox>,
     text_width: f32,
     text_height: f32,
-    text_max_width: f32,
+    text_max_width: Option<f32>,
 }
 impl CompositeRectCache {
     fn new() -> Self {
@@ -1646,7 +1646,7 @@ impl CompositeRectCache {
             text_rects: Vec::new(),
             text_width: 0.0,
             text_height: 0.0,
-            text_max_width: f32::MAX,
+            text_max_width: None,
         }
     }
 }
@@ -1975,12 +1975,12 @@ impl<Event> CompositeTreeRender<Event> {
             }
 
             if let Some(ref mut t) = r.text {
-                let wrap_width = if t.allow_wrapping { w } else { f32::MAX };
+                let wrap_width = t.allow_wrapping.then(|| w / scale_factor);
                 if self.dirty_flags[p.r.0].text_layout_dirty
                     || cache.text_render_scale != scale_factor
                     || cache.text_max_width != wrap_width
                 {
-                    tracing::trace!(layout_max_width = wrap_width, "relayout text");
+                    tracing::trace!(layout_max_width = ?wrap_width, "relayout text");
 
                     let text_layout = TextLayout::new(
                         t.runs.iter().map(|r| TextRun {
@@ -1990,7 +1990,7 @@ impl<Event> CompositeTreeRender<Event> {
                         }),
                         font_set,
                         t.horizontal_alignment,
-                        Some(wrap_width / scale_factor),
+                        wrap_width,
                     );
                     cache.text_rects.clear();
                     cache

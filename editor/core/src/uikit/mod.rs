@@ -201,7 +201,8 @@ pub use self::menu::{
 
 mod text_input;
 pub use self::text_input::{
-    NumericInputView, RawTextInputView, RawTextInputViewCreateFlags, TextInputView,
+    MultilineTextInputView, NumericInputView, RawTextInputView, RawTextInputViewCreateFlags,
+    TextInputView,
 };
 
 mod scroll;

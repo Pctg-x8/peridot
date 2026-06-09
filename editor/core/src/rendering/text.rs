@@ -21,7 +21,7 @@ use crate::{
         composite::CompositeRectTextHorizontalAlignment,
         vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
     },
-    utils::Point,
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 #[cfg(feature = "freetype")]
@@ -415,6 +415,7 @@ thread_local! {
 #[cfg(feature = "harfbuzz")]
 pub struct NativeTextRun {
     buffer: *mut hb::ffi::hb_buffer_t,
+    byte_range: core::ops::Range<usize>,
     left_offset: f32,
     font_id: FontID,
     face_index: usize,
@@ -471,6 +472,8 @@ impl NativeTextRun {
 pub struct HarfbuzzLineLayout {
     buffers: Vec<NativeTextRun>,
     width_with_trailing_whitespace: f32,
+    height: f32,
+    line_top_offset: f32,
     baseline_y_offset: f32,
 }
 #[cfg(feature = "harfbuzz")]
@@ -531,6 +534,8 @@ impl TextLayout {
         let mut lines = vec![HarfbuzzLineLayout {
             buffers: Vec::new(),
             width_with_trailing_whitespace: 0.0,
+            height: 0.0,
+            line_top_offset: 0.0,
             baseline_y_offset: 0.0,
         }];
         #[cfg(feature = "harfbuzz")]
@@ -676,6 +681,7 @@ impl TextLayout {
                                 // needs shaping
                                 let face = font.faces[face_index];
                                 let shaping_face = shaping_set.faces[face_index];
+                                let byte_range = starting_bytes..shaped_bytes;
 
                                 #[cfg(feature = "harfbuzz")]
                                 let buf = unsafe { hb::ffi::hb_buffer_create() };
@@ -683,8 +689,8 @@ impl TextLayout {
                                 unsafe {
                                     hb::ffi::hb_buffer_add_utf8(
                                         buf,
-                                        b.as_ptr().add(starting_bytes).cast(),
-                                        (shaped_bytes - starting_bytes) as _,
+                                        b.as_ptr().add(byte_range.start).cast(),
+                                        byte_range.len() as _,
                                         0,
                                         -1,
                                     );
@@ -752,6 +758,7 @@ impl TextLayout {
                                 #[cfg(feature = "harfbuzz")]
                                 section_buffers.push(NativeTextRun {
                                     buffer: buf,
+                                    byte_range,
                                     left_offset: line_left_offset + section_left_offset,
                                     font_id: x.font,
                                     face_index,
@@ -783,6 +790,12 @@ impl TextLayout {
                             }
                         }
 
+                        if b.is_empty() {
+                            // no chars emitted
+                            section_line_height =
+                                unsafe { (*(*font.faces[0]).size).metrics.height as f32 / 64.0 };
+                        }
+
                         tracing::debug!(
                             line_right = line_left_offset + section_visual_right,
                             max_width,
@@ -792,15 +805,18 @@ impl TextLayout {
                             // overflow: should line feed
                             lines.last_mut().expect("empty lines").baseline_y_offset +=
                                 line_y_offset;
+                            lines.last_mut().expect("empty_lines").height = final_line_height;
                             lines
                                 .last_mut()
                                 .expect("empty lines")
                                 .width_with_trailing_whitespace = line_left_offset;
+
                             line_y_offset += core::mem::replace(&mut line_height, 0.0);
-                            final_line_height = 0.0;
                             lines.push(HarfbuzzLineLayout {
                                 buffers: Vec::new(),
                                 width_with_trailing_whitespace: 0.0,
+                                height: 0.0,
+                                line_top_offset: line_y_offset,
                                 baseline_y_offset: 0.0,
                             });
 
@@ -808,6 +824,7 @@ impl TextLayout {
                             for x in section_buffers.iter_mut() {
                                 x.left_offset -= line_left_offset;
                             }
+                            final_line_height = 0.0;
                             line_left_offset = 0.0;
                         }
 
@@ -826,18 +843,24 @@ impl TextLayout {
                     if n < line_count - 1 {
                         // newline
                         lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
+                        lines.last_mut().expect("empty lines").height = final_line_height;
                         lines
                             .last_mut()
                             .expect("empty lines")
                             .width_with_trailing_whitespace = line_left_offset;
+
                         line_y_offset += line_height;
-                        final_line_height = 0.0;
-                        line_left_offset = 0.0;
                         lines.push(HarfbuzzLineLayout {
                             buffers: Vec::new(),
                             width_with_trailing_whitespace: 0.0,
+                            height: 0.0,
+                            line_top_offset: line_y_offset,
                             baseline_y_offset: 0.0,
                         });
+
+                        line_height = 0.0;
+                        final_line_height = 0.0;
+                        line_left_offset = 0.0;
                     }
 
                     left_offset = line_left_offset;
@@ -851,6 +874,7 @@ impl TextLayout {
                     .last_mut()
                     .expect("empty lines")
                     .width_with_trailing_whitespace = left_offset;
+                lines.last_mut().expect("empty lines").height = final_line_height;
             }
         } else {
             // no max width(no autowrapping): optimal path
@@ -864,6 +888,7 @@ impl TextLayout {
 
                 let mut face_index = 0;
                 let mut shaped_bytes = 0usize;
+                let mut any_shaped_on_line = false;
                 while shaped_bytes < x.content.len() {
                     let starting_bytes = shaped_bytes;
                     let mut newline_break = false;
@@ -884,8 +909,10 @@ impl TextLayout {
 
                     if starting_bytes != shaped_bytes {
                         // needs shaping
+                        any_shaped_on_line = true;
                         let face = font.faces[face_index];
                         let shaping_face = shaping_set.faces[face_index];
+                        let byte_range = starting_bytes..shaped_bytes;
 
                         #[cfg(feature = "harfbuzz")]
                         let buf = unsafe { hb::ffi::hb_buffer_create() };
@@ -893,8 +920,8 @@ impl TextLayout {
                         unsafe {
                             hb::ffi::hb_buffer_add_utf8(
                                 buf,
-                                x.content.as_ptr().add(starting_bytes).cast(),
-                                (shaped_bytes - starting_bytes) as _,
+                                x.content.as_ptr().add(byte_range.start).cast(),
+                                byte_range.len() as _,
                                 0,
                                 -1,
                             );
@@ -930,6 +957,7 @@ impl TextLayout {
                         #[cfg(feature = "harfbuzz")]
                         last_line.buffers.push(NativeTextRun {
                             buffer: buf,
+                            byte_range,
                             left_offset,
                             font_id: x.font,
                             face_index,
@@ -963,20 +991,32 @@ impl TextLayout {
 
                     if newline_break {
                         // broke actual run by newline
-                        lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
-                        lines
-                            .last_mut()
-                            .expect("empty lines")
-                            .width_with_trailing_whitespace = left_offset;
+                        let last_line = lines.last_mut().expect("empty lines");
+                        if !any_shaped_on_line {
+                            // no chars processed on the line
+                            let face_metrics = unsafe { &(*(*font.faces[0]).size).metrics };
+
+                            last_line.baseline_y_offset = face_metrics.ascender as f32 / 64.0;
+                            line_height = face_metrics.height as f32 / 64.0;
+                        }
+
+                        last_line.baseline_y_offset += line_y_offset;
+                        last_line.width_with_trailing_whitespace = left_offset;
+                        last_line.height = final_line_height;
+
                         line_y_offset += line_height;
-                        final_line_height = 0.0;
-                        left_offset = 0.0;
                         lines.push(HarfbuzzLineLayout {
                             buffers: Vec::new(),
                             width_with_trailing_whitespace: 0.0,
+                            height: 0.0,
+                            line_top_offset: line_y_offset,
                             baseline_y_offset: 0.0,
                         });
 
+                        final_line_height = 0.0;
+                        line_height = 0.0;
+                        left_offset = 0.0;
+                        any_shaped_on_line = false;
                         shaped_bytes += 1;
                     }
                 }
@@ -984,11 +1024,11 @@ impl TextLayout {
 
             #[cfg(feature = "harfbuzz")]
             {
-                lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
-                lines
-                    .last_mut()
-                    .expect("empty lines")
-                    .width_with_trailing_whitespace = left_offset;
+                let last_line = lines.last_mut().expect("empty lines");
+
+                last_line.baseline_y_offset += line_y_offset;
+                last_line.width_with_trailing_whitespace = left_offset;
+                last_line.height = final_line_height;
             }
         }
 
@@ -1267,7 +1307,6 @@ impl TextLayout {
                 };
                 assert_eq!(glyph_infos.len(), glyph_positions.len());
 
-                let baseline_y = l.baseline_y_offset;
                 let mut left_cursor = x.left_offset;
                 for (glyph_info, glyph_position) in
                     glyph_infos.into_iter().zip(glyph_positions.into_iter())
@@ -1290,7 +1329,8 @@ impl TextLayout {
                             + (glyph_position.x_offset as f32 + metrics.horiBearingX as f32)
                                 / 64.0)
                             * render_scale,
-                        top: (baseline_y - metrics.horiBearingY as f32 / 64.0) * render_scale,
+                        top: (l.baseline_y_offset - metrics.horiBearingY as f32 / 64.0)
+                            * render_scale,
                         tex_left: r.left,
                         tex_top: r.top,
                         width: r.width(),
@@ -1942,6 +1982,7 @@ impl TextLayout {
         return unsafe { metrics.assume_init_ref() }.height;
     }
 
+    #[tracing::instrument(skip(text, font, font_set))]
     pub fn measure_height(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         Self::new(
@@ -1957,6 +1998,50 @@ impl TextLayout {
         .height()
     }
 
+    pub fn measure_cursor_rect(text: &str, font: FontID, font_set: &FontSet) -> Rect<LogicalUnit> {
+        // TODO: 最適化はあとで
+        let layout = Self::new_single(
+            text,
+            font,
+            font_set,
+            CompositeRectTextHorizontalAlignment::Start,
+            None,
+        );
+        let Some(last_line) = layout.lines.last() else {
+            #[cfg(feature = "freetype")]
+            let face_line_height = unsafe {
+                let metrics = &(*(*font_set.select(font).faces[0]).size).metrics;
+
+                (metrics.ascender + metrics.descender) as f32 / 64.0
+            };
+
+            return Rect::from_lt_size(
+                Point::new_logical(0.0, 0.0),
+                Size::new_logical(0.0, face_line_height),
+            );
+        };
+
+        let last_line_height = if last_line.height == 0.0 {
+            #[cfg(feature = "freetype")]
+            unsafe {
+                let metrics = &(*(*font_set.select(font).faces[0]).size).metrics;
+
+                (metrics.ascender + metrics.descender) as f32 / 64.0
+            }
+        } else {
+            last_line.height
+        };
+
+        Rect::from_lt_size(
+            Point::new_logical(
+                last_line.width_with_trailing_whitespace,
+                last_line.line_top_offset,
+            ),
+            Size::new_logical(0.0, last_line_height),
+        )
+    }
+
+    #[tracing::instrument(skip(text, font, font_set))]
     pub fn measure_visual_width(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         return Self::new(
@@ -2019,6 +2104,7 @@ impl TextLayout {
         return width;
     }
 
+    #[tracing::instrument(skip(text, font, font_set))]
     pub fn measure_total_advances(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
@@ -2102,36 +2188,100 @@ impl TextLayout {
         return unsafe { metrics.assume_init_ref() }.widthIncludingTrailingWhitespace;
     }
 
-    pub fn find_nearest_bytes(x: f32, text: &str, font: FontID, font_set: &FontSet) -> usize {
+    #[tracing::instrument(skip(x, y, text, font, font_set))]
+    pub fn find_nearest_bytes(
+        x: f32,
+        y: f32,
+        text: &str,
+        font: FontID,
+        font_set: &FontSet,
+    ) -> usize {
         // TODO: 最適化はあとで
-        let layout = Self::new(
-            core::iter::once(TextRun {
-                content: text,
-                font,
-                spacing_inline_start: 0.0,
-            }),
+        let layout = Self::new_single(
+            text,
+            font,
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
             None,
         );
 
-        // TODO: LTR前提+複数行対応
+        // TODO: RTLサポート
         #[cfg(feature = "harfbuzz")]
-        let mut left_cursor;
+        for l in layout.lines.iter() {
+            if y < l.line_top_offset || l.line_top_offset + l.height < y {
+                // never across with this line
+                continue;
+            }
+
+            let mut bytes = 0;
+            for tr in l.buffers.iter() {
+                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
+                let glyph_positions = unsafe {
+                    hb::ffi::hb_buffer_get_glyph_positions(
+                        tr.buffer,
+                        glyph_positions_len.as_mut_ptr(),
+                    )
+                };
+                let mut left_cursor = tr.left_offset;
+                bytes = tr.byte_range.start;
+                for n in 0..unsafe { glyph_positions_len.assume_init() } {
+                    let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
+
+                    let left = left_cursor;
+                    let right = left + glyph_position.x_advance as f32 / 64.0;
+                    let mid = (left + right) / 2.0;
+
+                    if x < left {
+                        // overshoot
+                        return bytes;
+                    }
+
+                    if x <= mid {
+                        // left
+                        return bytes;
+                    }
+
+                    if x <= right {
+                        // right
+                        let mut next_boundary_bytes = bytes.saturating_add(1);
+                        while next_boundary_bytes < text.len()
+                            && !text.is_char_boundary(next_boundary_bytes)
+                        {
+                            next_boundary_bytes += 1;
+                        }
+
+                        return next_boundary_bytes;
+                    }
+
+                    left_cursor += glyph_position.x_advance as f32 / 64.0;
+                    bytes += text[bytes..]
+                        .chars()
+                        .next()
+                        .expect("out of range")
+                        .len_utf8();
+                }
+            }
+
+            // beyond
+            return bytes;
+        }
+
+        // try for last line
         #[cfg(feature = "harfbuzz")]
-        let mut bytes = 0;
-        #[cfg(feature = "harfbuzz")]
-        let Some(l) = layout.lines.first() else {
-            // no lines(empty?)
+        let Some(last_line) = layout.lines.last() else {
+            // no lines
             return 0;
         };
         #[cfg(feature = "harfbuzz")]
-        for tr in l.buffers.iter() {
+        let mut bytes = 0;
+        #[cfg(feature = "harfbuzz")]
+        for tr in last_line.buffers.iter() {
             let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
             let glyph_positions = unsafe {
                 hb::ffi::hb_buffer_get_glyph_positions(tr.buffer, glyph_positions_len.as_mut_ptr())
             };
-            left_cursor = tr.left_offset;
+            let mut left_cursor = tr.left_offset;
+            bytes = tr.byte_range.start;
             for n in 0..unsafe { glyph_positions_len.assume_init() } {
                 let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
 
@@ -2170,7 +2320,6 @@ impl TextLayout {
             }
         }
 
-        #[cfg(feature = "harfbuzz")]
         // beyond
         return bytes;
 

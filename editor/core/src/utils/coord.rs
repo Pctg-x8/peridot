@@ -241,13 +241,26 @@ impl Size<InteriorMutableLogicalUnit> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Rect<U: Unit> {
     pub left: U::SignedValueType,
     pub top: U::SignedValueType,
     pub width: U::UnsignedValueType,
     pub height: U::UnsignedValueType,
     _marker: PhantomData<U>,
+}
+impl<U: Unit<UnsignedValueType: core::fmt::Debug, SignedValueType: core::fmt::Debug>>
+    core::fmt::Debug for Rect<U>
+{
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(&format!("Rect<{}>", U::DBG_NAME))
+            .field("left", &self.left)
+            .field("top", &self.top)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
 }
 impl<U: Unit> Rect<U> {
     #[inline(always)]

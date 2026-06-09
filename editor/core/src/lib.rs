@@ -3086,6 +3086,19 @@ async fn run<'sys>(
     );
     editable_color_button.mount(&mut view_init_ctx, &main_window);
 
+    let ml_text_kf_token = view_init_ctx.keyboard_focus_registry.acquire_token();
+    let ml_text_editor_view = uikit::MultilineTextInputView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(8.0, 320.0),
+            Size::new_logical(160.0, 100.0),
+        ),
+        "".into(),
+        ml_text_kf_token,
+        uikit::RawTextInputViewCreateFlags::NON_DELEGATED_HT,
+    );
+    ml_text_editor_view.mount(&mut view_init_ctx, &main_window);
+
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
     for msg in delayed_render_messages.drain(..) {
