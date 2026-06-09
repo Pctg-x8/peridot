@@ -2302,7 +2302,9 @@ impl TextLayout {
         for (n, l) in layout.lines.iter().enumerate() {
             if n == 0 {
                 // first line check
-                if layout.lines[n + 1].line_top_offset < y {
+                if let Some(next_line) = layout.lines.get(n + 1)
+                    && next_line.line_top_offset < y
+                {
                     // never across with this line
                     bytes = l
                         .buffers
