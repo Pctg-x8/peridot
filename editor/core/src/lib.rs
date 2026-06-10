@@ -2581,15 +2581,245 @@ impl PaneView for TestPane2View {
     }
 }
 
+pub enum Dock {
+    Fill(PaneGroupView),
+    ToLeft {
+        left: Box<Dock>,
+        right: Box<Dock>,
+        splitter: DockedPaneSplitterView,
+        width: f32,
+    },
+    ToRight {
+        left: Box<Dock>,
+        right: Box<Dock>,
+        splitter: DockedPaneSplitterView,
+        width: f32,
+    },
+    ToTop {
+        top: Box<Dock>,
+        bottom: Box<Dock>,
+        splitter: DockedPaneSplitterView,
+        height: f32,
+    },
+    ToBottom {
+        top: Box<Dock>,
+        bottom: Box<Dock>,
+        splitter: DockedPaneSplitterView,
+        height: f32,
+    },
+}
+
+pub struct DockingManager {
+    max_rect: Rect<LogicalUnit>,
+    dock: Dock,
+}
+impl DockingManager {
+    pub fn new<E>(
+        max_rect: Rect<LogicalUnit>,
+        dock: Dock,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) -> Self {
+        Self::relayout_dock(&dock, max_rect.clone(), composite_tree, ht_manager);
+
+        Self { max_rect, dock }
+    }
+
+    fn relayout_dock<E>(
+        dock: &Dock,
+        available_rect: Rect<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        match dock {
+            Dock::Fill(v) => v.set_rect(available_rect, composite_tree, ht_manager),
+            &Dock::ToLeft {
+                ref left,
+                ref right,
+                ref splitter,
+                width,
+            } => {
+                let l_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, available_rect.top),
+                    Size::new_logical(width, available_rect.height),
+                );
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(l_rect.right(), available_rect.top),
+                    Size::new_logical(DockedPaneSplitterView::THICKNESS, available_rect.height),
+                );
+                let r_rect = Rect::from_lt_size(
+                    Point::new_logical(s_rect.right(), available_rect.top),
+                    Size::new_logical(
+                        available_rect.width - s_rect.width - l_rect.width,
+                        available_rect.height,
+                    ),
+                );
+
+                Self::relayout_dock(left, l_rect, composite_tree, ht_manager);
+                splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(right, r_rect, composite_tree, ht_manager);
+            }
+            &Dock::ToRight {
+                ref left,
+                ref right,
+                ref splitter,
+                width,
+            } => {
+                let l_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, available_rect.top),
+                    Size::new_logical(
+                        available_rect.width - width - DockedPaneSplitterView::THICKNESS,
+                        available_rect.height,
+                    ),
+                );
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(l_rect.right(), available_rect.top),
+                    Size::new_logical(DockedPaneSplitterView::THICKNESS, available_rect.height),
+                );
+                let r_rect = Rect::from_lt_size(
+                    Point::new_logical(s_rect.right(), available_rect.top),
+                    Size::new_logical(width, available_rect.height),
+                );
+
+                Self::relayout_dock(left, l_rect, composite_tree, ht_manager);
+                splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(right, r_rect, composite_tree, ht_manager);
+            }
+            &Dock::ToTop {
+                ref top,
+                ref bottom,
+                ref splitter,
+                height,
+            } => {
+                let t_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, available_rect.top),
+                    Size::new_logical(available_rect.width, height),
+                );
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, t_rect.bottom()),
+                    Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
+                );
+                let b_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, s_rect.bottom()),
+                    Size::new_logical(
+                        available_rect.width,
+                        available_rect.height - s_rect.height - t_rect.height,
+                    ),
+                );
+
+                Self::relayout_dock(top, t_rect, composite_tree, ht_manager);
+                splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(bottom, b_rect, composite_tree, ht_manager);
+            }
+            &Dock::ToBottom {
+                ref top,
+                ref bottom,
+                ref splitter,
+                height,
+            } => {
+                let t_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, available_rect.top),
+                    Size::new_logical(
+                        available_rect.width,
+                        available_rect.height - height - DockedPaneSplitterView::THICKNESS,
+                    ),
+                );
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, t_rect.bottom()),
+                    Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
+                );
+                let b_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, s_rect.bottom()),
+                    Size::new_logical(available_rect.width, height),
+                );
+
+                Self::relayout_dock(top, t_rect, composite_tree, ht_manager);
+                splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(bottom, b_rect, composite_tree, ht_manager);
+            }
+        }
+    }
+}
+
+enum DockedPaneSplitDirection {
+    Horizontal,
+    Vertical,
+}
+
+pub struct DockedPaneSplitterView {
+    eh: Rc<DockedPaneSplitterEventHandler>,
+}
+impl DockedPaneSplitterView {
+    const THICKNESS: f32 = 4.0;
+
+    fn new(ctx: &mut ViewInitContext, dir: DockedPaneSplitDirection) -> Self {
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                1.0, 1.0, 1.0, 0.125,
+            ])),
+            opacity: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            cursor_shape: match dir {
+                DockedPaneSplitDirection::Horizontal => CursorShape::ResizeVertical,
+                DockedPaneSplitDirection::Vertical => CursorShape::ResizeHorizontal,
+            },
+            ..Default::default()
+        });
+
+        let eh = Rc::new(DockedPaneSplitterEventHandler {
+            dir,
+            ct_root,
+            ht_root,
+        });
+        ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
+
+        Self { eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    }
+
+    fn resize<E>(
+        &self,
+        rect: Rect<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.get_mut(self.eh.ct_root).offset = [
+            AnimatableFloat::Value(rect.left),
+            AnimatableFloat::Value(rect.top),
+        ];
+        composite_tree.get_mut(self.eh.ct_root).size = [
+            AnimatableFloat::Value(rect.width),
+            AnimatableFloat::Value(rect.height),
+        ];
+        composite_tree.mark_dirty(self.eh.ct_root);
+        ht_manager.get_data_mut(self.eh.ht_root).left = rect.left;
+        ht_manager.get_data_mut(self.eh.ht_root).top = rect.top;
+        ht_manager.get_data_mut(self.eh.ht_root).width = rect.width;
+        ht_manager.get_data_mut(self.eh.ht_root).height = rect.height;
+    }
+}
+
+struct DockedPaneSplitterEventHandler {
+    dir: DockedPaneSplitDirection,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {}
+
 pub struct PaneGroupView {
     controller: Rc<PaneGroupViewController>,
 }
 impl PaneGroupView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        rect: Rect<LogicalUnit>,
-        contents: Vec<Box<dyn PaneView>>,
-    ) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, contents: Vec<Box<dyn PaneView>>) -> Self {
         let active_gradient = ctx.composite_tree.create_gradient(Gradient::Linear {
             start_color: [0.0, 0.1, 0.5, 0.0],
             end_color: [0.0, 0.1, 0.5, 1.0],
@@ -2599,23 +2829,11 @@ impl PaneGroupView {
 
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(rect.left),
-                AnimatableFloat::Value(rect.top),
-            ],
-            size: [
-                AnimatableFloat::Value(rect.width),
-                AnimatableFloat::Value(rect.height),
-            ],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.5])),
             ..Default::default()
         });
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
             ..Default::default()
         });
 
@@ -2657,7 +2875,7 @@ impl PaneGroupView {
                     (c, tv)
                 })
                 .collect(),
-            current_active_index: Cell::new(1), // specify non zero to trigger update
+            current_active_index: Cell::new(0),
             pending_active_changes: Cell::new(None),
         });
         ctx.view_registry
@@ -2674,7 +2892,7 @@ impl PaneGroupView {
             left_offset += t.size.width;
         }
 
-        controller.select_tab(0, ctx.system_link.event_dispatcher());
+        controller.activate(0, ctx);
 
         Self { controller }
     }
@@ -2684,6 +2902,27 @@ impl PaneGroupView {
             .add_child(target.ct_root(), self.controller.ct_root);
         ctx.ht_manager
             .add_child(target.ht_root(), self.controller.ht_root);
+    }
+
+    pub fn set_rect<E>(
+        &self,
+        rect: Rect<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.get_mut(self.controller.ct_root).offset = [
+            AnimatableFloat::Value(rect.left),
+            AnimatableFloat::Value(rect.top),
+        ];
+        composite_tree.get_mut(self.controller.ct_root).size = [
+            AnimatableFloat::Value(rect.width),
+            AnimatableFloat::Value(rect.height),
+        ];
+        composite_tree.mark_dirty(self.controller.ct_root);
+        ht_manager.get_data_mut(self.controller.ht_root).left = rect.left;
+        ht_manager.get_data_mut(self.controller.ht_root).top = rect.top;
+        ht_manager.get_data_mut(self.controller.ht_root).width = rect.width;
+        ht_manager.get_data_mut(self.controller.ht_root).height = rect.height;
     }
 }
 
@@ -2703,24 +2942,13 @@ impl ViewEventHandler for PaneGroupViewController {
             let old_active = self.current_active_index.replace(index);
             if old_active != index {
                 self.contents[old_active].0.unmount(context);
-                self.contents[index].0.mount(
-                    context,
-                    &RawMountTarget {
-                        ct_root: self.ct_content_root,
-                        ht_root: self.ht_content_root,
-                    },
-                );
-
                 self.contents[old_active].1.eh.set_active(
                     false,
                     context.mount_context.composite_tree,
                     context.mount_context.current_sec,
                 );
-                self.contents[index].1.eh.set_active(
-                    true,
-                    context.mount_context.composite_tree,
-                    context.mount_context.current_sec,
-                );
+
+                self.activate(index, context);
             }
         }
     }
@@ -2729,6 +2957,20 @@ impl PaneGroupViewController {
     fn select_tab(&self, index: usize, e: &LogicFiberEventDispatcher) {
         self.pending_active_changes.set(Some(index));
         e.dispatch(Event::UpdateView { id: self.view_id });
+    }
+
+    fn activate(&self, index: usize, context: &mut MountContext) {
+        self.contents[index].0.mount(
+            context,
+            &RawMountTarget {
+                ct_root: self.ct_content_root,
+                ht_root: self.ht_content_root,
+            },
+        );
+        self.contents[index]
+            .1
+            .eh
+            .set_active(true, context.composite_tree, context.current_sec);
     }
 }
 
@@ -3579,15 +3821,32 @@ async fn run<'sys>(
         Box::new(TestPane1View::new(&mut view_init_ctx)),
         Box::new(TestPane2View::new(&mut view_init_ctx)),
     ];
-    let pane_group_view = PaneGroupView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(0.0, 460.0),
-            Size::new_logical(128.0, 128.0),
-        ),
-        pane_group_view_contents,
-    );
+    let pane_group_view = PaneGroupView::new(&mut view_init_ctx, pane_group_view_contents);
     pane_group_view.mount(&mut view_init_ctx, &main_window);
+
+    let pane_group_view_contents: Vec<Box<dyn PaneView>> =
+        vec![Box::new(TestPane1View::new(&mut view_init_ctx))];
+    let pane_group_view2 = PaneGroupView::new(&mut view_init_ctx, pane_group_view_contents);
+    pane_group_view2.mount(&mut view_init_ctx, &main_window);
+
+    let splitter =
+        DockedPaneSplitterView::new(&mut view_init_ctx, DockedPaneSplitDirection::Vertical);
+    splitter.mount(&mut view_init_ctx, &main_window);
+
+    let mut docking_manager = DockingManager::new(
+        Rect::from_lt_size(
+            Point::new_logical(8.0, 460.0),
+            Size::new_logical(320.0, 256.0),
+        ),
+        Dock::ToRight {
+            left: Box::new(Dock::Fill(pane_group_view)),
+            right: Box::new(Dock::Fill(pane_group_view2)),
+            splitter,
+            width: 96.0,
+        },
+        view_init_ctx.mount_context.composite_tree,
+        view_init_ctx.mount_context.ht_manager,
+    );
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
