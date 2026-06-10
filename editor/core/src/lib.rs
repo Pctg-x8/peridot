@@ -3040,6 +3040,8 @@ impl PaneGroupTabView {
             active: Cell::new(false),
             group_controller,
             index,
+            preview_drag_offset_x: Cell::new(0.0),
+            preview_drag_offset_y: Cell::new(0.0),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
@@ -3072,6 +3074,8 @@ struct PaneGroupTabEventHandler {
     active: Cell<bool>,
     group_controller: std::rc::Weak<PaneGroupViewController>,
     index: usize,
+    preview_drag_offset_x: Cell<f32>,
+    preview_drag_offset_y: Cell<f32>,
 }
 impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
     fn on_pointer_enter(
@@ -3137,9 +3141,15 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             return input::EventContinueControl::empty();
         }
 
-        context
-            .drag_preview_popover
-            .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
+        if let Some(gc) = self.group_controller.upgrade() {
+            let (x, y, w, h, _) = context.ht_manager.compute_global_rect_autoroot(gc.ht_root);
+            self.preview_drag_offset_x.set(x - args.client_pos.x);
+            self.preview_drag_offset_y.set(y - args.client_pos.y);
+
+            context
+                .drag_preview_popover
+                .show(&Point::new_logical(x, y), &Size::new_logical(w, h));
+        }
 
         input::EventContinueControl::CAPTURE_ELEMENT | input::EventContinueControl::STOP_PROPAGATION
     }
@@ -3150,7 +3160,13 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
-        context.drag_preview_popover.r#move(&args.client_pos);
+        let ox = self.preview_drag_offset_x.get();
+        let oy = self.preview_drag_offset_y.get();
+
+        context.drag_preview_popover.r#move(&Point::new_logical(
+            args.client_pos.x + ox,
+            args.client_pos.y + oy,
+        ));
 
         input::EventContinueControl::STOP_PROPAGATION
     }
