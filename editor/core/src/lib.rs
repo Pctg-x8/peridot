@@ -2492,6 +2492,482 @@ impl FlyoutSurfaceViewConstructor for EditableColorButtonPickerFlyoutViewConstru
     }
 }
 
+pub trait PaneView {
+    fn name(&self) -> String;
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget);
+    fn unmount(&self, ctx: &mut MountContext);
+}
+
+pub struct TestPane1View {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl TestPane1View {
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "test content1".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            ..Default::default()
+        });
+
+        Self { ct_root, ht_root }
+    }
+}
+impl PaneView for TestPane1View {
+    fn name(&self) -> String {
+        "test".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
+    }
+
+    fn unmount(&self, ctx: &mut MountContext) {
+        ctx.composite_tree.remove_child(self.ct_root);
+        ctx.ht_manager.remove_child(self.ht_root);
+    }
+}
+
+pub struct TestPane2View {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl TestPane2View {
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "test content2".into(),
+                    color: AnimatableColor::Value([1.0, 0.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            ..Default::default()
+        });
+
+        Self { ct_root, ht_root }
+    }
+}
+impl PaneView for TestPane2View {
+    fn name(&self) -> String {
+        "test2".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
+    }
+
+    fn unmount(&self, ctx: &mut MountContext) {
+        ctx.composite_tree.remove_child(self.ct_root);
+        ctx.ht_manager.remove_child(self.ht_root);
+    }
+}
+
+pub struct PaneGroupView {
+    controller: Rc<PaneGroupViewController>,
+}
+impl PaneGroupView {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        rect: Rect<LogicalUnit>,
+        contents: Vec<Box<dyn PaneView>>,
+    ) -> Self {
+        let active_gradient = ctx.composite_tree.create_gradient(Gradient::Linear {
+            start_color: [0.0, 0.1, 0.5, 0.0],
+            end_color: [0.0, 0.1, 0.5, 1.0],
+            start_pos_relative: [0.0, 0.8],
+            end_pos_relative: [0.0, 1.0],
+        });
+
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [
+                AnimatableFloat::Value(rect.left),
+                AnimatableFloat::Value(rect.top),
+            ],
+            size: [
+                AnimatableFloat::Value(rect.width),
+                AnimatableFloat::Value(rect.height),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.5])),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            ..Default::default()
+        });
+
+        let ct_content_root = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            relative_size_adjustment: [1.0, 1.0],
+            offset: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(16.0 + PaneGroupTabView::PADDING_Y * 2.0),
+            ],
+            size: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(-16.0 - PaneGroupTabView::PADDING_Y * 2.0),
+            ],
+            ..Default::default()
+        });
+        let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
+            top: 16.0 + PaneGroupTabView::PADDING_Y * 2.0,
+            height: -16.0 - PaneGroupTabView::PADDING_Y * 2.0,
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
+
+        ctx.composite_tree.add_child(ct_root, ct_content_root);
+        ctx.ht_manager.add_child(ht_root, ht_content_root);
+
+        let controller = Rc::new_cyclic(|wgc| PaneGroupViewController {
+            view_id: ctx.view_registry.alloc(),
+            ct_root,
+            ht_root,
+            ct_content_root,
+            ht_content_root,
+            contents: contents
+                .into_iter()
+                .enumerate()
+                .map(|(n, c)| {
+                    let tv = PaneGroupTabView::new(ctx, c.name(), active_gradient, wgc.clone(), n);
+                    (c, tv)
+                })
+                .collect(),
+            current_active_index: Cell::new(1), // specify non zero to trigger update
+            pending_active_changes: Cell::new(None),
+        });
+        ctx.view_registry
+            .set_event_handler(controller.view_id, &controller);
+
+        let mut left_offset = 0.0;
+        for (_, t) in &controller.contents {
+            t.place(
+                Point::new_logical(left_offset, 0.0),
+                ctx.mount_context.composite_tree,
+                ctx.mount_context.ht_manager,
+            );
+            t.mount(ctx, &RawMountTarget { ct_root, ht_root });
+            left_offset += t.size.width;
+        }
+
+        controller.select_tab(0, ctx.system_link.event_dispatcher());
+
+        Self { controller }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.controller.ct_root);
+        ctx.ht_manager
+            .add_child(target.ht_root(), self.controller.ht_root);
+    }
+}
+
+struct PaneGroupViewController {
+    view_id: ViewIdentifier,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    ct_content_root: CompositeTreeRef,
+    ht_content_root: HitTestTreeRef,
+    contents: Vec<(Box<dyn PaneView>, PaneGroupTabView)>,
+    current_active_index: Cell<usize>,
+    pending_active_changes: Cell<Option<usize>>,
+}
+impl ViewEventHandler for PaneGroupViewController {
+    fn update(&self, context: &mut ViewUpdateContext) {
+        if let Some(index) = self.pending_active_changes.take() {
+            let old_active = self.current_active_index.replace(index);
+            if old_active != index {
+                self.contents[old_active].0.unmount(context);
+                self.contents[index].0.mount(
+                    context,
+                    &RawMountTarget {
+                        ct_root: self.ct_content_root,
+                        ht_root: self.ht_content_root,
+                    },
+                );
+
+                self.contents[old_active].1.eh.set_active(
+                    false,
+                    context.mount_context.composite_tree,
+                    context.mount_context.current_sec,
+                );
+                self.contents[index].1.eh.set_active(
+                    true,
+                    context.mount_context.composite_tree,
+                    context.mount_context.current_sec,
+                );
+            }
+        }
+    }
+}
+impl PaneGroupViewController {
+    fn select_tab(&self, index: usize, e: &LogicFiberEventDispatcher) {
+        self.pending_active_changes.set(Some(index));
+        e.dispatch(Event::UpdateView { id: self.view_id });
+    }
+}
+
+struct PaneGroupTabView {
+    ht_root: HitTestTreeRef,
+    size: Size<LogicalUnit>,
+    eh: Rc<PaneGroupTabEventHandler>,
+}
+impl PaneGroupTabView {
+    const PADDING_X: f32 = 8.0;
+    const PADDING_Y: f32 = 4.0;
+    const ROUNDING: f32 = 8.0;
+
+    fn new(
+        ctx: &mut ViewInitContext,
+        label: String,
+        active_gradient: GradientRef,
+        group_controller: std::rc::Weak<PaneGroupViewController>,
+        index: usize,
+    ) -> Self {
+        let tw =
+            TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
+        let size = Size::new_logical(tw + Self::PADDING_X * 2.0, 16.0 + Self::PADDING_Y * 2.0);
+
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            size: [
+                AnimatableFloat::Value(size.width),
+                AnimatableFloat::Value(size.height),
+            ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            corner_radius: CornerRadius::all(Self::ROUNDING),
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: label,
+                    ..Default::default()
+                }],
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ct_underline = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            relative_size_adjustment: [1.0, 1.0],
+            relative_offset_adjustment: [0.0, 0.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillLinearGradient(active_gradient),
+            corner_radius: CornerRadius::all(Self::ROUNDING),
+            scale_x: AnimatableFloat::Value(0.0),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            width: size.width,
+            height: size.height,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        ctx.composite_tree.add_child(ct_root, ct_underline);
+
+        let eh = Rc::new(PaneGroupTabEventHandler {
+            ct_root,
+            ct_underline,
+            active: Cell::new(false),
+            group_controller,
+            index,
+        });
+        ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+        Self { ht_root, size, eh }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
+    }
+
+    pub fn place<E>(
+        &self,
+        pos: Point<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.get_mut(self.eh.ct_root).offset =
+            [AnimatableFloat::Value(pos.x), AnimatableFloat::Value(pos.y)];
+        composite_tree.mark_dirty(self.eh.ct_root);
+        ht_manager.get_data_mut(self.ht_root).left = pos.x;
+        ht_manager.get_data_mut(self.ht_root).top = pos.y;
+    }
+}
+
+struct PaneGroupTabEventHandler {
+    ct_root: CompositeTreeRef,
+    ct_underline: CompositeTreeRef,
+    active: Cell<bool>,
+    group_controller: std::rc::Weak<PaneGroupViewController>,
+    index: usize,
+}
+impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context.composite_tree.get_mut(self.ct_root).composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.5],
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            });
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context.composite_tree.get_mut(self.ct_root).composite_mode =
+            CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.5],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                start_sec: context.current_sec,
+                end_sec: context.current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            });
+        context.composite_tree.mark_dirty(self.ct_root);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        if let Some(gc) = self.group_controller.upgrade() {
+            gc.select_tab(self.index, context.system_link.event_dispatcher());
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_start(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> input::EventContinueControl {
+        if args.button != PointerButton::Primary {
+            return input::EventContinueControl::empty();
+        }
+
+        context
+            .drag_preview_popover
+            .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
+
+        input::EventContinueControl::CAPTURE_ELEMENT | input::EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> input::EventContinueControl {
+        context.drag_preview_popover.r#move(&args.client_pos);
+
+        input::EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_end(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> input::EventContinueControl {
+        if args.button != PointerButton::Primary {
+            return input::EventContinueControl::empty();
+        }
+
+        context.drag_preview_popover.hide();
+
+        input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
+            | input::EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl PaneGroupTabEventHandler {
+    fn set_active<E>(&self, active: bool, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        if self.active.replace(active) == active {
+            // active not changed
+            return;
+        }
+
+        if active {
+            composite_tree.get_mut(self.ct_underline).scale_x = AnimatableFloat::Animated {
+                from_value: 0.0,
+                to_value: 1.0,
+                start_sec: current_sec,
+                end_sec: current_sec + 0.2,
+                curve: AnimationCurve::EASE_OUT_HARD,
+                event_on_complete: None,
+            };
+            composite_tree.get_mut(self.ct_underline).opacity = AnimatableFloat::Animated {
+                from_value: 0.0,
+                to_value: 1.0,
+                start_sec: current_sec,
+                end_sec: current_sec + 0.1,
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            };
+            composite_tree.mark_dirty(self.ct_underline);
+        } else {
+            composite_tree.get_mut(self.ct_underline).scale_x = AnimatableFloat::Animated {
+                from_value: 1.0,
+                to_value: 0.0,
+                start_sec: current_sec,
+                end_sec: current_sec + 0.2,
+                curve: AnimationCurve::EASE_IN,
+                event_on_complete: None,
+            };
+            composite_tree.mark_dirty(self.ct_underline);
+        }
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -3098,6 +3574,20 @@ async fn run<'sys>(
         uikit::RawTextInputViewCreateFlags::NON_DELEGATED_HT,
     );
     ml_text_editor_view.mount(&mut view_init_ctx, &main_window);
+
+    let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
+        Box::new(TestPane1View::new(&mut view_init_ctx)),
+        Box::new(TestPane2View::new(&mut view_init_ctx)),
+    ];
+    let pane_group_view = PaneGroupView::new(
+        &mut view_init_ctx,
+        Rect::from_lt_size(
+            Point::new_logical(0.0, 460.0),
+            Size::new_logical(128.0, 128.0),
+        ),
+        pane_group_view_contents,
+    );
+    pane_group_view.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -4064,11 +4554,13 @@ async fn run<'sys>(
                 view_registry.call_update(
                     id,
                     &mut ViewUpdateContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &keyboard_focus_registry,
+                        mount_context: MountContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                        },
                         system_link: &system_link,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
                     },
                 );
 

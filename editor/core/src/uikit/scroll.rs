@@ -11,7 +11,8 @@ use crate::{
         },
     },
     rendering::composite::{
-        AnimatableColor, AnimatableFloat, AnimationCurve, ClipConfig, CompositeMode, CompositeRect, CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius
+        AnimatableColor, AnimatableFloat, AnimationCurve, ClipConfig, CompositeMode, CompositeRect,
+        CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
     },
     uikit::{
         MountContext, MountTarget, ViewEventHandler, ViewIdentifier, ViewInitContext,
@@ -743,7 +744,10 @@ impl ViewEventHandler for ScrollContainerEventHandler {
             AnimatableFloat::Value(-offset_y);
         context.ht_manager.get_data_mut(self.ht_content_root).top = -offset_y;
         context.composite_tree.mark_dirty(self.ct_content_root);
-        self.update_thumb_position(context.composite_tree, context.ht_manager);
+        self.update_thumb_position(
+            context.mount_context.composite_tree,
+            context.mount_context.ht_manager,
+        );
     }
 }
 impl ScrollContainerEventHandler {

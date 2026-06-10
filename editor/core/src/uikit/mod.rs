@@ -48,11 +48,22 @@ impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h> {
 }
 
 pub struct ViewUpdateContext<'a, 'h> {
-    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
-    pub ht_manager: &'a mut HitTestTreeManager<'h>,
-    pub keyboard_focus_registry: &'a KeyboardFocusTokenRegistry,
+    pub mount_context: MountContext<'a, 'h>,
     pub system_link: &'a SystemLink<'a>,
-    pub current_sec: f32,
+}
+impl<'a, 'h> core::ops::Deref for ViewUpdateContext<'a, 'h> {
+    type Target = MountContext<'a, 'h>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.mount_context
+    }
+}
+impl<'a, 'h> core::ops::DerefMut for ViewUpdateContext<'a, 'h> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.mount_context
+    }
 }
 
 pub trait MountTarget {

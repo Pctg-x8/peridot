@@ -232,10 +232,10 @@ impl RawTextInputView {
     #[inline(always)]
     pub fn fwd_view_update(&self, context: &mut ViewUpdateContext) {
         self.eh.process_pending_updates_with_ht_mutation(
-            context.composite_tree,
+            context.mount_context.composite_tree,
             context.system_link,
-            context.ht_manager,
-            context.current_sec,
+            context.mount_context.ht_manager,
+            context.mount_context.current_sec,
         );
     }
 
@@ -2267,10 +2267,10 @@ impl MultilineTextInputView {
     #[inline(always)]
     pub fn fwd_view_update(&self, context: &mut ViewUpdateContext) {
         self.eh.process_pending_updates_with_ht_mutation(
-            context.composite_tree,
+            context.mount_context.composite_tree,
             context.system_link,
-            context.ht_manager,
-            context.current_sec,
+            context.mount_context.ht_manager,
+            context.mount_context.current_sec,
         );
     }
 
@@ -2460,10 +2460,10 @@ impl ViewEventHandler for MultilineTextInputEventHandler {
     #[inline(always)]
     fn update(&self, context: &mut ViewUpdateContext) {
         self.process_pending_updates_with_ht_mutation(
-            context.composite_tree,
+            context.mount_context.composite_tree,
             context.system_link,
-            context.ht_manager,
-            context.current_sec,
+            context.mount_context.ht_manager,
+            context.mount_context.current_sec,
         );
     }
 }

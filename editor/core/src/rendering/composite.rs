@@ -298,6 +298,10 @@ impl AnimationCurve {
         p1: (0.0, 0.0),
         p2: (0.5, 1.0),
     };
+    pub const EASE_OUT_HARD: Self = Self::CubicBezier {
+        p1: (0.0, 0.0),
+        p2: (0.0, 1.0),
+    };
     pub const EASE_IN: Self = Self::CubicBezier {
         p1: (0.5, 0.0),
         p2: (1.0, 1.0),
