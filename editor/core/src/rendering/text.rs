@@ -2008,6 +2008,8 @@ impl TextLayout {
             CompositeRectTextHorizontalAlignment::Start,
             None,
         );
+
+        #[cfg(feature = "harfbuzz")]
         let Some(last_line) = layout.lines.last() else {
             #[cfg(feature = "freetype")]
             let face_line_height = unsafe {
@@ -2022,6 +2024,7 @@ impl TextLayout {
             );
         };
 
+        #[cfg(feature = "harfbuzz")]
         let last_line_height = if last_line.height == 0.0 {
             #[cfg(feature = "freetype")]
             unsafe {
@@ -2033,13 +2036,41 @@ impl TextLayout {
             last_line.height
         };
 
-        Rect::from_lt_size(
+        #[cfg(feature = "harfbuzz")]
+        return Rect::from_lt_size(
             Point::new_logical(
                 last_line.width_with_trailing_whitespace,
                 last_line.line_top_offset,
             ),
             Size::new_logical(0.0, last_line_height),
-        )
+        );
+
+        #[cfg(windows)]
+        {
+            let mut x = core::mem::MaybeUninit::uninit();
+            let mut y = core::mem::MaybeUninit::uninit();
+            let mut metrics = core::mem::MaybeUninit::uninit();
+            unsafe {
+                layout
+                    .layout
+                    .HitTestTextPosition(
+                        text.len() as _,
+                        true,
+                        x.as_mut_ptr(),
+                        y.as_mut_ptr(),
+                        metrics.as_mut_ptr(),
+                    )
+                    .expect("layout.HitTestTextPosition");
+
+                Rect::from_lt_size(
+                    Point::new_logical(x.assume_init(), y.assume_init()),
+                    Size::new_logical(
+                        metrics.assume_init_ref().width,
+                        metrics.assume_init_ref().height,
+                    ),
+                )
+            }
+        }
     }
 
     #[tracing::instrument(skip(text, range, font, font_set))]
@@ -2123,7 +2154,58 @@ impl TextLayout {
         }
 
         #[cfg(feature = "harfbuzz")]
-        rects
+        return rects;
+
+        #[cfg(windows)]
+        unsafe {
+            let start_char = text[..range.start].encode_utf16().count();
+            let count_char = text[range.clone()].encode_utf16().count();
+            let mut actual_metrics_count = core::mem::MaybeUninit::uninit();
+            match layout.layout.HitTestTextRange(
+                start_char as _,
+                count_char as _,
+                0.0,
+                0.0,
+                None,
+                actual_metrics_count.as_mut_ptr(),
+            ) {
+                Ok(_) => (),
+                // なんかどうやっても型が合わないので強制する
+                Err(e)
+                    if core::mem::transmute::<_, i32>(e.code())
+                        == windows_result::HRESULT::from_win32(
+                            windows::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER.0,
+                        )
+                        .0 =>
+                {
+                    ()
+                }
+                e => e.expect("layout.HitTestTextRange"),
+            };
+            let mut metrics = Vec::<windows::Win32::Graphics::DirectWrite::DWRITE_HIT_TEST_METRICS>::with_capacity(actual_metrics_count.assume_init() as _);
+            layout
+                .layout
+                .HitTestTextRange(
+                    start_char as _,
+                    count_char as _,
+                    0.0,
+                    0.0,
+                    Some(core::mem::transmute(metrics.spare_capacity_mut())),
+                    actual_metrics_count.as_mut_ptr(),
+                )
+                .expect("layout.HitTestTextRange");
+            let actual_metrics_count = actual_metrics_count.assume_init();
+            metrics.set_len(actual_metrics_count as _);
+            return metrics
+                .into_iter()
+                .map(|m| {
+                    Rect::from_lt_size(
+                        Point::new_logical(m.left, m.top),
+                        Size::new_logical(m.width, m.height),
+                    )
+                })
+                .collect();
+        }
     }
 
     #[tracing::instrument(skip(text, font, font_set))]
@@ -2413,7 +2495,7 @@ impl TextLayout {
                 .layout
                 .HitTestPoint(
                     x,
-                    1.0,
+                    y,
                     is_trailing_hit.as_mut_ptr(),
                     is_inside.as_mut_ptr(),
                     metrics.as_mut_ptr(),

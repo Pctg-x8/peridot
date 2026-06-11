@@ -3615,24 +3615,54 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextI
             Point::new_logical(2.0, 2.0),
             Point::new_logical(2.0, 2.0),
         );
-        let o = TextLayout::measure_total_advances(
-            &content[..start_bytes],
-            FontID::UIDefault,
-            ctx.system_link.font_set(),
-        );
-        let w = TextLayout::measure_total_advances(
-            &content[start_bytes..end_bytes],
+        let rects = TextLayout::measure_line_rects(
+            &content,
+            start_bytes..end_bytes,
             FontID::UIDefault,
             ctx.system_link.font_set(),
         );
 
+        let x_min = rects
+            .iter()
+            .map(|x| x.left + self.content_h_offset.get())
+            .min_by(f32::total_cmp)
+            .unwrap_or(0.0)
+            * self.render_scale.get();
+        let y_min = rects
+            .iter()
+            .map(|x| x.top + self.content_v_offset.get())
+            .min_by(f32::total_cmp)
+            .unwrap_or(0.0)
+            * self.render_scale.get();
+        let x_max = rects
+            .iter()
+            .map(|x| x.right() + self.content_h_offset.get())
+            .max_by(f32::total_cmp)
+            .unwrap_or(0.0)
+            * self.render_scale.get();
+        let y_max = rects
+            .iter()
+            .map(|x| x.bottom() + self.content_v_offset.get())
+            .max_by(f32::total_cmp)
+            .unwrap_or(0.0)
+            * self.render_scale.get();
+
         req.LayoutBounds()?
             .SetTextBounds(windows::Foundation::Rect {
-                X: r.left as f32 + (o + self.content_h_offset.get()) * self.render_scale.get(),
+                X: r.left as f32 + x_min,
+                Y: r.top as f32 + y_min,
+                Width: x_max - x_min,
+                Height: y_max - y_min,
+            })?;
+        req.LayoutBounds()?
+            .SetControlBounds(windows::Foundation::Rect {
+                X: r.left as _,
                 Y: r.top as _,
-                Width: w * self.render_scale.get(),
+                Width: r.width as _,
                 Height: r.height as _,
-            })
+            })?;
+
+        Ok(())
     }
 
     fn text_updating(

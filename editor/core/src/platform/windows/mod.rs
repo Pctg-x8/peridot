@@ -1863,20 +1863,20 @@ impl NativeTextInputContext {
                 CoreTextEditContext,
                 CoreTextCompositionCompletedEventArgs,
             >::new(move |_sender, e| {
-                let e = e.ok().expect("event_args.null");
+                // let e = e.ok().expect("event_args.null");
                 tracing::trace!(
-                    composition_segments = ?e.CompositionSegments(),
-                    composition_segments.len = ?e.CompositionSegments().and_then(|x| x.Size()),
+                    // composition_segments = ?e.CompositionSegments(),
+                    // composition_segments.len = ?e.CompositionSegments().and_then(|x| x.Size()),
                     "edit_context.composition_completed"
                 );
 
-                for segment in e.CompositionSegments().expect("edit_context.composition_copmleted.composition_segments") {
+                /*for segment in e.CompositionSegments().expect("edit_context.composition_copmleted.composition_segments") {
                     tracing::trace!(
                         preconversion_string = ?segment.PreconversionString().map(|x| x.to_string_lossy()),
                         range = ?segment.Range(),
                         "edit_context.composition_completed.segment"
                     );
-                }
+                }*/
 
                 Ok(())
             }))

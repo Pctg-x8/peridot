@@ -72,8 +72,9 @@ features = [
 ]
 
 [target.'cfg(windows)'.dependencies]
-windows-core = "*"
+windows-core = "0.62"
 windows-numerics = "*"
+windows-result = "*"
 
 [dependencies.peridot-tp-wayland]
 path = "../../thirdparty/wayland"
