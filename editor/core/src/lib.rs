@@ -3063,20 +3063,12 @@ impl DockingManager {
                 ref width,
             } => {
                 let width = width.get();
-                let l_rect = Rect::from_lt_size(
-                    Point::new_logical(available_rect.left, available_rect.top),
-                    Size::new_logical(
-                        available_rect.width - width - DockedPaneSplitterView::THICKNESS,
-                        available_rect.height,
-                    ),
-                );
+                let r_rect = available_rect.slice_right(width);
+                let l_rect = available_rect
+                    .slice_left(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
                 let s_rect = Rect::from_lt_size(
                     Point::new_logical(l_rect.right(), available_rect.top),
                     Size::new_logical(DockedPaneSplitterView::THICKNESS, available_rect.height),
-                );
-                let r_rect = Rect::from_lt_size(
-                    Point::new_logical(s_rect.right(), available_rect.top),
-                    Size::new_logical(width, available_rect.height),
                 );
 
                 Self::relayout_dock_lazy(left, store, l_rect, event_dispatcher);
@@ -3090,20 +3082,13 @@ impl DockingManager {
                 ref height,
             } => {
                 let height = height.get();
-                let t_rect = Rect::from_lt_size(
-                    Point::new_logical(available_rect.left, available_rect.top),
-                    Size::new_logical(available_rect.width, height),
+                let t_rect = available_rect.slice_top(height);
+                let b_rect = available_rect.slice_bottom(
+                    available_rect.height - height - DockedPaneSplitterView::THICKNESS,
                 );
                 let s_rect = Rect::from_lt_size(
                     Point::new_logical(available_rect.left, t_rect.bottom()),
                     Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
-                );
-                let b_rect = Rect::from_lt_size(
-                    Point::new_logical(available_rect.left, s_rect.bottom()),
-                    Size::new_logical(
-                        available_rect.width,
-                        available_rect.height - s_rect.height - t_rect.height,
-                    ),
                 );
 
                 Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
@@ -3117,20 +3102,12 @@ impl DockingManager {
                 ref height,
             } => {
                 let height = height.get();
-                let t_rect = Rect::from_lt_size(
-                    Point::new_logical(available_rect.left, available_rect.top),
-                    Size::new_logical(
-                        available_rect.width,
-                        available_rect.height - height - DockedPaneSplitterView::THICKNESS,
-                    ),
-                );
+                let b_rect = available_rect.slice_bottom(height);
+                let t_rect = available_rect
+                    .slice_top(available_rect.height - height - DockedPaneSplitterView::THICKNESS);
                 let s_rect = Rect::from_lt_size(
                     Point::new_logical(available_rect.left, t_rect.bottom()),
                     Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
-                );
-                let b_rect = Rect::from_lt_size(
-                    Point::new_logical(available_rect.left, s_rect.bottom()),
-                    Size::new_logical(available_rect.width, height),
                 );
 
                 Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
