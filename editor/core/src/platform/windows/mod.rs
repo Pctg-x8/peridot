@@ -96,7 +96,7 @@ use crate::{
     },
     uikit::MountTarget,
     utils::{
-        LogicalUnit, PixelsUnit, Point, Size,
+        LogicalUnit, PixelsUnit, Point, Rect, Size,
         platform::windows::{WaitableTimer, current_instance_handle, register_class},
     },
 };
@@ -1410,6 +1410,35 @@ impl DragPreviewPopoverHandle {
             )
             .expect("setwindowpos");
         }
+    }
+
+    pub fn set_rect(&self, rect: &Rect<PointerInputUnit>) {
+        // デスクトップ座標で指定になるので置き換え
+        let scale = unsafe { GetDpiForWindow(self.base_window_handle.get()) } as f32 / 96.0;
+        let pos = rect.left_top().to_pixels_round(scale);
+        let size = rect.size().to_pixels_ceil(scale);
+        let mut p = [POINT { x: pos.x, y: pos.y }];
+        unsafe {
+            MapWindowPoints(Some(self.base_window_handle.get()), None, &mut p);
+        }
+        let [POINT { x, y }] = p;
+
+        // 影のぶんだけずらして設定する
+        unsafe {
+            SetWindowPos(
+                self.w,
+                None,
+                x - 32,
+                y - 32,
+                (size.width + 32 * 2) as _,
+                (size.height + 32 * 2) as _,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .expect("setwindowpos");
+        }
+        self.root_visual
+            .SetSize(Vector2::new(size.width as _, size.height as _))
+            .expect("drag.visual.set_size");
     }
 
     pub fn hide(&self) {

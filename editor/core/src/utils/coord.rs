@@ -304,13 +304,89 @@ impl<U: Unit> Rect<U> {
     }
 
     #[inline(always)]
-    pub const fn size(&self) -> Size<U>
+    pub fn left_top(&self) -> Point<U>
+    where
+        U::SignedValueType: Copy,
+    {
+        Point {
+            x: self.left,
+            y: self.top,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn size(&self) -> Size<U>
     where
         U::UnsignedValueType: Copy,
     {
         Size {
             width: self.width,
             height: self.height,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn slice_left(&self, width: U::UnsignedValueType) -> Self
+    where
+        U::SignedValueType: Copy,
+        U::UnsignedValueType: Copy,
+    {
+        Self {
+            left: self.left,
+            top: self.top,
+            width,
+            height: self.height,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn slice_right(&self, width: U::UnsignedValueType) -> Self
+    where
+        U::SignedValueType: Copy
+            + core::ops::Add<U::UnsignedValueType, Output = U::SignedValueType>
+            + core::ops::Sub<U::UnsignedValueType, Output = U::SignedValueType>,
+        U::UnsignedValueType: Copy,
+    {
+        Self {
+            left: self.right() - width,
+            top: self.top,
+            width,
+            height: self.height,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn slice_top(&self, height: U::UnsignedValueType) -> Self
+    where
+        U::SignedValueType: Copy,
+        U::UnsignedValueType: Copy,
+    {
+        Self {
+            left: self.left,
+            top: self.top,
+            width: self.width,
+            height,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn slice_bottom(&self, height: U::UnsignedValueType) -> Self
+    where
+        U::SignedValueType: Copy
+            + core::ops::Add<U::UnsignedValueType, Output = U::SignedValueType>
+            + core::ops::Sub<U::UnsignedValueType, Output = U::SignedValueType>,
+        U::UnsignedValueType: Copy,
+    {
+        Self {
+            left: self.left,
+            top: self.bottom() - height,
+            width: self.width,
+            height,
             _marker: PhantomData,
         }
     }

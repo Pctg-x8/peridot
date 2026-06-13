@@ -2608,21 +2608,223 @@ pub enum Dock {
         height: f32,
     },
 }
+impl Dock {
+    const PARENT_DOCK_THRESHOLD: f32 = 8.0;
+
+    pub fn compute_recommended_operation(
+        self: &Box<Self>,
+        source_rect: Rect<LogicalUnit>,
+        available_rect: Rect<LogicalUnit>,
+        pos: Point<LogicalUnit>,
+    ) -> (DockingOperation, Rect<LogicalUnit>) {
+        fn try_parent_dock(
+            this: &Box<Dock>,
+            source_rect: &Rect<LogicalUnit>,
+            available_rect: &Rect<LogicalUnit>,
+            pos: &Point<LogicalUnit>,
+        ) -> Option<(DockingOperation, Rect<LogicalUnit>)> {
+            if pos.x <= available_rect.left + Dock::PARENT_DOCK_THRESHOLD {
+                return Some((
+                    DockingOperation::SplitToLeft(this.as_ref() as _),
+                    available_rect.slice_left(source_rect.width.min(available_rect.width * 0.7)),
+                ));
+            }
+            if pos.x >= available_rect.right() - Dock::PARENT_DOCK_THRESHOLD {
+                return Some((
+                    DockingOperation::SplitToRight(this.as_ref() as _),
+                    available_rect.slice_right(source_rect.width.min(available_rect.width * 0.7)),
+                ));
+            }
+            if pos.y <= available_rect.top + Dock::PARENT_DOCK_THRESHOLD {
+                return Some((
+                    DockingOperation::SplitToTop(this.as_ref() as _),
+                    available_rect.slice_top(source_rect.height.min(available_rect.height * 0.7)),
+                ));
+            }
+            if pos.y >= available_rect.bottom() - Dock::PARENT_DOCK_THRESHOLD {
+                return Some((
+                    DockingOperation::SplitToBottom(this.as_ref() as _),
+                    available_rect
+                        .slice_bottom(source_rect.height.min(available_rect.height * 0.7)),
+                ));
+            }
+
+            None
+        }
+
+        if !available_rect.point_in_inclusive(&pos) {
+            // not hit to the rect
+            return (DockingOperation::Diverge, source_rect);
+        }
+
+        match self.as_ref() {
+            Self::Fill(_) => {
+                let dl = pos.x - available_rect.left;
+                let dr = available_rect.right() - pos.x;
+                let dt = pos.y - available_rect.top;
+                let db = available_rect.bottom() - pos.y;
+                if dl.min(dr) < dt.min(db) {
+                    if dl <= available_rect.width * 0.3 {
+                        return (
+                            DockingOperation::SplitToLeft(self.as_ref() as _),
+                            available_rect
+                                .slice_left(source_rect.width.min(available_rect.width * 0.7)),
+                        );
+                    }
+                    if dr <= available_rect.width * 0.3 {
+                        return (
+                            DockingOperation::SplitToRight(self.as_ref() as _),
+                            available_rect
+                                .slice_right(source_rect.width.min(available_rect.width * 0.7)),
+                        );
+                    }
+                } else {
+                    if dt <= available_rect.height * 0.3 {
+                        return (
+                            DockingOperation::SplitToTop(self.as_ref() as _),
+                            available_rect
+                                .slice_top(source_rect.height.min(available_rect.height * 0.7)),
+                        );
+                    }
+                    if db <= available_rect.height * 0.3 {
+                        return (
+                            DockingOperation::SplitToBottom(self.as_ref() as _),
+                            available_rect
+                                .slice_bottom(source_rect.height.min(available_rect.height * 0.7)),
+                        );
+                    }
+                }
+
+                return (DockingOperation::Merge(self.as_ref() as _), available_rect);
+            }
+            &Self::ToLeft {
+                ref left,
+                ref right,
+                width,
+                ..
+            } => {
+                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                    return op;
+                }
+
+                let r = available_rect.slice_left(width);
+                if pos.x <= r.right() {
+                    return left.compute_recommended_operation(source_rect, r, pos);
+                }
+                let r = available_rect
+                    .slice_right(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
+                if pos.x >= r.left {
+                    return right.compute_recommended_operation(source_rect, r, pos);
+                }
+            }
+            &Self::ToRight {
+                ref left,
+                ref right,
+                width,
+                ..
+            } => {
+                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                    return op;
+                }
+
+                let r = available_rect
+                    .slice_left(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
+                if pos.x <= r.right() {
+                    return left.compute_recommended_operation(source_rect, r, pos);
+                }
+                let r = available_rect.slice_right(width);
+                if pos.x >= r.left {
+                    return right.compute_recommended_operation(source_rect, r, pos);
+                }
+            }
+            &Self::ToTop {
+                ref top,
+                ref bottom,
+                height,
+                ..
+            } => {
+                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                    return op;
+                }
+
+                let r = available_rect.slice_top(height);
+                if pos.y <= r.bottom() {
+                    return top.compute_recommended_operation(source_rect, r, pos);
+                }
+                let r = available_rect.slice_bottom(
+                    available_rect.height - height - DockedPaneSplitterView::THICKNESS,
+                );
+                if pos.y >= r.top {
+                    return bottom.compute_recommended_operation(source_rect, r, pos);
+                }
+            }
+            &Self::ToBottom {
+                ref top,
+                ref bottom,
+                height,
+                ..
+            } => {
+                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                    return op;
+                }
+
+                let r = available_rect
+                    .slice_top(available_rect.height - height - DockedPaneSplitterView::THICKNESS);
+                if pos.y <= r.bottom() {
+                    return top.compute_recommended_operation(source_rect, r, pos);
+                }
+                let r = available_rect.slice_bottom(height);
+                if pos.y >= r.top {
+                    return bottom.compute_recommended_operation(source_rect, r, pos);
+                }
+            }
+        }
+
+        return (DockingOperation::Diverge, source_rect);
+    }
+}
+
+pub enum DockingOperation {
+    Merge(*const Dock),
+    SplitToLeft(*const Dock),
+    SplitToRight(*const Dock),
+    SplitToTop(*const Dock),
+    SplitToBottom(*const Dock),
+    Diverge,
+}
+
+pub struct DockingPreviewState {
+    control_rect: Rect<LogicalUnit>,
+    original_rect: Rect<LogicalUnit>,
+    offset: Point<LogicalUnit>,
+}
 
 pub struct DockingManager {
     max_rect: Rect<LogicalUnit>,
-    dock: Dock,
+    dock: Box<Dock>,
+    preview_state: core::cell::RefCell<Option<DockingPreviewState>>,
 }
 impl DockingManager {
-    pub fn new<E>(
+    pub fn new(
+        ctx: &mut ViewInitContext,
         max_rect: Rect<LogicalUnit>,
-        dock: Dock,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-    ) -> Self {
-        Self::relayout_dock(&dock, max_rect.clone(), composite_tree, ht_manager);
+        dock_ctor: impl FnOnce(&std::rc::Weak<Self>, &mut ViewInitContext) -> Dock,
+    ) -> Rc<Self> {
+        Rc::new_cyclic(move |wthis| {
+            let dock = dock_ctor(wthis, ctx);
+            Self::relayout_dock(
+                &dock,
+                max_rect.clone(),
+                ctx.mount_context.composite_tree,
+                ctx.mount_context.ht_manager,
+            );
 
-        Self { max_rect, dock }
+            Self {
+                max_rect,
+                dock: Box::new(dock),
+                preview_state: core::cell::RefCell::new(None),
+            }
+        })
     }
 
     fn relayout_dock<E>(
@@ -2739,6 +2941,66 @@ impl DockingManager {
             }
         }
     }
+
+    fn begin_preview(
+        &self,
+        pane_rect: Rect<LogicalUnit>,
+        client_pos: &Point<LogicalUnit>,
+        popover: &DragPreviewPopoverHandle,
+    ) {
+        popover.show(
+            &Point::new_logical(pane_rect.left, pane_rect.top),
+            &Size::new_logical(pane_rect.width, pane_rect.height),
+        );
+        *self.preview_state.borrow_mut() = Some(DockingPreviewState {
+            offset: Point::new_logical(pane_rect.left - client_pos.x, pane_rect.top - client_pos.y),
+            control_rect: self.max_rect.clone(),
+            original_rect: pane_rect,
+        });
+    }
+
+    fn move_preview(&self, client_pos: Point<LogicalUnit>, popover: &DragPreviewPopoverHandle) {
+        let locked = self.preview_state.borrow();
+        let Some(state) = locked.as_ref() else {
+            return;
+        };
+
+        match self.dock.compute_recommended_operation(
+            state.original_rect.clone(),
+            state.control_rect.clone(),
+            client_pos,
+        ) {
+            (DockingOperation::Merge(_), r) => {
+                popover.set_rect(&r);
+            }
+            (DockingOperation::SplitToLeft(_), r) => {
+                popover.set_rect(&r);
+            }
+            (DockingOperation::SplitToRight(_), r) => {
+                popover.set_rect(&r);
+            }
+            (DockingOperation::SplitToTop(_), r) => {
+                popover.set_rect(&r);
+            }
+            (DockingOperation::SplitToBottom(_), r) => {
+                popover.set_rect(&r);
+            }
+            (DockingOperation::Diverge, _) => {
+                popover.set_rect(&Rect::from_lt_size(
+                    Point::new_logical(
+                        client_pos.x + state.offset.x,
+                        client_pos.y + state.offset.y,
+                    ),
+                    state.original_rect.size(),
+                ));
+            }
+        }
+    }
+
+    fn end_preview(&self, popover: &DragPreviewPopoverHandle) {
+        popover.hide();
+        *self.preview_state.borrow_mut() = None;
+    }
 }
 
 enum DockedPaneSplitDirection {
@@ -2819,7 +3081,11 @@ pub struct PaneGroupView {
     controller: Rc<PaneGroupViewController>,
 }
 impl PaneGroupView {
-    pub fn new(ctx: &mut ViewInitContext, contents: Vec<Box<dyn PaneView>>) -> Self {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        manager: &std::rc::Weak<DockingManager>,
+        contents: Vec<Box<dyn PaneView>>,
+    ) -> Self {
         let active_gradient = ctx.composite_tree.create_gradient(Gradient::Linear {
             start_color: [0.0, 0.1, 0.5, 0.0],
             end_color: [0.0, 0.1, 0.5, 1.0],
@@ -2871,7 +3137,14 @@ impl PaneGroupView {
                 .into_iter()
                 .enumerate()
                 .map(|(n, c)| {
-                    let tv = PaneGroupTabView::new(ctx, c.name(), active_gradient, wgc.clone(), n);
+                    let tv = PaneGroupTabView::new(
+                        ctx,
+                        c.name(),
+                        active_gradient,
+                        wgc.clone(),
+                        n,
+                        manager,
+                    );
                     (c, tv)
                 })
                 .collect(),
@@ -2990,6 +3263,7 @@ impl PaneGroupTabView {
         active_gradient: GradientRef,
         group_controller: std::rc::Weak<PaneGroupViewController>,
         index: usize,
+        manager: &std::rc::Weak<DockingManager>,
     ) -> Self {
         let tw =
             TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
@@ -3040,8 +3314,7 @@ impl PaneGroupTabView {
             active: Cell::new(false),
             group_controller,
             index,
-            preview_drag_offset_x: Cell::new(0.0),
-            preview_drag_offset_y: Cell::new(0.0),
+            manager: manager.clone(),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
@@ -3074,8 +3347,7 @@ struct PaneGroupTabEventHandler {
     active: Cell<bool>,
     group_controller: std::rc::Weak<PaneGroupViewController>,
     index: usize,
-    preview_drag_offset_x: Cell<f32>,
-    preview_drag_offset_y: Cell<f32>,
+    manager: std::rc::Weak<DockingManager>,
 }
 impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
     fn on_pointer_enter(
@@ -3141,14 +3413,16 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             return input::EventContinueControl::empty();
         }
 
-        if let Some(gc) = self.group_controller.upgrade() {
+        if let Some(gc) = self.group_controller.upgrade()
+            && let Some(m) = self.manager.upgrade()
+        {
             let (x, y, w, h, _) = context.ht_manager.compute_global_rect_autoroot(gc.ht_root);
-            self.preview_drag_offset_x.set(x - args.client_pos.x);
-            self.preview_drag_offset_y.set(y - args.client_pos.y);
 
-            context
-                .drag_preview_popover
-                .show(&Point::new_logical(x, y), &Size::new_logical(w, h));
+            m.begin_preview(
+                Rect::from_lt_size(Point::new_logical(x, y), Size::new_logical(w, h)),
+                &args.client_pos,
+                &context.drag_preview_popover,
+            );
         }
 
         input::EventContinueControl::CAPTURE_ELEMENT | input::EventContinueControl::STOP_PROPAGATION
@@ -3160,13 +3434,9 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
-        let ox = self.preview_drag_offset_x.get();
-        let oy = self.preview_drag_offset_y.get();
-
-        context.drag_preview_popover.r#move(&Point::new_logical(
-            args.client_pos.x + ox,
-            args.client_pos.y + oy,
-        ));
+        if let Some(m) = self.manager.upgrade() {
+            m.move_preview(args.client_pos, &context.drag_preview_popover);
+        }
 
         input::EventContinueControl::STOP_PROPAGATION
     }
@@ -3181,7 +3451,9 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             return input::EventContinueControl::empty();
         }
 
-        context.drag_preview_popover.hide();
+        if let Some(m) = self.manager.upgrade() {
+            m.end_preview(&context.drag_preview_popover);
+        }
 
         input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
             | input::EventContinueControl::STOP_PROPAGATION
@@ -3833,35 +4105,38 @@ async fn run<'sys>(
     );
     ml_text_editor_view.mount(&mut view_init_ctx, &main_window);
 
-    let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
-        Box::new(TestPane1View::new(&mut view_init_ctx)),
-        Box::new(TestPane2View::new(&mut view_init_ctx)),
-    ];
-    let pane_group_view = PaneGroupView::new(&mut view_init_ctx, pane_group_view_contents);
-    pane_group_view.mount(&mut view_init_ctx, &main_window);
-
-    let pane_group_view_contents: Vec<Box<dyn PaneView>> =
-        vec![Box::new(TestPane1View::new(&mut view_init_ctx))];
-    let pane_group_view2 = PaneGroupView::new(&mut view_init_ctx, pane_group_view_contents);
-    pane_group_view2.mount(&mut view_init_ctx, &main_window);
-
     let splitter =
         DockedPaneSplitterView::new(&mut view_init_ctx, DockedPaneSplitDirection::Vertical);
     splitter.mount(&mut view_init_ctx, &main_window);
 
-    let mut docking_manager = DockingManager::new(
+    let docking_manager = DockingManager::new(
+        &mut view_init_ctx,
         Rect::from_lt_size(
             Point::new_logical(8.0, 460.0),
             Size::new_logical(320.0, 256.0),
         ),
-        Dock::ToRight {
-            left: Box::new(Dock::Fill(pane_group_view)),
-            right: Box::new(Dock::Fill(pane_group_view2)),
-            splitter,
-            width: 96.0,
+        |manager, view_init_ctx| {
+            let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
+                Box::new(TestPane1View::new(view_init_ctx)),
+                Box::new(TestPane2View::new(view_init_ctx)),
+            ];
+            let pane_group_view =
+                PaneGroupView::new(view_init_ctx, manager, pane_group_view_contents);
+            pane_group_view.mount(view_init_ctx, &main_window);
+
+            let pane_group_view_contents: Vec<Box<dyn PaneView>> =
+                vec![Box::new(TestPane1View::new(view_init_ctx))];
+            let pane_group_view2 =
+                PaneGroupView::new(view_init_ctx, manager, pane_group_view_contents);
+            pane_group_view2.mount(view_init_ctx, &main_window);
+
+            Dock::ToRight {
+                left: Box::new(Dock::Fill(pane_group_view)),
+                right: Box::new(Dock::Fill(pane_group_view2)),
+                splitter,
+                width: 96.0,
+            }
         },
-        view_init_ctx.mount_context.composite_tree,
-        view_init_ctx.mount_context.ht_manager,
     );
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
