@@ -11,7 +11,8 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::{
-    collections::{HashSet, VecDeque},
+    cell::UnsafeCell,
+    collections::{BTreeSet, HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,
@@ -2581,69 +2582,134 @@ impl PaneView for TestPane2View {
     }
 }
 
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DockID(u32);
+impl DockID {
+    #[inline(always)]
+    const fn store_index(&self) -> usize {
+        self.0 as _
+    }
+}
+
+pub struct DockStore {
+    docks: Vec<Dock>,
+    computed_states: Vec<ComputedDockState>,
+    free_id: BTreeSet<DockID>,
+}
+impl DockStore {
+    pub fn new() -> Self {
+        Self {
+            docks: Vec::new(),
+            computed_states: Vec::new(),
+            free_id: BTreeSet::new(),
+        }
+    }
+
+    pub fn alloc(&mut self, dock: impl FnOnce(DockID) -> Dock) -> DockID {
+        if let Some(id) = self.free_id.pop_first() {
+            return id;
+        }
+
+        let id = DockID(self.docks.len().try_into().expect("too many docks"));
+        self.docks.push(dock(id));
+        self.computed_states.push(ComputedDockState {
+            rect: UnsafeCell::new(Rect::from_lt_size(
+                Point::new_logical(0.0, 0.0),
+                Size::new_logical(0.0, 0.0),
+            )),
+        });
+        id
+    }
+
+    pub fn free(&mut self, id: DockID) {
+        if id.store_index() == self.docks.len() + 1 {
+            // tail freed
+            self.docks.pop();
+            self.computed_states.pop();
+            return;
+        }
+
+        self.free_id.insert(id);
+    }
+
+    pub fn get(&self, id: DockID) -> &Dock {
+        &self.docks[id.store_index()]
+    }
+
+    pub fn get_computed_state(&self, id: DockID) -> &ComputedDockState {
+        &self.computed_states[id.store_index()]
+    }
+}
+
+pub struct ComputedDockState {
+    rect: UnsafeCell<Rect<LogicalUnit>>,
+}
+
 pub enum Dock {
     Fill(PaneGroupView),
     ToLeft {
-        left: Box<Dock>,
-        right: Box<Dock>,
+        left: DockID,
+        right: DockID,
         splitter: DockedPaneSplitterView,
-        width: f32,
+        width: Cell<f32>,
     },
     ToRight {
-        left: Box<Dock>,
-        right: Box<Dock>,
+        left: DockID,
+        right: DockID,
         splitter: DockedPaneSplitterView,
-        width: f32,
+        width: Cell<f32>,
     },
     ToTop {
-        top: Box<Dock>,
-        bottom: Box<Dock>,
+        top: DockID,
+        bottom: DockID,
         splitter: DockedPaneSplitterView,
-        height: f32,
+        height: Cell<f32>,
     },
     ToBottom {
-        top: Box<Dock>,
-        bottom: Box<Dock>,
+        top: DockID,
+        bottom: DockID,
         splitter: DockedPaneSplitterView,
-        height: f32,
+        height: Cell<f32>,
     },
 }
 impl Dock {
     const PARENT_DOCK_THRESHOLD: f32 = 8.0;
 
     pub fn compute_recommended_operation(
-        self: &Box<Self>,
+        this: DockID,
+        store: &DockStore,
         source_rect: Rect<LogicalUnit>,
         available_rect: Rect<LogicalUnit>,
         pos: Point<LogicalUnit>,
     ) -> (DockingOperation, Rect<LogicalUnit>) {
         fn try_parent_dock(
-            this: &Box<Dock>,
+            this: DockID,
             source_rect: &Rect<LogicalUnit>,
             available_rect: &Rect<LogicalUnit>,
             pos: &Point<LogicalUnit>,
         ) -> Option<(DockingOperation, Rect<LogicalUnit>)> {
             if pos.x <= available_rect.left + Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
-                    DockingOperation::SplitToLeft(this.as_ref() as _),
+                    DockingOperation::SplitToLeft(this),
                     available_rect.slice_left(source_rect.width.min(available_rect.width * 0.7)),
                 ));
             }
             if pos.x >= available_rect.right() - Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
-                    DockingOperation::SplitToRight(this.as_ref() as _),
+                    DockingOperation::SplitToRight(this),
                     available_rect.slice_right(source_rect.width.min(available_rect.width * 0.7)),
                 ));
             }
             if pos.y <= available_rect.top + Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
-                    DockingOperation::SplitToTop(this.as_ref() as _),
+                    DockingOperation::SplitToTop(this),
                     available_rect.slice_top(source_rect.height.min(available_rect.height * 0.7)),
                 ));
             }
             if pos.y >= available_rect.bottom() - Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
-                    DockingOperation::SplitToBottom(this.as_ref() as _),
+                    DockingOperation::SplitToBottom(this),
                     available_rect
                         .slice_bottom(source_rect.height.min(available_rect.height * 0.7)),
                 ));
@@ -2657,7 +2723,7 @@ impl Dock {
             return (DockingOperation::Diverge, source_rect);
         }
 
-        match self.as_ref() {
+        match store.get(this) {
             Self::Fill(_) => {
                 let dl = pos.x - available_rect.left;
                 let dr = available_rect.right() - pos.x;
@@ -2666,14 +2732,14 @@ impl Dock {
                 if dl.min(dr) < dt.min(db) {
                     if dl <= available_rect.width * 0.3 {
                         return (
-                            DockingOperation::SplitToLeft(self.as_ref() as _),
+                            DockingOperation::SplitToLeft(this),
                             available_rect
                                 .slice_left(source_rect.width.min(available_rect.width * 0.7)),
                         );
                     }
                     if dr <= available_rect.width * 0.3 {
                         return (
-                            DockingOperation::SplitToRight(self.as_ref() as _),
+                            DockingOperation::SplitToRight(this),
                             available_rect
                                 .slice_right(source_rect.width.min(available_rect.width * 0.7)),
                         );
@@ -2681,101 +2747,105 @@ impl Dock {
                 } else {
                     if dt <= available_rect.height * 0.3 {
                         return (
-                            DockingOperation::SplitToTop(self.as_ref() as _),
+                            DockingOperation::SplitToTop(this),
                             available_rect
                                 .slice_top(source_rect.height.min(available_rect.height * 0.7)),
                         );
                     }
                     if db <= available_rect.height * 0.3 {
                         return (
-                            DockingOperation::SplitToBottom(self.as_ref() as _),
+                            DockingOperation::SplitToBottom(this),
                             available_rect
                                 .slice_bottom(source_rect.height.min(available_rect.height * 0.7)),
                         );
                     }
                 }
 
-                return (DockingOperation::Merge(self.as_ref() as _), available_rect);
+                return (DockingOperation::Merge(this), available_rect);
             }
             &Self::ToLeft {
-                ref left,
-                ref right,
-                width,
+                left,
+                right,
+                ref width,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
                     return op;
                 }
 
+                let width = width.get();
                 let r = available_rect.slice_left(width);
                 if pos.x <= r.right() {
-                    return left.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(left, store, source_rect, r, pos);
                 }
                 let r = available_rect
                     .slice_right(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
                 if pos.x >= r.left {
-                    return right.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(right, store, source_rect, r, pos);
                 }
             }
             &Self::ToRight {
-                ref left,
-                ref right,
-                width,
+                left,
+                right,
+                ref width,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
                     return op;
                 }
 
+                let width = width.get();
                 let r = available_rect
                     .slice_left(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
                 if pos.x <= r.right() {
-                    return left.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(left, store, source_rect, r, pos);
                 }
                 let r = available_rect.slice_right(width);
                 if pos.x >= r.left {
-                    return right.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(right, store, source_rect, r, pos);
                 }
             }
             &Self::ToTop {
-                ref top,
-                ref bottom,
-                height,
+                top,
+                bottom,
+                ref height,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
                     return op;
                 }
 
+                let height = height.get();
                 let r = available_rect.slice_top(height);
                 if pos.y <= r.bottom() {
-                    return top.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(top, store, source_rect, r, pos);
                 }
                 let r = available_rect.slice_bottom(
                     available_rect.height - height - DockedPaneSplitterView::THICKNESS,
                 );
                 if pos.y >= r.top {
-                    return bottom.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(bottom, store, source_rect, r, pos);
                 }
             }
             &Self::ToBottom {
-                ref top,
-                ref bottom,
-                height,
+                top,
+                bottom,
+                ref height,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(self, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
                     return op;
                 }
 
+                let height = height.get();
                 let r = available_rect
                     .slice_top(available_rect.height - height - DockedPaneSplitterView::THICKNESS);
                 if pos.y <= r.bottom() {
-                    return top.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(top, store, source_rect, r, pos);
                 }
                 let r = available_rect.slice_bottom(height);
                 if pos.y >= r.top {
-                    return bottom.compute_recommended_operation(source_rect, r, pos);
+                    return Self::compute_recommended_operation(bottom, store, source_rect, r, pos);
                 }
             }
         }
@@ -2785,11 +2855,11 @@ impl Dock {
 }
 
 pub enum DockingOperation {
-    Merge(*const Dock),
-    SplitToLeft(*const Dock),
-    SplitToRight(*const Dock),
-    SplitToTop(*const Dock),
-    SplitToBottom(*const Dock),
+    Merge(DockID),
+    SplitToLeft(DockID),
+    SplitToRight(DockID),
+    SplitToTop(DockID),
+    SplitToBottom(DockID),
     Diverge,
 }
 
@@ -2801,19 +2871,22 @@ pub struct DockingPreviewState {
 
 pub struct DockingManager {
     max_rect: Rect<LogicalUnit>,
-    dock: Box<Dock>,
+    store: DockStore,
+    root_id: DockID,
     preview_state: core::cell::RefCell<Option<DockingPreviewState>>,
 }
 impl DockingManager {
     pub fn new(
         ctx: &mut ViewInitContext,
         max_rect: Rect<LogicalUnit>,
-        dock_ctor: impl FnOnce(&std::rc::Weak<Self>, &mut ViewInitContext) -> Dock,
+        dock_ctor: impl FnOnce(&std::rc::Weak<Self>, &mut ViewInitContext, &mut DockStore) -> DockID,
     ) -> Rc<Self> {
         Rc::new_cyclic(move |wthis| {
-            let dock = dock_ctor(wthis, ctx);
+            let mut store = DockStore::new();
+            let root_id = dock_ctor(wthis, ctx, &mut store);
             Self::relayout_dock(
-                &dock,
+                root_id,
+                &store,
                 max_rect.clone(),
                 ctx.mount_context.composite_tree,
                 ctx.mount_context.ht_manager,
@@ -2821,26 +2894,33 @@ impl DockingManager {
 
             Self {
                 max_rect,
-                dock: Box::new(dock),
+                root_id,
+                store,
                 preview_state: core::cell::RefCell::new(None),
             }
         })
     }
 
     fn relayout_dock<E>(
-        dock: &Dock,
+        target: DockID,
+        store: &DockStore,
         available_rect: Rect<LogicalUnit>,
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        match dock {
+        unsafe {
+            *store.get_computed_state(target).rect.get() = available_rect.clone();
+        }
+
+        match store.get(target) {
             Dock::Fill(v) => v.set_rect(available_rect, composite_tree, ht_manager),
             &Dock::ToLeft {
-                ref left,
-                ref right,
+                left,
+                right,
                 ref splitter,
-                width,
+                ref width,
             } => {
+                let width = width.get();
                 let l_rect = Rect::from_lt_size(
                     Point::new_logical(available_rect.left, available_rect.top),
                     Size::new_logical(width, available_rect.height),
@@ -2857,16 +2937,17 @@ impl DockingManager {
                     ),
                 );
 
-                Self::relayout_dock(left, l_rect, composite_tree, ht_manager);
+                Self::relayout_dock(left, store, l_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
-                Self::relayout_dock(right, r_rect, composite_tree, ht_manager);
+                Self::relayout_dock(right, store, r_rect, composite_tree, ht_manager);
             }
             &Dock::ToRight {
-                ref left,
-                ref right,
+                left,
+                right,
                 ref splitter,
-                width,
+                ref width,
             } => {
+                let width = width.get();
                 let l_rect = Rect::from_lt_size(
                     Point::new_logical(available_rect.left, available_rect.top),
                     Size::new_logical(
@@ -2883,16 +2964,17 @@ impl DockingManager {
                     Size::new_logical(width, available_rect.height),
                 );
 
-                Self::relayout_dock(left, l_rect, composite_tree, ht_manager);
+                Self::relayout_dock(left, store, l_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
-                Self::relayout_dock(right, r_rect, composite_tree, ht_manager);
+                Self::relayout_dock(right, store, r_rect, composite_tree, ht_manager);
             }
             &Dock::ToTop {
-                ref top,
-                ref bottom,
+                top,
+                bottom,
                 ref splitter,
-                height,
+                ref height,
             } => {
+                let height = height.get();
                 let t_rect = Rect::from_lt_size(
                     Point::new_logical(available_rect.left, available_rect.top),
                     Size::new_logical(available_rect.width, height),
@@ -2909,16 +2991,17 @@ impl DockingManager {
                     ),
                 );
 
-                Self::relayout_dock(top, t_rect, composite_tree, ht_manager);
+                Self::relayout_dock(top, store, t_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
-                Self::relayout_dock(bottom, b_rect, composite_tree, ht_manager);
+                Self::relayout_dock(bottom, store, b_rect, composite_tree, ht_manager);
             }
             &Dock::ToBottom {
-                ref top,
-                ref bottom,
+                top,
+                bottom,
                 ref splitter,
-                height,
+                ref height,
             } => {
+                let height = height.get();
                 let t_rect = Rect::from_lt_size(
                     Point::new_logical(available_rect.left, available_rect.top),
                     Size::new_logical(
@@ -2935,11 +3018,162 @@ impl DockingManager {
                     Size::new_logical(available_rect.width, height),
                 );
 
-                Self::relayout_dock(top, t_rect, composite_tree, ht_manager);
+                Self::relayout_dock(top, store, t_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
-                Self::relayout_dock(bottom, b_rect, composite_tree, ht_manager);
+                Self::relayout_dock(bottom, store, b_rect, composite_tree, ht_manager);
             }
         }
+    }
+
+    fn relayout_dock_lazy(
+        target: DockID,
+        store: &DockStore,
+        available_rect: Rect<LogicalUnit>,
+        event_dispatcher: &LogicFiberEventDispatcher,
+    ) {
+        unsafe {
+            *store.get_computed_state(target).rect.get() = available_rect.clone();
+        }
+
+        match store.get(target) {
+            Dock::Fill(v) => v.set_rect_lazy(available_rect, event_dispatcher),
+            &Dock::ToLeft {
+                left,
+                right,
+                ref splitter,
+                ref width,
+            } => {
+                let width = width.get();
+                let l_rect = available_rect.slice_left(width);
+                let r_rect = available_rect
+                    .slice_right(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(l_rect.right(), available_rect.top),
+                    Size::new_logical(DockedPaneSplitterView::THICKNESS, available_rect.height),
+                );
+
+                Self::relayout_dock_lazy(left, store, l_rect, event_dispatcher);
+                splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(right, store, r_rect, event_dispatcher);
+            }
+            &Dock::ToRight {
+                left,
+                right,
+                ref splitter,
+                ref width,
+            } => {
+                let width = width.get();
+                let l_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, available_rect.top),
+                    Size::new_logical(
+                        available_rect.width - width - DockedPaneSplitterView::THICKNESS,
+                        available_rect.height,
+                    ),
+                );
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(l_rect.right(), available_rect.top),
+                    Size::new_logical(DockedPaneSplitterView::THICKNESS, available_rect.height),
+                );
+                let r_rect = Rect::from_lt_size(
+                    Point::new_logical(s_rect.right(), available_rect.top),
+                    Size::new_logical(width, available_rect.height),
+                );
+
+                Self::relayout_dock_lazy(left, store, l_rect, event_dispatcher);
+                splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(right, store, r_rect, event_dispatcher);
+            }
+            &Dock::ToTop {
+                top,
+                bottom,
+                ref splitter,
+                ref height,
+            } => {
+                let height = height.get();
+                let t_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, available_rect.top),
+                    Size::new_logical(available_rect.width, height),
+                );
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, t_rect.bottom()),
+                    Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
+                );
+                let b_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, s_rect.bottom()),
+                    Size::new_logical(
+                        available_rect.width,
+                        available_rect.height - s_rect.height - t_rect.height,
+                    ),
+                );
+
+                Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
+                splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(bottom, store, b_rect, event_dispatcher);
+            }
+            &Dock::ToBottom {
+                top,
+                bottom,
+                ref splitter,
+                ref height,
+            } => {
+                let height = height.get();
+                let t_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, available_rect.top),
+                    Size::new_logical(
+                        available_rect.width,
+                        available_rect.height - height - DockedPaneSplitterView::THICKNESS,
+                    ),
+                );
+                let s_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, t_rect.bottom()),
+                    Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
+                );
+                let b_rect = Rect::from_lt_size(
+                    Point::new_logical(available_rect.left, s_rect.bottom()),
+                    Size::new_logical(available_rect.width, height),
+                );
+
+                Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
+                splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(bottom, store, b_rect, event_dispatcher);
+            }
+        }
+    }
+
+    fn move_splitter(
+        &self,
+        target: DockID,
+        new_splitter_client_pos: f32,
+        event_dispatcher: &LogicFiberEventDispatcher,
+    ) {
+        let self_rect = unsafe { &*self.store.get_computed_state(target).rect.get() }.clone();
+        match self.store.get(target) {
+            Dock::Fill(_) => unreachable!("fill does not have any splitters!"),
+            Dock::ToLeft { width, .. } => {
+                let new_fixed_size =
+                    (new_splitter_client_pos - self_rect.left).clamp(10.0, self_rect.width - 10.0);
+                width.set(new_fixed_size);
+            }
+            Dock::ToRight { width, .. } => {
+                let new_fixed_size = (self_rect.right()
+                    - (new_splitter_client_pos + DockedPaneSplitterView::THICKNESS))
+                    .clamp(10.0, self_rect.width - 10.0);
+                width.set(new_fixed_size);
+            }
+            Dock::ToTop { height, .. } => {
+                let new_fixed_size =
+                    (new_splitter_client_pos - self_rect.top).clamp(10.0, self_rect.height - 10.0);
+                height.set(new_fixed_size);
+            }
+            Dock::ToBottom { height, .. } => {
+                let new_fixed_size = (self_rect.bottom()
+                    - (new_splitter_client_pos + DockedPaneSplitterView::THICKNESS))
+                    .clamp(10.0, self_rect.height - 10.0);
+                height.set(new_fixed_size);
+            }
+        }
+
+        Self::relayout_dock_lazy(target, &self.store, self_rect, event_dispatcher);
     }
 
     fn begin_preview(
@@ -2965,7 +3199,9 @@ impl DockingManager {
             return;
         };
 
-        match self.dock.compute_recommended_operation(
+        match Dock::compute_recommended_operation(
+            self.root_id,
+            &self.store,
             state.original_rect.clone(),
             state.control_rect.clone(),
             client_pos,
@@ -3014,7 +3250,12 @@ pub struct DockedPaneSplitterView {
 impl DockedPaneSplitterView {
     const THICKNESS: f32 = 4.0;
 
-    fn new(ctx: &mut ViewInitContext, dir: DockedPaneSplitDirection) -> Self {
+    fn new(
+        ctx: &mut ViewInitContext,
+        dir: DockedPaneSplitDirection,
+        controlling_dock: DockID,
+        manager: &std::rc::Weak<DockingManager>,
+    ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             has_bitmap: true,
@@ -3033,11 +3274,18 @@ impl DockedPaneSplitterView {
         });
 
         let eh = Rc::new(DockedPaneSplitterEventHandler {
+            view_id: ctx.view_registry.alloc(),
             dir,
+            controlling_dock,
+            manager: manager.clone(),
             ct_root,
             ht_root,
+            pressing: Cell::new(false),
+            pending_relayout: Cell::new(None),
+            drag_delta: Cell::new(0.0),
         });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
+        ctx.view_registry.set_event_handler(eh.view_id, &eh);
 
         Self { eh }
     }
@@ -3048,34 +3296,168 @@ impl DockedPaneSplitterView {
         ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
     }
 
+    #[inline(always)]
     fn resize<E>(
         &self,
         rect: Rect<LogicalUnit>,
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        composite_tree.get_mut(self.eh.ct_root).offset = [
-            AnimatableFloat::Value(rect.left),
-            AnimatableFloat::Value(rect.top),
-        ];
-        composite_tree.get_mut(self.eh.ct_root).size = [
-            AnimatableFloat::Value(rect.width),
-            AnimatableFloat::Value(rect.height),
-        ];
-        composite_tree.mark_dirty(self.eh.ct_root);
-        ht_manager.get_data_mut(self.eh.ht_root).left = rect.left;
-        ht_manager.get_data_mut(self.eh.ht_root).top = rect.top;
-        ht_manager.get_data_mut(self.eh.ht_root).width = rect.width;
-        ht_manager.get_data_mut(self.eh.ht_root).height = rect.height;
+        self.eh.perform_relayout(rect, composite_tree, ht_manager);
+    }
+
+    #[inline(always)]
+    fn relayout_lazy(&self, rect: Rect<LogicalUnit>, event_dispatcher: &LogicFiberEventDispatcher) {
+        self.eh.pending_relayout.set(Some(rect));
+        event_dispatcher.dispatch(Event::UpdateView {
+            id: self.eh.view_id,
+        });
     }
 }
 
 struct DockedPaneSplitterEventHandler {
+    view_id: ViewIdentifier,
     dir: DockedPaneSplitDirection,
+    controlling_dock: DockID,
+    manager: std::rc::Weak<DockingManager>,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    pressing: Cell<bool>,
+    pending_relayout: Cell<Option<Rect<LogicalUnit>>>,
+    drag_delta: Cell<f32>,
 }
-impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {}
+impl ViewEventHandler for DockedPaneSplitterEventHandler {
+    fn update(&self, context: &mut ViewUpdateContext) {
+        if let Some(new_rect) = self.pending_relayout.take() {
+            self.perform_relayout(
+                new_rect,
+                context.mount_context.composite_tree,
+                context.mount_context.ht_manager,
+            );
+        }
+    }
+}
+impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.drag_delta.set(match self.dir {
+            DockedPaneSplitDirection::Horizontal => {
+                args.client_pos.y - context.ht_manager.compute_global_rect_autoroot(sender).1
+            }
+            DockedPaneSplitDirection::Vertical => {
+                args.client_pos.x - context.ht_manager.compute_global_rect_autoroot(sender).0
+            }
+        });
+        self.pressing.set(true);
+
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
+    }
+
+    fn on_pointer_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        if !self.pressing.get() {
+            return EventContinueControl::empty();
+        }
+
+        let Some(manager) = self.manager.upgrade() else {
+            return EventContinueControl::empty();
+        };
+
+        match self.dir {
+            DockedPaneSplitDirection::Horizontal => {
+                let pos = args.client_pos.y + self.drag_delta.get();
+                manager.move_splitter(
+                    self.controlling_dock,
+                    pos,
+                    context.system_link.event_dispatcher(),
+                );
+            }
+            DockedPaneSplitDirection::Vertical => {
+                let pos = args.client_pos.x + self.drag_delta.get();
+                manager.move_splitter(
+                    self.controlling_dock,
+                    pos,
+                    context.system_link.event_dispatcher(),
+                );
+            }
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        let Some(manager) = self.manager.upgrade() else {
+            return EventContinueControl::empty();
+        };
+
+        match self.dir {
+            DockedPaneSplitDirection::Horizontal => {
+                let pos = args.client_pos.y + self.drag_delta.get();
+                manager.move_splitter(
+                    self.controlling_dock,
+                    pos,
+                    context.system_link.event_dispatcher(),
+                );
+            }
+            DockedPaneSplitDirection::Vertical => {
+                let pos = args.client_pos.x + self.drag_delta.get();
+                manager.move_splitter(
+                    self.controlling_dock,
+                    pos,
+                    context.system_link.event_dispatcher(),
+                );
+            }
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.pressing.set(false);
+
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
+    }
+}
+impl DockedPaneSplitterEventHandler {
+    fn perform_relayout<E>(
+        &self,
+        new_rect: Rect<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.get_mut(self.ct_root).offset = [
+            AnimatableFloat::Value(new_rect.left),
+            AnimatableFloat::Value(new_rect.top),
+        ];
+        composite_tree.get_mut(self.ct_root).size = [
+            AnimatableFloat::Value(new_rect.width),
+            AnimatableFloat::Value(new_rect.height),
+        ];
+        composite_tree.mark_dirty(self.ct_root);
+        ht_manager.get_data_mut(self.ht_root).left = new_rect.left;
+        ht_manager.get_data_mut(self.ht_root).top = new_rect.top;
+        ht_manager.get_data_mut(self.ht_root).width = new_rect.width;
+        ht_manager.get_data_mut(self.ht_root).height = new_rect.height;
+    }
+}
 
 pub struct PaneGroupView {
     controller: Rc<PaneGroupViewController>,
@@ -3150,6 +3532,7 @@ impl PaneGroupView {
                 .collect(),
             current_active_index: Cell::new(0),
             pending_active_changes: Cell::new(None),
+            pending_set_rect: Cell::new(None),
         });
         ctx.view_registry
             .set_event_handler(controller.view_id, &controller);
@@ -3177,25 +3560,26 @@ impl PaneGroupView {
             .add_child(target.ht_root(), self.controller.ht_root);
     }
 
+    #[inline(always)]
     pub fn set_rect<E>(
         &self,
         rect: Rect<LogicalUnit>,
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        composite_tree.get_mut(self.controller.ct_root).offset = [
-            AnimatableFloat::Value(rect.left),
-            AnimatableFloat::Value(rect.top),
-        ];
-        composite_tree.get_mut(self.controller.ct_root).size = [
-            AnimatableFloat::Value(rect.width),
-            AnimatableFloat::Value(rect.height),
-        ];
-        composite_tree.mark_dirty(self.controller.ct_root);
-        ht_manager.get_data_mut(self.controller.ht_root).left = rect.left;
-        ht_manager.get_data_mut(self.controller.ht_root).top = rect.top;
-        ht_manager.get_data_mut(self.controller.ht_root).width = rect.width;
-        ht_manager.get_data_mut(self.controller.ht_root).height = rect.height;
+        self.controller
+            .perform_set_rect(rect, composite_tree, ht_manager);
+    }
+
+    pub fn set_rect_lazy(
+        &self,
+        rect: Rect<LogicalUnit>,
+        event_dispatcher: &LogicFiberEventDispatcher,
+    ) {
+        self.controller.pending_set_rect.set(Some(rect));
+        event_dispatcher.dispatch(Event::UpdateView {
+            id: self.controller.view_id,
+        });
     }
 }
 
@@ -3208,6 +3592,7 @@ struct PaneGroupViewController {
     contents: Vec<(Box<dyn PaneView>, PaneGroupTabView)>,
     current_active_index: Cell<usize>,
     pending_active_changes: Cell<Option<usize>>,
+    pending_set_rect: Cell<Option<Rect<LogicalUnit>>>,
 }
 impl ViewEventHandler for PaneGroupViewController {
     fn update(&self, context: &mut ViewUpdateContext) {
@@ -3223,6 +3608,14 @@ impl ViewEventHandler for PaneGroupViewController {
 
                 self.activate(index, context);
             }
+        }
+
+        if let Some(rect) = self.pending_set_rect.take() {
+            self.perform_set_rect(
+                rect,
+                context.mount_context.composite_tree,
+                context.mount_context.ht_manager,
+            );
         }
     }
 }
@@ -3244,6 +3637,27 @@ impl PaneGroupViewController {
             .1
             .eh
             .set_active(true, context.composite_tree, context.current_sec);
+    }
+
+    fn perform_set_rect<E>(
+        &self,
+        rect: Rect<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        composite_tree.get_mut(self.ct_root).offset = [
+            AnimatableFloat::Value(rect.left),
+            AnimatableFloat::Value(rect.top),
+        ];
+        composite_tree.get_mut(self.ct_root).size = [
+            AnimatableFloat::Value(rect.width),
+            AnimatableFloat::Value(rect.height),
+        ];
+        composite_tree.mark_dirty(self.ct_root);
+        ht_manager.get_data_mut(self.ht_root).left = rect.left;
+        ht_manager.get_data_mut(self.ht_root).top = rect.top;
+        ht_manager.get_data_mut(self.ht_root).width = rect.width;
+        ht_manager.get_data_mut(self.ht_root).height = rect.height;
     }
 }
 
@@ -4105,17 +4519,13 @@ async fn run<'sys>(
     );
     ml_text_editor_view.mount(&mut view_init_ctx, &main_window);
 
-    let splitter =
-        DockedPaneSplitterView::new(&mut view_init_ctx, DockedPaneSplitDirection::Vertical);
-    splitter.mount(&mut view_init_ctx, &main_window);
-
     let docking_manager = DockingManager::new(
         &mut view_init_ctx,
         Rect::from_lt_size(
             Point::new_logical(8.0, 460.0),
             Size::new_logical(320.0, 256.0),
         ),
-        |manager, view_init_ctx| {
+        |manager, view_init_ctx, store| {
             let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
                 Box::new(TestPane1View::new(view_init_ctx)),
                 Box::new(TestPane2View::new(view_init_ctx)),
@@ -4130,12 +4540,24 @@ async fn run<'sys>(
                 PaneGroupView::new(view_init_ctx, manager, pane_group_view_contents);
             pane_group_view2.mount(view_init_ctx, &main_window);
 
-            Dock::ToRight {
-                left: Box::new(Dock::Fill(pane_group_view)),
-                right: Box::new(Dock::Fill(pane_group_view2)),
-                splitter,
-                width: 96.0,
-            }
+            let left = store.alloc(|_| Dock::Fill(pane_group_view));
+            let right = store.alloc(|_| Dock::Fill(pane_group_view2));
+            store.alloc(|id| {
+                let splitter = DockedPaneSplitterView::new(
+                    view_init_ctx,
+                    DockedPaneSplitDirection::Vertical,
+                    id,
+                    manager,
+                );
+                splitter.mount(view_init_ctx, &main_window);
+
+                Dock::ToRight {
+                    left,
+                    right,
+                    splitter,
+                    width: Cell::new(96.0),
+                }
+            })
         },
     );
 
