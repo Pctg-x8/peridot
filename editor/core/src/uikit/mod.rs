@@ -46,6 +46,22 @@ impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h> {
         &mut self.mount_context
     }
 }
+impl<'a, 'h> ViewInitContext<'a, 'h> {
+    pub const fn derive<'a2>(&'a2 mut self) -> ViewInitContext<'a2, 'h> {
+        ViewInitContext {
+            mount_context: MountContext {
+                composite_tree: &mut self.mount_context.composite_tree,
+                ht_manager: &mut self.mount_context.ht_manager,
+                keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
+                current_sec: self.mount_context.current_sec,
+            },
+            view_registry: &mut self.view_registry,
+            ui_scale_factor: self.ui_scale_factor,
+            system_link: self.system_link,
+            main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
+        }
+    }
+}
 
 pub struct ViewUpdateContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,

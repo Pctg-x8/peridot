@@ -43,7 +43,7 @@ use windows::{
         },
         UI::{
             Controls::{MARGINS, WM_MOUSELEAVE},
-            HiDpi::GetDpiForWindow,
+            HiDpi::{GetDpiForMonitor, GetDpiForWindow},
             Input::KeyboardAndMouse::{
                 ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
                 TrackMouseEvent, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_LCONTROL, VK_LEFT,
@@ -415,6 +415,7 @@ impl NativeWindow {
     fn new(
         wc_set: &WindowClassSet,
         window_type: WindowType,
+        size: Option<Size<PixelsUnit>>,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
@@ -428,8 +429,8 @@ impl NativeWindow {
                 WS_OVERLAPPEDWINDOW,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
+                size.map_or(CW_USEDEFAULT, |s| s.width as i32),
+                size.map_or(CW_USEDEFAULT, |s| s.height as i32),
                 None,
                 None,
                 Some(wc_set.hinstance),
@@ -1597,6 +1598,7 @@ impl SystemLink<'_> {
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },
             WindowType::Main {},
+            None,
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
@@ -1625,6 +1627,8 @@ impl SystemLink<'_> {
 
     pub fn open_window<'h>(
         &mut self,
+        size: Size<LogicalUnit>,
+        ref_render_scale: f32,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager<'h>,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -1640,6 +1644,7 @@ impl SystemLink<'_> {
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },
             WindowType::Sub,
+            Some(size.to_pixels_ceil(ref_render_scale)),
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()

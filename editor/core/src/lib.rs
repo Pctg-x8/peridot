@@ -3571,10 +3571,10 @@ impl DockingManager {
         source: DockID,
         index: usize,
         op: DockingOperation,
-        suggested_rect: Rect<LogicalUnit>,
+        suggested_rect: &Rect<LogicalUnit>,
         view_init_ctx: &mut ViewInitContext,
         mount_target: &(impl MountTarget + ?Sized),
-    ) {
+    ) -> Option<Box<dyn PaneView>> {
         self.store.dump(self.root_id);
 
         let Dock::Fill {
@@ -3587,10 +3587,9 @@ impl DockingManager {
         let content = source_group_view.remove_content(index, view_init_ctx);
         let should_undock_source = !source_group_view.has_contents();
 
-        match op {
-            DockingOperation::Diverge => {
-                // diverge to new window
-            }
+        let diverged_contents = match op {
+            // ウィンドウのオープンが必要なので内容物だけ返してLogicFiber側でやる
+            DockingOperation::Diverge => Some(content),
             DockingOperation::Merge(target) => {
                 let Dock::Fill {
                     group_view: target_group_view,
@@ -3601,6 +3600,7 @@ impl DockingManager {
                 };
 
                 target_group_view.add_content(content, view_init_ctx, true);
+                None
             }
             DockingOperation::SplitToLeft(target) => {
                 let target_parent = self.store.get(target).parent();
@@ -3649,6 +3649,7 @@ impl DockingManager {
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
                 );
+                None
             }
             DockingOperation::SplitToRight(target) => {
                 let target_parent = self.store.get(target).parent();
@@ -3697,6 +3698,7 @@ impl DockingManager {
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
                 );
+                None
             }
             DockingOperation::SplitToTop(target) => {
                 let target_parent = self.store.get(target).parent();
@@ -3745,6 +3747,7 @@ impl DockingManager {
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
                 );
+                None
             }
             DockingOperation::SplitToBottom(target) => {
                 let target_parent = self.store.get(target).parent();
@@ -3793,8 +3796,9 @@ impl DockingManager {
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
                 );
+                None
             }
-        }
+        };
 
         if should_undock_source {
             self.undock(
@@ -3805,6 +3809,7 @@ impl DockingManager {
         }
 
         self.store.dump(self.root_id);
+        diverged_contents
     }
 
     fn begin_preview(
@@ -4721,10 +4726,6 @@ async fn run<'sys>(
     let mut view_registry = ViewRegistry::new();
 
     let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
-    let texture_id_set = ui::window_header::SystemCommandTextureIDSet::new(
-        &mut texture_id_issuer,
-        system_link.rt_sender(),
-    );
     let mut popup_manager = PopupManager::new();
     let context_menu_common_resources = MenuItemCommonResources::new(
         &mut composite_tree,
@@ -4765,7 +4766,6 @@ async fn run<'sys>(
         ui::window_header::Caption::Main {
             project_name: "New Project".into(),
         },
-        &texture_id_set,
         main_window.needs_system_command_buttons(),
     );
     window_header_view.mount(&mut view_init_ctx, &main_window);
@@ -5348,6 +5348,8 @@ async fn run<'sys>(
             Event::Quit => break,
             Event::SubWindowOpen => {
                 system_link.open_window(
+                    Size::new_logical(320.0, 240.0),
+                    main_window.ui_scale_factor(),
                     &mut composite_tree,
                     &mut ht_manager,
                     &mut keyboard_focus_registry,
@@ -5375,7 +5377,6 @@ async fn run<'sys>(
                         let window_header_view = ui::window_header::View::new(
                             &mut view_init_ctx,
                             ui::window_header::Caption::Sub,
-                            &texture_id_set,
                             w.needs_system_command_buttons(),
                         );
                         window_header_view.mount(&mut view_init_ctx, &w);
@@ -5505,12 +5506,7 @@ async fn run<'sys>(
                 window
                     .extra_data_ref::<PerWindowData>()
                     .header
-                    .set_maximize_state(
-                        is_maximized,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &texture_id_set,
-                    );
+                    .set_maximize_state(is_maximized, &mut composite_tree, &mut ht_manager);
             },
             Event::WindowFocusChanged {
                 mut window,
@@ -6377,11 +6373,11 @@ async fn run<'sys>(
                 let dm = &mut unsafe { window.extra_data_mut::<PerWindowData>() }.docking_manager;
 
                 let (op, suggested_rect) = dm.end_preview(client_pos, &drag_preview_popover);
-                dm.redock(
+                let diverged_content = dm.redock(
                     source_dock,
                     tab_index,
                     op,
-                    suggested_rect,
+                    &suggested_rect,
                     &mut ViewInitContext {
                         mount_context: MountContext {
                             composite_tree: &mut composite_tree,
@@ -6396,6 +6392,73 @@ async fn run<'sys>(
                     },
                     &mount_target,
                 );
+
+                if let Some(content) = diverged_content {
+                    system_link.open_window(
+                        suggested_rect.size(),
+                        window.ui_scale_factor(),
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                        &mut delayed_render_messages,
+                        |mut w,
+                         composite_tree,
+                         ht_manager,
+                         keyboard_focus_registry,
+                         system_link| {
+                            ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
+
+                            composite_tree.get_mut(w.ct_root()).has_bitmap = true;
+                            composite_tree.get_mut(w.ct_root()).composite_mode =
+                                CompositeMode::FillColor(AnimatableColor::Value([
+                                    0.0, 0.1, 0.2, 1.0,
+                                ]));
+                            composite_tree.mark_dirty(w.ct_root());
+
+                            let mut view_init_ctx = ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree,
+                                    ht_manager,
+                                    current_sec: global_time_base.elapsed().as_secs_f32(),
+                                    keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                ui_scale_factor: w.ui_scale_factor(),
+                                system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            };
+                            let window_header_view = ui::window_header::View::new(
+                                &mut view_init_ctx,
+                                ui::window_header::Caption::Sub,
+                                w.needs_system_command_buttons(),
+                            );
+                            window_header_view.mount(&mut view_init_ctx, &w);
+
+                            w.associate_extra_data(Box::new(PerWindowData {
+                                screen_reposition_interests: HashSet::new(),
+                                header: window_header_view,
+                                docking_manager: DockingManager::new(
+                                    &mut view_init_ctx,
+                                    Rect::from_lt_size(
+                                        Point::new_logical(8.0, ui::window_header::View::THICKNESS),
+                                        Size::new_logical(320.0, 256.0),
+                                    ),
+                                    |view_init_ctx, store| {
+                                        store.alloc(|id| Dock::Fill {
+                                            group_view: PaneGroupView::new(
+                                                view_init_ctx,
+                                                vec![content],
+                                                id,
+                                            ),
+                                            parent: None,
+                                        })
+                                    },
+                                    &w,
+                                ),
+                            }));
+                        },
+                    );
+                }
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);

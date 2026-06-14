@@ -21,6 +21,7 @@ use crate::{
         text::FontID,
     },
     uikit::{MountContext, MountTarget, ViewInitContext},
+    utils::UnsafeMainThreadOnlyOnceCell,
 };
 
 pub enum Caption {
@@ -42,9 +43,15 @@ impl View {
     pub fn new<'a>(
         init_ctx: &mut ViewInitContext,
         init_caption: Caption,
-        texture_id_set: &SystemCommandTextureIDSet,
         needs_system_command_buttons: bool,
     ) -> Self {
+        let texture_id_set = SYSTEM_COMMAND_TEXTURE_ID_SET.0.get_or_init(|| {
+            SystemCommandTextureIDSet::new(
+                init_ctx.main_thread_texture_id_issuer,
+                init_ctx.system_link.rt_sender(),
+            )
+        });
+
         let ct_root = init_ctx.mount_context.composite_tree.create(CompositeRect {
             has_bitmap: true,
             scale_factor: CompositeRectScaleFactor::UI,
@@ -140,13 +147,15 @@ impl View {
         is_maximized: bool,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager<'_>,
-        texture_id_set: &SystemCommandTextureIDSet,
     ) {
         if let Some(ref xs) = self.command_buttons {
             xs[1].replace_cmd(
                 composite_tree,
                 ht_manager,
-                texture_id_set,
+                SYSTEM_COMMAND_TEXTURE_ID_SET
+                    .0
+                    .get()
+                    .expect("texture id set not initialized?"),
                 if is_maximized {
                     SystemCommand::Restore
                 } else {
@@ -480,17 +489,17 @@ impl SystemCommand {
     }
 }
 
-pub struct SystemCommandTextureIDSet {
+static SYSTEM_COMMAND_TEXTURE_ID_SET: UnsafeMainThreadOnlyOnceCell<SystemCommandTextureIDSet> =
+    UnsafeMainThreadOnlyOnceCell(std::cell::OnceCell::new());
+
+struct SystemCommandTextureIDSet {
     close: TextureID,
     minimize: TextureID,
     maximize: TextureID,
     restore: TextureID,
 }
 impl SystemCommandTextureIDSet {
-    pub fn new(
-        tid_issuer: &mut MainThreadTextureIDIssuer,
-        rt_sender: &RenderMessageSender,
-    ) -> Self {
+    fn new(tid_issuer: &mut MainThreadTextureIDIssuer, rt_sender: &RenderMessageSender) -> Self {
         let close = tid_issuer.issue();
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
