@@ -49,8 +49,9 @@ use crate::{
         MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
         MenuItemView, MountContext, MountTarget, NumericInputView, OverlayPopupBasicFrameView,
         OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
-        ScrollContainer, SimpleButtonView, TextInputView, ViewEventHandler, ViewIdentifier,
-        ViewInitContext, ViewRegistry, ViewUpdateContext,
+        ScrollContainer, SimpleButtonConstantEventHandler, SimpleButtonEventHandler,
+        SimpleButtonView, TextInputView, ViewEventHandler, ViewIdentifier, ViewInitContext,
+        ViewRegistry, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, SafeF32, Size,
@@ -1093,7 +1094,9 @@ impl AlertDialogPresenter {
             ctx,
             "OK".into(),
             Size::new_logical(64.0, 24.0),
-            Some(Event::PopupClose { id: popup_id }),
+            Some(Box::new(SimpleButtonConstantEventHandler(
+                Event::PopupClose { id: popup_id },
+            ))),
         );
         let ct_message = ctx.mount_context.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -2522,6 +2525,16 @@ pub trait PaneView {
     fn name(&self) -> String;
     fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget);
     fn unmount(&self, ctx: &mut MountContext);
+
+    #[allow(unused_variables)]
+    #[inline(always)]
+    fn resize(
+        &self,
+        new_size: &Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+    }
 }
 
 pub struct TestPane1View {
@@ -3208,21 +3221,23 @@ pub struct DockingPreviewState {
 }
 
 pub struct DockingManager {
+    bound_window: WindowHandle,
     max_rect: Rect<LogicalUnit>,
     store: DockStore,
     root_id: DockID,
     preview_state: Option<DockingPreviewState>,
 }
 impl DockingManager {
+    #[tracing::instrument(skip(bound_window, ctx, dock_ctor))]
     pub fn new(
+        bound_window: WindowHandle,
         ctx: &mut ViewInitContext,
         max_rect: Rect<LogicalUnit>,
         dock_ctor: impl FnOnce(&mut ViewInitContext, &mut DockStore) -> DockID,
-        mount_target: &(impl MountTarget + ?Sized),
     ) -> Self {
         let mut store = DockStore::new();
         let root_id = dock_ctor(ctx, &mut store);
-        Self::mount_recursive(root_id, &store, ctx, mount_target);
+        Self::mount_recursive(root_id, &store, ctx, &bound_window);
         Self::relayout_dock(
             root_id,
             &mut store,
@@ -3231,7 +3246,10 @@ impl DockingManager {
             ctx.mount_context.ht_manager,
         );
 
+        store.dump(root_id);
+
         Self {
+            bound_window,
             max_rect,
             root_id,
             store,
@@ -3290,11 +3308,11 @@ impl DockingManager {
         }
     }
 
-    fn relayout_dock<E>(
+    fn relayout_dock(
         target: DockID,
         store: &mut DockStore,
         available_rect: Rect<LogicalUnit>,
-        composite_tree: &mut CompositeTree<E>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         store.get_computed_state_mut(target).rect = available_rect.clone();
@@ -3418,11 +3436,11 @@ impl DockingManager {
         }
     }
 
-    pub fn move_splitter<E>(
+    pub fn move_splitter(
         &mut self,
         target: DockID,
         new_splitter_client_pos: f32,
-        composite_tree: &mut CompositeTree<E>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         let self_rect = &self.store.get_computed_state(target).rect;
@@ -4140,6 +4158,10 @@ impl PaneGroupView {
                 AnimatableFloat::Value(0.0),
                 AnimatableFloat::Value(-16.0 - PaneGroupTabView::PADDING_Y * 2.0),
             ],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                0.01, 0.01, 0.01, 1.0,
+            ])),
             ..Default::default()
         });
         let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
@@ -4207,25 +4229,14 @@ impl PaneGroupView {
     }
 
     #[inline(always)]
-    pub fn set_rect<E>(
+    pub fn set_rect(
         &self,
         rect: Rect<LogicalUnit>,
-        composite_tree: &mut CompositeTree<E>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         self.controller
             .perform_set_rect(rect, composite_tree, ht_manager);
-    }
-
-    pub fn set_rect_lazy(
-        &self,
-        rect: Rect<LogicalUnit>,
-        event_dispatcher: &LogicFiberEventDispatcher,
-    ) {
-        self.controller.pending_set_rect.set(Some(rect));
-        event_dispatcher.dispatch(Event::UpdateView {
-            id: self.controller.view_id,
-        });
     }
 
     #[inline(always)]
@@ -4389,10 +4400,10 @@ impl PaneGroupViewController {
             .set_active(true, context.composite_tree, context.current_sec);
     }
 
-    fn perform_set_rect<E>(
+    fn perform_set_rect(
         &self,
         rect: Rect<LogicalUnit>,
-        composite_tree: &mut CompositeTree<E>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         composite_tree.get_mut(self.ct_root).offset = [
@@ -4408,6 +4419,14 @@ impl PaneGroupViewController {
         ht_manager.get_data_mut(self.ht_root).top = rect.top;
         ht_manager.get_data_mut(self.ht_root).width = rect.width;
         ht_manager.get_data_mut(self.ht_root).height = rect.height;
+
+        let content_size = Size::new_logical(
+            rect.width,
+            rect.height - 16.0 - PaneGroupTabView::PADDING_Y * 2.0,
+        );
+        for (c, _) in self.contents.borrow().iter() {
+            c.resize(&content_size, composite_tree, ht_manager);
+        }
     }
 }
 
@@ -4565,8 +4584,47 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
         context: &mut InputEventContext,
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        if let Some(gc) = self.group_controller.upgrade() {
-            gc.select_tab(self, context.system_link.event_dispatcher());
+        if args.button == PointerButton::Primary {
+            if let Some(gc) = self.group_controller.upgrade() {
+                gc.select_tab(self, context.system_link.event_dispatcher());
+            }
+        } else {
+            context.system_link.dispatch_event(Event::MenuOpen {
+                parent: context
+                    .ht_manager
+                    .query_root_window(sender)
+                    .expect("not mounted"),
+                items: vec![
+                    crate::uikit::MenuItem::Command {
+                        label: "Entry1".into(),
+                        command_id: 0,
+                    },
+                    crate::uikit::MenuItem::Command {
+                        label: "Entry2".into(),
+                        command_id: 1,
+                    },
+                    crate::uikit::MenuItem::Separator,
+                    crate::uikit::MenuItem::Command {
+                        label: "Entry3".into(),
+                        command_id: 2,
+                    },
+                    crate::uikit::MenuItem::Heading {
+                        label: "Head".into(),
+                    },
+                    crate::uikit::MenuItem::SubMenu {
+                        label: "Sub".into(),
+                        items: vec![crate::uikit::MenuItem::Command {
+                            label: "SubEntry1".into(),
+                            command_id: 4,
+                        }],
+                    },
+                    crate::uikit::MenuItem::Command {
+                        label: "Entry4".into(),
+                        command_id: 3,
+                    },
+                ],
+                surface_pos: args.client_pos,
+            });
         }
 
         EventContinueControl::STOP_PROPAGATION
@@ -4679,6 +4737,471 @@ impl PaneGroupTabEventHandler {
             };
             composite_tree.mark_dirty(self.ct_underline);
         }
+    }
+}
+
+struct ColorPickerTestBackingStore {
+    color: Cell<u32>,
+}
+impl ColorPickerBackingStoreEvent for ColorPickerTestBackingStore {
+    fn value(&self) -> u32 {
+        self.color.get()
+    }
+    fn new_value(&self, value: u32, _event_dispatcher: &LogicFiberEventDispatcher) {
+        self.color.set(value);
+    }
+}
+
+pub struct UIKitPreviewPaneView {
+    scroll_container: ScrollContainer,
+    test_alert_btn: SimpleButtonView,
+    test_alert_btn2: SimpleButtonView,
+    text_input_view: TextInputView,
+    text_input_view2: TextInputView,
+    ml_text_editor_view: uikit::MultilineTextInputView,
+    color_picker_backing_store: Rc<ColorPickerTestBackingStore>,
+    color_picker: ColorPickerView,
+    editable_color_button: EditableColorButtonView,
+    numeric_input_view: NumericInputView,
+    dropdown_box: uikit::dropdown_box::View,
+    toggle_button: uikit::ToggleButtonView,
+    checkbox: uikit::CheckboxView,
+    rgc1: Rc<RadioButtonGroupController>,
+    rgc2: Rc<RadioButtonGroupController>,
+    radio_button1: RadioButtonView,
+    radio_button2: RadioButtonView,
+    radio_button3: RadioButtonView,
+    radio_button4: RadioButtonView,
+}
+impl UIKitPreviewPaneView {
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let scroll_container = ScrollContainer::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(0.0, 0.0),
+                Size::new_logical(128.0, 128.0),
+            ),
+        );
+
+        let mut ytop = 8.0;
+        let mut content_width = 8.0f32;
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Simple Buttons + Alert Dialog".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        ytop += 16.0;
+
+        struct AlertButtonEventHandler(String);
+        impl SimpleButtonEventHandler for AlertButtonEventHandler {
+            #[inline(always)]
+            fn on_click_event(&self, window: WindowHandle) -> Event {
+                Event::OpenAlertDialog {
+                    target_window: window,
+                    message: self.0.clone(),
+                }
+            }
+        }
+
+        let test_alert_btn = SimpleButtonView::new(
+            ctx,
+            "Test Alert".into(),
+            Size::new_logical(64.0, 24.0),
+            Some(Box::new(AlertButtonEventHandler(
+                "てすとめっせーじ from button\n改行もしてみる".into(),
+            ))),
+        );
+        test_alert_btn.locate(
+            &Positioning {
+                parent_anchor: [0.0, 0.0],
+                anchor: [0.0, 0.0],
+                offset: [16.0, ytop],
+            },
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+        );
+        test_alert_btn.mount(ctx, &scroll_container);
+
+        let test_alert_btn2 = SimpleButtonView::new(
+            ctx,
+            "Test Alert 2".into(),
+            Size::new_logical(96.0, 24.0),
+            Some(Box::new(AlertButtonEventHandler("とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ".into()))),
+        );
+        test_alert_btn2.locate(
+            &Positioning {
+                parent_anchor: [0.0, 0.0],
+                anchor: [0.0, 0.0],
+                offset: [88.0, ytop],
+            },
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+        );
+        test_alert_btn2.mount(ctx, &scroll_container);
+
+        ytop += 24.0;
+        ytop += 8.0;
+
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Text Input(Single Line)".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        ytop += 16.0;
+
+        let text_input_view = TextInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(16.0, ytop),
+                Size::new_logical(128.0, 20.0),
+            ),
+        );
+        text_input_view.mount(ctx, &scroll_container);
+        // text_input_view.set_keyboard_focus_group(
+        //     main_window.keyboard_focus_group(),
+        //     view_init_ctx.keyboard_focus_registry,
+        // );
+        ytop += 24.0;
+
+        let text_input_view2 = TextInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(16.0, ytop),
+                Size::new_logical(128.0, 20.0),
+            ),
+        );
+        text_input_view2.mount(ctx, &scroll_container);
+        // text_input_view2.set_keyboard_focus_group(
+        //     main_window.keyboard_focus_group(),
+        //     view_init_ctx.keyboard_focus_registry,
+        // );
+        ytop += 24.0;
+        ytop += 8.0;
+
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Text Input(Multiline)".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        ytop += 16.0;
+
+        let ml_text_kf_token = ctx.keyboard_focus_registry.acquire_token();
+        let ml_text_editor_view = uikit::MultilineTextInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(16.0, ytop),
+                Size::new_logical(160.0, 100.0),
+            ),
+            "".into(),
+            ml_text_kf_token,
+            uikit::RawTextInputViewCreateFlags::NON_DELEGATED_HT,
+        );
+        ml_text_editor_view.mount(ctx, &scroll_container);
+        ytop += 100.0;
+        ytop += 8.0;
+
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Color Picker(Standalone)".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        ytop += 16.0;
+
+        let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
+            color: Cell::new(0xffffffff),
+        });
+        let color_picker = ColorPickerView::new(
+            ctx,
+            Point::new_logical(16.0, ytop),
+            &Rc::downgrade(&color_picker_backing_store),
+        );
+        color_picker.mount(ctx, &scroll_container);
+        ytop += 128.0 + 32.0 + 16.0 + 20.0;
+        ytop += 8.0;
+
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Color Picker(Button Style)".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        let label_width = TextLayout::measure_visual_width(
+            "Color Picker(Button Style)",
+            FontID::UIDefault,
+            ctx.system_link.font_set(),
+        );
+
+        let editable_color_button = EditableColorButtonView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(16.0 + label_width, ytop - 2.0),
+                Size::new_logical(64.0, 20.0),
+            ),
+            0xffffffff,
+        );
+        editable_color_button.mount(ctx, &scroll_container);
+        ytop += 20.0;
+        content_width = content_width.max(label_width + 16.0 + 64.0 + 8.0);
+
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Numeric Input".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        let label_width = TextLayout::measure_visual_width(
+            "Numeric Input",
+            FontID::UIDefault,
+            ctx.system_link.font_set(),
+        );
+
+        let numeric_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(16.0 + label_width, ytop - 2.0),
+                Size::new_logical(64.0, 20.0),
+            ),
+        );
+        numeric_input_view.mount(ctx, &scroll_container);
+        // numeric_input_view.set_keyboard_focus_group(
+        //     main_window.keyboard_focus_group(),
+        //     view_init_ctx.keyboard_focus_registry,
+        // );
+        ytop += 20.0;
+
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [
+                AnimatableFloat::Value(8.0),
+                AnimatableFloat::Value(ytop + 4.0),
+            ],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Dropdown".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        let label_width = TextLayout::measure_visual_width(
+            "Dropdown",
+            FontID::UIDefault,
+            ctx.system_link.font_set(),
+        );
+
+        let dropdown_box = uikit::dropdown_box::View::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(label_width + 16.0, ytop),
+                Size::new_logical(128.0, 24.0),
+            ),
+            vec![
+                "DropdownBox Item 1".into(),
+                "DropdownBox Item 2".into(),
+                "DropdownBox Item 3 too long version".into(),
+            ],
+        );
+        dropdown_box.mount(ctx, &scroll_container);
+        ytop += 28.0;
+
+        let toggle_button = uikit::ToggleButtonView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0, ytop),
+                Size::new_logical(128.0, 24.0),
+            ),
+            "Toggle / Checkbox".into(),
+        );
+        toggle_button.mount(ctx, &scroll_container);
+
+        let checkbox = uikit::CheckboxView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(144.0, ytop + 4.0),
+                Size::new_logical(16.0, 16.0),
+            ),
+        );
+        checkbox.mount(ctx, &scroll_container);
+        ytop += 24.0;
+        ytop += 8.0;
+
+        let label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "Radio Buttons/Groups".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        ctx.composite_tree
+            .add_child(scroll_container.ct_root(), label);
+        ytop += 16.0;
+
+        let rgc1 = Rc::new(RadioButtonGroupController::new());
+        let rgc2 = Rc::new(RadioButtonGroupController::new());
+        let radio_button1 = RadioButtonView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(16.0, ytop),
+                Size::new_logical(16.0, 16.0),
+            ),
+            &rgc1,
+        );
+        radio_button1.mount(ctx, &scroll_container);
+        let radio_button2 = RadioButtonView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(36.0, ytop),
+                Size::new_logical(16.0, 16.0),
+            ),
+            &rgc1,
+        );
+        radio_button2.mount(ctx, &scroll_container);
+        let radio_button3 = RadioButtonView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(56.0, ytop),
+                Size::new_logical(16.0, 16.0),
+            ),
+            &rgc1,
+        );
+        radio_button3.mount(ctx, &scroll_container);
+        let radio_button4 = RadioButtonView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(76.0, ytop),
+                Size::new_logical(16.0, 16.0),
+            ),
+            &rgc2,
+        );
+        radio_button4.mount(ctx, &scroll_container);
+        ytop += 24.0;
+
+        // test_alert_btn.set_keyboard_focus_group(
+        //     main_window.keyboard_focus_group(),
+        //     ctx.keyboard_focus_registry,
+        // );
+        // test_alert_btn2.set_keyboard_focus_group(
+        //     main_window.keyboard_focus_group(),
+        //     ctx.keyboard_focus_registry,
+        // );
+
+        scroll_container.set_content_size(
+            Size::new_logical(content_width, ytop + 8.0),
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+        );
+        Self {
+            scroll_container,
+            test_alert_btn,
+            test_alert_btn2,
+            text_input_view,
+            text_input_view2,
+            ml_text_editor_view,
+            color_picker_backing_store,
+            color_picker,
+            editable_color_button,
+            numeric_input_view,
+            dropdown_box,
+            toggle_button,
+            checkbox,
+            rgc1,
+            rgc2,
+            radio_button1,
+            radio_button2,
+            radio_button3,
+            radio_button4,
+        }
+    }
+}
+impl PaneView for UIKitPreviewPaneView {
+    fn name(&self) -> String {
+        "uikit on stage".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+        self.scroll_container.mount(ctx, target);
+    }
+
+    fn unmount(&self, ctx: &mut MountContext) {
+        self.scroll_container.unmount(ctx);
+    }
+
+    fn resize(
+        &self,
+        new_size: &Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        self.scroll_container
+            .resize(new_size.clone(), composite_tree, ht_manager);
     }
 }
 
@@ -4855,6 +5378,7 @@ async fn run<'sys>(
         screen_reposition_interests: HashSet::new(),
         header: window_header_view,
         docking_manager: DockingManager::new(
+            main_window,
             &mut view_init_ctx,
             Rect::from_lt_size(
                 Point::new_logical(8.0, 460.0),
@@ -4865,8 +5389,8 @@ async fn run<'sys>(
                     parent: None,
                     left: store.alloc(|id| {
                         let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
+                            Box::new(UIKitPreviewPaneView::new(view_init_ctx)),
                             Box::new(TestPane1View::new(view_init_ctx)),
-                            Box::new(TestPane2View::new(view_init_ctx)),
                         ];
 
                         Dock::Fill {
@@ -4879,8 +5403,10 @@ async fn run<'sys>(
                         }
                     }),
                     right: store.alloc(|id| {
-                        let pane_group_view_contents: Vec<Box<dyn PaneView>> =
-                            vec![Box::new(TestPane1View::new(view_init_ctx))];
+                        let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
+                            Box::new(TestPane1View::new(view_init_ctx)),
+                            Box::new(TestPane2View::new(view_init_ctx)),
+                        ];
 
                         Dock::Fill {
                             group_view: PaneGroupView::new(
@@ -4899,438 +5425,8 @@ async fn run<'sys>(
                     width: Cell::new(96.0),
                 })
             },
-            &main_window,
         ),
     }));
-
-    // tab view
-    let tab_main = view_init_ctx.composite_tree.create(CompositeRect {
-        has_bitmap: true,
-        scale_factor: CompositeRectScaleFactor::UI,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-        size: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(36.0)],
-        offset: [AnimatableFloat::Value(100.0), AnimatableFloat::Value(100.0)],
-        text: Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                font_id: FontID::UIDefault,
-                content: "tab".into(),
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
-    let tab_bg_grad = view_init_ctx
-        .composite_tree
-        .create_gradient(Gradient::Radial {
-            start_color: [1.0, 1.0, 1.0, 1.0],
-            end_color: [1.0, 1.0, 1.0, 0.0],
-            center_relative: [0.5, 0.5],
-            radius: [0.5, 0.1],
-        });
-    let tab_bg = view_init_ctx.composite_tree.create(CompositeRect {
-        scale_factor: CompositeRectScaleFactor::UI,
-        relative_size_adjustment: [1.0, 1.0],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillRadialGradient(tab_bg_grad),
-        ..Default::default()
-    });
-    view_init_ctx.composite_tree.add_child(tab_main, tab_bg);
-    view_init_ctx
-        .composite_tree
-        .add_child(main_window.ct_root(), tab_main);
-    let ht_tab_main = view_init_ctx.ht_manager.create(HitTestTreeData {
-        left: 100.0,
-        top: 100.0,
-        width: 100.0,
-        height: 36.0,
-        cursor_shape: CursorShape::Pointer,
-        ..Default::default()
-    });
-    view_init_ctx
-        .ht_manager
-        .add_child(main_window.ht_root(), ht_tab_main);
-
-    struct TabHitAction {
-        ct: CompositeTreeRef,
-        ht: HitTestTreeRef,
-    }
-    impl HitTestTreeActionHandler for TabHitAction {
-        fn on_pointer_enter(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut InputEventContext,
-            args: &PointerActionArgs,
-        ) -> input::EventContinueControl {
-            context.composite_tree.get_mut(self.ct).composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Animated {
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
-                    from_value: [1.0, 1.0, 1.0, 0.0],
-                    to_value: [1.0, 1.0, 1.0, 0.25],
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                });
-            context.composite_tree.mark_dirty(self.ct);
-
-            input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_pointer_leave(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut InputEventContext,
-            args: &PointerActionArgs,
-        ) -> input::EventContinueControl {
-            context.composite_tree.get_mut(self.ct).composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Animated {
-                    start_sec: context.current_sec,
-                    end_sec: context.current_sec + 0.1,
-                    from_value: [1.0, 1.0, 1.0, 0.25],
-                    to_value: [1.0, 1.0, 1.0, 0.0],
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                });
-            context.composite_tree.mark_dirty(self.ct);
-
-            input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_drag_start(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut InputEventContext,
-            args: &PointerButtonActionArgs,
-        ) -> input::EventContinueControl {
-            if args.button != PointerButton::Primary {
-                return input::EventContinueControl::empty();
-            }
-
-            context
-                .drag_preview_popover
-                .show(&args.client_pos, &Size::new_logical(128.0, 128.0));
-
-            input::EventContinueControl::CAPTURE_ELEMENT
-                | input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_drag_move(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut InputEventContext,
-            args: &PointerActionArgs,
-        ) -> input::EventContinueControl {
-            context.drag_preview_popover.r#move(&args.client_pos);
-
-            input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_drag_end(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut InputEventContext,
-            args: &PointerButtonActionArgs,
-        ) -> input::EventContinueControl {
-            if args.button != PointerButton::Primary {
-                return input::EventContinueControl::empty();
-            }
-
-            context.drag_preview_popover.hide();
-
-            input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
-                | input::EventContinueControl::STOP_PROPAGATION
-        }
-
-        fn on_click(
-            &self,
-            sender: HitTestTreeRef,
-            context: &mut InputEventContext,
-            args: &PointerButtonActionArgs,
-        ) -> input::EventContinueControl {
-            if args.button == PointerButton::Primary {
-                context.system_link.dispatch_event(Event::SubWindowOpen);
-
-                input::EventContinueControl::STOP_PROPAGATION
-            } else {
-                context.system_link.dispatch_event(Event::MenuOpen {
-                    parent: context
-                        .ht_manager
-                        .query_root_window(self.ht)
-                        .expect("not mounted"),
-                    items: vec![
-                        crate::uikit::MenuItem::Command {
-                            label: "Entry1".into(),
-                            command_id: 0,
-                        },
-                        crate::uikit::MenuItem::Command {
-                            label: "Entry2".into(),
-                            command_id: 1,
-                        },
-                        crate::uikit::MenuItem::Separator,
-                        crate::uikit::MenuItem::Command {
-                            label: "Entry3".into(),
-                            command_id: 2,
-                        },
-                        crate::uikit::MenuItem::Heading {
-                            label: "Head".into(),
-                        },
-                        crate::uikit::MenuItem::SubMenu {
-                            label: "Sub".into(),
-                            items: vec![crate::uikit::MenuItem::Command {
-                                label: "SubEntry1".into(),
-                                command_id: 4,
-                            }],
-                        },
-                        crate::uikit::MenuItem::Command {
-                            label: "Entry4".into(),
-                            command_id: 3,
-                        },
-                    ],
-                    surface_pos: args.client_pos,
-                });
-
-                input::EventContinueControl::STOP_PROPAGATION
-            }
-        }
-    }
-    let ht_action_handler = std::rc::Rc::new(TabHitAction {
-        ct: tab_main,
-        ht: ht_tab_main,
-    });
-    view_init_ctx
-        .ht_manager
-        .set_action_handler(ht_tab_main, &ht_action_handler);
-
-    let test_alert_btn = SimpleButtonView::new(
-        &mut view_init_ctx,
-        "Test Alert".into(),
-        Size::new_logical(64.0, 24.0),
-        Some(Event::OpenAlertDialog {
-            target_window: main_window,
-            message: "てすとめっせーじ from button\n改行もしてみる".into(),
-        }),
-    );
-    test_alert_btn.locate(
-        &Positioning {
-            parent_anchor: [0.0, 0.0],
-            anchor: [0.0, 0.0],
-            offset: [200.0, 96.0],
-        },
-        &mut view_init_ctx.mount_context.composite_tree,
-        &mut view_init_ctx.mount_context.ht_manager,
-    );
-    test_alert_btn.mount(&mut view_init_ctx, &main_window);
-    test_alert_btn.set_keyboard_focus_group(
-        main_window.keyboard_focus_group(),
-        view_init_ctx.keyboard_focus_registry,
-    );
-
-    let test_alert_btn2 = SimpleButtonView::new(
-        &mut view_init_ctx,
-        "Test Alert 2".into(),
-        Size::new_logical(96.0, 24.0),
-        Some(Event::OpenAlertDialog {
-            target_window: main_window,
-            message: "とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ".into(),
-        }),
-    );
-    test_alert_btn2.locate(
-        &Positioning {
-            parent_anchor: [0.0, 0.0],
-            anchor: [0.0, 0.0],
-            offset: [280.0, 96.0],
-        },
-        &mut view_init_ctx.mount_context.composite_tree,
-        &mut view_init_ctx.mount_context.ht_manager,
-    );
-    test_alert_btn2.mount(&mut view_init_ctx, &main_window);
-    test_alert_btn2.set_keyboard_focus_group(
-        main_window.keyboard_focus_group(),
-        view_init_ctx.keyboard_focus_registry,
-    );
-
-    let text_input_view = TextInputView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(200.0, 300.0),
-            Size::new_logical(128.0, 20.0),
-        ),
-    );
-    text_input_view.mount(&mut view_init_ctx, &main_window);
-    text_input_view.set_keyboard_focus_group(
-        main_window.keyboard_focus_group(),
-        view_init_ctx.keyboard_focus_registry,
-    );
-
-    let text_input_view2 = TextInputView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(200.0, 324.0),
-            Size::new_logical(128.0, 20.0),
-        ),
-    );
-    text_input_view2.mount(&mut view_init_ctx, &main_window);
-    text_input_view2.set_keyboard_focus_group(
-        main_window.keyboard_focus_group(),
-        view_init_ctx.keyboard_focus_registry,
-    );
-
-    let scroll_container = ScrollContainer::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(500.0, 200.0),
-            Size::new_logical(128.0, 128.0),
-        ),
-    );
-    scroll_container.mount(&mut view_init_ctx, &main_window);
-
-    let text_input_view3 = TextInputView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(Point::new_logical(8.0, 8.0), Size::new_logical(128.0, 20.0)),
-    );
-    text_input_view3.mount(&mut view_init_ctx, &scroll_container);
-    text_input_view3.set_keyboard_focus_group(
-        main_window.keyboard_focus_group(),
-        view_init_ctx.keyboard_focus_registry,
-    );
-
-    scroll_container.set_content_size(
-        Size::new_logical(100.0, 400.0),
-        view_init_ctx.mount_context.composite_tree,
-        view_init_ctx.mount_context.ht_manager,
-    );
-
-    let dropdown_box = uikit::dropdown_box::View::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(200.0, 44.0),
-            Size::new_logical(128.0, 24.0),
-        ),
-        vec![
-            "DropdownBox Item 1".into(),
-            "DropdownBox Item 2".into(),
-            "DropdownBox Item 3 too long version".into(),
-        ],
-    );
-    dropdown_box.mount(&mut view_init_ctx, &main_window);
-
-    let numeric_input_view = NumericInputView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(500.0, 100.0),
-            Size::new_logical(64.0, 20.0),
-        ),
-    );
-    numeric_input_view.mount(&mut view_init_ctx, &main_window);
-    numeric_input_view.set_keyboard_focus_group(
-        main_window.keyboard_focus_group(),
-        view_init_ctx.keyboard_focus_registry,
-    );
-
-    let toggle_button = uikit::ToggleButtonView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(500.0, 128.0),
-            Size::new_logical(64.0, 24.0),
-        ),
-        "Toggle".into(),
-    );
-    toggle_button.mount(&mut view_init_ctx, &main_window);
-
-    let checkbox = uikit::CheckboxView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(580.0, 128.0 + 4.0),
-            Size::new_logical(16.0, 16.0),
-        ),
-    );
-    checkbox.mount(&mut view_init_ctx, &main_window);
-
-    let rgc1 = Rc::new(RadioButtonGroupController::new());
-    let rgc2 = Rc::new(RadioButtonGroupController::new());
-    let radio_button = RadioButtonView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(640.0, 128.0 + 4.0),
-            Size::new_logical(16.0, 16.0),
-        ),
-        &rgc1,
-    );
-    radio_button.mount(&mut view_init_ctx, &main_window);
-    let radio_button2 = RadioButtonView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(660.0, 128.0 + 4.0),
-            Size::new_logical(16.0, 16.0),
-        ),
-        &rgc1,
-    );
-    radio_button2.mount(&mut view_init_ctx, &main_window);
-    let radio_button3 = RadioButtonView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(680.0, 128.0 + 4.0),
-            Size::new_logical(16.0, 16.0),
-        ),
-        &rgc1,
-    );
-    radio_button3.mount(&mut view_init_ctx, &main_window);
-    let radio_button4 = RadioButtonView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(700.0, 128.0 + 4.0),
-            Size::new_logical(16.0, 16.0),
-        ),
-        &rgc2,
-    );
-    radio_button4.mount(&mut view_init_ctx, &main_window);
-
-    struct ColorPickerTestBackingStore {
-        color: Cell<u32>,
-    }
-    impl ColorPickerBackingStoreEvent for ColorPickerTestBackingStore {
-        fn value(&self) -> u32 {
-            self.color.get()
-        }
-        fn new_value(&self, value: u32, _event_dispatcher: &LogicFiberEventDispatcher) {
-            self.color.set(value);
-        }
-    }
-    let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
-        color: Cell::new(0xffffffff),
-    });
-    let color_picker = ColorPickerView::new(
-        &mut view_init_ctx,
-        Point::new_logical(8.0, 64.0),
-        &Rc::downgrade(&color_picker_backing_store),
-    );
-    color_picker.mount(&mut view_init_ctx, &main_window);
-
-    let editable_color_button = EditableColorButtonView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(500.0, 128.0 + 32.0),
-            Size::new_logical(32.0, 20.0),
-        ),
-        0xffffffff,
-    );
-    editable_color_button.mount(&mut view_init_ctx, &main_window);
-
-    let ml_text_kf_token = view_init_ctx.keyboard_focus_registry.acquire_token();
-    let ml_text_editor_view = uikit::MultilineTextInputView::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(8.0, 320.0),
-            Size::new_logical(160.0, 100.0),
-        ),
-        "".into(),
-        ml_text_kf_token,
-        uikit::RawTextInputViewCreateFlags::NON_DELEGATED_HT,
-    );
-    ml_text_editor_view.mount(&mut view_init_ctx, &main_window);
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -5385,6 +5481,7 @@ async fn run<'sys>(
                             screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
                             docking_manager: DockingManager::new(
+                                w,
                                 &mut view_init_ctx,
                                 Rect::from_lt_size(
                                     Point::new_logical(8.0, ui::window_header::View::THICKNESS),
@@ -5405,7 +5502,6 @@ async fn run<'sys>(
                                         }
                                     })
                                 },
-                                &main_window,
                             ),
                         }));
                     },
@@ -6438,6 +6534,7 @@ async fn run<'sys>(
                                 screen_reposition_interests: HashSet::new(),
                                 header: window_header_view,
                                 docking_manager: DockingManager::new(
+                                    w,
                                     &mut view_init_ctx,
                                     Rect::from_lt_size(
                                         Point::new_logical(8.0, ui::window_header::View::THICKNESS),
@@ -6453,7 +6550,6 @@ async fn run<'sys>(
                                             parent: None,
                                         })
                                     },
-                                    &w,
                                 ),
                             }));
                         },

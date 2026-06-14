@@ -215,7 +215,9 @@ pub use self::popup::{
 };
 
 mod button;
-pub use self::button::SimpleButtonView;
+pub use self::button::{
+    SimpleButtonConstantEventHandler, SimpleButtonEventHandler, SimpleButtonView,
+};
 
 mod menu;
 pub use self::menu::{

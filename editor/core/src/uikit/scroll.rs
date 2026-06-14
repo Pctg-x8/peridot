@@ -45,10 +45,10 @@ impl ScrollContainer {
                 AnimatableFloat::Value(rect.width),
                 AnimatableFloat::Value(rect.height),
             ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                1.0, 1.0, 1.0, 0.0625,
-            ])),
+            has_bitmap: false,
+            // composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+            //     1.0, 1.0, 1.0, 0.0625,
+            // ])),
             clip_child: Some(ClipConfig {
                 left_softness: SafeF32::ZERO,
                 top_softness: SafeF32::ZERO,
@@ -88,8 +88,9 @@ impl ScrollContainer {
             relative_offset_adjustment: [1.0, 0.0],
             size: [
                 AnimatableFloat::Value(ACTIVE_SCROLL_BAR_THICKNESS),
-                AnimatableFloat::Value(rect.height),
+                AnimatableFloat::Value(0.0),
             ],
+            relative_size_adjustment: [0.0, 1.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
                 0.75, 0.75, 0.75, 0.5,
@@ -119,7 +120,7 @@ impl ScrollContainer {
             top: 0.0,
             left_adjustment_factor: 1.0,
             width: ACTIVE_SCROLL_BAR_THICKNESS,
-            height: rect.height,
+            height_adjustment_factor: 1.0,
             ..Default::default()
         });
         let ht_scroll_thumb_vert = ctx.ht_manager.create(HitTestTreeData {
@@ -139,9 +140,10 @@ impl ScrollContainer {
             ],
             relative_offset_adjustment: [0.0, 1.0],
             size: [
-                AnimatableFloat::Value(rect.height),
+                AnimatableFloat::Value(0.0),
                 AnimatableFloat::Value(ACTIVE_SCROLL_BAR_THICKNESS),
             ],
+            relative_size_adjustment: [1.0, 0.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
                 0.75, 0.75, 0.75, 0.5,
@@ -170,7 +172,7 @@ impl ScrollContainer {
             left: 0.0,
             top: -ACTIVE_SCROLL_BAR_THICKNESS,
             top_adjustment_factor: 1.0,
-            width: rect.height,
+            width_adjustment_factor: 1.0,
             height: ACTIVE_SCROLL_BAR_THICKNESS,
             ..Default::default()
         });
@@ -227,18 +229,33 @@ impl ScrollContainer {
         ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
     }
 
-    pub fn set_content_size<E>(
+    pub fn unmount(&self, ctx: &mut MountContext) {
+        ctx.composite_tree.remove_child(self.ct_root);
+        ctx.ht_manager.remove_child(self.ht_root);
+    }
+
+    pub fn resize<E>(
         &self,
         size: Size<LogicalUnit>,
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        self.eh.content_size.width.set(size.width);
-        self.eh.content_size.height.set(size.height);
+        self.eh.viewport_size.width.set(size.width);
+        self.eh.viewport_size.height.set(size.height);
+
+        composite_tree.get_mut(self.ct_root).size = [
+            AnimatableFloat::Value(size.width),
+            AnimatableFloat::Value(size.height),
+        ];
+        composite_tree.mark_dirty(self.ct_root);
+        ht_manager.get_data_mut(self.ht_root).width = size.width;
+        ht_manager.get_data_mut(self.ht_root).height = size.height;
 
         // mount/dismount scroll bars only if needed
-        let should_scroll_vert = self.eh.viewport_size.height.get() < size.height;
-        let should_scroll_horz = self.eh.viewport_size.width.get() < size.width;
+        let should_scroll_vert =
+            self.eh.viewport_size.height.get() < self.eh.content_size.height.get();
+        let should_scroll_horz =
+            self.eh.viewport_size.width.get() < self.eh.content_size.width.get();
         if self.eh.should_scroll_vert.replace(should_scroll_vert) != should_scroll_vert {
             if should_scroll_vert {
                 composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_vert);
@@ -265,6 +282,94 @@ impl ScrollContainer {
                 ht_manager.remove_child(self.eh.ht_scroll_thumb_horz);
             }
         }
+
+        self.eh.content_offset.x.update(|x| {
+            x.clamp(
+                0.0,
+                (self.eh.content_size.width.get() - self.eh.viewport_size.width.get()).max(0.0),
+            )
+        });
+        self.eh.content_offset.y.update(|x| {
+            x.clamp(
+                0.0,
+                (self.eh.content_size.height.get() - self.eh.viewport_size.height.get()).max(0.0),
+            )
+        });
+        let offset_x = self.eh.content_offset.x.get();
+        let offset_y = self.eh.content_offset.y.get();
+        composite_tree.get_mut(self.eh.ct_content_root).offset[0] =
+            AnimatableFloat::Value(-offset_x);
+        ht_manager.get_data_mut(self.eh.ht_content_root).left = -offset_x;
+        composite_tree.get_mut(self.eh.ct_content_root).offset[1] =
+            AnimatableFloat::Value(-offset_y);
+        ht_manager.get_data_mut(self.eh.ht_content_root).top = -offset_y;
+        composite_tree.mark_dirty(self.eh.ct_content_root);
+
+        self.eh.update_thumb_position(composite_tree, ht_manager);
+    }
+
+    pub fn set_content_size<E>(
+        &self,
+        size: Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        self.eh.content_size.width.set(size.width);
+        self.eh.content_size.height.set(size.height);
+
+        // mount/dismount scroll bars only if needed
+        let should_scroll_vert =
+            self.eh.viewport_size.height.get() < self.eh.content_size.height.get();
+        let should_scroll_horz =
+            self.eh.viewport_size.width.get() < self.eh.content_size.width.get();
+        if self.eh.should_scroll_vert.replace(should_scroll_vert) != should_scroll_vert {
+            if should_scroll_vert {
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_vert);
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_vert);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_vert);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_vert);
+            } else {
+                composite_tree.remove_child(self.eh.ct_scroll_bar_vert);
+                composite_tree.remove_child(self.eh.ct_scroll_thumb_vert);
+                ht_manager.remove_child(self.eh.ht_scroll_bar_vert);
+                ht_manager.remove_child(self.eh.ht_scroll_thumb_vert);
+            }
+        }
+        if self.eh.should_scroll_horz.replace(should_scroll_horz) != should_scroll_horz {
+            if should_scroll_horz {
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_horz);
+                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_horz);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_horz);
+                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_horz);
+            } else {
+                composite_tree.remove_child(self.eh.ct_scroll_bar_horz);
+                composite_tree.remove_child(self.eh.ct_scroll_thumb_horz);
+                ht_manager.remove_child(self.eh.ht_scroll_bar_horz);
+                ht_manager.remove_child(self.eh.ht_scroll_thumb_horz);
+            }
+        }
+
+        self.eh.content_offset.x.update(|x| {
+            x.clamp(
+                0.0,
+                (self.eh.content_size.width.get() - self.eh.viewport_size.width.get()).max(0.0),
+            )
+        });
+        self.eh.content_offset.y.update(|x| {
+            x.clamp(
+                0.0,
+                (self.eh.content_size.height.get() - self.eh.viewport_size.height.get()).max(0.0),
+            )
+        });
+        let offset_x = self.eh.content_offset.x.get();
+        let offset_y = self.eh.content_offset.y.get();
+        composite_tree.get_mut(self.eh.ct_content_root).offset[0] =
+            AnimatableFloat::Value(-offset_x);
+        ht_manager.get_data_mut(self.eh.ht_content_root).left = -offset_x;
+        composite_tree.get_mut(self.eh.ct_content_root).offset[1] =
+            AnimatableFloat::Value(-offset_y);
+        ht_manager.get_data_mut(self.eh.ht_content_root).top = -offset_y;
+        composite_tree.mark_dirty(self.eh.ct_content_root);
 
         self.eh.update_thumb_position(composite_tree, ht_manager);
     }

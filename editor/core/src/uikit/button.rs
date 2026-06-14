@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Event, SyncEvent, SystemLink,
+    Event, SyncEvent, SystemLink, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputEventHandler,
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
@@ -23,8 +23,18 @@ use crate::{
     utils::{LogicalUnit, Size},
 };
 
+pub trait SimpleButtonEventHandler {
+    fn on_click_event(&self, window: WindowHandle) -> Event;
+}
+
+pub struct SimpleButtonConstantEventHandler(pub Event);
+impl SimpleButtonEventHandler for SimpleButtonConstantEventHandler {
+    fn on_click_event(&self, _window: WindowHandle) -> Event {
+        self.0.clone()
+    }
+}
+
 pub struct SimpleButtonView {
-    ht_root: HitTestTreeRef,
     size: Size<LogicalUnit>,
     action_handler: Rc<SimpleButtonActionHandler>,
     kf_token: FocusTargetToken,
@@ -34,7 +44,7 @@ impl SimpleButtonView {
         ctx: &mut ViewInitContext,
         init_label: String,
         size: Size<LogicalUnit>,
-        click_event: Option<Event>,
+        event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -91,9 +101,10 @@ impl SimpleButtonView {
         ctx.composite_tree.add_child(ct_root, ct_focus);
 
         let action_handler = Rc::new(SimpleButtonActionHandler {
+            ht_root,
             ct_root,
             ct_focus,
-            click_event,
+            event_handler,
             state: core::cell::Cell::new(ButtonState::None),
         });
         ctx.ht_manager.set_action_handler(ht_root, &action_handler);
@@ -101,7 +112,6 @@ impl SimpleButtonView {
             .set_event_handler(kf, &action_handler);
 
         Self {
-            ht_root,
             size,
             action_handler,
             kf_token: kf,
@@ -109,7 +119,7 @@ impl SimpleButtonView {
     }
 
     pub fn terminate(&mut self, ctx: &mut MountContext) {
-        ctx.ht_manager.free_all(self.ht_root);
+        ctx.ht_manager.free_all(self.action_handler.ht_root);
         ctx.composite_tree.free_all(self.action_handler.ct_root);
         ctx.keyboard_focus_registry.release_token(self.kf_token);
     }
@@ -117,11 +127,12 @@ impl SimpleButtonView {
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree
             .add_child(parent.ct_root(), self.action_handler.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
+        ctx.ht_manager
+            .add_child(parent.ht_root(), self.action_handler.ht_root);
     }
 
     pub fn unmount(&self, ctx: &mut MountContext) {
-        ctx.ht_manager.remove_child(self.ht_root);
+        ctx.ht_manager.remove_child(self.action_handler.ht_root);
         ctx.composite_tree.remove_child(self.action_handler.ct_root);
     }
 
@@ -139,7 +150,7 @@ impl SimpleButtonView {
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        let ht = ht_manager.get_data_mut(self.ht_root);
+        let ht = ht_manager.get_data_mut(self.action_handler.ht_root);
         let ct = composite_tree.get_mut(self.action_handler.ct_root);
 
         ht.left_adjustment_factor = pos.parent_anchor[0];
@@ -156,14 +167,15 @@ impl SimpleButtonView {
     }
 
     pub fn set_interactive(&self, interactive: bool, ht_manager: &mut HitTestTreeManager) {
-        ht_manager.get_data_mut(self.ht_root).active = interactive;
+        ht_manager.get_data_mut(self.action_handler.ht_root).active = interactive;
     }
 }
 
 struct SimpleButtonActionHandler {
+    ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
     ct_focus: CompositeTreeRef,
-    click_event: Option<Event>,
+    event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
     state: core::cell::Cell<ButtonState>,
 }
 impl KeyInputEventHandler for SimpleButtonActionHandler {
@@ -185,7 +197,13 @@ impl KeyInputEventHandler for SimpleButtonActionHandler {
     ) {
         if code == crate::input::KeyInputCode::Enter {
             // hit enter
-            self.perform_click_action(context.system_link);
+            self.perform_click_action(
+                context.system_link,
+                context
+                    .ht_manager
+                    .query_root_window(self.ht_root)
+                    .expect("not mounted"),
+            );
         }
     }
 }
@@ -252,11 +270,17 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
 
     fn on_click(
         &self,
-        _sender: HitTestTreeRef,
+        sender: HitTestTreeRef,
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.perform_click_action(context.system_link);
+        self.perform_click_action(
+            context.system_link,
+            context
+                .ht_manager
+                .query_root_window(sender)
+                .expect("not mounted"),
+        );
 
         EventContinueControl::empty()
     }
@@ -296,9 +320,9 @@ impl SimpleButtonActionHandler {
         self.state.set(new_state);
     }
 
-    fn perform_click_action(&self, syslink: &SystemLink) {
-        if let Some(ref c) = self.click_event {
-            syslink.dispatch_event(c.clone());
+    fn perform_click_action(&self, syslink: &SystemLink, window: WindowHandle) {
+        if let Some(ref c) = self.event_handler {
+            syslink.dispatch_event(c.on_click_event(window));
         }
     }
 }
