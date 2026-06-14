@@ -2880,10 +2880,12 @@ impl DockingManager {
         ctx: &mut ViewInitContext,
         max_rect: Rect<LogicalUnit>,
         dock_ctor: impl FnOnce(&std::rc::Weak<Self>, &mut ViewInitContext, &mut DockStore) -> DockID,
+        mount_target: &(impl MountTarget + ?Sized),
     ) -> Rc<Self> {
         Rc::new_cyclic(move |wthis| {
             let mut store = DockStore::new();
             let root_id = dock_ctor(wthis, ctx, &mut store);
+            Self::mount_recursive(root_id, &store, ctx, mount_target);
             Self::relayout_dock(
                 root_id,
                 &store,
@@ -2899,6 +2901,57 @@ impl DockingManager {
                 preview_state: core::cell::RefCell::new(None),
             }
         })
+    }
+
+    fn mount_recursive(
+        target: DockID,
+        store: &DockStore,
+        ctx: &mut MountContext,
+        mount_target: &(impl MountTarget + ?Sized),
+    ) {
+        match store.get(target) {
+            Dock::Fill(g) => g.mount(ctx, mount_target),
+            &Dock::ToLeft {
+                left,
+                right,
+                ref splitter,
+                ..
+            } => {
+                Self::mount_recursive(left, store, ctx, mount_target);
+                Self::mount_recursive(right, store, ctx, mount_target);
+                splitter.mount(ctx, mount_target);
+            }
+            &Dock::ToRight {
+                left,
+                right,
+                ref splitter,
+                ..
+            } => {
+                Self::mount_recursive(left, store, ctx, mount_target);
+                Self::mount_recursive(right, store, ctx, mount_target);
+                splitter.mount(ctx, mount_target);
+            }
+            &Dock::ToTop {
+                top,
+                bottom,
+                ref splitter,
+                ..
+            } => {
+                Self::mount_recursive(top, store, ctx, mount_target);
+                Self::mount_recursive(bottom, store, ctx, mount_target);
+                splitter.mount(ctx, mount_target);
+            }
+            &Dock::ToBottom {
+                top,
+                bottom,
+                ref splitter,
+                ..
+            } => {
+                Self::mount_recursive(top, store, ctx, mount_target);
+                Self::mount_recursive(bottom, store, ctx, mount_target);
+                splitter.mount(ctx, mount_target);
+            }
+        }
     }
 
     fn relayout_dock<E>(
@@ -3151,6 +3204,25 @@ impl DockingManager {
         }
 
         Self::relayout_dock_lazy(target, &self.store, self_rect, event_dispatcher);
+    }
+
+    fn redock(
+        &mut self,
+        source: DockID,
+        index: usize,
+        op: DockingOperation,
+        view_init_ctx: &mut ViewInitContext,
+    ) {
+        match op {
+            DockingOperation::Diverge => {
+                // diverge to new window
+            }
+            DockingOperation::Merge(target) => {}
+            DockingOperation::SplitToLeft(target) => {}
+            DockingOperation::SplitToRight(target) => {}
+            DockingOperation::SplitToTop(target) => {}
+            DockingOperation::SplitToBottom(target) => {}
+        }
     }
 
     fn begin_preview(
@@ -4509,33 +4581,27 @@ async fn run<'sys>(
             ];
             let pane_group_view =
                 PaneGroupView::new(view_init_ctx, manager, pane_group_view_contents);
-            pane_group_view.mount(view_init_ctx, &main_window);
 
             let pane_group_view_contents: Vec<Box<dyn PaneView>> =
                 vec![Box::new(TestPane1View::new(view_init_ctx))];
             let pane_group_view2 =
                 PaneGroupView::new(view_init_ctx, manager, pane_group_view_contents);
-            pane_group_view2.mount(view_init_ctx, &main_window);
 
             let left = store.alloc(|_| Dock::Fill(pane_group_view));
             let right = store.alloc(|_| Dock::Fill(pane_group_view2));
-            store.alloc(|id| {
-                let splitter = DockedPaneSplitterView::new(
+            store.alloc(|id| Dock::ToRight {
+                left,
+                right,
+                splitter: DockedPaneSplitterView::new(
                     view_init_ctx,
                     DockedPaneSplitDirection::Vertical,
                     id,
                     manager,
-                );
-                splitter.mount(view_init_ctx, &main_window);
-
-                Dock::ToRight {
-                    left,
-                    right,
-                    splitter,
-                    width: Cell::new(96.0),
-                }
+                ),
+                width: Cell::new(96.0),
             })
         },
+        &main_window,
     );
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
