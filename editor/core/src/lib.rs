@@ -895,6 +895,23 @@ pub enum Event {
     UpdateView {
         id: ViewIdentifier,
     },
+    DockMoveSplitter {
+        window: WindowHandle,
+        controlling_dock: DockID,
+        pos_client: f32,
+    },
+    DockBeginPreview {
+        window: WindowHandle,
+        pane_rect: Rect<LogicalUnit>,
+        client_pos: Point<LogicalUnit>,
+    },
+    DockMovePreview {
+        window: WindowHandle,
+        client_pos: Point<LogicalUnit>,
+    },
+    DockEndPreview {
+        window: WindowHandle,
+    },
     #[cfg(not(target_os = "macos"))]
     GlobalMouseClicked,
     #[cfg(windows)]
@@ -959,6 +976,10 @@ impl Event {
             Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
             Self::UpdateView { .. } => "UpdateView",
+            Self::DockMoveSplitter { .. } => "DockMoveSplitter",
+            Self::DockBeginPreview { .. } => "DockBeginPreview",
+            Self::DockMovePreview { .. } => "DockMovePreview",
+            Self::DockEndPreview { .. } => "DockEndPreview",
             #[cfg(not(target_os = "macos"))]
             Self::GlobalMouseClicked => "GlobalMouseClicked",
             #[cfg(windows)]
@@ -2614,10 +2635,7 @@ impl DockStore {
         let id = DockID(self.docks.len().try_into().expect("too many docks"));
         self.docks.push(dock(id));
         self.computed_states.push(ComputedDockState {
-            rect: UnsafeCell::new(Rect::from_lt_size(
-                Point::new_logical(0.0, 0.0),
-                Size::new_logical(0.0, 0.0),
-            )),
+            rect: Rect::from_lt_size(Point::new_logical(0.0, 0.0), Size::new_logical(0.0, 0.0)),
         });
         id
     }
@@ -2640,10 +2658,14 @@ impl DockStore {
     pub fn get_computed_state(&self, id: DockID) -> &ComputedDockState {
         &self.computed_states[id.store_index()]
     }
+
+    pub fn get_computed_state_mut(&mut self, id: DockID) -> &mut ComputedDockState {
+        &mut self.computed_states[id.store_index()]
+    }
 }
 
 pub struct ComputedDockState {
-    rect: UnsafeCell<Rect<LogicalUnit>>,
+    rect: Rect<LogicalUnit>,
 }
 
 pub enum Dock {
@@ -2873,34 +2895,32 @@ pub struct DockingManager {
     max_rect: Rect<LogicalUnit>,
     store: DockStore,
     root_id: DockID,
-    preview_state: core::cell::RefCell<Option<DockingPreviewState>>,
+    preview_state: Option<DockingPreviewState>,
 }
 impl DockingManager {
     pub fn new(
         ctx: &mut ViewInitContext,
         max_rect: Rect<LogicalUnit>,
-        dock_ctor: impl FnOnce(&std::rc::Weak<Self>, &mut ViewInitContext, &mut DockStore) -> DockID,
+        dock_ctor: impl FnOnce(&mut ViewInitContext, &mut DockStore) -> DockID,
         mount_target: &(impl MountTarget + ?Sized),
-    ) -> Rc<Self> {
-        Rc::new_cyclic(move |wthis| {
-            let mut store = DockStore::new();
-            let root_id = dock_ctor(wthis, ctx, &mut store);
-            Self::mount_recursive(root_id, &store, ctx, mount_target);
-            Self::relayout_dock(
-                root_id,
-                &store,
-                max_rect.clone(),
-                ctx.mount_context.composite_tree,
-                ctx.mount_context.ht_manager,
-            );
+    ) -> Self {
+        let mut store = DockStore::new();
+        let root_id = dock_ctor(ctx, &mut store);
+        Self::mount_recursive(root_id, &store, ctx, mount_target);
+        Self::relayout_dock(
+            root_id,
+            &mut store,
+            max_rect.clone(),
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+        );
 
-            Self {
-                max_rect,
-                root_id,
-                store,
-                preview_state: core::cell::RefCell::new(None),
-            }
-        })
+        Self {
+            max_rect,
+            root_id,
+            store,
+            preview_state: None,
+        }
     }
 
     fn mount_recursive(
@@ -2956,14 +2976,12 @@ impl DockingManager {
 
     fn relayout_dock<E>(
         target: DockID,
-        store: &DockStore,
+        store: &mut DockStore,
         available_rect: Rect<LogicalUnit>,
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        unsafe {
-            *store.get_computed_state(target).rect.get() = available_rect.clone();
-        }
+        store.get_computed_state_mut(target).rect = available_rect.clone();
 
         match store.get(target) {
             Dock::Fill(v) => v.set_rect(available_rect, composite_tree, ht_manager),
@@ -2990,8 +3008,8 @@ impl DockingManager {
                     ),
                 );
 
-                Self::relayout_dock(left, store, l_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(left, store, l_rect, composite_tree, ht_manager);
                 Self::relayout_dock(right, store, r_rect, composite_tree, ht_manager);
             }
             &Dock::ToRight {
@@ -3017,8 +3035,8 @@ impl DockingManager {
                     Size::new_logical(width, available_rect.height),
                 );
 
-                Self::relayout_dock(left, store, l_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(left, store, l_rect, composite_tree, ht_manager);
                 Self::relayout_dock(right, store, r_rect, composite_tree, ht_manager);
             }
             &Dock::ToTop {
@@ -3044,8 +3062,8 @@ impl DockingManager {
                     ),
                 );
 
-                Self::relayout_dock(top, store, t_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(top, store, t_rect, composite_tree, ht_manager);
                 Self::relayout_dock(bottom, store, b_rect, composite_tree, ht_manager);
             }
             &Dock::ToBottom {
@@ -3071,8 +3089,8 @@ impl DockingManager {
                     Size::new_logical(available_rect.width, height),
                 );
 
-                Self::relayout_dock(top, store, t_rect, composite_tree, ht_manager);
                 splitter.resize(s_rect, composite_tree, ht_manager);
+                Self::relayout_dock(top, store, t_rect, composite_tree, ht_manager);
                 Self::relayout_dock(bottom, store, b_rect, composite_tree, ht_manager);
             }
         }
@@ -3080,13 +3098,11 @@ impl DockingManager {
 
     fn relayout_dock_lazy(
         target: DockID,
-        store: &DockStore,
+        store: &mut DockStore,
         available_rect: Rect<LogicalUnit>,
         event_dispatcher: &LogicFiberEventDispatcher,
     ) {
-        unsafe {
-            *store.get_computed_state(target).rect.get() = available_rect.clone();
-        }
+        store.get_computed_state_mut(target).rect = available_rect.clone();
 
         match store.get(target) {
             Dock::Fill(v) => v.set_rect_lazy(available_rect, event_dispatcher),
@@ -3105,8 +3121,8 @@ impl DockingManager {
                     Size::new_logical(DockedPaneSplitterView::THICKNESS, available_rect.height),
                 );
 
-                Self::relayout_dock_lazy(left, store, l_rect, event_dispatcher);
                 splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(left, store, l_rect, event_dispatcher);
                 Self::relayout_dock_lazy(right, store, r_rect, event_dispatcher);
             }
             &Dock::ToRight {
@@ -3124,8 +3140,8 @@ impl DockingManager {
                     Size::new_logical(DockedPaneSplitterView::THICKNESS, available_rect.height),
                 );
 
-                Self::relayout_dock_lazy(left, store, l_rect, event_dispatcher);
                 splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(left, store, l_rect, event_dispatcher);
                 Self::relayout_dock_lazy(right, store, r_rect, event_dispatcher);
             }
             &Dock::ToTop {
@@ -3144,8 +3160,8 @@ impl DockingManager {
                     Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
                 );
 
-                Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
                 splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
                 Self::relayout_dock_lazy(bottom, store, b_rect, event_dispatcher);
             }
             &Dock::ToBottom {
@@ -3163,20 +3179,21 @@ impl DockingManager {
                     Size::new_logical(available_rect.width, DockedPaneSplitterView::THICKNESS),
                 );
 
-                Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
                 splitter.relayout_lazy(s_rect, event_dispatcher);
+                Self::relayout_dock_lazy(top, store, t_rect, event_dispatcher);
                 Self::relayout_dock_lazy(bottom, store, b_rect, event_dispatcher);
             }
         }
     }
 
-    fn move_splitter(
-        &self,
+    pub fn move_splitter<E>(
+        &mut self,
         target: DockID,
         new_splitter_client_pos: f32,
-        event_dispatcher: &LogicFiberEventDispatcher,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
     ) {
-        let self_rect = unsafe { &*self.store.get_computed_state(target).rect.get() }.clone();
+        let self_rect = &self.store.get_computed_state(target).rect;
         match self.store.get(target) {
             Dock::Fill(_) => unreachable!("fill does not have any splitters!"),
             Dock::ToLeft { width, .. } => {
@@ -3203,7 +3220,14 @@ impl DockingManager {
             }
         }
 
-        Self::relayout_dock_lazy(target, &self.store, self_rect, event_dispatcher);
+        let self_rect = self_rect.clone();
+        Self::relayout_dock(
+            target,
+            &mut self.store,
+            self_rect,
+            composite_tree,
+            ht_manager,
+        );
     }
 
     fn redock(
@@ -3226,7 +3250,7 @@ impl DockingManager {
     }
 
     fn begin_preview(
-        &self,
+        &mut self,
         pane_rect: Rect<LogicalUnit>,
         client_pos: &Point<LogicalUnit>,
         popover: &DragPreviewPopoverHandle,
@@ -3235,7 +3259,7 @@ impl DockingManager {
             &Point::new_logical(pane_rect.left, pane_rect.top),
             &Size::new_logical(pane_rect.width, pane_rect.height),
         );
-        *self.preview_state.borrow_mut() = Some(DockingPreviewState {
+        self.preview_state = Some(DockingPreviewState {
             offset: Point::new_logical(pane_rect.left - client_pos.x, pane_rect.top - client_pos.y),
             control_rect: self.max_rect.clone(),
             original_rect: pane_rect,
@@ -3243,8 +3267,7 @@ impl DockingManager {
     }
 
     fn move_preview(&self, client_pos: Point<LogicalUnit>, popover: &DragPreviewPopoverHandle) {
-        let locked = self.preview_state.borrow();
-        let Some(state) = locked.as_ref() else {
+        let Some(ref state) = self.preview_state else {
             return;
         };
 
@@ -3282,9 +3305,9 @@ impl DockingManager {
         }
     }
 
-    fn end_preview(&self, popover: &DragPreviewPopoverHandle) {
+    fn end_preview(&mut self, popover: &DragPreviewPopoverHandle) {
         popover.hide();
-        *self.preview_state.borrow_mut() = None;
+        self.preview_state = None;
     }
 }
 
@@ -3303,7 +3326,6 @@ impl DockedPaneSplitterView {
         ctx: &mut ViewInitContext,
         dir: DockedPaneSplitDirection,
         controlling_dock: DockID,
-        manager: &std::rc::Weak<DockingManager>,
     ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -3326,7 +3348,6 @@ impl DockedPaneSplitterView {
             view_id: ctx.view_registry.alloc(),
             dir,
             controlling_dock,
-            manager: manager.clone(),
             ct_root,
             ht_root,
             pressing: Cell::new(false),
@@ -3368,7 +3389,6 @@ struct DockedPaneSplitterEventHandler {
     view_id: ViewIdentifier,
     dir: DockedPaneSplitDirection,
     controlling_dock: DockID,
-    manager: std::rc::Weak<DockingManager>,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     pressing: Cell<bool>,
@@ -3416,29 +3436,11 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
             return EventContinueControl::empty();
         }
 
-        let Some(manager) = self.manager.upgrade() else {
-            return EventContinueControl::empty();
-        };
-
-        match self.dir {
-            DockedPaneSplitDirection::Horizontal => {
-                let pos = args.client_pos.y + self.drag_delta.get();
-                manager.move_splitter(
-                    self.controlling_dock,
-                    pos,
-                    context.system_link.event_dispatcher(),
-                );
-            }
-            DockedPaneSplitDirection::Vertical => {
-                let pos = args.client_pos.x + self.drag_delta.get();
-                manager.move_splitter(
-                    self.controlling_dock,
-                    pos,
-                    context.system_link.event_dispatcher(),
-                );
-            }
-        }
-
+        self.r#move(
+            &args.client_pos,
+            context.ht_manager,
+            context.system_link.event_dispatcher(),
+        );
         EventContinueControl::STOP_PROPAGATION
     }
 
@@ -3448,29 +3450,11 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
-        let Some(manager) = self.manager.upgrade() else {
-            return EventContinueControl::empty();
-        };
-
-        match self.dir {
-            DockedPaneSplitDirection::Horizontal => {
-                let pos = args.client_pos.y + self.drag_delta.get();
-                manager.move_splitter(
-                    self.controlling_dock,
-                    pos,
-                    context.system_link.event_dispatcher(),
-                );
-            }
-            DockedPaneSplitDirection::Vertical => {
-                let pos = args.client_pos.x + self.drag_delta.get();
-                manager.move_splitter(
-                    self.controlling_dock,
-                    pos,
-                    context.system_link.event_dispatcher(),
-                );
-            }
-        }
-
+        self.r#move(
+            &args.client_pos,
+            context.ht_manager,
+            context.system_link.event_dispatcher(),
+        );
         EventContinueControl::STOP_PROPAGATION
     }
 
@@ -3486,6 +3470,25 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
     }
 }
 impl DockedPaneSplitterEventHandler {
+    fn r#move(
+        &self,
+        client_pos: &Point<PointerInputUnit>,
+        ht_manager: &HitTestTreeManager,
+        event_dispatcher: &LogicFiberEventDispatcher,
+    ) {
+        let pos = match self.dir {
+            DockedPaneSplitDirection::Horizontal => client_pos.y + self.drag_delta.get(),
+            DockedPaneSplitDirection::Vertical => client_pos.x + self.drag_delta.get(),
+        };
+        event_dispatcher.dispatch(Event::DockMoveSplitter {
+            window: ht_manager
+                .query_root_window(self.ht_root)
+                .expect("not mounted"),
+            controlling_dock: self.controlling_dock,
+            pos_client: pos,
+        });
+    }
+
     fn perform_relayout<E>(
         &self,
         new_rect: Rect<LogicalUnit>,
@@ -3512,11 +3515,7 @@ pub struct PaneGroupView {
     controller: Rc<PaneGroupViewController>,
 }
 impl PaneGroupView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        manager: &std::rc::Weak<DockingManager>,
-        contents: Vec<Box<dyn PaneView>>,
-    ) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, contents: Vec<Box<dyn PaneView>>) -> Self {
         let active_gradient = ctx.composite_tree.create_gradient(Gradient::Linear {
             start_color: [0.0, 0.1, 0.5, 0.0],
             end_color: [0.0, 0.1, 0.5, 1.0],
@@ -3568,14 +3567,7 @@ impl PaneGroupView {
                 .into_iter()
                 .enumerate()
                 .map(|(n, c)| {
-                    let tv = PaneGroupTabView::new(
-                        ctx,
-                        c.name(),
-                        active_gradient,
-                        wgc.clone(),
-                        n,
-                        manager,
-                    );
+                    let tv = PaneGroupTabView::new(ctx, c.name(), active_gradient, wgc.clone(), n);
                     (c, tv)
                 })
                 .collect(),
@@ -3726,7 +3718,6 @@ impl PaneGroupTabView {
         active_gradient: GradientRef,
         group_controller: std::rc::Weak<PaneGroupViewController>,
         index: usize,
-        manager: &std::rc::Weak<DockingManager>,
     ) -> Self {
         let tw =
             TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
@@ -3777,7 +3768,6 @@ impl PaneGroupTabView {
             active: Cell::new(false),
             group_controller,
             index,
-            manager: manager.clone(),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
@@ -3810,7 +3800,6 @@ struct PaneGroupTabEventHandler {
     active: Cell<bool>,
     group_controller: std::rc::Weak<PaneGroupViewController>,
     index: usize,
-    manager: std::rc::Weak<DockingManager>,
 }
 impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
     fn on_pointer_enter(
@@ -3876,16 +3865,17 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             return input::EventContinueControl::empty();
         }
 
-        if let Some(gc) = self.group_controller.upgrade()
-            && let Some(m) = self.manager.upgrade()
-        {
+        if let Some(gc) = self.group_controller.upgrade() {
             let (x, y, w, h, _) = context.ht_manager.compute_global_rect_autoroot(gc.ht_root);
 
-            m.begin_preview(
-                Rect::from_lt_size(Point::new_logical(x, y), Size::new_logical(w, h)),
-                &args.client_pos,
-                &context.drag_preview_popover,
-            );
+            context.system_link.dispatch_event(Event::DockBeginPreview {
+                window: context
+                    .ht_manager
+                    .query_root_window(sender)
+                    .expect("not mounted"),
+                pane_rect: Rect::from_lt_size(Point::new_logical(x, y), Size::new_logical(w, h)),
+                client_pos: args.client_pos,
+            });
         }
 
         input::EventContinueControl::CAPTURE_ELEMENT | input::EventContinueControl::STOP_PROPAGATION
@@ -3897,9 +3887,13 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> input::EventContinueControl {
-        if let Some(m) = self.manager.upgrade() {
-            m.move_preview(args.client_pos, &context.drag_preview_popover);
-        }
+        context.system_link.dispatch_event(Event::DockMovePreview {
+            window: context
+                .ht_manager
+                .query_root_window(sender)
+                .expect("not mounted"),
+            client_pos: args.client_pos,
+        });
 
         input::EventContinueControl::STOP_PROPAGATION
     }
@@ -3914,9 +3908,12 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             return input::EventContinueControl::empty();
         }
 
-        if let Some(m) = self.manager.upgrade() {
-            m.end_preview(&context.drag_preview_popover);
-        }
+        context.system_link.dispatch_event(Event::DockEndPreview {
+            window: context
+                .ht_manager
+                .query_root_window(sender)
+                .expect("not mounted"),
+        });
 
         input::EventContinueControl::RELEASE_CAPTURE_ELEMENT
             | input::EventContinueControl::STOP_PROPAGATION
@@ -3964,6 +3961,7 @@ impl PaneGroupTabEventHandler {
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
+    docking_manager: DockingManager,
 }
 
 struct LaunchArgs<'sys> {
@@ -4137,6 +4135,38 @@ async fn run<'sys>(
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
         header: window_header_view,
+        docking_manager: DockingManager::new(
+            &mut view_init_ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0, 460.0),
+                Size::new_logical(320.0, 256.0),
+            ),
+            |view_init_ctx, store| {
+                let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
+                    Box::new(TestPane1View::new(view_init_ctx)),
+                    Box::new(TestPane2View::new(view_init_ctx)),
+                ];
+                let pane_group_view = PaneGroupView::new(view_init_ctx, pane_group_view_contents);
+
+                let pane_group_view_contents: Vec<Box<dyn PaneView>> =
+                    vec![Box::new(TestPane1View::new(view_init_ctx))];
+                let pane_group_view2 = PaneGroupView::new(view_init_ctx, pane_group_view_contents);
+
+                let left = store.alloc(|_| Dock::Fill(pane_group_view));
+                let right = store.alloc(|_| Dock::Fill(pane_group_view2));
+                store.alloc(|id| Dock::ToRight {
+                    left,
+                    right,
+                    splitter: DockedPaneSplitterView::new(
+                        view_init_ctx,
+                        DockedPaneSplitDirection::Vertical,
+                        id,
+                    ),
+                    width: Cell::new(96.0),
+                })
+            },
+            &main_window,
+        ),
     }));
 
     // tab view
@@ -4568,42 +4598,6 @@ async fn run<'sys>(
     );
     ml_text_editor_view.mount(&mut view_init_ctx, &main_window);
 
-    let docking_manager = DockingManager::new(
-        &mut view_init_ctx,
-        Rect::from_lt_size(
-            Point::new_logical(8.0, 460.0),
-            Size::new_logical(320.0, 256.0),
-        ),
-        |manager, view_init_ctx, store| {
-            let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
-                Box::new(TestPane1View::new(view_init_ctx)),
-                Box::new(TestPane2View::new(view_init_ctx)),
-            ];
-            let pane_group_view =
-                PaneGroupView::new(view_init_ctx, manager, pane_group_view_contents);
-
-            let pane_group_view_contents: Vec<Box<dyn PaneView>> =
-                vec![Box::new(TestPane1View::new(view_init_ctx))];
-            let pane_group_view2 =
-                PaneGroupView::new(view_init_ctx, manager, pane_group_view_contents);
-
-            let left = store.alloc(|_| Dock::Fill(pane_group_view));
-            let right = store.alloc(|_| Dock::Fill(pane_group_view2));
-            store.alloc(|id| Dock::ToRight {
-                left,
-                right,
-                splitter: DockedPaneSplitterView::new(
-                    view_init_ctx,
-                    DockedPaneSplitDirection::Vertical,
-                    id,
-                    manager,
-                ),
-                width: Cell::new(96.0),
-            })
-        },
-        &main_window,
-    );
-
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
     for msg in delayed_render_messages.drain(..) {
@@ -4655,6 +4649,22 @@ async fn run<'sys>(
                         w.associate_extra_data(Box::new(PerWindowData {
                             screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
+                            docking_manager: DockingManager::new(
+                                &mut view_init_ctx,
+                                Rect::from_lt_size(
+                                    Point::new_logical(8.0, ui::window_header::View::THICKNESS),
+                                    Size::new_logical(320.0, 256.0),
+                                ),
+                                |view_init_ctx, store| {
+                                    let pane_group_view_contents: Vec<Box<dyn PaneView>> =
+                                        vec![Box::new(TestPane1View::new(view_init_ctx))];
+                                    let pane_group_view =
+                                        PaneGroupView::new(view_init_ctx, pane_group_view_contents);
+
+                                    store.alloc(|_| Dock::Fill(pane_group_view))
+                                },
+                                &main_window,
+                            ),
                         }));
                     },
                 );
@@ -5581,6 +5591,51 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::DockMoveSplitter {
+                mut window,
+                controlling_dock,
+                pos_client,
+            } => {
+                unsafe { window.extra_data_mut::<PerWindowData>() }
+                    .docking_manager
+                    .move_splitter(
+                        controlling_dock,
+                        pos_client,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                    );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::DockBeginPreview {
+                mut window,
+                pane_rect,
+                client_pos,
+            } => {
+                unsafe { window.extra_data_mut::<PerWindowData>() }
+                    .docking_manager
+                    .begin_preview(pane_rect, &client_pos, &drag_preview_popover);
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::DockMovePreview {
+                mut window,
+                client_pos,
+            } => {
+                unsafe { window.extra_data_mut::<PerWindowData>() }
+                    .docking_manager
+                    .move_preview(client_pos, &drag_preview_popover);
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
+            Event::DockEndPreview { mut window } => {
+                unsafe { window.extra_data_mut::<PerWindowData>() }
+                    .docking_manager
+                    .end_preview(&drag_preview_popover);
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
