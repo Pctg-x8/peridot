@@ -3313,6 +3313,12 @@ pub struct DockingPreviewState {
     offset: Point<LogicalUnit>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum UndockResult {
+    Success,
+    ToBeEmpty,
+}
+
 pub struct DockingManager {
     max_rect: Rect<LogicalUnit>,
     root_id: DockID,
@@ -3581,13 +3587,16 @@ impl DockingManager {
         store: &mut DockStore,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
-    ) {
+    ) -> UndockResult {
         store.dump(self.root_id);
 
         let old_dock = store.free(target);
 
         match old_dock {
-            Dock::Fill { parent: None, .. } => todo!("empty docking manager support"),
+            Dock::Fill { parent: None, .. } => {
+                old_dock.teardown(composite_tree, ht_manager);
+                return UndockResult::ToBeEmpty;
+            }
             Dock::Fill {
                 parent: Some(parent),
                 group_view,
@@ -3676,6 +3685,7 @@ impl DockingManager {
         }
 
         store.dump(self.root_id);
+        UndockResult::Success
     }
 
     #[tracing::instrument(skip(self, store, view_init_ctx, mount_target))]
@@ -3688,7 +3698,7 @@ impl DockingManager {
         suggested_rect: &Rect<LogicalUnit>,
         view_init_ctx: &mut ViewInitContext,
         mount_target: &(impl MountTarget + ?Sized),
-    ) -> Option<Box<dyn PaneView>> {
+    ) -> (Option<Box<dyn PaneView>>, UndockResult) {
         store.dump(self.root_id);
 
         let Dock::Fill {
@@ -3932,17 +3942,19 @@ impl DockingManager {
             }
         };
 
-        if should_undock_source {
+        let undock_result = if should_undock_source {
             self.undock(
                 source,
                 store,
                 view_init_ctx.mount_context.composite_tree,
                 view_init_ctx.mount_context.ht_manager,
-            );
-        }
+            )
+        } else {
+            UndockResult::Success
+        };
 
         store.dump(self.root_id);
-        diverged_contents
+        (diverged_contents, undock_result)
     }
 
     fn begin_preview(
@@ -6612,7 +6624,7 @@ async fn run<'sys>(
                 }
             }
             Event::DockConfirm {
-                window,
+                mut window,
                 pointing_window,
                 source_dock,
                 tab_index,
@@ -6641,7 +6653,7 @@ async fn run<'sys>(
                         &drag_preview_popover,
                         state,
                     );
-                    let diverged_content = dm.redock(
+                    let (diverged_content, undock_result) = dm.redock(
                         source_dock,
                         &mut dock_store,
                         tab_index,
@@ -6661,6 +6673,21 @@ async fn run<'sys>(
                         },
                         &mount_target,
                     );
+
+                    match undock_result {
+                        UndockResult::Success => {}
+                        UndockResult::ToBeEmpty => {
+                            unsafe {
+                                drop(window.take_extra_data::<PerWindowData>());
+                            }
+                            system_link.close_window(
+                                window,
+                                &mut composite_tree,
+                                &mut ht_manager,
+                                &mut keyboard_focus_registry,
+                            );
+                        }
+                    }
 
                     if let Some(content) = diverged_content {
                         system_link.open_window(
