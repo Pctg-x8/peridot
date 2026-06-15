@@ -817,7 +817,6 @@ pub enum Event {
         window: WindowHandle,
         activated: bool,
     },
-    SubWindowOpen,
     SubWindowClose {
         window: WindowHandle,
     },
@@ -960,7 +959,6 @@ impl Event {
             Self::WindowMaximizeStateChanged { .. } => "WindowMaximizeStateChanged",
             Self::WindowFocusChanged { .. } => "WindowFocusChanged",
             Self::WindowActivatingStateChanged { .. } => "WindowActivatingStateChanged",
-            Self::SubWindowOpen => "SubWindowOpen",
             Self::SubWindowClose { .. } => "SubWindowClose",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
             Self::PopupClose { .. } => "PopupClose",
@@ -5463,75 +5461,6 @@ async fn run<'sys>(
         crate::perf_scope!(PROCESS_EVENT, str e.p_name());
         match e {
             Event::Quit => break,
-            Event::SubWindowOpen => {
-                system_link.open_window(
-                    Size::new_logical(320.0, 240.0),
-                    main_window.ui_scale_factor(),
-                    &mut composite_tree,
-                    &mut ht_manager,
-                    &mut keyboard_focus_registry,
-                    &mut delayed_render_messages,
-                    |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
-                        ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
-
-                        composite_tree.get_mut(w.ct_root()).has_bitmap = true;
-                        composite_tree.get_mut(w.ct_root()).composite_mode =
-                            CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.1, 0.2, 1.0]));
-                        composite_tree.mark_dirty(w.ct_root());
-
-                        let mut view_init_ctx = ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree,
-                                ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry,
-                            },
-                            view_registry: &mut view_registry,
-                            ui_scale_factor: w.ui_scale_factor(),
-                            system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        };
-                        let window_header_view = ui::window_header::View::new(
-                            &mut view_init_ctx,
-                            ui::window_header::Caption::Sub,
-                            w.needs_system_command_buttons(),
-                        );
-                        window_header_view.mount(&mut view_init_ctx, &w);
-
-                        w.associate_extra_data(Box::new(PerWindowData {
-                            screen_reposition_interests: HashSet::new(),
-                            has_appmenu: false,
-                            header: window_header_view,
-                            docking_manager: DockingManager::new(
-                                w,
-                                &mut view_init_ctx,
-                                Rect::from_lt_size(
-                                    Point::new_logical(8.0, ui::window_header::View::THICKNESS),
-                                    Size::new_logical(320.0, 256.0),
-                                ),
-                                |view_init_ctx, store| {
-                                    store.alloc(|id| {
-                                        let pane_group_view_contents: Vec<Box<dyn PaneView>> =
-                                            vec![Box::new(TestPane1View::new(view_init_ctx))];
-
-                                        Dock::Fill {
-                                            group_view: PaneGroupView::new(
-                                                view_init_ctx,
-                                                pane_group_view_contents,
-                                                id,
-                                            ),
-                                            parent: None,
-                                        }
-                                    })
-                                },
-                            ),
-                        }));
-                    },
-                );
-
-                let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                composite_tree.commit(&mut renderer_sync.composite_buffer);
-            }
             Event::SubWindowClose { mut window } => {
                 tracing::trace!("subWindowClose");
                 unsafe {
