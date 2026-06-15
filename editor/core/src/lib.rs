@@ -3699,12 +3699,17 @@ impl DockingManager {
             unreachable!("merge from non-fill dock");
         };
         let content = source_group_view.remove_content(index, view_init_ctx);
-        let should_undock_source = !source_group_view.has_contents();
+        let mut should_undock_source = !source_group_view.has_contents();
 
         let diverged_contents = match op {
             // ウィンドウのオープンが必要なので内容物だけ返してLogicFiber側でやる
             DockingOperation::Diverge => Some(content),
             DockingOperation::Merge(target) => {
+                if target == source {
+                    // 同じDockにまた帰ってくるのである状態になる
+                    should_undock_source = false;
+                }
+
                 let Dock::Fill {
                     group_view: target_group_view,
                     ..
@@ -3717,6 +3722,11 @@ impl DockingManager {
                 None
             }
             DockingOperation::MergeAtTabIndex(target, index) => {
+                if target == source {
+                    // 同じDockにまた帰ってくるのである状態になる
+                    should_undock_source = false;
+                }
+
                 let Dock::Fill {
                     group_view: target_group_view,
                     ..
