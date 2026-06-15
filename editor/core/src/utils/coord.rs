@@ -390,6 +390,17 @@ impl<U: Unit> Rect<U> {
             _marker: PhantomData,
         }
     }
+
+    #[inline(always)]
+    pub fn relocate(self, new_lt: Point<U>) -> Self {
+        Self {
+            left: new_lt.x,
+            top: new_lt.y,
+            width: self.width,
+            height: self.height,
+            _marker: PhantomData,
+        }
+    }
 }
 impl<U: Unit<SignedValueType: Zero>> From<Size<U>> for Rect<U> {
     #[inline(always)]

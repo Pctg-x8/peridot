@@ -11,8 +11,7 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::{
-    cell::RefCell,
-    collections::{BTreeSet, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,
@@ -33,28 +32,27 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
-        RenderMessageSender, RenderThread, RendererSync, ShaderTexture, TextureID,
+        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
+        ShaderTexture, TextureID,
         composite::{
-            AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
-            CompositeRect, CompositeRectScaleFactor, CompositeRectText,
-            CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
-            CompositeTreeSyncBuffer, CornerRadius, Gradient, GradientRef, TextureMappingMode,
-            TextureType,
+            AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
+            GradientRef, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemLayout,
-        MenuItemView, MountContext, MountTarget, NumericInputView, OverlayPopupBasicFrameView,
-        OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
-        ScrollContainer, SimpleButtonConstantEventHandler, SimpleButtonEventHandler,
-        SimpleButtonView, TeardownContext, TextInputView, ViewEventHandler, ViewIdentifier,
-        ViewInitContext, ViewRegistry, ViewUpdateContext,
+        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView, MountContext,
+        MountTarget, NumericInputView, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView,
+        Popup, PopupID, PopupManager, Positioning, RawMountTarget, ScrollContainer,
+        SimpleButtonConstantEventHandler, SimpleButtonEventHandler, SimpleButtonView,
+        TeardownContext, TextInputView, ViewEventHandler, ViewIdentifier, ViewInitContext,
+        ViewRegistry, ViewUpdateContext,
     },
     utils::{
-        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, SafeF32, Size,
+        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
         UnsafeMainThreadOnlyOnceCell,
     },
 };
@@ -898,12 +896,10 @@ pub enum Event {
         id: ViewIdentifier,
     },
     DockMoveSplitter {
-        window: WindowHandle,
         controlling_dock: uikit::dock::DockID,
         pos_client: f32,
     },
     DockBeginPreview {
-        window: WindowHandle,
         pane_rect: Rect<LogicalUnit>,
         tab_size: Size<LogicalUnit>,
         client_pos: Point<LogicalUnit>,
@@ -3358,70 +3354,78 @@ async fn run<'sys>(
             &mut dock_store,
             |view_init_ctx, store| {
                 store.alloc_recurse(|root_id, store| uikit::dock::Dock::RootContainer {
-                    content: store.alloc_recurse(|parent_id1, store| uikit::dock::Dock::ToBottom {
+                    content: store.alloc_recurse(|parent_id1, store| uikit::dock::Dock::Splitted {
                         parent: root_id,
                         splitter: uikit::dock::DockedPaneSplitterView::new(
                             view_init_ctx,
                             uikit::dock::DockedPaneSplitDirection::Horizontal,
                             parent_id1,
                         ),
-                        height: Cell::new(320.0),
-                        bottom: store.alloc_fill(parent_id1, view_init_ctx, |_| {
+                        direction: uikit::dock::DockDirection::ToBottom(Cell::new(320.0)),
+                        docked: store.alloc_fill(parent_id1, view_init_ctx, |_| {
                             vec![Box::new(AssetExplorerPanePresenter {})]
                         }),
-                        top: store.alloc_recurse(|parent_id2, store| uikit::dock::Dock::ToRight {
-                            parent: parent_id1,
-                            splitter: uikit::dock::DockedPaneSplitterView::new(
-                                view_init_ctx,
-                                uikit::dock::DockedPaneSplitDirection::Vertical,
-                                parent_id2,
-                            ),
-                            width: Cell::new(256.0),
-                            right: store.alloc_fill(parent_id2, view_init_ctx, |_| {
-                                vec![Box::new(InspectorPanePresenter {})]
-                            }),
-                            left: store.alloc_recurse(|parent_id1, store| {
-                                uikit::dock::Dock::ToTop {
-                                    parent: parent_id2,
-                                    splitter: uikit::dock::DockedPaneSplitterView::new(
-                                        view_init_ctx,
-                                        uikit::dock::DockedPaneSplitDirection::Horizontal,
-                                        parent_id1,
-                                    ),
-                                    height: Cell::new(120.0),
-                                    top: store.alloc_fill(parent_id1, view_init_ctx, |_| {
-                                        vec![Box::new(TimelinePanePresenter {})]
-                                    }),
-                                    bottom: store.alloc_recurse(|parent_id2, store| {
-                                        uikit::dock::Dock::ToLeft {
-                                            parent: parent_id1,
-                                            splitter: uikit::dock::DockedPaneSplitterView::new(
-                                                view_init_ctx,
-                                                uikit::dock::DockedPaneSplitDirection::Vertical,
-                                                parent_id2,
-                                            ),
-                                            width: Cell::new(160.0),
-                                            left: store.alloc_fill(
-                                                parent_id2,
-                                                view_init_ctx,
-                                                |_| vec![Box::new(ObjectTreePanePresenter {})],
-                                            ),
-                                            right: store.alloc_fill(
-                                                parent_id2,
-                                                view_init_ctx,
-                                                |view_init_ctx| {
-                                                    vec![
-                                                        Box::new(UIKitPreviewPaneView::new(
-                                                            view_init_ctx,
-                                                        )),
-                                                        Box::new(ProjectSettingsPanePresenter {}),
-                                                    ]
-                                                },
-                                            ),
-                                        }
-                                    }),
-                                }
-                            }),
+                        rest: store.alloc_recurse(|parent_id2, store| {
+                            uikit::dock::Dock::Splitted {
+                                parent: parent_id1,
+                                splitter: uikit::dock::DockedPaneSplitterView::new(
+                                    view_init_ctx,
+                                    uikit::dock::DockedPaneSplitDirection::Vertical,
+                                    parent_id2,
+                                ),
+                                direction: uikit::dock::DockDirection::ToRight(Cell::new(256.0)),
+                                docked: store.alloc_fill(parent_id2, view_init_ctx, |_| {
+                                    vec![Box::new(InspectorPanePresenter {})]
+                                }),
+                                rest: store.alloc_recurse(|parent_id1, store| {
+                                    uikit::dock::Dock::Splitted {
+                                        parent: parent_id2,
+                                        splitter: uikit::dock::DockedPaneSplitterView::new(
+                                            view_init_ctx,
+                                            uikit::dock::DockedPaneSplitDirection::Horizontal,
+                                            parent_id1,
+                                        ),
+                                        direction: uikit::dock::DockDirection::ToTop(Cell::new(
+                                            120.0,
+                                        )),
+                                        docked: store.alloc_fill(parent_id1, view_init_ctx, |_| {
+                                            vec![Box::new(TimelinePanePresenter {})]
+                                        }),
+                                        rest: store.alloc_recurse(|parent_id2, store| {
+                                            uikit::dock::Dock::Splitted {
+                                                parent: parent_id1,
+                                                splitter: uikit::dock::DockedPaneSplitterView::new(
+                                                    view_init_ctx,
+                                                    uikit::dock::DockedPaneSplitDirection::Vertical,
+                                                    parent_id2,
+                                                ),
+                                                direction: uikit::dock::DockDirection::ToLeft(
+                                                    Cell::new(160.0),
+                                                ),
+                                                docked: store.alloc_fill(
+                                                    parent_id2,
+                                                    view_init_ctx,
+                                                    |_| vec![Box::new(ObjectTreePanePresenter {})],
+                                                ),
+                                                rest: store.alloc_fill(
+                                                    parent_id2,
+                                                    view_init_ctx,
+                                                    |view_init_ctx| {
+                                                        vec![
+                                                            Box::new(UIKitPreviewPaneView::new(
+                                                                view_init_ctx,
+                                                            )),
+                                                            Box::new(
+                                                                ProjectSettingsPanePresenter {},
+                                                            ),
+                                                        ]
+                                                    },
+                                                ),
+                                            }
+                                        }),
+                                    }
+                                }),
+                            }
                         }),
                     }),
                 })
@@ -4368,34 +4372,30 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::DockMoveSplitter {
-                mut window,
                 controlling_dock,
                 pos_client,
             } => {
-                unsafe { window.extra_data_mut::<PerWindowData>() }
-                    .docking_manager
-                    .move_splitter(
-                        controlling_dock,
-                        &mut dock_store,
-                        pos_client,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                    );
+                uikit::dock::move_splitter(
+                    controlling_dock,
+                    &mut dock_store,
+                    pos_client,
+                    &mut composite_tree,
+                    &mut ht_manager,
+                );
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::DockBeginPreview {
-                window,
                 pane_rect,
                 tab_size,
                 client_pos,
             } => {
-                docking_preview_state = Some(
-                    unsafe { window.extra_data_ref::<PerWindowData>() }
-                        .docking_manager
-                        .begin_preview(pane_rect, tab_size, &client_pos, &drag_preview_popover),
-                );
+                let (state, popover_rect) =
+                    uikit::dock::begin_preview(pane_rect, tab_size, &client_pos);
+
+                drag_preview_popover.show(&popover_rect.left_top(), &popover_rect.size());
+                docking_preview_state = Some(state);
             }
             Event::DockMovePreview {
                 window,
@@ -4403,7 +4403,7 @@ async fn run<'sys>(
                 client_pos,
             } => {
                 if let Some(ref mut state) = docking_preview_state {
-                    let (mut target_window, final_client_pos) = if let Some(w) = pointing_window {
+                    let (target_window, final_client_pos) = if let Some(w) = pointing_window {
                         (
                             w,
                             SystemLink::translate_client_pos_to_another_window(
@@ -4416,9 +4416,13 @@ async fn run<'sys>(
 
                     target_window.set_foreground();
                     drag_preview_popover.bind_position_base_window(target_window);
-                    unsafe { target_window.extra_data_mut::<PerWindowData>() }
-                        .docking_manager
-                        .move_preview(&dock_store, final_client_pos, &drag_preview_popover, state);
+                    let popover_rect = uikit::dock::move_preview(
+                        &unsafe { target_window.extra_data_ref::<PerWindowData>() }.docking_manager,
+                        &dock_store,
+                        final_client_pos,
+                        state,
+                    );
+                    drag_preview_popover.set_rect(&popover_rect);
                 }
             }
             Event::DockConfirm {
@@ -4445,12 +4449,9 @@ async fn run<'sys>(
                     let dm = &mut unsafe { target_window.extra_data_mut::<PerWindowData>() }
                         .docking_manager;
 
-                    let (op, suggested_rect) = dm.end_preview(
-                        &mut dock_store,
-                        final_client_pos,
-                        &drag_preview_popover,
-                        state,
-                    );
+                    drag_preview_popover.hide();
+                    let (op, suggested_rect) =
+                        uikit::dock::end_preview(dm, &mut dock_store, final_client_pos, state);
                     let (diverged_content, undock_result) = dm.redock(
                         source_dock,
                         &mut dock_store,
