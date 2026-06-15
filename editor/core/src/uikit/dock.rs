@@ -801,7 +801,7 @@ impl DockingManager {
     }
 
     pub fn resize(
-        &mut self,
+        &self,
         new_rect: Rect<LogicalUnit>,
         store: &mut DockStore,
         composite_tree: &mut CompositeTree<SyncEvent>,

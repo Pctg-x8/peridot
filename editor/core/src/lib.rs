@@ -3077,11 +3077,99 @@ impl uikit::dock::PaneContentPresenter for UIKitPreviewPaneView {
     }
 }
 
+struct TimelinePanePresenter {}
+impl uikit::dock::PaneContentPresenter for TimelinePanePresenter {
+    fn name(&self) -> String {
+        "Timeline".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+
+    fn unmount(&self, ctx: &mut MountContext) {}
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+}
+
+struct ObjectTreePanePresenter {}
+impl uikit::dock::PaneContentPresenter for ObjectTreePanePresenter {
+    fn name(&self) -> String {
+        "Object Tree".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+
+    fn unmount(&self, ctx: &mut MountContext) {}
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+}
+
+struct InspectorPanePresenter {}
+impl uikit::dock::PaneContentPresenter for InspectorPanePresenter {
+    fn name(&self) -> String {
+        "Inspector".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+
+    fn unmount(&self, ctx: &mut MountContext) {}
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+}
+
+struct AssetExplorerPanePresenter {}
+impl uikit::dock::PaneContentPresenter for AssetExplorerPanePresenter {
+    fn name(&self) -> String {
+        "Asset Explorer".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+
+    fn unmount(&self, ctx: &mut MountContext) {}
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+}
+
+struct ProjectSettingsPanePresenter {}
+impl uikit::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
+    fn name(&self) -> String {
+        "Project Settings".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+
+    fn unmount(&self, ctx: &mut MountContext) {}
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     has_appmenu: bool,
     header: ui::window_header::View,
+    footer: Option<ui::window_footer::View>,
     docking_manager: uikit::dock::DockingManager,
+}
+impl PerWindowData {
+    fn compute_content_area(&self, surface_size: Size<LogicalUnit>) -> Rect<LogicalUnit> {
+        let top_offset = if self.has_appmenu {
+            ui::window_header::View::THICKNESS + ui::app_menu_bar::View::HEIGHT
+        } else {
+            ui::window_header::View::THICKNESS
+        };
+        let bottom_offset = if self.footer.is_some() {
+            ui::window_footer::View::THICKNESS
+        } else {
+            0.0
+        };
+
+        Rect::from_lt_size(
+            Point::new_logical(0.0, top_offset),
+            Size::new_logical(
+                surface_size.width,
+                surface_size.height - top_offset - bottom_offset,
+            ),
+        )
+    }
 }
 
 struct LaunchArgs<'sys> {
@@ -3249,10 +3337,14 @@ async fn run<'sys>(
     );
     app_menu_view.mount(&mut view_init_ctx, &main_window);
 
+    let window_footer_view = ui::window_footer::View::new(&mut view_init_ctx);
+    window_footer_view.mount(&mut view_init_ctx, &main_window);
+
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
         has_appmenu: true,
         header: window_header_view,
+        footer: Some(window_footer_view),
         docking_manager: uikit::dock::DockingManager::new(
             main_window,
             &mut view_init_ctx,
@@ -3266,48 +3358,118 @@ async fn run<'sys>(
             &mut dock_store,
             |view_init_ctx, store| {
                 store.alloc_recurse(|root_id, store| uikit::dock::Dock::RootContainer {
-                    content: store.alloc_recurse(|parent_id, store| uikit::dock::Dock::ToRight {
+                    content: store.alloc_recurse(|parent_id1, store| uikit::dock::Dock::ToBottom {
                         parent: root_id,
-                        left: store.alloc(|id| {
-                            let pane_group_view_contents: Vec<
-                                Box<dyn uikit::dock::PaneContentPresenter>,
-                            > = vec![
-                                Box::new(UIKitPreviewPaneView::new(view_init_ctx)),
-                                Box::new(TestPane1View::new(view_init_ctx)),
-                            ];
-
-                            uikit::dock::Dock::Fill {
-                                group_view: uikit::dock::PaneGroupView::new(
-                                    view_init_ctx,
-                                    pane_group_view_contents,
-                                    id,
-                                ),
-                                parent: parent_id,
-                            }
-                        }),
-                        right: store.alloc(|id| {
-                            let pane_group_view_contents: Vec<
-                                Box<dyn uikit::dock::PaneContentPresenter>,
-                            > = vec![
-                                Box::new(TestPane1View::new(view_init_ctx)),
-                                Box::new(TestPane2View::new(view_init_ctx)),
-                            ];
-
-                            uikit::dock::Dock::Fill {
-                                group_view: uikit::dock::PaneGroupView::new(
-                                    view_init_ctx,
-                                    pane_group_view_contents,
-                                    id,
-                                ),
-                                parent: parent_id,
-                            }
-                        }),
                         splitter: uikit::dock::DockedPaneSplitterView::new(
                             view_init_ctx,
-                            uikit::dock::DockedPaneSplitDirection::Vertical,
-                            parent_id,
+                            uikit::dock::DockedPaneSplitDirection::Horizontal,
+                            parent_id1,
                         ),
-                        width: Cell::new(96.0),
+                        height: Cell::new(320.0),
+                        bottom: store.alloc(|id| {
+                            let contents: Vec<Box<dyn uikit::dock::PaneContentPresenter>> =
+                                vec![Box::new(AssetExplorerPanePresenter {})];
+
+                            uikit::dock::Dock::Fill {
+                                group_view: uikit::dock::PaneGroupView::new(
+                                    view_init_ctx,
+                                    contents,
+                                    id,
+                                ),
+                                parent: parent_id1,
+                            }
+                        }),
+                        top: store.alloc_recurse(|parent_id2, store| uikit::dock::Dock::ToRight {
+                            parent: parent_id1,
+                            splitter: uikit::dock::DockedPaneSplitterView::new(
+                                view_init_ctx,
+                                uikit::dock::DockedPaneSplitDirection::Vertical,
+                                parent_id2,
+                            ),
+                            width: Cell::new(256.0),
+                            right: store.alloc(|id| {
+                                let contents: Vec<Box<dyn uikit::dock::PaneContentPresenter>> =
+                                    vec![Box::new(InspectorPanePresenter {})];
+
+                                uikit::dock::Dock::Fill {
+                                    group_view: uikit::dock::PaneGroupView::new(
+                                        view_init_ctx,
+                                        contents,
+                                        id,
+                                    ),
+                                    parent: parent_id2,
+                                }
+                            }),
+                            left: store.alloc_recurse(|parent_id1, store| {
+                                uikit::dock::Dock::ToTop {
+                                    parent: parent_id2,
+                                    splitter: uikit::dock::DockedPaneSplitterView::new(
+                                        view_init_ctx,
+                                        uikit::dock::DockedPaneSplitDirection::Horizontal,
+                                        parent_id1,
+                                    ),
+                                    height: Cell::new(120.0),
+                                    top: store.alloc(|id| {
+                                        let contents: Vec<
+                                            Box<dyn uikit::dock::PaneContentPresenter>,
+                                        > = vec![Box::new(TimelinePanePresenter {})];
+
+                                        uikit::dock::Dock::Fill {
+                                            group_view: uikit::dock::PaneGroupView::new(
+                                                view_init_ctx,
+                                                contents,
+                                                id,
+                                            ),
+                                            parent: parent_id1,
+                                        }
+                                    }),
+                                    bottom: store.alloc_recurse(|parent_id2, store| {
+                                        uikit::dock::Dock::ToLeft {
+                                            parent: parent_id1,
+                                            splitter: uikit::dock::DockedPaneSplitterView::new(
+                                                view_init_ctx,
+                                                uikit::dock::DockedPaneSplitDirection::Vertical,
+                                                parent_id2,
+                                            ),
+                                            width: Cell::new(160.0),
+                                            left: store.alloc(|id| {
+                                                let pane_group_view_contents: Vec<
+                                                    Box<dyn uikit::dock::PaneContentPresenter>,
+                                                > = vec![Box::new(ObjectTreePanePresenter {})];
+
+                                                uikit::dock::Dock::Fill {
+                                                    group_view: uikit::dock::PaneGroupView::new(
+                                                        view_init_ctx,
+                                                        pane_group_view_contents,
+                                                        id,
+                                                    ),
+                                                    parent: parent_id2,
+                                                }
+                                            }),
+                                            right: store.alloc(|id| {
+                                                let pane_group_view_contents: Vec<
+                                                    Box<dyn uikit::dock::PaneContentPresenter>,
+                                                > = vec![
+                                                    Box::new(UIKitPreviewPaneView::new(
+                                                        view_init_ctx,
+                                                    )),
+                                                    Box::new(ProjectSettingsPanePresenter {}),
+                                                ];
+
+                                                uikit::dock::Dock::Fill {
+                                                    group_view: uikit::dock::PaneGroupView::new(
+                                                        view_init_ctx,
+                                                        pane_group_view_contents,
+                                                        id,
+                                                    ),
+                                                    parent: parent_id2,
+                                                }
+                                            }),
+                                        }
+                                    }),
+                                }
+                            }),
+                        }),
                     }),
                 })
             },
@@ -3340,36 +3502,14 @@ async fn run<'sys>(
                     &mut keyboard_focus_registry,
                 );
             }
-            Event::WindowResize { mut window, size } => {
-                let has_appmenu = unsafe { window.extra_data_ref::<PerWindowData>().has_appmenu };
-                unsafe { window.extra_data_mut::<PerWindowData>() }
-                    .docking_manager
-                    .resize(
-                        Rect::from_lt_size(
-                            Point::new_logical(
-                                0.0,
-                                if has_appmenu {
-                                    ui::window_header::View::THICKNESS
-                                        + ui::app_menu_bar::View::HEIGHT
-                                } else {
-                                    ui::window_header::View::THICKNESS
-                                },
-                            ),
-                            Size::new_logical(
-                                size.width,
-                                size.height
-                                    - if has_appmenu {
-                                        ui::window_header::View::THICKNESS
-                                            + ui::app_menu_bar::View::HEIGHT
-                                    } else {
-                                        ui::window_header::View::THICKNESS
-                                    },
-                            ),
-                        ),
-                        &mut dock_store,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                    );
+            Event::WindowResize { window, size } => {
+                let wd = unsafe { window.extra_data_ref::<PerWindowData>() };
+                wd.docking_manager.resize(
+                    wd.compute_content_area(size),
+                    &mut dock_store,
+                    &mut composite_tree,
+                    &mut ht_manager,
+                );
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -4450,6 +4590,7 @@ async fn run<'sys>(
                                     screen_reposition_interests: HashSet::new(),
                                     has_appmenu: false,
                                     header: window_header_view,
+                                    footer: None,
                                     docking_manager: uikit::dock::DockingManager::new(
                                         w,
                                         &mut view_init_ctx,
