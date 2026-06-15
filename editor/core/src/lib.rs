@@ -3257,6 +3257,22 @@ impl DockingManager {
         }
     }
 
+    pub fn resize(
+        &mut self,
+        new_rect: Rect<LogicalUnit>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        self.max_rect = new_rect;
+        Self::relayout_dock(
+            self.root_id,
+            &mut self.store,
+            self.max_rect.clone(),
+            composite_tree,
+            ht_manager,
+        );
+    }
+
     fn mount_recursive(
         target: DockID,
         store: &DockStore,
@@ -5207,6 +5223,7 @@ impl PaneView for UIKitPreviewPaneView {
 
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
+    has_appmenu: bool,
     header: ui::window_header::View,
     docking_manager: DockingManager,
 }
@@ -5376,12 +5393,16 @@ async fn run<'sys>(
 
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
+        has_appmenu: true,
         header: window_header_view,
         docking_manager: DockingManager::new(
             main_window,
             &mut view_init_ctx,
             Rect::from_lt_size(
-                Point::new_logical(8.0, 460.0),
+                Point::new_logical(
+                    0.0,
+                    ui::window_header::View::THICKNESS + ui::app_menu_bar::View::HEIGHT,
+                ),
                 Size::new_logical(320.0, 256.0),
             ),
             |view_init_ctx, store| {
@@ -5479,6 +5500,7 @@ async fn run<'sys>(
 
                         w.associate_extra_data(Box::new(PerWindowData {
                             screen_reposition_interests: HashSet::new(),
+                            has_appmenu: false,
                             header: window_header_view,
                             docking_manager: DockingManager::new(
                                 w,
@@ -5522,8 +5544,38 @@ async fn run<'sys>(
                     &mut keyboard_focus_registry,
                 );
             }
-            Event::WindowResize { window, size } => {
-                // pointer_input_manager.set_client_size(window, size);
+            Event::WindowResize { mut window, size } => {
+                let has_appmenu = unsafe { window.extra_data_ref::<PerWindowData>().has_appmenu };
+                unsafe { window.extra_data_mut::<PerWindowData>() }
+                    .docking_manager
+                    .resize(
+                        Rect::from_lt_size(
+                            Point::new_logical(
+                                0.0,
+                                if has_appmenu {
+                                    ui::window_header::View::THICKNESS
+                                        + ui::app_menu_bar::View::HEIGHT
+                                } else {
+                                    ui::window_header::View::THICKNESS
+                                },
+                            ),
+                            Size::new_logical(
+                                size.width,
+                                size.height
+                                    - if has_appmenu {
+                                        ui::window_header::View::THICKNESS
+                                            + ui::app_menu_bar::View::HEIGHT
+                                    } else {
+                                        ui::window_header::View::THICKNESS
+                                    },
+                            ),
+                        ),
+                        &mut composite_tree,
+                        &mut ht_manager,
+                    );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
@@ -6491,7 +6543,10 @@ async fn run<'sys>(
 
                 if let Some(content) = diverged_content {
                     system_link.open_window(
-                        suggested_rect.size(),
+                        Size::new_logical(
+                            suggested_rect.width,
+                            suggested_rect.height + ui::window_header::View::THICKNESS,
+                        ),
                         window.ui_scale_factor(),
                         &mut composite_tree,
                         &mut ht_manager,
@@ -6532,13 +6587,14 @@ async fn run<'sys>(
 
                             w.associate_extra_data(Box::new(PerWindowData {
                                 screen_reposition_interests: HashSet::new(),
+                                has_appmenu: false,
                                 header: window_header_view,
                                 docking_manager: DockingManager::new(
                                     w,
                                     &mut view_init_ctx,
                                     Rect::from_lt_size(
-                                        Point::new_logical(8.0, ui::window_header::View::THICKNESS),
-                                        Size::new_logical(320.0, 256.0),
+                                        Point::new_logical(0.0, ui::window_header::View::THICKNESS),
+                                        suggested_rect.size(),
                                     ),
                                     |view_init_ctx, store| {
                                         store.alloc(|id| Dock::Fill {

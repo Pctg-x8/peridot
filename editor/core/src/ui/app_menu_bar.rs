@@ -29,6 +29,8 @@ pub struct View {
     ht_root: HitTestTreeRef,
 }
 impl View {
+    pub const HEIGHT: f32 = ItemView::ITEM_HEIGHT;
+
     pub fn new(ctx: &mut ViewInitContext, top: f32, labels: Vec<(String, Vec<MenuItem>)>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
