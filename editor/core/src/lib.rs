@@ -904,6 +904,7 @@ pub enum Event {
     DockBeginPreview {
         window: WindowHandle,
         pane_rect: Rect<LogicalUnit>,
+        tab_size: Size<LogicalUnit>,
         client_pos: Point<LogicalUnit>,
     },
     DockMovePreview {
@@ -3028,6 +3029,7 @@ impl Dock {
         this: DockID,
         store: &DockStore,
         source_rect: Rect<LogicalUnit>,
+        source_tab_size: Size<LogicalUnit>,
         available_rect: Rect<LogicalUnit>,
         pos: Point<LogicalUnit>,
     ) -> (DockingOperation, Rect<LogicalUnit>) {
@@ -3072,7 +3074,25 @@ impl Dock {
         }
 
         match store.get(this) {
-            Self::Fill { .. } => {
+            Self::Fill { group_view, .. } => {
+                if pos.y <= available_rect.top + PaneGroupTabView::PADDING_Y * 2.0 + 16.0 {
+                    // dock to tab index
+                    let local_pos =
+                        Point::new_logical(pos.x - available_rect.left, pos.y - available_rect.top);
+                    let (index, tab_lt) = group_view.hittest_tab_index(local_pos);
+
+                    return (
+                        DockingOperation::MergeAtTabIndex(this, index),
+                        Rect::from_lt_size(
+                            Point::new_logical(
+                                tab_lt.x + available_rect.left,
+                                tab_lt.y + available_rect.top,
+                            ),
+                            source_tab_size,
+                        ),
+                    );
+                }
+
                 let dl = pos.x - available_rect.left;
                 let dr = available_rect.right() - pos.x;
                 let dt = pos.y - available_rect.top;
@@ -3124,12 +3144,26 @@ impl Dock {
                 let width = width.get();
                 let r = available_rect.slice_left(width);
                 if pos.x <= r.right() {
-                    return Self::compute_recommended_operation(left, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        left,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
                 let r = available_rect
                     .slice_right(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
                 if pos.x >= r.left {
-                    return Self::compute_recommended_operation(right, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        right,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
             }
             &Self::ToRight {
@@ -3146,11 +3180,25 @@ impl Dock {
                 let r = available_rect
                     .slice_left(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
                 if pos.x <= r.right() {
-                    return Self::compute_recommended_operation(left, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        left,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
                 let r = available_rect.slice_right(width);
                 if pos.x >= r.left {
-                    return Self::compute_recommended_operation(right, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        right,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
             }
             &Self::ToTop {
@@ -3166,13 +3214,27 @@ impl Dock {
                 let height = height.get();
                 let r = available_rect.slice_top(height);
                 if pos.y <= r.bottom() {
-                    return Self::compute_recommended_operation(top, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        top,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
                 let r = available_rect.slice_bottom(
                     available_rect.height - height - DockedPaneSplitterView::THICKNESS,
                 );
                 if pos.y >= r.top {
-                    return Self::compute_recommended_operation(bottom, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        bottom,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
             }
             &Self::ToBottom {
@@ -3189,11 +3251,25 @@ impl Dock {
                 let r = available_rect
                     .slice_top(available_rect.height - height - DockedPaneSplitterView::THICKNESS);
                 if pos.y <= r.bottom() {
-                    return Self::compute_recommended_operation(top, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        top,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
                 let r = available_rect.slice_bottom(height);
                 if pos.y >= r.top {
-                    return Self::compute_recommended_operation(bottom, store, source_rect, r, pos);
+                    return Self::compute_recommended_operation(
+                        bottom,
+                        store,
+                        source_rect,
+                        source_tab_size,
+                        r,
+                        pos,
+                    );
                 }
             }
         }
@@ -3205,6 +3281,7 @@ impl Dock {
 #[derive(Debug)]
 pub enum DockingOperation {
     Merge(DockID),
+    MergeAtTabIndex(DockID, usize),
     SplitToLeft(DockID),
     SplitToRight(DockID),
     SplitToTop(DockID),
@@ -3214,6 +3291,7 @@ pub enum DockingOperation {
 
 pub struct DockingPreviewState {
     control_rect: Rect<LogicalUnit>,
+    tab_size: Size<LogicalUnit>,
     original_rect: Rect<LogicalUnit>,
     offset: Point<LogicalUnit>,
 }
@@ -3634,6 +3712,18 @@ impl DockingManager {
                 target_group_view.add_content(content, view_init_ctx, true);
                 None
             }
+            DockingOperation::MergeAtTabIndex(target, index) => {
+                let Dock::Fill {
+                    group_view: target_group_view,
+                    ..
+                } = self.store.get(target)
+                else {
+                    unreachable!("merge into non-fill dock");
+                };
+
+                target_group_view.insert_content(content, index, view_init_ctx, true);
+                None
+            }
             DockingOperation::SplitToLeft(target) => {
                 let target_parent = self.store.get(target).parent();
                 let new_dock = self.store.alloc_recurse(|parent_id, store| {
@@ -3847,6 +3937,7 @@ impl DockingManager {
     fn begin_preview(
         &mut self,
         pane_rect: Rect<LogicalUnit>,
+        tab_size: Size<LogicalUnit>,
         client_pos: &Point<LogicalUnit>,
         popover: &DragPreviewPopoverHandle,
     ) {
@@ -3857,6 +3948,7 @@ impl DockingManager {
         self.preview_state = Some(DockingPreviewState {
             offset: Point::new_logical(pane_rect.left - client_pos.x, pane_rect.top - client_pos.y),
             control_rect: self.max_rect.clone(),
+            tab_size,
             original_rect: pane_rect,
         });
     }
@@ -3870,10 +3962,14 @@ impl DockingManager {
             self.root_id,
             &self.store,
             state.original_rect.clone(),
+            state.tab_size.clone(),
             state.control_rect.clone(),
             client_pos,
         ) {
             (DockingOperation::Merge(_), r) => {
+                popover.set_rect(&r);
+            }
+            (DockingOperation::MergeAtTabIndex(_, _), r) => {
                 popover.set_rect(&r);
             }
             (DockingOperation::SplitToLeft(_), r) => {
@@ -3912,6 +4008,7 @@ impl DockingManager {
             self.root_id,
             &self.store,
             state.original_rect.clone(),
+            state.tab_size.clone(),
             state.control_rect.clone(),
             client_pos,
         )
@@ -4258,6 +4355,25 @@ impl PaneGroupView {
         self.controller.dock.set(dock);
     }
 
+    pub fn hittest_tab_index(&self, pos: Point<LogicalUnit>) -> (usize, Point<LogicalUnit>) {
+        if pos.x < 0.0 {
+            return (0, Point::new_logical(0.0, 0.0));
+        }
+
+        let mut leftmost = 0.0;
+        for (index, (_, tv)) in self.controller.contents.borrow().iter().enumerate() {
+            if leftmost <= pos.x && pos.x <= leftmost + tv.eh.size.width {
+                return (index, Point::new_logical(leftmost, 0.0));
+            }
+            leftmost += tv.eh.size.width;
+        }
+
+        (
+            self.controller.contents.borrow().len(),
+            Point::new_logical(leftmost, 0.0),
+        )
+    }
+
     fn add_content(
         &self,
         content: Box<dyn PaneView>,
@@ -4285,6 +4401,39 @@ impl PaneGroupView {
         if with_activate {
             self.controller
                 .perform_change_active(self.controller.contents.borrow().len() - 1, ctx);
+        }
+    }
+
+    fn insert_content(
+        &self,
+        content: Box<dyn PaneView>,
+        index: usize,
+        ctx: &mut ViewInitContext,
+        with_activate: bool,
+    ) {
+        let tab_view = PaneGroupTabView::new(ctx, content.name(), Rc::downgrade(&self.controller));
+        tab_view.mount(
+            ctx,
+            &RawMountTarget {
+                ct_root: self.controller.ct_root,
+                ht_root: self.controller.ht_root,
+            },
+        );
+        self.controller
+            .contents
+            .borrow_mut()
+            .insert(index, (content, tab_view));
+        self.controller
+            .current_active_index
+            .update(|x| if x >= index { x + 1 } else { x });
+        Self::relocate_tabs(
+            self.controller.contents.borrow().iter().map(|(_, t)| t),
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+        );
+
+        if with_activate {
+            self.controller.perform_change_active(index, ctx);
         }
     }
 
@@ -4334,7 +4483,7 @@ impl PaneGroupView {
                 composite_tree,
                 ht_manager,
             );
-            left_offset += t.size.width;
+            left_offset += t.eh.size.width;
         }
     }
 }
@@ -4446,7 +4595,6 @@ impl PaneGroupViewController {
 
 struct PaneGroupTabView {
     ht_root: HitTestTreeRef,
-    size: Size<LogicalUnit>,
     eh: Rc<PaneGroupTabEventHandler>,
 }
 impl PaneGroupTabView {
@@ -4506,12 +4654,13 @@ impl PaneGroupTabView {
         let eh = Rc::new(PaneGroupTabEventHandler {
             ct_root,
             ct_underline,
+            size,
             active: Cell::new(false),
             group_controller,
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-        Self { ht_root, size, eh }
+        Self { ht_root, eh }
     }
 
     pub fn teardown(self, ctx: &mut MountContext) {
@@ -4548,6 +4697,7 @@ impl PaneGroupTabView {
 struct PaneGroupTabEventHandler {
     ct_root: CompositeTreeRef,
     ct_underline: CompositeTreeRef,
+    size: Size<LogicalUnit>,
     active: Cell<bool>,
     group_controller: std::rc::Weak<PaneGroupViewController>,
 }
@@ -4663,6 +4813,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                     .query_root_window(sender)
                     .expect("not mounted"),
                 pane_rect: Rect::from_lt_size(Point::new_logical(x, y), Size::new_logical(w, h)),
+                tab_size: self.size.clone(),
                 client_pos: args.client_pos,
             });
         }
@@ -6426,11 +6577,12 @@ async fn run<'sys>(
             Event::DockBeginPreview {
                 mut window,
                 pane_rect,
+                tab_size,
                 client_pos,
             } => {
                 unsafe { window.extra_data_mut::<PerWindowData>() }
                     .docking_manager
-                    .begin_preview(pane_rect, &client_pos, &drag_preview_popover);
+                    .begin_preview(pane_rect, tab_size, &client_pos, &drag_preview_popover);
             }
             Event::DockMovePreview {
                 mut window,
