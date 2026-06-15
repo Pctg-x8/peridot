@@ -52,22 +52,23 @@ use windows::{
             },
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT,
-                HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON,
-                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS,
-                IDC_SIZEWE, IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS,
-                PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
-                SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW,
-                SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetCursorPos, SetWindowLongPtrW, SetWindowPos,
-                ShowWindow, WA_INACTIVE, WHEEL_DELTA, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR,
-                WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+                GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM,
+                HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON,
+                HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM,
+                IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW,
+                NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE,
+                SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
+                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
+                SetCursorPos, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+                WA_INACTIVE, WHEEL_DELTA, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
+                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
                 WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
                 WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
                 WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
                 WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
                 WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP,
+                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP, WindowFromPoint,
             },
         },
     },
@@ -75,7 +76,7 @@ use windows::{
 use windows_core::{HSTRING, IInspectable, Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
-use std::{rc::Rc, sync::Mutex};
+use std::{collections::HashSet, rc::Rc, sync::Mutex};
 
 use crate::{
     Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
@@ -329,6 +330,12 @@ impl WindowHandle {
     #[inline(always)]
     pub fn keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
         self.state().root_focus_group
+    }
+
+    pub fn set_foreground(&self) {
+        unsafe {
+            SetForegroundWindow(self.0).expect("SetForegroundWindow");
+        }
     }
 }
 impl ShellPointerActions for WindowHandle {
@@ -1203,6 +1210,7 @@ impl WindowEventHandler {
     }
 }
 
+#[derive(Debug)]
 pub struct DragPreviewPopoverHandle {
     w: HWND,
     base_window_handle: core::cell::Cell<HWND>,
@@ -1561,6 +1569,7 @@ pub struct SystemLink<'sys> {
     pub app_context_ptr: *const ApplicationContext,
     pub pointer_hovering_timer: *const WaitableTimer,
     pub flyout_surface_context: flyout_surface::SharedState,
+    pub known_window_handles: HashSet<WindowHandle>,
 }
 impl SystemLink<'_> {
     #[inline(always)]
@@ -1584,7 +1593,7 @@ impl SystemLink<'_> {
     }
 
     pub fn create_main_window(
-        &self,
+        &mut self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -1609,6 +1618,7 @@ impl SystemLink<'_> {
         );
         let h = w.make_handle();
         ht_manager.get_data_mut(ht).root_of_window = Some(h);
+        self.known_window_handles.insert(h);
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
         delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
@@ -1658,6 +1668,7 @@ impl SystemLink<'_> {
             keyboard_focus_registry,
         );
         let h = w.make_handle();
+        self.known_window_handles.insert(h);
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
         delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
@@ -1673,7 +1684,7 @@ impl SystemLink<'_> {
     }
 
     pub fn close_window(
-        &self,
+        &mut self,
         mut window_handle: WindowHandle,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
@@ -1690,6 +1701,7 @@ impl SystemLink<'_> {
             .recv()
             .expect("done_event_receiver.recv");
 
+        self.known_window_handles.remove(&window_handle);
         composite_tree.free_all(window_handle.ct_root());
         hit_tree.free_all(window_handle.ht_root());
         keyboard_focus_registry.release_group(window_handle.state().root_focus_group);
@@ -1738,6 +1750,36 @@ impl SystemLink<'_> {
         unsafe { &*self.pointer_hovering_timer }
             .cancel()
             .expect("pointer_hovering_timer.cancel");
+    }
+
+    pub fn query_window_under_pointer(&self, pointer: &PointerID) -> Option<WindowHandle> {
+        let mut cursor_pos = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetCursorPos(cursor_pos.as_mut_ptr()).expect("GetCursorPos");
+        }
+
+        match unsafe { WindowFromPoint(cursor_pos.assume_init()) } {
+            h if !self.known_window_handles.contains(&WindowHandle(h)) => None,
+            h => Some(WindowHandle(h)),
+        }
+    }
+
+    pub fn translate_client_pos_to_another_window(
+        client_pos: Point<LogicalUnit>,
+        source_window: WindowHandle,
+        dest_window: WindowHandle,
+    ) -> Point<LogicalUnit> {
+        let mut translated_pos = [client_pos
+            .to_pixels_round(source_window.ui_scale_factor())
+            .to_win32()];
+        unsafe {
+            MapWindowPoints(
+                Some(source_window.0),
+                Some(dest_window.0),
+                &mut translated_pos,
+            )
+        };
+        Point::from_win32(translated_pos[0]).to_logical(dest_window.ui_scale_factor())
     }
 }
 

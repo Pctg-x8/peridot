@@ -260,7 +260,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 app_context,
                 &dx_context,
                 context_menu_delayed_action_timer.as_ref(),
-            )
+            ),
+            known_window_handles: HashSet::new(),
         },
         #[cfg(not(windows))]
         SystemLink {
@@ -909,10 +910,12 @@ pub enum Event {
     },
     DockMovePreview {
         window: WindowHandle,
+        pointing_window: Option<WindowHandle>,
         client_pos: Point<LogicalUnit>,
     },
     DockConfirm {
         window: WindowHandle,
+        pointing_window: Option<WindowHandle>,
         source_dock: DockID,
         tab_index: usize,
         client_pos: Point<LogicalUnit>,
@@ -3290,59 +3293,48 @@ pub enum DockingOperation {
 }
 
 pub struct DockingPreviewState {
-    control_rect: Rect<LogicalUnit>,
     tab_size: Size<LogicalUnit>,
     original_rect: Rect<LogicalUnit>,
     offset: Point<LogicalUnit>,
 }
 
 pub struct DockingManager {
-    bound_window: WindowHandle,
     max_rect: Rect<LogicalUnit>,
-    store: DockStore,
     root_id: DockID,
-    preview_state: Option<DockingPreviewState>,
 }
 impl DockingManager {
-    #[tracing::instrument(skip(bound_window, ctx, dock_ctor))]
+    #[tracing::instrument(skip(bound_window, ctx, store, dock_ctor))]
     pub fn new(
         bound_window: WindowHandle,
         ctx: &mut ViewInitContext,
         max_rect: Rect<LogicalUnit>,
+        store: &mut DockStore,
         dock_ctor: impl FnOnce(&mut ViewInitContext, &mut DockStore) -> DockID,
     ) -> Self {
-        let mut store = DockStore::new();
-        let root_id = dock_ctor(ctx, &mut store);
-        Self::mount_recursive(root_id, &store, ctx, &bound_window);
+        let root_id = dock_ctor(ctx, store);
+        Self::mount_recursive(root_id, store, ctx, &bound_window);
         Self::relayout_dock(
             root_id,
-            &mut store,
+            store,
             max_rect.clone(),
             ctx.mount_context.composite_tree,
             ctx.mount_context.ht_manager,
         );
 
-        store.dump(root_id);
-
-        Self {
-            bound_window,
-            max_rect,
-            root_id,
-            store,
-            preview_state: None,
-        }
+        Self { max_rect, root_id }
     }
 
     pub fn resize(
         &mut self,
         new_rect: Rect<LogicalUnit>,
+        store: &mut DockStore,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
         self.max_rect = new_rect;
         Self::relayout_dock(
             self.root_id,
-            &mut self.store,
+            store,
             self.max_rect.clone(),
             composite_tree,
             ht_manager,
@@ -3529,14 +3521,15 @@ impl DockingManager {
     }
 
     pub fn move_splitter(
-        &mut self,
+        &self,
         target: DockID,
+        store: &mut DockStore,
         new_splitter_client_pos: f32,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        let self_rect = &self.store.get_computed_state(target).rect;
-        match self.store.get(target) {
+        let self_rect = &store.get_computed_state(target).rect;
+        match store.get(target) {
             Dock::Fill { .. } => unreachable!("fill does not have any splitters!"),
             Dock::ToLeft { width, .. } => {
                 let new_fixed_size =
@@ -3563,25 +3556,20 @@ impl DockingManager {
         }
 
         let self_rect = self_rect.clone();
-        Self::relayout_dock(
-            target,
-            &mut self.store,
-            self_rect,
-            composite_tree,
-            ht_manager,
-        );
+        Self::relayout_dock(target, store, self_rect, composite_tree, ht_manager);
     }
 
-    #[tracing::instrument(skip(self, composite_tree, ht_manager))]
+    #[tracing::instrument(skip(self, store, composite_tree, ht_manager))]
     fn undock(
-        &mut self,
+        &self,
         target: DockID,
+        store: &mut DockStore,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        self.store.dump(self.root_id);
+        store.dump(self.root_id);
 
-        let old_dock = self.store.free(target);
+        let old_dock = store.free(target);
 
         match old_dock {
             Dock::Fill { parent: None, .. } => todo!("empty docking manager support"),
@@ -3590,7 +3578,7 @@ impl DockingManager {
                 group_view,
             } => {
                 group_view.teardown(composite_tree, ht_manager);
-                let (remain_dock, parent_parent) = match self.store.get(parent) {
+                let (remain_dock, parent_parent) = match store.get(parent) {
                     Dock::Fill { .. } => unreachable!("fill cannot be nested"),
                     &Dock::ToLeft {
                         left,
@@ -3643,27 +3631,27 @@ impl DockingManager {
                     t => unreachable!("invalid structure {t:?}"),
                 };
 
-                let new_parent = self.store.free(remain_dock).reparent(parent_parent);
+                let new_parent = store.free(remain_dock).reparent(parent_parent);
                 new_parent.maintain_dock_id_relation(parent);
                 match new_parent {
                     Dock::Fill { .. } => (),
                     Dock::ToLeft { left, right, .. } | Dock::ToRight { left, right, .. } => {
-                        self.store.replace_by(left, |x| x.reparent(Some(parent)));
-                        self.store.replace_by(right, |x| x.reparent(Some(parent)));
+                        store.replace_by(left, |x| x.reparent(Some(parent)));
+                        store.replace_by(right, |x| x.reparent(Some(parent)));
                     }
                     Dock::ToTop { top, bottom, .. } | Dock::ToBottom { top, bottom, .. } => {
-                        self.store.replace_by(top, |x| x.reparent(Some(parent)));
-                        self.store.replace_by(bottom, |x| x.reparent(Some(parent)));
+                        store.replace_by(top, |x| x.reparent(Some(parent)));
+                        store.replace_by(bottom, |x| x.reparent(Some(parent)));
                     }
                 }
-                self.store
+                store
                     .replace(parent, new_parent)
                     .teardown(composite_tree, ht_manager);
                 let relayout_base = parent_parent.unwrap_or(self.root_id);
-                let relayout_base_rect = self.store.get_computed_state(relayout_base).rect.clone();
+                let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
                 Self::relayout_dock(
                     relayout_base,
-                    &mut self.store,
+                    store,
                     relayout_base_rect,
                     composite_tree,
                     ht_manager,
@@ -3672,25 +3660,26 @@ impl DockingManager {
             _ => todo!(),
         }
 
-        self.store.dump(self.root_id);
+        store.dump(self.root_id);
     }
 
-    #[tracing::instrument(skip(self, view_init_ctx, mount_target))]
+    #[tracing::instrument(skip(self, store, view_init_ctx, mount_target))]
     fn redock(
         &mut self,
         source: DockID,
+        store: &mut DockStore,
         index: usize,
         op: DockingOperation,
         suggested_rect: &Rect<LogicalUnit>,
         view_init_ctx: &mut ViewInitContext,
         mount_target: &(impl MountTarget + ?Sized),
     ) -> Option<Box<dyn PaneView>> {
-        self.store.dump(self.root_id);
+        store.dump(self.root_id);
 
         let Dock::Fill {
             group_view: source_group_view,
             ..
-        } = self.store.get(source)
+        } = store.get(source)
         else {
             unreachable!("merge from non-fill dock");
         };
@@ -3704,7 +3693,7 @@ impl DockingManager {
                 let Dock::Fill {
                     group_view: target_group_view,
                     ..
-                } = self.store.get(target)
+                } = store.get(target)
                 else {
                     unreachable!("merge into non-fill dock");
                 };
@@ -3716,7 +3705,7 @@ impl DockingManager {
                 let Dock::Fill {
                     group_view: target_group_view,
                     ..
-                } = self.store.get(target)
+                } = store.get(target)
                 else {
                     unreachable!("merge into non-fill dock");
                 };
@@ -3725,8 +3714,8 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToLeft(target) => {
-                let target_parent = self.store.get(target).parent();
-                let new_dock = self.store.alloc_recurse(|parent_id, store| {
+                let target_parent = store.get(target).parent();
+                let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToLeft {
                         parent: target_parent,
                         left: store.alloc(|id| {
@@ -3749,10 +3738,9 @@ impl DockingManager {
                     d
                 });
 
-                self.store
-                    .replace_by(target, |x| x.reparent(Some(new_dock)));
+                store.replace_by(target, |x| x.reparent(Some(new_dock)));
                 if let Some(target_parent) = target_parent {
-                    self.store
+                    store
                         .get_mut(target_parent)
                         .replace_matching_child(target, new_dock);
                 } else {
@@ -3762,11 +3750,11 @@ impl DockingManager {
 
                 let relayout_base = target_parent.unwrap_or(self.root_id);
                 let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &self.store.get_computed_state(x).rect)
+                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
                     .clone();
                 Self::relayout_dock(
                     relayout_base,
-                    &mut self.store,
+                    store,
                     relayout_base_rect,
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
@@ -3774,8 +3762,8 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToRight(target) => {
-                let target_parent = self.store.get(target).parent();
-                let new_dock = self.store.alloc_recurse(|parent_id, store| {
+                let target_parent = store.get(target).parent();
+                let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToRight {
                         parent: target_parent,
                         left: target,
@@ -3798,10 +3786,9 @@ impl DockingManager {
                     d
                 });
 
-                self.store
-                    .replace_by(target, |x| x.reparent(Some(new_dock)));
+                store.replace_by(target, |x| x.reparent(Some(new_dock)));
                 if let Some(target_parent) = target_parent {
-                    self.store
+                    store
                         .get_mut(target_parent)
                         .replace_matching_child(target, new_dock);
                 } else {
@@ -3811,11 +3798,11 @@ impl DockingManager {
 
                 let relayout_base = target_parent.unwrap_or(self.root_id);
                 let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &self.store.get_computed_state(x).rect)
+                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
                     .clone();
                 Self::relayout_dock(
                     relayout_base,
-                    &mut self.store,
+                    store,
                     relayout_base_rect,
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
@@ -3823,8 +3810,8 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToTop(target) => {
-                let target_parent = self.store.get(target).parent();
-                let new_dock = self.store.alloc_recurse(|parent_id, store| {
+                let target_parent = store.get(target).parent();
+                let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToTop {
                         parent: target_parent,
                         top: store.alloc(|id| {
@@ -3847,10 +3834,9 @@ impl DockingManager {
                     d
                 });
 
-                self.store
-                    .replace_by(target, |x| x.reparent(Some(new_dock)));
+                store.replace_by(target, |x| x.reparent(Some(new_dock)));
                 if let Some(target_parent) = target_parent {
-                    self.store
+                    store
                         .get_mut(target_parent)
                         .replace_matching_child(target, new_dock);
                 } else {
@@ -3860,11 +3846,11 @@ impl DockingManager {
 
                 let relayout_base = target_parent.unwrap_or(self.root_id);
                 let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &self.store.get_computed_state(x).rect)
+                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
                     .clone();
                 Self::relayout_dock(
                     relayout_base,
-                    &mut self.store,
+                    store,
                     relayout_base_rect,
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
@@ -3872,8 +3858,8 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToBottom(target) => {
-                let target_parent = self.store.get(target).parent();
-                let new_dock = self.store.alloc_recurse(|parent_id, store| {
+                let target_parent = store.get(target).parent();
+                let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToBottom {
                         parent: target_parent,
                         top: target,
@@ -3896,10 +3882,9 @@ impl DockingManager {
                     d
                 });
 
-                self.store
-                    .replace_by(target, |x| x.reparent(Some(new_dock)));
+                store.replace_by(target, |x| x.reparent(Some(new_dock)));
                 if let Some(target_parent) = target_parent {
-                    self.store
+                    store
                         .get_mut(target_parent)
                         .replace_matching_child(target, new_dock);
                 } else {
@@ -3909,11 +3894,11 @@ impl DockingManager {
 
                 let relayout_base = target_parent.unwrap_or(self.root_id);
                 let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &self.store.get_computed_state(x).rect)
+                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
                     .clone();
                 Self::relayout_dock(
                     relayout_base,
-                    &mut self.store,
+                    store,
                     relayout_base_rect,
                     view_init_ctx.mount_context.composite_tree,
                     view_init_ctx.mount_context.ht_manager,
@@ -3925,45 +3910,48 @@ impl DockingManager {
         if should_undock_source {
             self.undock(
                 source,
+                store,
                 view_init_ctx.mount_context.composite_tree,
                 view_init_ctx.mount_context.ht_manager,
             );
         }
 
-        self.store.dump(self.root_id);
+        store.dump(self.root_id);
         diverged_contents
     }
 
     fn begin_preview(
-        &mut self,
+        &self,
         pane_rect: Rect<LogicalUnit>,
         tab_size: Size<LogicalUnit>,
         client_pos: &Point<LogicalUnit>,
         popover: &DragPreviewPopoverHandle,
-    ) {
+    ) -> DockingPreviewState {
         popover.show(
             &Point::new_logical(pane_rect.left, pane_rect.top),
             &Size::new_logical(pane_rect.width, pane_rect.height),
         );
-        self.preview_state = Some(DockingPreviewState {
+
+        DockingPreviewState {
             offset: Point::new_logical(pane_rect.left - client_pos.x, pane_rect.top - client_pos.y),
-            control_rect: self.max_rect.clone(),
             tab_size,
             original_rect: pane_rect,
-        });
+        }
     }
 
-    fn move_preview(&self, client_pos: Point<LogicalUnit>, popover: &DragPreviewPopoverHandle) {
-        let Some(ref state) = self.preview_state else {
-            return;
-        };
-
+    fn move_preview(
+        &self,
+        store: &DockStore,
+        client_pos: Point<LogicalUnit>,
+        popover: &DragPreviewPopoverHandle,
+        state: &mut DockingPreviewState,
+    ) {
         match Dock::compute_recommended_operation(
             self.root_id,
-            &self.store,
+            store,
             state.original_rect.clone(),
             state.tab_size.clone(),
-            state.control_rect.clone(),
+            self.max_rect.clone(),
             client_pos,
         ) {
             (DockingOperation::Merge(_), r) => {
@@ -3997,19 +3985,19 @@ impl DockingManager {
     }
 
     fn end_preview(
-        &mut self,
+        &self,
+        store: &DockStore,
         client_pos: Point<LogicalUnit>,
         popover: &DragPreviewPopoverHandle,
+        state: DockingPreviewState,
     ) -> (DockingOperation, Rect<LogicalUnit>) {
-        let state = self.preview_state.take().expect("not docking");
-
         popover.hide();
         Dock::compute_recommended_operation(
             self.root_id,
-            &self.store,
-            state.original_rect.clone(),
-            state.tab_size.clone(),
-            state.control_rect.clone(),
+            store,
+            state.original_rect,
+            state.tab_size,
+            self.max_rect.clone(),
             client_pos,
         )
     }
@@ -4832,6 +4820,9 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                 .ht_manager
                 .query_root_window(sender)
                 .expect("not mounted"),
+            pointing_window: context
+                .system_link
+                .query_window_under_pointer(&args.pointer_id),
             client_pos: args.client_pos,
         });
 
@@ -4857,6 +4848,9 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                 .ht_manager
                 .query_root_window(sender)
                 .expect("not mounted"),
+            pointing_window: context
+                .system_link
+                .query_window_under_pointer(&args.pointer_id),
             client_pos: args.client_pos,
             source_dock: gc.dock.get(),
             tab_index: gc.tab_index(self).expect("not in any group"),
@@ -5425,6 +5419,8 @@ async fn run<'sys>(
     let mut current_active_dropdown_menu_session = None::<DropdownMenuSession>;
     let mut custom_view_flyout_session = None::<CustomViewFlyoutSession>;
     let mut delayed_render_messages = Vec::new();
+    let mut dock_store = DockStore::new();
+    let mut docking_preview_state = None;
 
     let mut main_window = system_link.create_main_window(
         &mut composite_tree,
@@ -5554,6 +5550,7 @@ async fn run<'sys>(
                 ),
                 Size::new_logical(320.0, 256.0),
             ),
+            &mut dock_store,
             |view_init_ctx, store| {
                 store.alloc_recurse(|parent_id, store| Dock::ToRight {
                     parent: None,
@@ -5650,6 +5647,7 @@ async fn run<'sys>(
                                     },
                             ),
                         ),
+                        &mut dock_store,
                         &mut composite_tree,
                         &mut ht_manager,
                     );
@@ -6566,6 +6564,7 @@ async fn run<'sys>(
                     .docking_manager
                     .move_splitter(
                         controlling_dock,
+                        &mut dock_store,
                         pos_client,
                         &mut composite_tree,
                         &mut ht_manager,
@@ -6575,126 +6574,170 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::DockBeginPreview {
-                mut window,
+                window,
                 pane_rect,
                 tab_size,
                 client_pos,
             } => {
-                unsafe { window.extra_data_mut::<PerWindowData>() }
-                    .docking_manager
-                    .begin_preview(pane_rect, tab_size, &client_pos, &drag_preview_popover);
+                docking_preview_state = Some(
+                    unsafe { window.extra_data_ref::<PerWindowData>() }
+                        .docking_manager
+                        .begin_preview(pane_rect, tab_size, &client_pos, &drag_preview_popover),
+                );
             }
             Event::DockMovePreview {
-                mut window,
+                window,
+                pointing_window,
                 client_pos,
             } => {
-                unsafe { window.extra_data_mut::<PerWindowData>() }
-                    .docking_manager
-                    .move_preview(client_pos, &drag_preview_popover);
+                if let Some(ref mut state) = docking_preview_state {
+                    let (mut target_window, final_client_pos) = if let Some(w) = pointing_window {
+                        (
+                            w,
+                            SystemLink::translate_client_pos_to_another_window(
+                                client_pos, window, w,
+                            ),
+                        )
+                    } else {
+                        (window, client_pos)
+                    };
+
+                    target_window.set_foreground();
+                    drag_preview_popover.bind_position_base_window(target_window);
+                    unsafe { target_window.extra_data_mut::<PerWindowData>() }
+                        .docking_manager
+                        .move_preview(&dock_store, final_client_pos, &drag_preview_popover, state);
+                }
             }
             Event::DockConfirm {
-                mut window,
+                window,
+                pointing_window,
                 source_dock,
                 tab_index,
                 client_pos,
             } => {
-                let mount_target = window;
-                let dm = &mut unsafe { window.extra_data_mut::<PerWindowData>() }.docking_manager;
+                if let Some(state) = docking_preview_state.take() {
+                    let (mut target_window, final_client_pos) = if let Some(w) = pointing_window {
+                        (
+                            w,
+                            SystemLink::translate_client_pos_to_another_window(
+                                client_pos, window, w,
+                            ),
+                        )
+                    } else {
+                        (window, client_pos)
+                    };
 
-                let (op, suggested_rect) = dm.end_preview(client_pos, &drag_preview_popover);
-                let diverged_content = dm.redock(
-                    source_dock,
-                    tab_index,
-                    op,
-                    &suggested_rect,
-                    &mut ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_registry: &mut view_registry,
-                        ui_scale_factor: 1.0, // updated later
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                    },
-                    &mount_target,
-                );
+                    target_window.set_foreground();
+                    let mount_target = target_window;
+                    let dm = &mut unsafe { target_window.extra_data_mut::<PerWindowData>() }
+                        .docking_manager;
 
-                if let Some(content) = diverged_content {
-                    system_link.open_window(
-                        Size::new_logical(
-                            suggested_rect.width,
-                            suggested_rect.height + ui::window_header::View::THICKNESS,
-                        ),
-                        window.ui_scale_factor(),
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                        &mut delayed_render_messages,
-                        |mut w,
-                         composite_tree,
-                         ht_manager,
-                         keyboard_focus_registry,
-                         system_link| {
-                            ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
-
-                            composite_tree.get_mut(w.ct_root()).has_bitmap = true;
-                            composite_tree.get_mut(w.ct_root()).composite_mode =
-                                CompositeMode::FillColor(AnimatableColor::Value([
-                                    0.0, 0.1, 0.2, 1.0,
-                                ]));
-                            composite_tree.mark_dirty(w.ct_root());
-
-                            let mut view_init_ctx = ViewInitContext {
-                                mount_context: MountContext {
-                                    composite_tree,
-                                    ht_manager,
-                                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                                    keyboard_focus_registry,
-                                },
-                                view_registry: &mut view_registry,
-                                ui_scale_factor: w.ui_scale_factor(),
-                                system_link,
-                                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            };
-                            let window_header_view = ui::window_header::View::new(
-                                &mut view_init_ctx,
-                                ui::window_header::Caption::Sub,
-                                w.needs_system_command_buttons(),
-                            );
-                            window_header_view.mount(&mut view_init_ctx, &w);
-
-                            w.associate_extra_data(Box::new(PerWindowData {
-                                screen_reposition_interests: HashSet::new(),
-                                has_appmenu: false,
-                                header: window_header_view,
-                                docking_manager: DockingManager::new(
-                                    w,
-                                    &mut view_init_ctx,
-                                    Rect::from_lt_size(
-                                        Point::new_logical(0.0, ui::window_header::View::THICKNESS),
-                                        suggested_rect.size(),
-                                    ),
-                                    |view_init_ctx, store| {
-                                        store.alloc(|id| Dock::Fill {
-                                            group_view: PaneGroupView::new(
-                                                view_init_ctx,
-                                                vec![content],
-                                                id,
-                                            ),
-                                            parent: None,
-                                        })
-                                    },
-                                ),
-                            }));
-                        },
+                    let (op, suggested_rect) = dm.end_preview(
+                        &mut dock_store,
+                        final_client_pos,
+                        &drag_preview_popover,
+                        state,
                     );
-                }
+                    let diverged_content = dm.redock(
+                        source_dock,
+                        &mut dock_store,
+                        tab_index,
+                        op,
+                        &suggested_rect,
+                        &mut ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                keyboard_focus_registry: &mut keyboard_focus_registry,
+                            },
+                            view_registry: &mut view_registry,
+                            ui_scale_factor: 1.0, // updated later
+                            system_link: &system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        },
+                        &mount_target,
+                    );
 
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    if let Some(content) = diverged_content {
+                        system_link.open_window(
+                            Size::new_logical(
+                                suggested_rect.width,
+                                suggested_rect.height + ui::window_header::View::THICKNESS,
+                            ),
+                            window.ui_scale_factor(),
+                            &mut composite_tree,
+                            &mut ht_manager,
+                            &mut keyboard_focus_registry,
+                            &mut delayed_render_messages,
+                            |mut w,
+                             composite_tree,
+                             ht_manager,
+                             keyboard_focus_registry,
+                             system_link| {
+                                ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
+
+                                composite_tree.get_mut(w.ct_root()).has_bitmap = true;
+                                composite_tree.get_mut(w.ct_root()).composite_mode =
+                                    CompositeMode::FillColor(AnimatableColor::Value([
+                                        0.0, 0.1, 0.2, 1.0,
+                                    ]));
+                                composite_tree.mark_dirty(w.ct_root());
+
+                                let mut view_init_ctx = ViewInitContext {
+                                    mount_context: MountContext {
+                                        composite_tree,
+                                        ht_manager,
+                                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                                        keyboard_focus_registry,
+                                    },
+                                    view_registry: &mut view_registry,
+                                    ui_scale_factor: w.ui_scale_factor(),
+                                    system_link,
+                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                };
+                                let window_header_view = ui::window_header::View::new(
+                                    &mut view_init_ctx,
+                                    ui::window_header::Caption::Sub,
+                                    w.needs_system_command_buttons(),
+                                );
+                                window_header_view.mount(&mut view_init_ctx, &w);
+
+                                w.associate_extra_data(Box::new(PerWindowData {
+                                    screen_reposition_interests: HashSet::new(),
+                                    has_appmenu: false,
+                                    header: window_header_view,
+                                    docking_manager: DockingManager::new(
+                                        w,
+                                        &mut view_init_ctx,
+                                        Rect::from_lt_size(
+                                            Point::new_logical(
+                                                0.0,
+                                                ui::window_header::View::THICKNESS,
+                                            ),
+                                            suggested_rect.size(),
+                                        ),
+                                        &mut dock_store,
+                                        |view_init_ctx, store| {
+                                            store.alloc(|id| Dock::Fill {
+                                                group_view: PaneGroupView::new(
+                                                    view_init_ctx,
+                                                    vec![content],
+                                                    id,
+                                                ),
+                                                parent: None,
+                                            })
+                                        },
+                                    ),
+                                }));
+                            },
+                        );
+                    }
+
+                    composite_tree
+                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
