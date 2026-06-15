@@ -2744,10 +2744,18 @@ impl DockStore {
         fn rec(store: &DockStore, id: DockID, level: usize, sink: &mut String) {
             use core::fmt::Write;
 
-            sink.extend(core::iter::repeat_n(' ', level * 2));
-            writeln!(sink, "#{} {:?}", id.0, store.docks[id.store_index()]).unwrap();
+            if !matches!(
+                store.docks[id.store_index()],
+                Some(Dock::RootContainer { .. }),
+            ) {
+                sink.extend(core::iter::repeat_n(' ', level * 2));
+                writeln!(sink, "#{} {:?}", id.0, store.docks[id.store_index()]).unwrap();
+            }
 
             match store.docks[id.store_index()] {
+                Some(Dock::RootContainer { content }) => {
+                    rec(store, content, level, sink);
+                }
                 Some(Dock::Fill { .. }) => {}
                 Some(Dock::ToLeft { left, right, .. })
                 | Some(Dock::ToRight { left, right, .. }) => {
@@ -2773,34 +2781,37 @@ pub struct ComputedDockState {
     rect: Rect<LogicalUnit>,
 }
 
+/// ドック形状
 pub enum Dock {
+    /// 最上位コンテナ（ウィンドウごとにひとつ）
+    RootContainer { content: DockID },
     Fill {
-        parent: Option<DockID>,
+        parent: DockID,
         group_view: PaneGroupView,
     },
     ToLeft {
-        parent: Option<DockID>,
+        parent: DockID,
         left: DockID,
         right: DockID,
         splitter: DockedPaneSplitterView,
         width: Cell<f32>,
     },
     ToRight {
-        parent: Option<DockID>,
+        parent: DockID,
         left: DockID,
         right: DockID,
         splitter: DockedPaneSplitterView,
         width: Cell<f32>,
     },
     ToTop {
-        parent: Option<DockID>,
+        parent: DockID,
         top: DockID,
         bottom: DockID,
         splitter: DockedPaneSplitterView,
         height: Cell<f32>,
     },
     ToBottom {
-        parent: Option<DockID>,
+        parent: DockID,
         top: DockID,
         bottom: DockID,
         splitter: DockedPaneSplitterView,
@@ -2810,6 +2821,10 @@ pub enum Dock {
 impl core::fmt::Debug for Dock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::RootContainer { content } => f
+                .debug_struct("Dock::RootContainer")
+                .field("content", content)
+                .finish_non_exhaustive(),
             Self::Fill { parent, .. } => f
                 .debug_struct("Dock::Fill")
                 .field("parent", parent)
@@ -2870,6 +2885,7 @@ impl Dock {
         ht_manager: &mut HitTestTreeManager,
     ) {
         match self {
+            Self::RootContainer { .. } => {}
             Self::Fill { group_view, .. } => {
                 group_view.teardown(composite_tree, ht_manager);
             }
@@ -2890,17 +2906,18 @@ impl Dock {
 
     fn mount(&self, ctx: &mut MountContext, mount_target: &(impl MountTarget + ?Sized)) {
         match self {
-            Dock::Fill { group_view, .. } => group_view.mount(ctx, mount_target),
-            Dock::ToLeft { splitter, .. } => {
+            Self::RootContainer { .. } => {}
+            Self::Fill { group_view, .. } => group_view.mount(ctx, mount_target),
+            Self::ToLeft { splitter, .. } => {
                 splitter.mount(ctx, mount_target);
             }
-            Dock::ToRight { splitter, .. } => {
+            Self::ToRight { splitter, .. } => {
                 splitter.mount(ctx, mount_target);
             }
-            Dock::ToTop { splitter, .. } => {
+            Self::ToTop { splitter, .. } => {
                 splitter.mount(ctx, mount_target);
             }
-            Dock::ToBottom { splitter, .. } => {
+            Self::ToBottom { splitter, .. } => {
                 splitter.mount(ctx, mount_target);
             }
         }
@@ -2908,16 +2925,18 @@ impl Dock {
 
     pub const fn parent(&self) -> Option<DockID> {
         match self {
-            &Self::Fill { parent, .. } => parent,
-            &Self::ToLeft { parent, .. } => parent,
-            &Self::ToRight { parent, .. } => parent,
-            &Self::ToTop { parent, .. } => parent,
-            &Self::ToBottom { parent, .. } => parent,
+            &Self::RootContainer { .. } => None,
+            &Self::Fill { parent, .. } => Some(parent),
+            &Self::ToLeft { parent, .. } => Some(parent),
+            &Self::ToRight { parent, .. } => Some(parent),
+            &Self::ToTop { parent, .. } => Some(parent),
+            &Self::ToBottom { parent, .. } => Some(parent),
         }
     }
 
     pub fn maintain_dock_id_relation(&self, id: DockID) {
         match self {
+            Self::RootContainer { .. } => {}
             Self::Fill { group_view, .. } => {
                 group_view.rebind_dock(id);
             }
@@ -2936,8 +2955,9 @@ impl Dock {
         }
     }
 
-    pub fn reparent(self, new_parent: Option<DockID>) -> Self {
+    pub fn reparent(self, new_parent: DockID) -> Self {
         match self {
+            Self::RootContainer { content } => unreachable!("reparenting root container"),
             Self::Fill { group_view, .. } => Self::Fill {
                 group_view,
                 parent: new_parent,
@@ -2999,29 +3019,32 @@ impl Dock {
 
     fn replace_matching_child(&mut self, target: DockID, new: DockID) {
         match self {
-            Dock::Fill { .. } => unreachable!("fill cannot be nested"),
-            Dock::ToLeft { left, right, .. } if *left == target => {
+            Self::RootContainer { content } if *content == target => {
+                *content = new;
+            }
+            Self::Fill { .. } => unreachable!("fill cannot be nested"),
+            Self::ToLeft { left, right, .. } if *left == target => {
                 *left = new;
             }
-            Dock::ToLeft { left, right, .. } if *right == target => {
+            Self::ToLeft { left, right, .. } if *right == target => {
                 *right = new;
             }
-            Dock::ToRight { left, right, .. } if *left == target => {
+            Self::ToRight { left, right, .. } if *left == target => {
                 *left = new;
             }
-            Dock::ToRight { left, right, .. } if *right == target => {
+            Self::ToRight { left, right, .. } if *right == target => {
                 *right = new;
             }
-            Dock::ToTop { top, bottom, .. } if *top == target => {
+            Self::ToTop { top, bottom, .. } if *top == target => {
                 *top = new;
             }
-            Dock::ToTop { top, bottom, .. } if *bottom == target => {
+            Self::ToTop { top, bottom, .. } if *bottom == target => {
                 *bottom = new;
             }
-            Dock::ToBottom { top, bottom, .. } if *top == target => {
+            Self::ToBottom { top, bottom, .. } if *top == target => {
                 *top = new;
             }
-            Dock::ToBottom { top, bottom, .. } if *bottom == target => {
+            Self::ToBottom { top, bottom, .. } if *bottom == target => {
                 *bottom = new;
             }
             t => unreachable!("invalid structure {t:?}"),
@@ -3033,46 +3056,45 @@ impl Dock {
         store: &DockStore,
         source_rect: Rect<LogicalUnit>,
         source_tab_size: Size<LogicalUnit>,
-        available_rect: Rect<LogicalUnit>,
         pos: Point<LogicalUnit>,
         drag_offset: Point<LogicalUnit>,
     ) -> (DockingOperation, Rect<LogicalUnit>) {
         fn try_parent_dock(
             this: DockID,
             source_rect: &Rect<LogicalUnit>,
-            available_rect: &Rect<LogicalUnit>,
+            dock_rect: &Rect<LogicalUnit>,
             pos: &Point<LogicalUnit>,
         ) -> Option<(DockingOperation, Rect<LogicalUnit>)> {
-            if pos.x <= available_rect.left + Dock::PARENT_DOCK_THRESHOLD {
+            if pos.x <= dock_rect.left + Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
                     DockingOperation::SplitToLeft(this),
-                    available_rect.slice_left(source_rect.width.min(available_rect.width * 0.7)),
+                    dock_rect.slice_left(source_rect.width.min(dock_rect.width * 0.7)),
                 ));
             }
-            if pos.x >= available_rect.right() - Dock::PARENT_DOCK_THRESHOLD {
+            if pos.x >= dock_rect.right() - Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
                     DockingOperation::SplitToRight(this),
-                    available_rect.slice_right(source_rect.width.min(available_rect.width * 0.7)),
+                    dock_rect.slice_right(source_rect.width.min(dock_rect.width * 0.7)),
                 ));
             }
-            if pos.y <= available_rect.top + Dock::PARENT_DOCK_THRESHOLD {
+            if pos.y <= dock_rect.top + Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
                     DockingOperation::SplitToTop(this),
-                    available_rect.slice_top(source_rect.height.min(available_rect.height * 0.7)),
+                    dock_rect.slice_top(source_rect.height.min(dock_rect.height * 0.7)),
                 ));
             }
-            if pos.y >= available_rect.bottom() - Dock::PARENT_DOCK_THRESHOLD {
+            if pos.y >= dock_rect.bottom() - Dock::PARENT_DOCK_THRESHOLD {
                 return Some((
                     DockingOperation::SplitToBottom(this),
-                    available_rect
-                        .slice_bottom(source_rect.height.min(available_rect.height * 0.7)),
+                    dock_rect.slice_bottom(source_rect.height.min(dock_rect.height * 0.7)),
                 ));
             }
 
             None
         }
 
-        if !available_rect.point_in_inclusive(&pos) {
+        let dock_rect = &store.get_computed_state(this).rect;
+        if !dock_rect.point_in_inclusive(&pos) {
             // not hit to the rect
             return (
                 DockingOperation::Diverge,
@@ -3084,62 +3106,65 @@ impl Dock {
         }
 
         match store.get(this) {
+            &Self::RootContainer { content } => {
+                return Self::compute_recommended_operation(
+                    content,
+                    store,
+                    source_rect,
+                    source_tab_size,
+                    pos,
+                    drag_offset,
+                );
+            }
             Self::Fill { group_view, .. } => {
-                if pos.y <= available_rect.top + PaneGroupTabView::PADDING_Y * 2.0 + 16.0 {
+                if pos.y <= dock_rect.top + PaneGroupTabView::PADDING_Y * 2.0 + 16.0 {
                     // dock to tab index
                     let local_pos =
-                        Point::new_logical(pos.x - available_rect.left, pos.y - available_rect.top);
+                        Point::new_logical(pos.x - dock_rect.left, pos.y - dock_rect.top);
                     let (index, tab_lt) = group_view.hittest_tab_index(local_pos);
 
                     return (
                         DockingOperation::MergeAtTabIndex(this, index),
                         Rect::from_lt_size(
-                            Point::new_logical(
-                                tab_lt.x + available_rect.left,
-                                tab_lt.y + available_rect.top,
-                            ),
+                            Point::new_logical(tab_lt.x + dock_rect.left, tab_lt.y + dock_rect.top),
                             source_tab_size,
                         ),
                     );
                 }
 
-                let dl = pos.x - available_rect.left;
-                let dr = available_rect.right() - pos.x;
-                let dt = pos.y - available_rect.top;
-                let db = available_rect.bottom() - pos.y;
+                let dl = pos.x - dock_rect.left;
+                let dr = dock_rect.right() - pos.x;
+                let dt = pos.y - dock_rect.top;
+                let db = dock_rect.bottom() - pos.y;
                 if dl.min(dr) < dt.min(db) {
-                    if dl <= available_rect.width * 0.3 {
+                    if dl <= dock_rect.width * 0.3 {
                         return (
                             DockingOperation::SplitToLeft(this),
-                            available_rect
-                                .slice_left(source_rect.width.min(available_rect.width * 0.7)),
+                            dock_rect.slice_left(source_rect.width.min(dock_rect.width * 0.7)),
                         );
                     }
-                    if dr <= available_rect.width * 0.3 {
+                    if dr <= dock_rect.width * 0.3 {
                         return (
                             DockingOperation::SplitToRight(this),
-                            available_rect
-                                .slice_right(source_rect.width.min(available_rect.width * 0.7)),
+                            dock_rect.slice_right(source_rect.width.min(dock_rect.width * 0.7)),
                         );
                     }
                 } else {
-                    if dt <= available_rect.height * 0.3 {
+                    if dt <= dock_rect.height * 0.3 {
                         return (
                             DockingOperation::SplitToTop(this),
-                            available_rect
-                                .slice_top(source_rect.height.min(available_rect.height * 0.7)),
+                            dock_rect.slice_top(source_rect.height.min(dock_rect.height * 0.7)),
                         );
                     }
-                    if db <= available_rect.height * 0.3 {
+                    if db <= dock_rect.height * 0.3 {
                         return (
                             DockingOperation::SplitToBottom(this),
-                            available_rect
-                                .slice_bottom(source_rect.height.min(available_rect.height * 0.7)),
+                            dock_rect.slice_bottom(source_rect.height.min(dock_rect.height * 0.7)),
                         );
                     }
                 }
 
-                return (DockingOperation::Merge(this), available_rect);
+                return (DockingOperation::Merge(this), dock_rect.clone());
             }
             &Self::ToLeft {
                 left,
@@ -3147,32 +3172,30 @@ impl Dock {
                 ref width,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
                     return op;
                 }
 
                 let width = width.get();
-                let r = available_rect.slice_left(width);
+                let r = dock_rect.slice_left(width);
                 if pos.x <= r.right() {
                     return Self::compute_recommended_operation(
                         left,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
                 }
-                let r = available_rect
-                    .slice_right(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
+                let r = dock_rect
+                    .slice_right(dock_rect.width - width - DockedPaneSplitterView::THICKNESS);
                 if pos.x >= r.left {
                     return Self::compute_recommended_operation(
                         right,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
@@ -3184,32 +3207,30 @@ impl Dock {
                 ref width,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
                     return op;
                 }
 
                 let width = width.get();
-                let r = available_rect
-                    .slice_left(available_rect.width - width - DockedPaneSplitterView::THICKNESS);
+                let r = dock_rect
+                    .slice_left(dock_rect.width - width - DockedPaneSplitterView::THICKNESS);
                 if pos.x <= r.right() {
                     return Self::compute_recommended_operation(
                         left,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
                 }
-                let r = available_rect.slice_right(width);
+                let r = dock_rect.slice_right(width);
                 if pos.x >= r.left {
                     return Self::compute_recommended_operation(
                         right,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
@@ -3221,33 +3242,30 @@ impl Dock {
                 ref height,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
                     return op;
                 }
 
                 let height = height.get();
-                let r = available_rect.slice_top(height);
+                let r = dock_rect.slice_top(height);
                 if pos.y <= r.bottom() {
                     return Self::compute_recommended_operation(
                         top,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
                 }
-                let r = available_rect.slice_bottom(
-                    available_rect.height - height - DockedPaneSplitterView::THICKNESS,
-                );
+                let r = dock_rect
+                    .slice_bottom(dock_rect.height - height - DockedPaneSplitterView::THICKNESS);
                 if pos.y >= r.top {
                     return Self::compute_recommended_operation(
                         bottom,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
@@ -3259,32 +3277,30 @@ impl Dock {
                 ref height,
                 ..
             } => {
-                if let Some(op) = try_parent_dock(this, &source_rect, &available_rect, &pos) {
+                if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
                     return op;
                 }
 
                 let height = height.get();
-                let r = available_rect
-                    .slice_top(available_rect.height - height - DockedPaneSplitterView::THICKNESS);
+                let r = dock_rect
+                    .slice_top(dock_rect.height - height - DockedPaneSplitterView::THICKNESS);
                 if pos.y <= r.bottom() {
                     return Self::compute_recommended_operation(
                         top,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
                 }
-                let r = available_rect.slice_bottom(height);
+                let r = dock_rect.slice_bottom(height);
                 if pos.y >= r.top {
                     return Self::compute_recommended_operation(
                         bottom,
                         store,
                         source_rect,
                         source_tab_size,
-                        r,
                         pos,
                         drag_offset,
                     );
@@ -3292,7 +3308,13 @@ impl Dock {
             }
         }
 
-        return (DockingOperation::Diverge, source_rect);
+        return (
+            DockingOperation::Diverge,
+            Rect::from_lt_size(
+                Point::new_logical(pos.x + drag_offset.x, pos.y + drag_offset.y),
+                source_rect.size(),
+            ),
+        );
     }
 }
 
@@ -3320,7 +3342,6 @@ pub enum UndockResult {
 }
 
 pub struct DockingManager {
-    max_rect: Rect<LogicalUnit>,
     root_id: DockID,
 }
 impl DockingManager {
@@ -3337,12 +3358,12 @@ impl DockingManager {
         Self::relayout_dock(
             root_id,
             store,
-            max_rect.clone(),
+            max_rect,
             ctx.mount_context.composite_tree,
             ctx.mount_context.ht_manager,
         );
 
-        Self { max_rect, root_id }
+        Self { root_id }
     }
 
     pub fn resize(
@@ -3352,14 +3373,7 @@ impl DockingManager {
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        self.max_rect = new_rect;
-        Self::relayout_dock(
-            self.root_id,
-            store,
-            self.max_rect.clone(),
-            composite_tree,
-            ht_manager,
-        );
+        Self::relayout_dock(self.root_id, store, new_rect, composite_tree, ht_manager);
     }
 
     fn mount_recursive(
@@ -3369,7 +3383,10 @@ impl DockingManager {
         mount_target: &(impl MountTarget + ?Sized),
     ) {
         match store.get(target) {
-            Dock::Fill { group_view, .. } => group_view.mount(ctx, mount_target),
+            &Dock::RootContainer { content } => {
+                Self::mount_recursive(content, store, ctx, mount_target);
+            }
+            &Dock::Fill { ref group_view, .. } => group_view.mount(ctx, mount_target),
             &Dock::ToLeft {
                 left,
                 right,
@@ -3423,7 +3440,10 @@ impl DockingManager {
         store.get_computed_state_mut(target).rect = available_rect.clone();
 
         match store.get(target) {
-            Dock::Fill { group_view, .. } => {
+            &Dock::RootContainer { content } => {
+                Self::relayout_dock(content, store, available_rect, composite_tree, ht_manager);
+            }
+            &Dock::Fill { ref group_view, .. } => {
                 group_view.set_rect(available_rect, composite_tree, ht_manager)
             }
             &Dock::ToLeft {
@@ -3551,6 +3571,9 @@ impl DockingManager {
     ) {
         let self_rect = &store.get_computed_state(target).rect;
         match store.get(target) {
+            Dock::RootContainer { .. } => {
+                unreachable!("root container does not have any splitters!")
+            }
             Dock::Fill { .. } => unreachable!("fill does not have any splitters!"),
             Dock::ToLeft { width, .. } => {
                 let new_fixed_size =
@@ -3593,16 +3616,14 @@ impl DockingManager {
         let old_dock = store.free(target);
 
         match old_dock {
-            Dock::Fill { parent: None, .. } => {
-                old_dock.teardown(composite_tree, ht_manager);
-                return UndockResult::ToBeEmpty;
-            }
-            Dock::Fill {
-                parent: Some(parent),
-                group_view,
-            } => {
+            Dock::RootContainer { .. } => unreachable!("undocking root container"),
+            Dock::Fill { parent, group_view } => {
                 group_view.teardown(composite_tree, ht_manager);
                 let (remain_dock, parent_parent) = match store.get(parent) {
+                    Dock::RootContainer { .. } => {
+                        // ルートにつながるDockをundockしようとしている => 何もなくなる
+                        return UndockResult::ToBeEmpty;
+                    }
                     Dock::Fill { .. } => unreachable!("fill cannot be nested"),
                     &Dock::ToLeft {
                         left,
@@ -3658,20 +3679,23 @@ impl DockingManager {
                 let new_parent = store.free(remain_dock).reparent(parent_parent);
                 new_parent.maintain_dock_id_relation(parent);
                 match new_parent {
+                    Dock::RootContainer { content } => {
+                        store.replace_by(content, |x| x.reparent(parent));
+                    }
                     Dock::Fill { .. } => (),
                     Dock::ToLeft { left, right, .. } | Dock::ToRight { left, right, .. } => {
-                        store.replace_by(left, |x| x.reparent(Some(parent)));
-                        store.replace_by(right, |x| x.reparent(Some(parent)));
+                        store.replace_by(left, |x| x.reparent(parent));
+                        store.replace_by(right, |x| x.reparent(parent));
                     }
                     Dock::ToTop { top, bottom, .. } | Dock::ToBottom { top, bottom, .. } => {
-                        store.replace_by(top, |x| x.reparent(Some(parent)));
-                        store.replace_by(bottom, |x| x.reparent(Some(parent)));
+                        store.replace_by(top, |x| x.reparent(parent));
+                        store.replace_by(bottom, |x| x.reparent(parent));
                     }
                 }
                 store
                     .replace(parent, new_parent)
                     .teardown(composite_tree, ht_manager);
-                let relayout_base = parent_parent.unwrap_or(self.root_id);
+                let relayout_base = parent_parent;
                 let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
                 Self::relayout_dock(
                     relayout_base,
@@ -3690,7 +3714,7 @@ impl DockingManager {
 
     #[tracing::instrument(skip(self, store, view_init_ctx, mount_target))]
     fn redock(
-        &mut self,
+        &self,
         source: DockID,
         store: &mut DockStore,
         index: usize,
@@ -3749,13 +3773,13 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToLeft(target) => {
-                let target_parent = store.get(target).parent();
+                let target_parent = store.get(target).parent().expect("no parent?");
                 let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToLeft {
                         parent: target_parent,
                         left: store.alloc(|id| {
                             let d = Dock::Fill {
-                                parent: Some(parent_id),
+                                parent: parent_id,
                                 group_view: PaneGroupView::new(view_init_ctx, vec![content], id),
                             };
                             d.mount(view_init_ctx, mount_target);
@@ -3773,20 +3797,13 @@ impl DockingManager {
                     d
                 });
 
-                store.replace_by(target, |x| x.reparent(Some(new_dock)));
-                if let Some(target_parent) = target_parent {
-                    store
-                        .get_mut(target_parent)
-                        .replace_matching_child(target, new_dock);
-                } else {
-                    assert_eq!(self.root_id, target);
-                    self.root_id = new_dock;
-                }
+                store.replace_by(target, |x| x.reparent(new_dock));
+                store
+                    .get_mut(target_parent)
+                    .replace_matching_child(target, new_dock);
 
-                let relayout_base = target_parent.unwrap_or(self.root_id);
-                let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
-                    .clone();
+                let relayout_base = target_parent;
+                let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
                 Self::relayout_dock(
                     relayout_base,
                     store,
@@ -3797,14 +3814,14 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToRight(target) => {
-                let target_parent = store.get(target).parent();
+                let target_parent = store.get(target).parent().expect("no parent?");
                 let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToRight {
                         parent: target_parent,
                         left: target,
                         right: store.alloc(|id| {
                             let d = Dock::Fill {
-                                parent: Some(parent_id),
+                                parent: parent_id,
                                 group_view: PaneGroupView::new(view_init_ctx, vec![content], id),
                             };
                             d.mount(view_init_ctx, mount_target);
@@ -3821,20 +3838,13 @@ impl DockingManager {
                     d
                 });
 
-                store.replace_by(target, |x| x.reparent(Some(new_dock)));
-                if let Some(target_parent) = target_parent {
-                    store
-                        .get_mut(target_parent)
-                        .replace_matching_child(target, new_dock);
-                } else {
-                    assert_eq!(self.root_id, target);
-                    self.root_id = new_dock;
-                }
+                store.replace_by(target, |x| x.reparent(new_dock));
+                store
+                    .get_mut(target_parent)
+                    .replace_matching_child(target, new_dock);
 
-                let relayout_base = target_parent.unwrap_or(self.root_id);
-                let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
-                    .clone();
+                let relayout_base = target_parent;
+                let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
                 Self::relayout_dock(
                     relayout_base,
                     store,
@@ -3845,13 +3855,13 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToTop(target) => {
-                let target_parent = store.get(target).parent();
+                let target_parent = store.get(target).parent().expect("no parent?");
                 let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToTop {
                         parent: target_parent,
                         top: store.alloc(|id| {
                             let d = Dock::Fill {
-                                parent: Some(parent_id),
+                                parent: parent_id,
                                 group_view: PaneGroupView::new(view_init_ctx, vec![content], id),
                             };
                             d.mount(view_init_ctx, mount_target);
@@ -3869,20 +3879,13 @@ impl DockingManager {
                     d
                 });
 
-                store.replace_by(target, |x| x.reparent(Some(new_dock)));
-                if let Some(target_parent) = target_parent {
-                    store
-                        .get_mut(target_parent)
-                        .replace_matching_child(target, new_dock);
-                } else {
-                    assert_eq!(self.root_id, target);
-                    self.root_id = new_dock;
-                }
+                store.replace_by(target, |x| x.reparent(new_dock));
+                store
+                    .get_mut(target_parent)
+                    .replace_matching_child(target, new_dock);
 
-                let relayout_base = target_parent.unwrap_or(self.root_id);
-                let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
-                    .clone();
+                let relayout_base = target_parent;
+                let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
                 Self::relayout_dock(
                     relayout_base,
                     store,
@@ -3893,14 +3896,14 @@ impl DockingManager {
                 None
             }
             DockingOperation::SplitToBottom(target) => {
-                let target_parent = store.get(target).parent();
+                let target_parent = store.get(target).parent().expect("no parent?");
                 let new_dock = store.alloc_recurse(|parent_id, store| {
                     let d = Dock::ToBottom {
                         parent: target_parent,
                         top: target,
                         bottom: store.alloc(|id| {
                             let d = Dock::Fill {
-                                parent: Some(parent_id),
+                                parent: parent_id,
                                 group_view: PaneGroupView::new(view_init_ctx, vec![content], id),
                             };
                             d.mount(view_init_ctx, mount_target);
@@ -3917,20 +3920,13 @@ impl DockingManager {
                     d
                 });
 
-                store.replace_by(target, |x| x.reparent(Some(new_dock)));
-                if let Some(target_parent) = target_parent {
-                    store
-                        .get_mut(target_parent)
-                        .replace_matching_child(target, new_dock);
-                } else {
-                    assert_eq!(self.root_id, target);
-                    self.root_id = new_dock;
-                }
+                store.replace_by(target, |x| x.reparent(new_dock));
+                store
+                    .get_mut(target_parent)
+                    .replace_matching_child(target, new_dock);
 
-                let relayout_base = target_parent.unwrap_or(self.root_id);
-                let relayout_base_rect = target_parent
-                    .map_or(&self.max_rect, |x| &store.get_computed_state(x).rect)
-                    .clone();
+                let relayout_base = target_parent;
+                let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
                 Self::relayout_dock(
                     relayout_base,
                     store,
@@ -3989,7 +3985,6 @@ impl DockingManager {
                 store,
                 state.original_rect.clone(),
                 state.tab_size.clone(),
-                self.max_rect.clone(),
                 client_pos,
                 state.offset.clone(),
             )
@@ -4010,7 +4005,6 @@ impl DockingManager {
             store,
             state.original_rect,
             state.tab_size,
-            self.max_rect.clone(),
             client_pos,
             state.offset,
         )
@@ -5566,44 +5560,46 @@ async fn run<'sys>(
             ),
             &mut dock_store,
             |view_init_ctx, store| {
-                store.alloc_recurse(|parent_id, store| Dock::ToRight {
-                    parent: None,
-                    left: store.alloc(|id| {
-                        let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
-                            Box::new(UIKitPreviewPaneView::new(view_init_ctx)),
-                            Box::new(TestPane1View::new(view_init_ctx)),
-                        ];
+                store.alloc_recurse(|root_id, store| Dock::RootContainer {
+                    content: store.alloc_recurse(|parent_id, store| Dock::ToRight {
+                        parent: root_id,
+                        left: store.alloc(|id| {
+                            let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
+                                Box::new(UIKitPreviewPaneView::new(view_init_ctx)),
+                                Box::new(TestPane1View::new(view_init_ctx)),
+                            ];
 
-                        Dock::Fill {
-                            group_view: PaneGroupView::new(
-                                view_init_ctx,
-                                pane_group_view_contents,
-                                id,
-                            ),
-                            parent: Some(parent_id),
-                        }
-                    }),
-                    right: store.alloc(|id| {
-                        let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
-                            Box::new(TestPane1View::new(view_init_ctx)),
-                            Box::new(TestPane2View::new(view_init_ctx)),
-                        ];
+                            Dock::Fill {
+                                group_view: PaneGroupView::new(
+                                    view_init_ctx,
+                                    pane_group_view_contents,
+                                    id,
+                                ),
+                                parent: parent_id,
+                            }
+                        }),
+                        right: store.alloc(|id| {
+                            let pane_group_view_contents: Vec<Box<dyn PaneView>> = vec![
+                                Box::new(TestPane1View::new(view_init_ctx)),
+                                Box::new(TestPane2View::new(view_init_ctx)),
+                            ];
 
-                        Dock::Fill {
-                            group_view: PaneGroupView::new(
-                                view_init_ctx,
-                                pane_group_view_contents,
-                                id,
-                            ),
-                            parent: Some(parent_id),
-                        }
+                            Dock::Fill {
+                                group_view: PaneGroupView::new(
+                                    view_init_ctx,
+                                    pane_group_view_contents,
+                                    id,
+                                ),
+                                parent: parent_id,
+                            }
+                        }),
+                        splitter: DockedPaneSplitterView::new(
+                            view_init_ctx,
+                            DockedPaneSplitDirection::Vertical,
+                            parent_id,
+                        ),
+                        width: Cell::new(96.0),
                     }),
-                    splitter: DockedPaneSplitterView::new(
-                        view_init_ctx,
-                        DockedPaneSplitDirection::Vertical,
-                        parent_id,
-                    ),
-                    width: Cell::new(96.0),
                 })
             },
         ),
@@ -6755,13 +6751,17 @@ async fn run<'sys>(
                                         ),
                                         &mut dock_store,
                                         |view_init_ctx, store| {
-                                            store.alloc(|id| Dock::Fill {
-                                                group_view: PaneGroupView::new(
-                                                    view_init_ctx,
-                                                    vec![content],
-                                                    id,
-                                                ),
-                                                parent: None,
+                                            store.alloc_recurse(|root_id, store| {
+                                                Dock::RootContainer {
+                                                    content: store.alloc(|id| Dock::Fill {
+                                                        group_view: PaneGroupView::new(
+                                                            view_init_ctx,
+                                                            vec![content],
+                                                            id,
+                                                        ),
+                                                        parent: root_id,
+                                                    }),
+                                                }
                                             })
                                         },
                                     ),
