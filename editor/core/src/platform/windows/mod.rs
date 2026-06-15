@@ -422,7 +422,7 @@ impl NativeWindow {
     fn new(
         wc_set: &WindowClassSet,
         window_type: WindowType,
-        size: Option<Size<PixelsUnit>>,
+        rect: Option<Rect<PixelsUnit>>,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
@@ -434,10 +434,10 @@ impl NativeWindow {
                 PCWSTR(core::ptr::without_provenance(wc_set.main as _)),
                 w!("Peridot Marble Editor"),
                 WS_OVERLAPPEDWINDOW,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                size.map_or(CW_USEDEFAULT, |s| s.width as i32),
-                size.map_or(CW_USEDEFAULT, |s| s.height as i32),
+                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.left),
+                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.top),
+                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.width as _),
+                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.height as _),
                 None,
                 None,
                 Some(wc_set.hinstance),
@@ -1637,8 +1637,8 @@ impl SystemLink<'_> {
 
     pub fn open_window<'h>(
         &mut self,
-        size: Size<LogicalUnit>,
-        ref_render_scale: f32,
+        rect: Rect<LogicalUnit>,
+        position_ref_window: WindowHandle,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager<'h>,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -1651,10 +1651,22 @@ impl SystemLink<'_> {
             &mut Self,
         ),
     ) -> WindowHandle {
+        let mut grect_lt = [rect
+            .left_top()
+            .to_pixels_round(position_ref_window.ui_scale_factor())
+            .to_win32()];
+        unsafe {
+            MapWindowPoints(Some(position_ref_window.0), None, &mut grect_lt);
+        }
+
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },
             WindowType::Sub,
-            Some(size.to_pixels_ceil(ref_render_scale)),
+            Some(Rect::from_lt_size(
+                Point::from_win32(grect_lt[0]),
+                rect.size()
+                    .to_pixels_ceil(position_ref_window.ui_scale_factor()),
+            )),
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()

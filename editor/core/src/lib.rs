@@ -3035,6 +3035,7 @@ impl Dock {
         source_tab_size: Size<LogicalUnit>,
         available_rect: Rect<LogicalUnit>,
         pos: Point<LogicalUnit>,
+        drag_offset: Point<LogicalUnit>,
     ) -> (DockingOperation, Rect<LogicalUnit>) {
         fn try_parent_dock(
             this: DockID,
@@ -3073,7 +3074,13 @@ impl Dock {
 
         if !available_rect.point_in_inclusive(&pos) {
             // not hit to the rect
-            return (DockingOperation::Diverge, source_rect);
+            return (
+                DockingOperation::Diverge,
+                Rect::from_lt_size(
+                    Point::new_logical(pos.x + drag_offset.x, pos.y + drag_offset.y),
+                    source_rect.size(),
+                ),
+            );
         }
 
         match store.get(this) {
@@ -3154,6 +3161,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
                 let r = available_rect
@@ -3166,6 +3174,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
             }
@@ -3190,6 +3199,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
                 let r = available_rect.slice_right(width);
@@ -3201,6 +3211,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
             }
@@ -3224,6 +3235,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
                 let r = available_rect.slice_bottom(
@@ -3237,6 +3249,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
             }
@@ -3261,6 +3274,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
                 let r = available_rect.slice_bottom(height);
@@ -3272,6 +3286,7 @@ impl Dock {
                         source_tab_size,
                         r,
                         pos,
+                        drag_offset,
                     );
                 }
             }
@@ -3946,42 +3961,18 @@ impl DockingManager {
         popover: &DragPreviewPopoverHandle,
         state: &mut DockingPreviewState,
     ) {
-        match Dock::compute_recommended_operation(
-            self.root_id,
-            store,
-            state.original_rect.clone(),
-            state.tab_size.clone(),
-            self.max_rect.clone(),
-            client_pos,
-        ) {
-            (DockingOperation::Merge(_), r) => {
-                popover.set_rect(&r);
-            }
-            (DockingOperation::MergeAtTabIndex(_, _), r) => {
-                popover.set_rect(&r);
-            }
-            (DockingOperation::SplitToLeft(_), r) => {
-                popover.set_rect(&r);
-            }
-            (DockingOperation::SplitToRight(_), r) => {
-                popover.set_rect(&r);
-            }
-            (DockingOperation::SplitToTop(_), r) => {
-                popover.set_rect(&r);
-            }
-            (DockingOperation::SplitToBottom(_), r) => {
-                popover.set_rect(&r);
-            }
-            (DockingOperation::Diverge, _) => {
-                popover.set_rect(&Rect::from_lt_size(
-                    Point::new_logical(
-                        client_pos.x + state.offset.x,
-                        client_pos.y + state.offset.y,
-                    ),
-                    state.original_rect.size(),
-                ));
-            }
-        }
+        popover.set_rect(
+            &Dock::compute_recommended_operation(
+                self.root_id,
+                store,
+                state.original_rect.clone(),
+                state.tab_size.clone(),
+                self.max_rect.clone(),
+                client_pos,
+                state.offset.clone(),
+            )
+            .1,
+        );
     }
 
     fn end_preview(
@@ -3999,6 +3990,7 @@ impl DockingManager {
             state.tab_size,
             self.max_rect.clone(),
             client_pos,
+            state.offset,
         )
     }
 }
@@ -6662,11 +6654,17 @@ async fn run<'sys>(
 
                     if let Some(content) = diverged_content {
                         system_link.open_window(
-                            Size::new_logical(
-                                suggested_rect.width,
-                                suggested_rect.height + ui::window_header::View::THICKNESS,
+                            Rect::from_lt_size(
+                                Point::new_logical(
+                                    suggested_rect.left,
+                                    suggested_rect.top - ui::window_header::View::THICKNESS,
+                                ),
+                                Size::new_logical(
+                                    suggested_rect.width,
+                                    suggested_rect.height + ui::window_header::View::THICKNESS,
+                                ),
                             ),
-                            window.ui_scale_factor(),
+                            target_window,
                             &mut composite_tree,
                             &mut ht_manager,
                             &mut keyboard_focus_registry,
