@@ -166,6 +166,12 @@ impl DockStore {
         &mut self.computed_states[id.store_index()]
     }
 
+    pub fn alloc_root(&mut self, content: impl FnOnce(DockID, &mut Self) -> DockID) -> DockID {
+        self.alloc_recurse(move |root_id, store| Dock::RootContainer {
+            content: content(root_id, store),
+        })
+    }
+
     pub fn alloc_fill(
         &mut self,
         parent: DockID,

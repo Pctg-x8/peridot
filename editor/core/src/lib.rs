@@ -3353,8 +3353,8 @@ async fn run<'sys>(
             ),
             &mut dock_store,
             |view_init_ctx, store| {
-                store.alloc_recurse(|root_id, store| uikit::dock::Dock::RootContainer {
-                    content: store.alloc_recurse(|parent_id1, store| uikit::dock::Dock::Splitted {
+                store.alloc_root(|root_id, store| {
+                    store.alloc_recurse(|parent_id1, store| uikit::dock::Dock::Splitted {
                         parent: root_id,
                         splitter: uikit::dock::DockedPaneSplitterView::new(
                             view_init_ctx,
@@ -3427,7 +3427,7 @@ async fn run<'sys>(
                                 }),
                             }
                         }),
-                    }),
+                    })
                 })
             },
         ),
@@ -4557,20 +4557,10 @@ async fn run<'sys>(
                                         ),
                                         &mut dock_store,
                                         |view_init_ctx, store| {
-                                            store.alloc_recurse(|root_id, store| {
-                                                uikit::dock::Dock::RootContainer {
-                                                    content: store.alloc(|id| {
-                                                        uikit::dock::Dock::Fill {
-                                                            group_view:
-                                                                uikit::dock::PaneGroupView::new(
-                                                                    view_init_ctx,
-                                                                    vec![content],
-                                                                    id,
-                                                                ),
-                                                            parent: root_id,
-                                                        }
-                                                    }),
-                                                }
+                                            store.alloc_root(|root_id, store| {
+                                                store.alloc_fill(root_id, view_init_ctx, |_| {
+                                                    vec![content]
+                                                })
                                             })
                                         },
                                     ),
