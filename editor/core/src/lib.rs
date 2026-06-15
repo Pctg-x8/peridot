@@ -3366,18 +3366,8 @@ async fn run<'sys>(
                             parent_id1,
                         ),
                         height: Cell::new(320.0),
-                        bottom: store.alloc(|id| {
-                            let contents: Vec<Box<dyn uikit::dock::PaneContentPresenter>> =
-                                vec![Box::new(AssetExplorerPanePresenter {})];
-
-                            uikit::dock::Dock::Fill {
-                                group_view: uikit::dock::PaneGroupView::new(
-                                    view_init_ctx,
-                                    contents,
-                                    id,
-                                ),
-                                parent: parent_id1,
-                            }
+                        bottom: store.alloc_fill(parent_id1, view_init_ctx, |_| {
+                            vec![Box::new(AssetExplorerPanePresenter {})]
                         }),
                         top: store.alloc_recurse(|parent_id2, store| uikit::dock::Dock::ToRight {
                             parent: parent_id1,
@@ -3387,18 +3377,8 @@ async fn run<'sys>(
                                 parent_id2,
                             ),
                             width: Cell::new(256.0),
-                            right: store.alloc(|id| {
-                                let contents: Vec<Box<dyn uikit::dock::PaneContentPresenter>> =
-                                    vec![Box::new(InspectorPanePresenter {})];
-
-                                uikit::dock::Dock::Fill {
-                                    group_view: uikit::dock::PaneGroupView::new(
-                                        view_init_ctx,
-                                        contents,
-                                        id,
-                                    ),
-                                    parent: parent_id2,
-                                }
+                            right: store.alloc_fill(parent_id2, view_init_ctx, |_| {
+                                vec![Box::new(InspectorPanePresenter {})]
                             }),
                             left: store.alloc_recurse(|parent_id1, store| {
                                 uikit::dock::Dock::ToTop {
@@ -3409,19 +3389,8 @@ async fn run<'sys>(
                                         parent_id1,
                                     ),
                                     height: Cell::new(120.0),
-                                    top: store.alloc(|id| {
-                                        let contents: Vec<
-                                            Box<dyn uikit::dock::PaneContentPresenter>,
-                                        > = vec![Box::new(TimelinePanePresenter {})];
-
-                                        uikit::dock::Dock::Fill {
-                                            group_view: uikit::dock::PaneGroupView::new(
-                                                view_init_ctx,
-                                                contents,
-                                                id,
-                                            ),
-                                            parent: parent_id1,
-                                        }
+                                    top: store.alloc_fill(parent_id1, view_init_ctx, |_| {
+                                        vec![Box::new(TimelinePanePresenter {})]
                                     }),
                                     bottom: store.alloc_recurse(|parent_id2, store| {
                                         uikit::dock::Dock::ToLeft {
@@ -3432,39 +3401,23 @@ async fn run<'sys>(
                                                 parent_id2,
                                             ),
                                             width: Cell::new(160.0),
-                                            left: store.alloc(|id| {
-                                                let pane_group_view_contents: Vec<
-                                                    Box<dyn uikit::dock::PaneContentPresenter>,
-                                                > = vec![Box::new(ObjectTreePanePresenter {})];
-
-                                                uikit::dock::Dock::Fill {
-                                                    group_view: uikit::dock::PaneGroupView::new(
-                                                        view_init_ctx,
-                                                        pane_group_view_contents,
-                                                        id,
-                                                    ),
-                                                    parent: parent_id2,
-                                                }
-                                            }),
-                                            right: store.alloc(|id| {
-                                                let pane_group_view_contents: Vec<
-                                                    Box<dyn uikit::dock::PaneContentPresenter>,
-                                                > = vec![
-                                                    Box::new(UIKitPreviewPaneView::new(
-                                                        view_init_ctx,
-                                                    )),
-                                                    Box::new(ProjectSettingsPanePresenter {}),
-                                                ];
-
-                                                uikit::dock::Dock::Fill {
-                                                    group_view: uikit::dock::PaneGroupView::new(
-                                                        view_init_ctx,
-                                                        pane_group_view_contents,
-                                                        id,
-                                                    ),
-                                                    parent: parent_id2,
-                                                }
-                                            }),
+                                            left: store.alloc_fill(
+                                                parent_id2,
+                                                view_init_ctx,
+                                                |_| vec![Box::new(ObjectTreePanePresenter {})],
+                                            ),
+                                            right: store.alloc_fill(
+                                                parent_id2,
+                                                view_init_ctx,
+                                                |view_init_ctx| {
+                                                    vec![
+                                                        Box::new(UIKitPreviewPaneView::new(
+                                                            view_init_ctx,
+                                                        )),
+                                                        Box::new(ProjectSettingsPanePresenter {}),
+                                                    ]
+                                                },
+                                            ),
                                         }
                                     }),
                                 }

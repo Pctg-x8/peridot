@@ -161,6 +161,22 @@ impl DockStore {
         &mut self.computed_states[id.store_index()]
     }
 
+    pub fn alloc_fill(
+        &mut self,
+        parent: DockID,
+        view_init_ctx: &mut ViewInitContext,
+        contents: impl FnOnce(&mut ViewInitContext) -> Vec<Box<dyn PaneContentPresenter>>,
+    ) -> DockID {
+        self.alloc(move |id| {
+            let contents = contents(view_init_ctx);
+
+            Dock::Fill {
+                group_view: PaneGroupView::new(view_init_ctx, contents, id),
+                parent,
+            }
+        })
+    }
+
     #[tracing::instrument(skip(self, root))]
     pub fn dump(&self, root: DockID) {
         fn rec(store: &DockStore, id: DockID, level: usize, sink: &mut String) {
