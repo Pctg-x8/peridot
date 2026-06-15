@@ -82,6 +82,10 @@ impl<'a, 'h> core::ops::DerefMut for ViewUpdateContext<'a, 'h> {
     }
 }
 
+pub struct TeardownContext<'a, 'h> {
+    pub mount_context: MountContext<'a, 'h>,
+}
+
 pub trait MountTarget {
     fn ct_root(&self) -> CompositeTreeRef;
     fn ht_root(&self) -> HitTestTreeRef;
@@ -241,3 +245,5 @@ pub mod dropdown_box;
 
 pub mod checkbox;
 pub use self::checkbox::{CheckboxView, ToggleButtonView};
+
+pub mod dock;
