@@ -17,6 +17,7 @@ enum CompositeMode : uint {
   FillColorBackdropBlur,
   FillLinearGradient,
   FillRadialGradient,
+  FillCornerGradient,
   ColorPickerGradientBox,
 }
 extension CompositeMode {
@@ -310,29 +311,27 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   case CompositeMode.FillColorBackdropBlur:
     col = input.colorTint;
     break;
-  case CompositeMode.FillLinearGradient: {
-    // nearest point on gradient line
-    let a = saturate(dot(
-                normalize(gradientDataArray[input.gradientDataIndex].params.zw -
-                          gradientDataArray[input.gradientDataIndex].params.xy),
-                input.relativePixelCoord / input.renderSizePixels -
-                    gradientDataArray[input.gradientDataIndex].params.xy)) /
-            length(gradientDataArray[input.gradientDataIndex].params.zw -
-                   gradientDataArray[input.gradientDataIndex].params.xy);
-    col = lerp(gradientDataArray[input.gradientDataIndex].startColor,
-               gradientDataArray[input.gradientDataIndex].endColor, a);
+  case CompositeMode.FillLinearGradient:
+    col = linearGradient(input.localUV,
+                         gradientDataArray[input.gradientDataIndex].params.xy,
+                         gradientDataArray[input.gradientDataIndex].params.zw,
+                         gradientDataArray[input.gradientDataIndex].startColor,
+                         gradientDataArray[input.gradientDataIndex].endColor);
     break;
-  }
-  case CompositeMode.FillRadialGradient: {
-    // starting from center
-    let a =
-        saturate(length((input.relativePixelCoord / input.renderSizePixels -
-                         gradientDataArray[input.gradientDataIndex].params.xy) /
-                        gradientDataArray[input.gradientDataIndex].params.zw));
-    col = lerp(gradientDataArray[input.gradientDataIndex].startColor,
-               gradientDataArray[input.gradientDataIndex].endColor, a);
+  case CompositeMode.FillRadialGradient:
+    col = radialGradient(input.localUV,
+                         gradientDataArray[input.gradientDataIndex].params.xy,
+                         gradientDataArray[input.gradientDataIndex].params.zw,
+                         gradientDataArray[input.gradientDataIndex].startColor,
+                         gradientDataArray[input.gradientDataIndex].endColor);
     break;
-  }
+  case CompositeMode.FillCornerGradient:
+    col = cornerGradient(input.localUV, input.colorTint,
+                         gradientDataArray[input.gradientDataIndex].startColor,
+                         gradientDataArray[input.gradientDataIndex].endColor,
+                         gradientDataArray[input.gradientDataIndex].params);
+    // col = input.colorTint;
+    break;
   case CompositeMode.ColorPickerGradientBox: {
     let l = 1.0 - input.localUV.y;
     let s = input.localUV.x;
@@ -429,6 +428,34 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   }
 
   return col;
+}
+
+inline func linearGradient(localUV: float2, startOffset: float2,
+                           endOffset: float2, startColor: float4,
+                           endColor: float4)
+    ->float4 {
+  // nearest point on gradient line
+  let a =
+      saturate(dot(normalize(endOffset - startOffset), localUV - startOffset)) /
+      length(endOffset - startOffset);
+
+  return lerp(startColor, endColor, a);
+}
+
+inline func radialGradient(localUV: float2, center: float2, radius: float2,
+                           centerColor: float4, outerColor: float4)
+    ->float4 {
+  // starting from center
+  let a = saturate(length((localUV - center) / radius));
+
+  return lerp(centerColor, outerColor, a);
+}
+
+inline func cornerGradient(localUV: float2, ltColor: float4, rtColor: float4,
+                           lbColor: float4, rbColor: float4)
+    ->float4 {
+  return lerp(lerp(ltColor, rtColor, localUV.x),
+              lerp(lbColor, rbColor, localUV.x), localUV.y);
 }
 
 // Helper functions

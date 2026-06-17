@@ -1400,8 +1400,8 @@ static PANE_GROUP_TAB_ACTIVE_GRADIENT: UnsafeMainThreadOnlyOnceCell<GradientRef>
 fn pane_group_tab_active_gradient<E>(composite_tree: &mut CompositeTree<E>) -> GradientRef {
     *PANE_GROUP_TAB_ACTIVE_GRADIENT.0.get_or_init(|| {
         composite_tree.create_gradient(Gradient::Linear {
-            start_color: [0.0, 0.1, 0.5, 0.0],
-            end_color: [0.0, 0.1, 0.5, 1.0],
+            start_color: [0.0, 0.5, 1.0, 0.0],
+            end_color: [0.0, 0.75, 1.2, 1.0],
             start_pos_relative: [0.0, 0.8],
             end_pos_relative: [0.0, 1.0],
         })
@@ -1419,8 +1419,6 @@ impl PaneGroupView {
     ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.5])),
             clip_child: Some(ClipConfig {
                 left_softness: SafeF32::ZERO,
                 top_softness: SafeF32::ZERO,
@@ -1446,7 +1444,7 @@ impl PaneGroupView {
             ],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                0.01, 0.01, 0.01, 1.0,
+                0.15, 0.15, 0.15, 1.0,
             ])),
             ..Default::default()
         });
@@ -1812,12 +1810,21 @@ impl PaneGroupTabView {
             text: Some(CompositeRectText {
                 runs: vec![CompositeRectTextRun {
                     content: label,
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                     ..Default::default()
                 }],
                 vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
                 horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
                 ..Default::default()
             }),
+            ..Default::default()
+        });
+        let ct_active = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            corner_radius: CornerRadius::all(Self::ROUNDING),
             ..Default::default()
         });
         let ct_underline = ctx.composite_tree.create(CompositeRect {
@@ -1837,10 +1844,12 @@ impl PaneGroupTabView {
             ..Default::default()
         });
 
+        ctx.composite_tree.add_child(ct_root, ct_active);
         ctx.composite_tree.add_child(ct_root, ct_underline);
 
         let eh = Rc::new(PaneGroupTabEventHandler {
             ct_root,
+            ct_active,
             ct_underline,
             size,
             active: Cell::new(false),
@@ -1883,6 +1892,7 @@ impl PaneGroupTabView {
 
 struct PaneGroupTabEventHandler {
     ct_root: CompositeTreeRef,
+    ct_active: CompositeTreeRef,
     ct_underline: CompositeTreeRef,
     size: Size<LogicalUnit>,
     active: Cell<bool>,
@@ -1898,7 +1908,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
         context.composite_tree.get_mut(self.ct_root).composite_mode =
             CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
-                to_value: [1.0, 1.0, 1.0, 0.5],
+                to_value: [1.0, 1.0, 1.0, 0.25],
                 start_sec: context.current_sec,
                 end_sec: context.current_sec + 0.1,
                 curve: AnimationCurve::Linear,
@@ -1917,7 +1927,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
     ) -> EventContinueControl {
         context.composite_tree.get_mut(self.ct_root).composite_mode =
             CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.5],
+                from_value: [1.0, 1.0, 1.0, 0.25],
                 to_value: [1.0, 1.0, 1.0, 0.0],
                 start_sec: context.current_sec,
                 end_sec: context.current_sec + 0.1,
@@ -2079,6 +2089,17 @@ impl PaneGroupTabEventHandler {
                 event_on_complete: None,
             };
             composite_tree.mark_dirty(self.ct_underline);
+
+            composite_tree.get_mut(self.ct_active).composite_mode =
+                CompositeMode::FillColor(AnimatableColor::Animated {
+                    from_value: [1.0, 1.0, 1.0, 0.0],
+                    to_value: [1.0, 1.0, 1.0, 0.1],
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.2,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                });
+            composite_tree.mark_dirty(self.ct_active);
         } else {
             composite_tree.get_mut(self.ct_underline).scale_x = AnimatableFloat::Animated {
                 from_value: 1.0,
@@ -2089,6 +2110,17 @@ impl PaneGroupTabEventHandler {
                 event_on_complete: None,
             };
             composite_tree.mark_dirty(self.ct_underline);
+
+            composite_tree.get_mut(self.ct_active).composite_mode =
+                CompositeMode::FillColor(AnimatableColor::Animated {
+                    from_value: [1.0, 1.0, 1.0, 0.1],
+                    to_value: [1.0, 1.0, 1.0, 0.0],
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.2,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                });
+            composite_tree.mark_dirty(self.ct_active);
         }
     }
 }

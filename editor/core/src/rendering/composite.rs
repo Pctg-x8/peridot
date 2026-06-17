@@ -635,6 +635,8 @@ pub enum CompositeMode<Event> {
     FillLinearGradient(GradientRef),
     /// 円形グラデーションで矩形を塗りつぶし
     FillRadialGradient(GradientRef),
+    /// 角グラデーションで矩形を塗りつぶし 引数に指定する色は左上のもの
+    FillCornerGradient(GradientRef, AnimatableColor<Event>),
     // TODO: このへんの特殊対応はなんか汎用化したい シェーダ指定できるようにするか......？
     /// 特殊対応: ColorPicker用 内部のグラデーションボックス
     /// 引数には右上の色（ベースカラー）を入れる
@@ -650,7 +652,8 @@ impl<Event> CompositeMode<Event> {
             Self::FillColorBackdropBlur(_, _) => 4.0,
             Self::FillLinearGradient(_) => 5.0,
             Self::FillRadialGradient(_) => 6.0,
-            Self::ColorPickerGradientBox(_) => 7.0,
+            Self::FillCornerGradient(_, _) => 7.0,
+            Self::ColorPickerGradientBox(_) => 8.0,
         }
     }
 
@@ -663,7 +666,17 @@ impl<Event> CompositeMode<Event> {
             | Self::FillColorBackdropBlur(_, _)
             | Self::FillLinearGradient(_)
             | Self::FillRadialGradient(_)
+            | Self::FillCornerGradient(_, _)
             | Self::ColorPickerGradientBox(_) => None,
+        }
+    }
+
+    const fn gradient_data_index(&self) -> u32 {
+        match self {
+            CompositeMode::FillLinearGradient(x)
+            | CompositeMode::FillRadialGradient(x)
+            | CompositeMode::FillCornerGradient(x, _) => x.0,
+            _ => 0,
         }
     }
 
@@ -686,6 +699,7 @@ impl<Event> CompositeMode<Event> {
             }
             Self::FillLinearGradient(_) => {}
             Self::FillRadialGradient(_) => {}
+            Self::FillCornerGradient(_, c) => c.process_on_complete(current_sec, on_event),
             Self::ColorPickerGradientBox(t) => {
                 t.process_on_complete(current_sec, on_event);
             }
@@ -824,6 +838,11 @@ pub enum Gradient {
         end_color: [f32; 4],
         center_relative: [f32; 2],
         radius: [f32; 2],
+    },
+    Corner {
+        right_top: [f32; 4],
+        left_bottom: [f32; 4],
+        right_bottom: [f32; 4],
     },
 }
 
@@ -1750,6 +1769,15 @@ impl<Event> CompositeTreeRender<Event> {
                             end_color: end_color.clone(),
                             params: [center_relative[0], center_relative[1], radius[0], radius[1]],
                         },
+                        Gradient::Corner {
+                            right_top,
+                            left_bottom,
+                            right_bottom,
+                        } => GradientData {
+                            start_color: right_top.clone(),
+                            end_color: left_bottom.clone(),
+                            params: right_bottom.clone(),
+                        },
                     },
                 );
             }
@@ -1904,6 +1932,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 | CompositeMode::FillColor(ref t)
                                 | CompositeMode::ColorTintBackdropBlur(ref t, _, _)
                                 | CompositeMode::FillColorBackdropBlur(ref t, _)
+                                | CompositeMode::FillCornerGradient(_, ref t)
                                 | CompositeMode::ColorPickerGradientBox(ref t) => {
                                     t.evaluate(current_sec, &self.parameter_store)
                                 }
@@ -1929,11 +1958,7 @@ impl<Event> CompositeTreeRender<Event> {
                                 .as_ref()
                                 .map_or(0.0, |b| b.thickness * scale_factor),
                             softedge: r.softedge * scale_factor,
-                            gradient_data_index: match r.composite_mode {
-                                CompositeMode::FillLinearGradient(x)
-                                | CompositeMode::FillRadialGradient(x) => x.0 as f32,
-                                _ => 0.0,
-                            },
+                            gradient_data_index: r.composite_mode.gradient_data_index() as _,
                             source_texture_index: tex_type.to_index() as _,
                             border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
                                 [

@@ -3219,15 +3219,23 @@ async fn run<'sys>(
     let mut dock_store = uikit::dock::DockStore::new();
     let mut docking_preview_state = None;
 
+    let window_bg_gradient = composite_tree.create_gradient(Gradient::Corner {
+        right_top: [0.1, 0.1, 0.1, 1.0],
+        left_bottom: [0.1, 0.1, 0.1, 1.0],
+        right_bottom: [0.1, 0.05, 0.0, 1.0],
+    });
+
     let mut main_window = system_link.create_main_window(
         &mut composite_tree,
         &mut ht_manager,
         &mut keyboard_focus_registry,
         &mut delayed_render_messages,
     );
-
     composite_tree.get_mut(main_window.ct_root()).composite_mode =
-        CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.2, 0.3, 1.0]));
+        CompositeMode::FillCornerGradient(
+            window_bg_gradient,
+            AnimatableColor::Value([0.0, 0.05, 0.1, 1.0]),
+        );
     composite_tree.get_mut(main_window.ct_root()).has_bitmap = true;
     composite_tree.mark_dirty(main_window.ct_root());
 
@@ -3243,6 +3251,7 @@ async fn run<'sys>(
         system_link: &system_link,
         main_thread_texture_id_issuer: &mut texture_id_issuer,
     };
+
     let window_header_view = ui::window_header::View::new(
         &mut view_init_ctx,
         ui::window_header::Caption::Main {

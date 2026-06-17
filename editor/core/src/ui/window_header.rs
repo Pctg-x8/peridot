@@ -53,11 +53,7 @@ impl View {
         });
 
         let ct_root = init_ctx.mount_context.composite_tree.create(CompositeRect {
-            has_bitmap: true,
             scale_factor: CompositeRectScaleFactor::UI,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                1.0, 1.0, 1.0, 0.125,
-            ])),
             relative_size_adjustment: [1.0, 0.0],
             size: [
                 AnimatableFloat::Value(0.0),
