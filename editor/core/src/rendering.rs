@@ -286,7 +286,6 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 window_glyph_atlas.color_manager.atlas(),
-                                self.font_set,
                                 self.event_bus,
                             ),
                         );
@@ -294,12 +293,12 @@ impl<'main> RenderThread<'main> {
                     Ok(RenderMessage::DestroyWindow(window_handle, done_event_bus)) => {
                         if let Some(x) = windows.remove(&window_handle) {
                             let current = glyph_atlas_per_scale
-                                .get_mut(&x.active_scale())
+                                .get_mut(&x.active_scale)
                                 .expect("invalid state");
                             current.ref_count -= 1;
                             if current.ref_count == 0 {
                                 // no references
-                                glyph_atlas_per_scale.remove(&x.active_scale());
+                                glyph_atlas_per_scale.remove(&x.active_scale);
                             }
                         }
 
@@ -498,12 +497,12 @@ impl<'main> RenderThread<'main> {
                     let scale = SafeF32::new(scale).expect("scale.invalid");
 
                     let current = glyph_atlas_per_scale
-                        .get_mut(&x.active_scale())
+                        .get_mut(&x.active_scale)
                         .expect("invalid state");
                     current.ref_count -= 1;
                     let removed = if current.ref_count == 0 {
                         // no references
-                        glyph_atlas_per_scale.remove(&x.active_scale())
+                        glyph_atlas_per_scale.remove(&x.active_scale)
                     } else {
                         None
                     };
@@ -526,7 +525,7 @@ impl<'main> RenderThread<'main> {
                     };
                     new_atlas_mgr.ref_count += 1;
 
-                    x.rescale(scale);
+                    x.active_scale = scale;
                     x.invalidate_render_commands(); // DescriptorSetをかえるときは再度つくりなおす必要がある
                     let mut descriptor_writes = Vec::with_capacity(1);
                     x.composite_renderer.rebind_glyph_atlas(
@@ -539,23 +538,20 @@ impl<'main> RenderThread<'main> {
                 }
 
                 let glyph_atlas_mgr = glyph_atlas_per_scale
-                    .get_mut(&x.active_scale())
+                    .get_mut(&x.active_scale)
                     .expect("invalid state");
                 // TODO: ここも重いようならあとで改善する
                 for (&id, e) in &normalized_2d_static_mesh_textures {
                     let rect_index = id.rect_index();
-                    if glyph_atlas_mgr.atlas_rects.get(rect_index).is_none_or(|x| {
-                        x == &AtlasRect {
-                            left: 0,
-                            top: 0,
-                            right: 0,
-                            bottom: 0,
-                        }
-                    }) {
+                    if glyph_atlas_mgr
+                        .atlas_rects
+                        .get(rect_index)
+                        .is_none_or(|x| x == &AtlasRect::EMPTY)
+                    {
                         tracing::trace!(?id, "rasterize mesh");
                         let rect = glyph_atlas_mgr.manager.acquire(
-                            (e.width * x.active_scale().value()).ceil() as _,
-                            (e.height * x.active_scale().value()).ceil() as _,
+                            (e.width * x.active_scale.value()).ceil() as _,
+                            (e.height * x.active_scale.value()).ceil() as _,
                         );
                         if glyph_atlas_mgr.atlas_rects.len() <= rect_index {
                             // extend with zero
@@ -1436,6 +1432,7 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(not(windows))]
         {
             let backbuffer_index = self.swapchain.acquire_next(
+                w,
                 None,
                 br::CompletionHandlerMut::Queue(
                     self.backbuffer_ready_semaphore.as_transparent_ref_mut(),
@@ -1609,7 +1606,6 @@ impl<'d> WindowRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         color_atlas: &ColorTextureAtlas,
-        root_font_set: &'d FontSet,
         event_bus: &SyncEventBus,
     ) -> Self {
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
@@ -1720,19 +1716,11 @@ impl<'d> WindowRenderer<'d> {
         }
     }
 
-    pub fn active_scale(&self) -> SafeF32 {
-        self.active_scale
-    }
-
     pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
         unsafe { &(*self.latest_ui_scale_changes) }
             .lock()
             .expect("poisoned")
             .take()
-    }
-
-    pub fn rescale(&mut self, scale: SafeF32) {
-        self.active_scale = scale;
     }
 
     pub fn update(

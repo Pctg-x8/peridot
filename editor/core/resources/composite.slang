@@ -336,8 +336,7 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   case CompositeMode.ColorPickerGradientBox: {
     let l = 1.0 - input.localUV.y;
     let s = input.localUV.x;
-    col = float4(
-        pow(lerp(float3(1.0, 1.0, 1.0), input.colorTint.xyz, s) * l, 2.2), 1.0);
+    col = float4(lerp(float3(1.0, 1.0, 1.0), input.colorTint.xyz, s) * l, 1.0);
     break;
   }
   case CompositeMode.DirectSourceOver:

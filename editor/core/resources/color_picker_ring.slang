@@ -30,7 +30,7 @@ float4 fragMain(float2 uv: TEXCOORD0) : SV_Target {
                    hueToRGBWave(hue - 120.0));
 
   // needs gamma collection?
-  return float4(pow(col, 2.2), 1.0) * ringOpacity(uv);
+  return float4(col, 1.0) * ringOpacity(uv);
 }
 
 inline func ringOpacity(float2 uv)->float {

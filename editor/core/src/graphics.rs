@@ -1062,8 +1062,8 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
                     .iter()
                     .find(|f| {
                         f.colorSpace == br::vk::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR
-                            && (f.format == br::vk::VK_FORMAT_B8G8R8A8_SRGB
-                                || f.format == br::vk::VK_FORMAT_R8G8B8A8_SRGB)
+                            && (f.format == br::vk::VK_FORMAT_B8G8R8A8_UNORM
+                                || f.format == br::vk::VK_FORMAT_R8G8B8A8_UNORM)
                     })
                     .copied()
                     .expect("no suitable surface format"),
