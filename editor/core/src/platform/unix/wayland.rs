@@ -227,6 +227,24 @@ impl DragPreviewPopoverHandle {
         pp.reposition(&pos, 0).expect("pp.reposition");
     }
 
+    pub fn set_rect(&self, r: &Rect<LogicalUnit>) {
+        let Some((_, pp, _, _, _, _)) = (unsafe { &*self.popup.get() }) else {
+            return;
+        };
+
+        let pos = unsafe {
+            (*self.wl_interfaces)
+                .xdg_wm_base
+                .create_positioner()
+                .expect("pos.create")
+        };
+        pos.set_offset(r.left as _, r.top as _)
+            .expect("pos.set_offset");
+        pos.set_size(r.width as _, r.height as _)
+            .expect("pos.set_size");
+        pp.reposition(&pos, 0).expect("pp.reposition");
+    }
+
     pub fn hide(&self) {
         unsafe {
             (*self.popup.get()) = None;
@@ -324,6 +342,7 @@ impl crate::SystemLink<'_> {
                 #[cfg(target_os = "linux")]
                 termination_event: self.terminate_event.clone(),
             },
+            None,
             unsafe { &*self.display_server.context },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
@@ -341,6 +360,8 @@ impl crate::SystemLink<'_> {
 
     pub fn open_window<'h>(
         &self,
+        rect: Rect<LogicalUnit>,
+        position_ref_window: toplevel::Handle,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -355,6 +376,7 @@ impl crate::SystemLink<'_> {
     ) -> toplevel::Handle {
         let w = toplevel::NativeWindow::new(
             WindowType::Sub,
+            Some(rect),
             unsafe { &*self.display_server.context },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
@@ -504,6 +526,27 @@ impl crate::SystemLink<'_> {
         // TODO: ContextMenuと区別ができてないのでなんとかしたい(でもしなくてもいいか......？)
         unsafe { &*p.surface.as_ref().user_data().cast::<SurfaceStateUntyped>() }.tag
             == SurfaceStateTag::FlyoutSurface
+    }
+
+    pub fn translate_client_pos_to_another_window(
+        client_pos: Point<LogicalUnit>,
+        source_window: toplevel::Handle,
+        dest_window: toplevel::Handle,
+    ) -> Point<LogicalUnit> {
+        // TODO
+        client_pos
+    }
+
+    pub fn query_window_under_pointer(&self, pointer: &PointerID) -> Option<toplevel::Handle> {
+        let global_msg = unsafe { &mut *(*pointer.0).user_data().cast::<GlobalMessaging>() };
+        let surface = global_msg
+            .pointer
+            .as_ref()
+            .expect("no pointer?")
+            .enter_state
+            .as_ref()?
+            .surface;
+        Some(toplevel::Handle(surface))
     }
 }
 

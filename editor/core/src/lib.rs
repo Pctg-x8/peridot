@@ -19,6 +19,9 @@ use std::{
 #[cfg(target_os = "macos")]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+#[cfg(not(windows))]
+#[cfg(feature = "wayland")]
+use crate::uikit::MenuItemLayout;
 use crate::{
     graphics::VulkanDevice,
     input::{
@@ -4424,6 +4427,7 @@ async fn run<'sys>(
                     };
 
                     target_window.set_foreground();
+                    #[cfg(windows)]
                     drag_preview_popover.bind_position_base_window(target_window);
                     let popover_rect = uikit::dock::move_preview(
                         &unsafe { target_window.extra_data_ref::<PerWindowData>() }.docking_manager,

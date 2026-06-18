@@ -1432,7 +1432,6 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(not(windows))]
         {
             let backbuffer_index = self.swapchain.acquire_next(
-                w,
                 None,
                 br::CompletionHandlerMut::Queue(
                     self.backbuffer_ready_semaphore.as_transparent_ref_mut(),

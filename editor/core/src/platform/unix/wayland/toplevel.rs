@@ -21,7 +21,7 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, PixelsUnit, Size},
+    utils::{LogicalUnit, PixelsUnit, Rect, Size},
 };
 
 #[repr(transparent)]
@@ -213,6 +213,10 @@ impl Handle {
                 )
                 .expect("viewport.set_destination");
         }
+    }
+
+    pub fn set_foreground(&self) {
+        // TODO: set_foreground
     }
 }
 impl crate::input::ShellPointerActions for Handle {
@@ -579,6 +583,7 @@ impl NativeWindow {
 
     pub fn new<E>(
         r#type: WindowType,
+        rect: Option<Rect<LogicalUnit>>,
         dpsv: &DisplayServerContext,
         dbus: &dbus::Connection,
         event_dispatcher: LogicFiberEventDispatcher,
@@ -589,6 +594,8 @@ impl NativeWindow {
         vk_device: &VulkanDevice,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
+        // TODO: displaying surface at specific rectangle
+
         let mut surface = dpsv
             .global_interfaces
             .compositor
@@ -604,7 +611,12 @@ impl NativeWindow {
             .set_title(c"Peridot Marble Editor")
             .expect("xdg_toplevel.set_title");
         xdg_surface
-            .set_window_geometry(0, 0, 640, 480)
+            .set_window_geometry(
+                0,
+                0,
+                rect.as_ref().map_or(640, |r| r.width.ceil() as _),
+                rect.as_ref().map_or(480, |r| r.height.ceil() as _),
+            )
             .expect("xdg_surface.set_window_geometry");
 
         let appmenu = if let Some(ref am) = dpsv.global_interfaces.kde_appmenu_manager {
