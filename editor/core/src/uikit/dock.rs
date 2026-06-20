@@ -2005,6 +2005,10 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             let (x, y, w, h, _) = context.ht_manager.compute_global_rect_autoroot(gc.ht_root);
 
             context.system_link.dispatch_event(Event::DockBeginPreview {
+                initiator: context
+                    .ht_manager
+                    .query_root_window(gc.ht_root)
+                    .expect("not mounted"),
                 pane_rect: Rect::from_lt_size(Point::new_logical(x, y), Size::new_logical(w, h)),
                 tab_size: self.size.clone(),
                 client_pos: args.client_pos,
