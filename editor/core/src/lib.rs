@@ -904,6 +904,7 @@ pub enum Event {
     },
     DockBeginPreview {
         initiator: WindowHandle,
+        pointer: PointerID,
         source_dock: uikit::dock::DockID,
         tab_index: usize,
         pane_rect: Rect<LogicalUnit>,
@@ -915,6 +916,7 @@ pub enum Event {
         client_pos_in_dest: Point<LogicalUnit>,
     },
     DockConfirm {
+        pointer: PointerID,
         destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     },
@@ -3627,8 +3629,6 @@ async fn run<'sys>(
                 #[cfg(feature = "wayland")]
                 event_id,
             } => {
-                #[cfg(feature = "wayland")]
-                drag_preview_popover.bind_parent_window(window);
                 #[cfg(target_os = "macos")]
                 drag_preview_popover.bind_position_base_window_link(window);
 
@@ -4377,6 +4377,7 @@ async fn run<'sys>(
             }
             Event::DockBeginPreview {
                 initiator,
+                pointer,
                 source_dock,
                 tab_index,
                 pane_rect,
@@ -4392,7 +4393,7 @@ async fn run<'sys>(
                     tab_index,
                 );
 
-                system_link.begin_pane_drag(initiator, &popover_rect);
+                system_link.begin_pane_drag(initiator, &pointer, state.offset, &popover_rect);
                 docking_preview_state = Some(state);
             }
             Event::DockMovePreview {
@@ -4410,6 +4411,7 @@ async fn run<'sys>(
                 }
             }
             Event::DockConfirm {
+                pointer,
                 mut destination_window,
                 client_pos_in_dest,
             } => {
@@ -4421,7 +4423,7 @@ async fn run<'sys>(
                     let mut source_window = state.source_window;
                     let source_dock = state.source_dock;
                     let tab_index = state.tab_index;
-                    system_link.end_pane_drag();
+                    system_link.end_pane_drag(&pointer);
                     let (op, suggested_rect) =
                         uikit::dock::end_preview(dm, &mut dock_store, client_pos_in_dest, state);
                     let (diverged_content, undock_result) = dm.redock(

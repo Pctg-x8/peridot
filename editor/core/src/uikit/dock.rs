@@ -858,7 +858,7 @@ fn relayout_dock(
 pub struct DockingPreviewState {
     tab_size: Size<LogicalUnit>,
     original_rect: Rect<LogicalUnit>,
-    offset: Point<LogicalUnit>,
+    pub offset: Point<LogicalUnit>,
     pub source_window: WindowHandle,
     pub source_dock: DockID,
     pub tab_index: usize,
@@ -2018,6 +2018,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                     .ht_manager
                     .query_root_window(gc.ht_root)
                     .expect("not mounted"),
+                pointer: args.pointer_id,
                 pane_rect: Rect::from_lt_size(Point::new_logical(x, y), Size::new_logical(w, h)),
                 tab_size: self.size.clone(),
                 client_pos: args.client_pos,

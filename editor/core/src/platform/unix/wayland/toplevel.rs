@@ -595,6 +595,10 @@ impl NativeWindow {
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
         // TODO: displaying surface at specific rectangle
+        let size = Size::new_logical(
+            rect.as_ref().map_or(1280.0, |r| r.width),
+            rect.as_ref().map_or(720.0, |r| r.height),
+        );
 
         let mut surface = dpsv
             .global_interfaces
@@ -611,12 +615,7 @@ impl NativeWindow {
             .set_title(c"Peridot Marble Editor")
             .expect("xdg_toplevel.set_title");
         xdg_surface
-            .set_window_geometry(
-                0,
-                0,
-                rect.as_ref().map_or(640, |r| r.width.ceil() as _),
-                rect.as_ref().map_or(480, |r| r.height.ceil() as _),
-            )
+            .set_window_geometry(0, 0, size.width.ceil() as _, size.height.ceil() as _)
             .expect("xdg_surface.set_window_geometry");
 
         let appmenu = if let Some(ref am) = dpsv.global_interfaces.kde_appmenu_manager {
@@ -710,8 +709,8 @@ impl NativeWindow {
                     extra_data: core::ptr::null_mut(),
                     committed_state: Mutex::new(CommittedState {
                         active_buffer_scale: 1.0,
-                        active_size: Size::new_pixels(640, 480),
-                        active_size_logical: Size::new_logical(640.0, 480.0),
+                        active_size: size.to_pixels_ceil(1.0),
+                        active_size_logical: size,
                         decoration_edge: DecorationEdge::all(),
                         maximized: false,
                     }),

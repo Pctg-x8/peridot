@@ -1,5 +1,8 @@
 use core::ptr::NonNull;
-use std::os::fd::{AsRawFd, RawFd};
+use std::{
+    collections::HashSet,
+    os::fd::{AsRawFd, RawFd},
+};
 
 use linux_input::Key;
 use peridot_tp_wayland as wl;
@@ -36,7 +39,7 @@ macro_rules! event_trace {
 }
 pub(self) use event_trace;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SurfaceStateTag {
     ToplevelWindow,
     ResizeEdge,
@@ -118,6 +121,12 @@ impl DragPreviewPopoverHandle {
                 .get_xdg_surface(&wl_popup_surface)
                 .expect("xdg_popup_surface.create")
         };
+        let viewport = unsafe {
+            (*self.wl_interfaces)
+                .viewporter
+                .get_viewport(&wl_popup_surface)
+                .expect("popup_viewport.create")
+        };
 
         let positioner = unsafe {
             (*self.wl_interfaces)
@@ -150,6 +159,11 @@ impl DragPreviewPopoverHandle {
         };
         let mut popup_state = Box::new(PopupState {
             surface_ptr: wl_popup_surface.as_ptr(),
+            xdg_surface_ptr: xdg_popup_surface.as_ptr(),
+            viewport_ptr: viewport.as_ptr(),
+            active_size: size.clone(),
+            pending_new_width: None,
+            pending_new_height: None,
         });
         xdg_popup_surface
             .set_listener(&mut *popup_state)
@@ -158,6 +172,18 @@ impl DragPreviewPopoverHandle {
         pp.set_listener(&mut *popup_state)
             .into_result()
             .expect("pop.set_listener");
+
+        // ignore all inputs for popup surface
+        let input_region = unsafe {
+            (*self.wl_interfaces)
+                .compositor
+                .create_region()
+                .expect("input_region.create")
+        };
+        wl_popup_surface
+            .set_input_region(Some(&input_region))
+            .expect("wl_popup_surface.set_input_region");
+
         wl_popup_surface.commit().expect("wl_popup_surface.commit");
         unsafe {
             // process configure event...(Kwinとかはconfigureくるまえにattachするとエラーが出ておちる)
@@ -170,12 +196,6 @@ impl DragPreviewPopoverHandle {
         wl_popup_surface
             .damage(0, 0, -1, -1)
             .expect("wl_popup_surface.damage");
-        let viewport = unsafe {
-            (*self.wl_interfaces)
-                .viewporter
-                .get_viewport(&wl_popup_surface)
-                .expect("popup_viewport.create")
-        };
         viewport
             .set_source(
                 wl::Fixed::ZERO,
@@ -242,6 +262,12 @@ impl DragPreviewPopoverHandle {
             .expect("pos.set_offset");
         pos.set_size(r.width as _, r.height as _)
             .expect("pos.set_size");
+        pos.set_anchor(wl::XdgPositionerAnchor::TopLeft)
+            .expect("pos.set_anchor");
+        pos.set_anchor_rect(0, 0, 1, 1)
+            .expect("pos.set_anchor_rect");
+        pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
+            .expect("pos.set_gravity");
         pp.reposition(&pos, 0).expect("pp.reposition");
     }
 
@@ -249,6 +275,77 @@ impl DragPreviewPopoverHandle {
         unsafe {
             (*self.popup.get()) = None;
         }
+    }
+}
+
+struct PopupState {
+    surface_ptr: *mut wl::Surface,
+    xdg_surface_ptr: *mut wl::XdgSurface,
+    viewport_ptr: *mut wl::WpViewport,
+    active_size: Size<LogicalUnit>,
+    pending_new_width: Option<i32>,
+    pending_new_height: Option<i32>,
+}
+impl wl::XdgSurfaceEventListener for PopupState {
+    #[tracing::instrument(name = "xdg_surface(Popup)::configure", skip(self, sender))]
+    fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
+        event_trace!();
+
+        if self.pending_new_width.is_some() || self.pending_new_height.is_some() {
+            // resize occured
+            let new_logical_size = Size::new_logical(
+                self.pending_new_width
+                    .take()
+                    .map_or(self.active_size.width, |x| x as _),
+                self.pending_new_height
+                    .take()
+                    .map_or(self.active_size.height, |x| x as _),
+            );
+            self.active_size = new_logical_size;
+
+            unsafe { &*self.xdg_surface_ptr }
+                .set_window_geometry(
+                    0,
+                    0,
+                    self.active_size.width.ceil() as _,
+                    self.active_size.height.ceil() as _,
+                )
+                .expect("xdg_surface.set_window_geometry");
+            unsafe { &*self.viewport_ptr }
+                .set_destination(
+                    self.active_size.width.ceil() as _,
+                    self.active_size.height.ceil() as _,
+                )
+                .expect("viewport.set_destination");
+        }
+
+        sender.ack_configure(serial).expect("popup.ack_configure");
+        unsafe {
+            (*self.surface_ptr).commit().expect("popup.surface.commit");
+        }
+    }
+}
+impl wl::XdgPopupEventListener for PopupState {
+    #[tracing::instrument(name = "xdg_popup::configure", skip(self, _sender))]
+    fn configure(&mut self, _sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
+        event_trace!();
+
+        if width != 0 {
+            self.pending_new_width = Some(width);
+        }
+        if height != 0 {
+            self.pending_new_height = Some(height);
+        }
+    }
+
+    #[tracing::instrument(name = "xdg_popup::popup_done", skip(self, _sender))]
+    fn popup_done(&mut self, _sender: &mut wl::XdgPopup) {
+        event_trace!();
+    }
+
+    #[tracing::instrument(name = "xdg_popup::repositioned", skip(self, _sender))]
+    fn repositioned(&mut self, _sender: &mut wl::XdgPopup, token: u32) {
+        event_trace!();
     }
 }
 
@@ -548,6 +645,68 @@ impl crate::SystemLink<'_> {
             .surface;
         Some(toplevel::Handle(surface))
     }
+
+    pub fn begin_pane_drag(
+        &self,
+        initiator: toplevel::Handle,
+        pointer: &PointerID,
+        offset: Point<LogicalUnit>,
+        _rect: &Rect<LogicalUnit>,
+    ) {
+        tracing::debug!("begin_pane_drag");
+
+        let global_msg = unsafe { &mut *(*pointer.0).user_data().cast::<GlobalMessaging>() };
+        let mut data_source = unsafe { global_msg.data_device_manager.as_ref() }
+            .create_data_source()
+            .expect("data_device_manager.create_data_source");
+        data_source
+            .set_actions(wl::DataDeviceManagerDndAction::MOVE)
+            .expect("data_source.set_actions");
+        data_source
+            .offer(c"application/x-pme-dock-content")
+            .expect("data_source.offer");
+        data_source
+            .add_listener(global_msg)
+            .into_result()
+            .expect("data_source.add_listener");
+
+        let pointer_enter_state = global_msg
+            .pointer
+            .as_ref()
+            .expect("no pointer")
+            .enter_state
+            .as_ref()
+            .expect("not entering");
+        let dd = global_msg.data_device.as_mut().expect("no data device");
+        dd.data_device
+            .start_drag(
+                // Note: 仕様上はnullにできるはずだがHyprlandでやるとCompositorごとおちる
+                Some(&data_source),
+                unsafe { initiator.0.as_ref() },
+                None,
+                pointer_enter_state
+                    .implicit_grab_serial
+                    .expect("not grabbing implicitly"),
+            )
+            .expect("data_device.start_drag");
+        dd.pane_drag_state = Some(PaneDragState {
+            source: data_source,
+            initiator,
+            offset,
+        });
+    }
+
+    pub fn update_pane_drag(&self, on_surface: toplevel::Handle, rect: &Rect<LogicalUnit>) {}
+
+    pub fn end_pane_drag(&self, pointer: &PointerID) {
+        let global_msg = unsafe { &mut *(*pointer.0).user_data().cast::<GlobalMessaging>() };
+        global_msg
+            .data_device
+            .as_mut()
+            .expect("no data device")
+            .pane_drag_state
+            .take();
+    }
 }
 
 pub struct StaticPixbufs {
@@ -608,7 +767,7 @@ impl StaticPixbufs {
             unsafe {
                 core::ptr::write(
                     mapped.as_ptr().cast::<u32>(),
-                    DragPreviewPopoverHandle::BG_COLOR
+                    crate::DRAG_PREVIEW_POPOVER_BG_COLOR
                         .premultiplied()
                         .argb8888(),
                 );
@@ -640,7 +799,7 @@ impl StaticPixbufs {
         interfaces: &GlobalInterfaces,
     ) -> DragPreviewPopoverBuffer {
         if let Some(ref spb) = interfaces.single_pixel_buffer_manager {
-            let c = DragPreviewPopoverHandle::BG_COLOR.premultiplied();
+            let c = crate::DRAG_PREVIEW_POPOVER_BG_COLOR.premultiplied();
             let b = spb
                 .create_u32_rgba_buffer(c.r_u32(), c.g_u32(), c.b_u32(), c.a_u32())
                 .expect("popup_buf.create.single_pixel_buffer");
@@ -656,37 +815,6 @@ impl StaticPixbufs {
 
             DragPreviewPopoverBuffer::Shm { buf }
         }
-    }
-}
-
-struct PopupState {
-    surface_ptr: *mut wl::Surface,
-}
-impl wl::XdgSurfaceEventListener for PopupState {
-    #[tracing::instrument(name = "xdg_surface(Popup)::configure", skip(self, sender))]
-    fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
-        event_trace!();
-
-        sender.ack_configure(serial).expect("popup.ack_configure");
-        unsafe {
-            (*self.surface_ptr).commit().expect("popup.surface.commit");
-        }
-    }
-}
-impl wl::XdgPopupEventListener for PopupState {
-    #[tracing::instrument(name = "xdg_popup::configure", skip(self, _sender))]
-    fn configure(&mut self, _sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
-        event_trace!();
-    }
-
-    #[tracing::instrument(name = "xdg_popup::popup_done", skip(self, _sender))]
-    fn popup_done(&mut self, _sender: &mut wl::XdgPopup) {
-        event_trace!();
-    }
-
-    #[tracing::instrument(name = "xdg_popup::repositioned", skip(self, _sender))]
-    fn repositioned(&mut self, _sender: &mut wl::XdgPopup, token: u32) {
-        event_trace!();
     }
 }
 
@@ -791,6 +919,7 @@ unsafe impl Send for PointerEventID {}
 struct PointerEnterState {
     surface: NonNull<wl::Surface>,
     serial: u32,
+    implicit_grab_serial: Option<u32>,
     lock_state: Option<PointerLockState>,
 }
 
@@ -858,11 +987,33 @@ struct IMEPendingState {
     preedit_text: String,
 }
 
+struct DataDeviceActiveOfferState {
+    object: wl::Owned<wl::DataOffer>,
+    entering_surface: Option<NonNull<wl::Surface>>,
+    client_pos: Point<LogicalUnit>,
+    mime_types: HashSet<std::ffi::CString>,
+    source_actions: wl::DataDeviceManagerDndAction,
+}
+
+struct PaneDragState {
+    source: wl::Owned<wl::DataSource>,
+    initiator: toplevel::Handle,
+    offset: Point<LogicalUnit>,
+}
+
+struct DataDeviceState {
+    data_device: wl::Owned<wl::DataDevice>,
+    pane_drag_state: Option<PaneDragState>,
+    active_offer: Option<DataDeviceActiveOfferState>,
+}
+
 pub struct GlobalMessaging {
     text_input_manager: NonNull<wl::ZwpTextInputManagerV3>,
+    data_device_manager: NonNull<wl::DataDeviceManager>,
     xkb_context: xkbcommon::Context,
     keyboard: Option<KeyboardState>,
     pointer: Option<PointerState>,
+    data_device: Option<DataDeviceState>,
     cursor_shape_manager: Option<NonNull<wl::WpCursorShapeManagerV1>>,
     pointer_constraints: Option<NonNull<wl::ZwpPointerConstraintsV1>>,
     relative_pointer_manager: Option<NonNull<wl::ZwpRelativePointerManagerV1>>,
@@ -874,10 +1025,12 @@ impl GlobalMessaging {
     pub fn new(ctx: &DisplayServerContext, event_dispatcher: LogicFiberEventDispatcher) -> Self {
         Self {
             text_input_manager: unsafe { ctx.global_interfaces.text_input_manager.copy_ptr() },
+            data_device_manager: unsafe { ctx.global_interfaces.data_device_manager.copy_ptr() },
             xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
                 .expect("xkb_context.create"),
             keyboard: None,
             pointer: None,
+            data_device: None,
             cursor_shape_manager: ctx
                 .global_interfaces
                 .cursor_shape_manager
@@ -921,6 +1074,18 @@ impl wl::SeatEventListener for GlobalMessaging {
     #[tracing::instrument(skip(self, seat))]
     fn capabilities(&mut self, seat: &mut wl::Seat, capabilities: wl::SeatCapability) {
         event_trace!();
+
+        let mut dd = unsafe { self.data_device_manager.as_ref() }
+            .get_data_device(seat)
+            .expect("seat.get_data_device");
+        dd.set_listener(self)
+            .into_result()
+            .expect("data_device.set_listener");
+        self.data_device = Some(DataDeviceState {
+            data_device: dd,
+            pane_drag_state: None,
+            active_offer: None,
+        });
 
         if capabilities.contains(wl::SeatCapability::POINTER) {
             // pointer
@@ -1004,11 +1169,18 @@ impl wl::PointerEventListener for GlobalMessaging {
         state.enter_state = Some(PointerEnterState {
             surface: NonNull::from_mut(surface),
             serial,
+            implicit_grab_serial: None,
             lock_state: None,
         });
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
 
-        let surface_state = unsafe { &*surface.user_data().cast::<SurfaceStateUntyped>() };
+        let surface_state_ptr = surface.user_data().cast::<SurfaceStateUntyped>();
+        if surface_state_ptr.is_null() {
+            tracing::warn!("entering into unknown surface");
+            return;
+        }
+        let surface_state = unsafe { &*surface_state_ptr };
+        tracing::debug!(tag = ?surface_state.tag, "entering into known surface");
         match surface_state.tag {
             SurfaceStateTag::ResizeEdge => {
                 let surface_state = unsafe {
@@ -1045,21 +1217,24 @@ impl wl::PointerEventListener for GlobalMessaging {
         let state = self.pointer.as_mut().expect("no pointer state initialized");
 
         if let Some(surface) = surface {
-            let surface_state = unsafe { &*surface.user_data().cast::<SurfaceStateUntyped>() };
-            match surface_state.tag {
-                SurfaceStateTag::ToplevelWindow => {
-                    self.event_dispatcher.dispatch(Event::PointerLeaveWindow {
-                        pointer_id: PointerID(pointer),
-                        window: toplevel::Handle::from_mut(surface),
-                    });
+            let surface_state_ptr = surface.user_data().cast::<SurfaceStateUntyped>();
+            if !surface_state_ptr.is_null() {
+                let surface_state = unsafe { &*surface_state_ptr };
+                match surface_state.tag {
+                    SurfaceStateTag::ToplevelWindow => {
+                        self.event_dispatcher.dispatch(Event::PointerLeaveWindow {
+                            pointer_id: PointerID(pointer),
+                            window: toplevel::Handle::from_mut(surface),
+                        });
+                    }
+                    SurfaceStateTag::FlyoutSurface => {
+                        self.event_dispatcher.dispatch(Event::MenuPointerLeave {
+                            pointer_id: PointerID(pointer),
+                            target: flyout_surface::Handle(NonNull::from_mut(surface)),
+                        });
+                    }
+                    _ => (),
                 }
-                SurfaceStateTag::FlyoutSurface => {
-                    self.event_dispatcher.dispatch(Event::MenuPointerLeave {
-                        pointer_id: PointerID(pointer),
-                        target: flyout_surface::Handle(NonNull::from_mut(surface)),
-                    });
-                }
-                _ => (),
             }
         }
 
@@ -1082,13 +1257,17 @@ impl wl::PointerEventListener for GlobalMessaging {
         };
 
         state.pos = Point::new_logical(surface_x.to_f32(), surface_y.to_f32());
-        let surface_state = unsafe {
-            &*enter_state
+        let surface_state_ptr = unsafe {
+            enter_state
                 .surface
                 .as_ref()
                 .user_data()
                 .cast::<SurfaceStateUntyped>()
         };
+        if surface_state_ptr.is_null() {
+            return;
+        }
+        let surface_state = unsafe { &*surface_state_ptr };
         match surface_state.tag {
             SurfaceStateTag::ResizeEdge => {}
             SurfaceStateTag::ToplevelWindow => {
@@ -1119,12 +1298,13 @@ impl wl::PointerEventListener for GlobalMessaging {
     ) {
         event_trace!();
 
-        let pointer_state = self.pointer.as_ref().expect("no pointer state initialized");
-        let Some(ref enter_state) = pointer_state.enter_state else {
+        let pointer_state = self.pointer.as_mut().expect("no pointer state initialized");
+        let Some(ref mut enter_state) = pointer_state.enter_state else {
             return;
         };
 
         if state == wl::PointerButtonState::Pressed {
+            enter_state.implicit_grab_serial = Some(serial);
             let surface_state = unsafe {
                 &*enter_state
                     .surface
@@ -1175,6 +1355,7 @@ impl wl::PointerEventListener for GlobalMessaging {
                 }
             }
         } else if state == wl::PointerButtonState::Released {
+            enter_state.implicit_grab_serial = None;
             let surface_state = unsafe {
                 &*enter_state
                     .surface
@@ -1292,8 +1473,276 @@ impl wl::ZwpRelativePointerV1EventListener for GlobalMessaging {
         });
     }
 }
+impl wl::DataDeviceEventListener for GlobalMessaging {
+    #[tracing::instrument(name = "data_device::data_offer", skip(self, _sender, id))]
+    fn data_offer(&mut self, _sender: &mut wl::DataDevice, mut id: wl::Owned<wl::DataOffer>) {
+        event_trace!();
+
+        id.set_listener(self)
+            .into_result()
+            .expect("data_offer.set_listener");
+        self.data_device
+            .as_mut()
+            .expect("no data device")
+            .active_offer = Some(DataDeviceActiveOfferState {
+            object: id,
+            entering_surface: None,
+            client_pos: Point::new_logical(0.0, 0.0),
+            mime_types: HashSet::new(),
+            source_actions: wl::DataDeviceManagerDndAction::empty(),
+        });
+    }
+
+    #[tracing::instrument(name = "data_device::enter", skip(self, _sender, surface, id))]
+    fn enter(
+        &mut self,
+        _sender: &mut wl::DataDevice,
+        serial: u32,
+        surface: &wl::Surface,
+        x: wl::Fixed,
+        y: wl::Fixed,
+        id: Option<&wl::DataOffer>,
+    ) {
+        event_trace!();
+
+        let surface_state_ptr = surface.user_data().cast::<SurfaceStateUntyped>();
+        if surface_state_ptr.is_null() {
+            self.data_device
+                .as_mut()
+                .expect("no data device")
+                .active_offer
+                .take();
+            return;
+        }
+        let surface_state = unsafe { &*surface_state_ptr };
+        if surface_state.tag != SurfaceStateTag::ToplevelWindow {
+            self.data_device
+                .as_mut()
+                .expect("no data device")
+                .active_offer
+                .take();
+            return;
+        }
+
+        let Some(ref mut active_offer) = self
+            .data_device
+            .as_mut()
+            .expect("no data device")
+            .active_offer
+        else {
+            // no active offer
+            return;
+        };
+
+        let accepting_mime_type;
+        if active_offer
+            .mime_types
+            .contains(c"application/x-pme-dock-content")
+        {
+            tracing::debug!("offered(accepting): dock content");
+            accepting_mime_type = Some(c"application/x-pme-dock-content");
+        } else {
+            accepting_mime_type = None;
+        }
+        active_offer
+            .object
+            .accept(0, accepting_mime_type)
+            .expect("data_offer.accept");
+        active_offer.entering_surface = Some(NonNull::from_ref(surface));
+        active_offer.client_pos = Point::new_logical(x.to_f32(), y.to_f32());
+    }
+
+    #[tracing::instrument(name = "data_device::leave", skip(self, _sender))]
+    fn leave(&mut self, _sender: &mut wl::DataDevice) {
+        event_trace!();
+
+        self.data_device
+            .as_mut()
+            .expect("no data device")
+            .active_offer
+            .take();
+    }
+
+    #[tracing::instrument(name = "data_device::motion", skip(self, _sender))]
+    fn motion(&mut self, _sender: &mut wl::DataDevice, time: u32, x: wl::Fixed, y: wl::Fixed) {
+        event_trace!();
+
+        let Some(ref mut active_offer) = self
+            .data_device
+            .as_mut()
+            .expect("no data device")
+            .active_offer
+        else {
+            // no active offer
+            return;
+        };
+        active_offer.client_pos = Point::new_logical(x.to_f32(), y.to_f32());
+        self.event_dispatcher.dispatch(Event::DockMovePreview {
+            dest_window: toplevel::Handle(
+                active_offer.entering_surface.expect("no entering surface?"),
+            ),
+            client_pos_in_dest: Point::new_logical(x.to_f32(), y.to_f32()),
+        });
+    }
+
+    #[tracing::instrument(name = "data_device::drop", skip(self, _sender))]
+    fn drop(&mut self, _sender: &mut wl::DataDevice) {
+        event_trace!();
+
+        let Some(active_offer) = self
+            .data_device
+            .as_mut()
+            .expect("no data device")
+            .active_offer
+            .take()
+        else {
+            // no active offers
+            return;
+        };
+        let mut pipe_fds = [0; 2];
+        let r = unsafe { libc::pipe(pipe_fds.as_mut_ptr()) };
+        if r < 0 {
+            panic!("libc.pipe: {}", std::io::Error::last_os_error());
+        }
+        active_offer
+            .object
+            .receive(c"application/x-pme-dock-content", &pipe_fds[1])
+            .expect("active_offer.receive");
+        active_offer.object.finish().expect("active_offer.finish");
+
+        self.event_dispatcher.dispatch(Event::DockConfirm {
+            pointer: PointerID(
+                self.pointer
+                    .as_ref()
+                    .expect("no pointer")
+                    ._wl_object
+                    .as_ptr(),
+            ),
+            destination_window: toplevel::Handle(
+                active_offer.entering_surface.expect("no entering surface?"),
+            ),
+            client_pos_in_dest: active_offer.client_pos,
+        })
+    }
+
+    #[tracing::instrument(name = "data_device::selection", skip(self, _sender, id))]
+    fn selection(&mut self, _sender: &mut wl::DataDevice, id: Option<&wl::DataOffer>) {
+        event_trace!();
+    }
+}
+impl wl::DataSourceEventListener for GlobalMessaging {
+    #[tracing::instrument(name = "data_source::target", skip(self, sender))]
+    fn target(&mut self, sender: &mut wl::DataSource, mime_type: Option<&core::ffi::CStr>) {
+        event_trace!();
+    }
+
+    #[tracing::instrument(name = "data_source::send", skip(self, sender))]
+    fn send(
+        &mut self,
+        sender: &mut wl::DataSource,
+        mime_type: &core::ffi::CStr,
+        fd: std::os::fd::RawFd,
+    ) {
+        event_trace!();
+
+        let r = unsafe { libc::close(fd) };
+        if r < 0 {
+            panic!("libc.close: {}", std::io::Error::last_os_error());
+        }
+    }
+
+    #[tracing::instrument(name = "data_source::cancelled", skip(self, sender))]
+    fn cancelled(&mut self, sender: &mut wl::DataSource) {
+        event_trace!();
+
+        tracing::debug!("dnd cancelled");
+        let Some(state) = self
+            .data_device
+            .as_mut()
+            .expect("no data device")
+            .pane_drag_state
+            .take_if(|x| x.source.ref_eq(sender))
+        else {
+            return;
+        };
+
+        self.event_dispatcher.dispatch(Event::DockConfirm {
+            pointer: PointerID(
+                self.pointer
+                    .as_ref()
+                    .expect("no pointer")
+                    ._wl_object
+                    .as_ptr(),
+            ),
+            destination_window: state.initiator,
+            client_pos_in_dest: Point::new_logical(-1.0, -1.0),
+        })
+    }
+
+    #[tracing::instrument(name = "data_source::dnd_drop_performed", skip(self, sender))]
+    fn dnd_drop_performed(&mut self, sender: &mut wl::DataSource) {
+        event_trace!();
+    }
+
+    #[tracing::instrument(name = "data_source::dnd_finished", skip(self, sender))]
+    fn dnd_finished(&mut self, sender: &mut wl::DataSource) {
+        event_trace!();
+
+        tracing::debug!("dnd finished");
+        self.data_device
+            .as_mut()
+            .expect("no data device")
+            .pane_drag_state
+            .take_if(|x| x.source.ref_eq(sender));
+    }
+
+    #[tracing::instrument(name = "data_source::action", skip(self, sender))]
+    fn action(&mut self, sender: &mut wl::DataSource, dnd_action: wl::DataDeviceManagerDndAction) {
+        event_trace!();
+    }
+}
+impl wl::DataOfferEventListener for GlobalMessaging {
+    #[tracing::instrument(name = "data_offer::offer", skip(self, sender))]
+    fn offer(&mut self, sender: &mut wl::DataOffer, mime_type: &core::ffi::CStr) {
+        event_trace!();
+
+        let active_offer = self
+            .data_device
+            .as_mut()
+            .expect("no data device")
+            .active_offer
+            .as_mut()
+            .expect("no offer active");
+        assert!(active_offer.object.ref_eq(sender), "another offer request");
+        active_offer.mime_types.insert(mime_type.to_owned());
+    }
+
+    #[tracing::instrument(name = "data_offer::source_actions", skip(self, sender))]
+    fn source_actions(
+        &mut self,
+        sender: &mut wl::DataOffer,
+        source_actions: wl::DataDeviceManagerDndAction,
+    ) {
+        event_trace!();
+
+        let active_offer = self
+            .data_device
+            .as_mut()
+            .expect("no data device")
+            .active_offer
+            .as_mut()
+            .expect("no offer active");
+        assert!(active_offer.object.ref_eq(sender), "another offer request");
+        active_offer.source_actions |= source_actions;
+    }
+
+    #[tracing::instrument(name = "data_offer::action", skip(self, sender))]
+    fn action(&mut self, sender: &mut wl::DataOffer, dnd_action: wl::DataDeviceManagerDndAction) {
+        event_trace!();
+    }
+}
 impl wl::KeyboardEventListener for GlobalMessaging {
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "keyboard::keymap", skip(self, _sender))]
     fn keymap(
         &mut self,
         _sender: &mut wl::Keyboard,
@@ -1343,7 +1792,7 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         state.xkb_state = Some(xkb_state);
     }
 
-    #[tracing::instrument(skip(self, _sender, surface))]
+    #[tracing::instrument(name = "keyboard::enter", skip(self, _sender, surface))]
     fn enter(
         &mut self,
         _sender: &mut wl::Keyboard,
@@ -1363,7 +1812,7 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         });
     }
 
-    #[tracing::instrument(skip(self, _sender, surface))]
+    #[tracing::instrument(name = "keyboard::leave", skip(self, _sender, surface))]
     fn leave(
         &mut self,
         _sender: &mut wl::Keyboard,
@@ -1382,7 +1831,7 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         }
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "keyboard::key", skip(self, _sender))]
     fn key(
         &mut self,
         _sender: &mut wl::Keyboard,
@@ -1456,7 +1905,7 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         }
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "keyboard::modifiers", skip(self, _sender))]
     fn modifiers(
         &mut self,
         _sender: &mut wl::Keyboard,
@@ -1481,13 +1930,13 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         }
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "keyboard::repeat_info", skip(self, _sender))]
     fn repeat_info(&mut self, _sender: &mut wl::Keyboard, rate: i32, delay: i32) {
         event_trace!();
     }
 }
 impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
-    #[tracing::instrument(skip(self, sender, _surface))]
+    #[tracing::instrument(name = "text_input_v3::enter", skip(self, sender, _surface))]
     fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: Option<&mut wl::Surface>) {
         event_trace!();
 
@@ -1495,7 +1944,7 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
         sender.commit().expect("text_input.commit");
     }
 
-    #[tracing::instrument(skip(self, sender, _surface))]
+    #[tracing::instrument(name = "text_input_v3::leave", skip(self, sender, _surface))]
     fn leave(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: Option<&mut wl::Surface>) {
         event_trace!();
 
@@ -1503,7 +1952,7 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
         sender.commit().expect("text_input.commit");
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "text_input_v3::preedit_string", skip(self, _sender))]
     fn preedit_string(
         &mut self,
         _sender: &mut wl::ZwpTextInputV3,
@@ -1518,7 +1967,7 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
             .unwrap_or_default();
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "text_input_v3::commit_string", skip(self, _sender))]
     fn commit_string(&mut self, _sender: &mut wl::ZwpTextInputV3, text: Option<&core::ffi::CStr>) {
         event_trace!();
 
@@ -1527,7 +1976,7 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
             .unwrap_or_default();
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "text_input_v3::delete_surrounding_text", skip(self, _sender))]
     fn delete_surrounding_text(
         &mut self,
         _sender: &mut wl::ZwpTextInputV3,
@@ -1537,7 +1986,7 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
         event_trace!();
     }
 
-    #[tracing::instrument(skip(self, _sender))]
+    #[tracing::instrument(name = "text_input_v3::done", skip(self, _sender))]
     fn done(&mut self, _sender: &mut wl::ZwpTextInputV3, serial: u32) {
         event_trace!();
 
@@ -1587,6 +2036,7 @@ struct GlobalInterfaces {
     subcompositor: wl::Owned<wl::Subcompositor>,
     xdg_wm_base: wl::Owned<wl::XdgWmBase>,
     seat: wl::Owned<wl::Seat>,
+    data_device_manager: wl::Owned<wl::DataDeviceManager>,
     shm: wl::Owned<wl::Shm>,
     viewporter: wl::Owned<wl::WpViewporter>,
     text_input_manager: wl::Owned<wl::ZwpTextInputManagerV3>,
@@ -1620,6 +2070,7 @@ impl GlobalInterfaces {
             subcompositor: rl.subcompositor.expect("no subcompositor"),
             xdg_wm_base: rl.xdg_wm_base.expect("no xdg-shell"),
             seat: rl.seat.expect("no seat"),
+            data_device_manager: rl.data_device_manager.expect("no data-device-manager"),
             shm: rl.shm.expect("no shm"),
             viewporter: rl.viewporter.expect("no viewporter"),
             text_input_manager: rl.text_input_manager.expect("no text-input"),
@@ -1656,6 +2107,7 @@ struct RegistryListener {
     outputs: Vec<wl::Owned<wl::Output>>,
     xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
     seat: Option<wl::Owned<wl::Seat>>,
+    data_device_manager: Option<wl::Owned<wl::DataDeviceManager>>,
     shm: Option<wl::Owned<wl::Shm>>,
     viewporter: Option<wl::Owned<wl::WpViewporter>>,
     text_input_manager: Option<wl::Owned<wl::ZwpTextInputManagerV3>>,
@@ -1706,6 +2158,14 @@ impl wl::RegistryListener for RegistryListener {
         if interface == c"wl_seat" {
             assert!(self.seat.is_none(), "multiple seat?");
             self.seat = Some(registry.bind(name, version).expect("bind seat"));
+            return;
+        }
+        if interface == c"wl_data_device_manager" {
+            self.data_device_manager = Some(
+                registry
+                    .bind(name, version)
+                    .expect("bind data_device_manager"),
+            );
             return;
         }
         if interface == c"wl_shm" {
