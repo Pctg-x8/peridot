@@ -1210,14 +1210,12 @@ impl WindowEventHandler {
     }
 }
 
-#[derive(Debug)]
-pub struct DragPreviewPopoverHandle {
+pub struct DragPreviewPopover {
     w: HWND,
-    base_window_handle: core::cell::Cell<HWND>,
     _composition_target: DesktopWindowTarget,
     root_visual: SpriteVisual,
 }
-impl Drop for DragPreviewPopoverHandle {
+impl Drop for DragPreviewPopover {
     #[inline(always)]
     fn drop(&mut self) {
         if let Err(e) = unsafe { DestroyWindow(self.w) } {
@@ -1225,12 +1223,8 @@ impl Drop for DragPreviewPopoverHandle {
         }
     }
 }
-impl DragPreviewPopoverHandle {
-    pub fn bind_position_base_window(&self, window: WindowHandle) {
-        self.base_window_handle.set(window.0);
-    }
-
-    pub fn new(syslink: &SystemLink) -> Self {
+impl DragPreviewPopover {
+    fn new(hinstance: HINSTANCE, native_compositor: &Compositor) -> Self {
         let atom_drag_floating = unsafe {
             register_class(&WNDCLASSEXW {
                 cbSize: core::mem::size_of::<WNDCLASSEXW>() as _,
@@ -1238,7 +1232,7 @@ impl DragPreviewPopoverHandle {
                 cbClsExtra: 0,
                 cbWndExtra: 0,
                 lpfnWndProc: Some(Self::wndproc),
-                hInstance: (&*syslink.app_context_ptr).hinstance,
+                hInstance: hinstance,
                 hIcon: HICON(core::ptr::null_mut()),
                 hCursor: HCURSOR(core::ptr::null_mut()),
                 hbrBackground: HBRUSH(core::ptr::null_mut()),
@@ -1264,7 +1258,7 @@ impl DragPreviewPopoverHandle {
                 128,
                 None,
                 None,
-                Some((&*syslink.app_context_ptr).hinstance),
+                Some(hinstance),
                 None,
             )
             .expect("CreateWindowExW")
@@ -1279,20 +1273,17 @@ impl DragPreviewPopoverHandle {
         fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
         fx.SetOptimization(EffectOptimization::Speed)
             .expect("drag.fx.set_optimization");
-        let effect_factory = unsafe { &*syslink.app_context_ptr }
-            .native_compositor
+        let effect_factory = native_compositor
             .CreateEffectFactory(&fx)
             .expect("drag.fx.create_factory");
-        let backdrop_brush = unsafe { &*syslink.app_context_ptr }
-            .native_compositor
+        let backdrop_brush = native_compositor
             .CreateBackdropBrush()
             .expect("drag.backdrop_brush.create");
         let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
         blur_brush
             .SetSourceParameter(h!("Source"), &backdrop_brush)
             .expect("drag.fx.set_blur_source");
-        let blur_visual = unsafe { &*syslink.app_context_ptr }
-            .native_compositor
+        let blur_visual = native_compositor
             .CreateSpriteVisual()
             .expect("drag.visual.blur.create");
         blur_visual
@@ -1309,8 +1300,7 @@ impl DragPreviewPopoverHandle {
             .expect("drag.visual.blur.set_brush");
         blur_visual
             .SetShadow(&{
-                let x = unsafe { &*syslink.app_context_ptr }
-                    .native_compositor
+                let x = native_compositor
                     .CreateDropShadow()
                     .expect("drag.visual.shadow.create");
                 x.SetBlurRadius(32.0)
@@ -1321,16 +1311,14 @@ impl DragPreviewPopoverHandle {
                 x
             })
             .expect("drag.visual.set_shadow");
-        let color_tint_visual = unsafe { &*syslink.app_context_ptr }
-            .native_compositor
+        let color_tint_visual = native_compositor
             .CreateSpriteVisual()
             .expect("drag.visual.color_tint.create");
         color_tint_visual
             .SetBrush(
-                &unsafe { &*syslink.app_context_ptr }
-                    .native_compositor
+                &native_compositor
                     .CreateColorBrushWithColor(
-                        DragPreviewPopoverHandle::BG_COLOR.windows_native_color(),
+                        crate::DRAG_PREVIEW_POPOVER_BG_COLOR.windows_native_color(),
                     )
                     .expect("drag.visual.color_tint.brush.create"),
             )
@@ -1348,8 +1336,7 @@ impl DragPreviewPopoverHandle {
             .expect("drag.visual.add_child");
 
         let composition_target = unsafe {
-            (&*syslink.app_context_ptr)
-                .native_compositor
+            native_compositor
                 .cast::<ICompositorDesktopInterop>()
                 .expect("native_compositor.cast.desktop_interop")
                 .CreateDesktopWindowTarget(w, true)
@@ -1364,20 +1351,19 @@ impl DragPreviewPopoverHandle {
 
         Self {
             w,
-            base_window_handle: core::cell::Cell::new(HWND(core::ptr::null_mut())),
             _composition_target: composition_target,
             root_visual: blur_visual,
         }
     }
 
-    pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
+    fn show(&self, base: HWND, rect: &Rect<LogicalUnit>) {
         unsafe {
             // デスクトップ座標で指定になるので置き換え
-            let scale = GetDpiForWindow(self.base_window_handle.get()) as f32 / 96.0;
-            let pos = pos.to_pixels_round(scale);
-            let size = size.to_pixels_ceil(scale);
+            let scale = GetDpiForWindow(base) as f32 / 96.0;
+            let pos = rect.left_top().to_pixels_round(scale);
+            let size = rect.size().to_pixels_ceil(scale);
             let mut p = [POINT { x: pos.x, y: pos.y }];
-            MapWindowPoints(Some(self.base_window_handle.get()), None, &mut p);
+            MapWindowPoints(Some(base), None, &mut p);
             let [POINT { x, y }] = p;
 
             // 影のぶんだけ余分に設定する
@@ -1398,13 +1384,13 @@ impl DragPreviewPopoverHandle {
         }
     }
 
-    pub fn r#move(&self, pos: &Point<PointerInputUnit>) {
+    fn r#move(&self, base: HWND, pos: &Point<PointerInputUnit>) {
         unsafe {
             // デスクトップ座標で指定になるので置き換え
-            let scale = GetDpiForWindow(self.base_window_handle.get()) as f32 / 96.0;
+            let scale = GetDpiForWindow(base) as f32 / 96.0;
             let pos = pos.to_pixels_round(scale);
             let mut p = [POINT { x: pos.x, y: pos.y }];
-            MapWindowPoints(Some(self.base_window_handle.get()), None, &mut p);
+            MapWindowPoints(Some(base), None, &mut p);
             let [POINT { x, y }] = p;
 
             // 影のぶんだけずらして設定する
@@ -1421,14 +1407,14 @@ impl DragPreviewPopoverHandle {
         }
     }
 
-    pub fn set_rect(&self, rect: &Rect<PointerInputUnit>) {
+    fn set_rect(&self, base: HWND, rect: &Rect<PointerInputUnit>) {
         // デスクトップ座標で指定になるので置き換え
-        let scale = unsafe { GetDpiForWindow(self.base_window_handle.get()) } as f32 / 96.0;
+        let scale = unsafe { GetDpiForWindow(base) } as f32 / 96.0;
         let pos = rect.left_top().to_pixels_round(scale);
         let size = rect.size().to_pixels_ceil(scale);
         let mut p = [POINT { x: pos.x, y: pos.y }];
         unsafe {
-            MapWindowPoints(Some(self.base_window_handle.get()), None, &mut p);
+            MapWindowPoints(Some(base), None, &mut p);
         }
         let [POINT { x, y }] = p;
 
@@ -1450,7 +1436,7 @@ impl DragPreviewPopoverHandle {
             .expect("drag.visual.set_size");
     }
 
-    pub fn hide(&self) {
+    fn hide(&self) {
         unsafe {
             let _ = ShowWindow(self.w, SW_HIDE);
         }
@@ -1469,6 +1455,7 @@ pub struct ApplicationContext {
     native_compositor_desktop_interop: ICompositorDesktopInterop,
     native_compositor_interop: ICompositorInterop,
     ctm: CoreTextServicesManager,
+    drag_preview_popover: DragPreviewPopover,
 }
 impl ApplicationContext {
     pub fn new() -> Self {
@@ -1490,6 +1477,7 @@ impl ApplicationContext {
             CoreTextServicesManager::GetForCurrentView().expect("coretextservicesmanager.get");
 
         Self {
+            drag_preview_popover: DragPreviewPopover::new(hinstance, &native_compositor),
             hinstance,
             wc_set,
             _dispatcher_queue: dispatcher_queue,
@@ -1792,6 +1780,24 @@ impl SystemLink<'_> {
             )
         };
         Point::from_win32(translated_pos[0]).to_logical(dest_window.ui_scale_factor())
+    }
+
+    pub fn begin_pane_drag(&self, initiator_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
+        unsafe { &*self.app_context_ptr }
+            .drag_preview_popover
+            .show(initiator_surface.0, rect);
+    }
+
+    pub fn update_pane_drag(&self, on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
+        unsafe { &*self.app_context_ptr }
+            .drag_preview_popover
+            .set_rect(on_surface.0, rect);
+    }
+
+    pub fn end_pane_drag(&self) {
+        unsafe { &*self.app_context_ptr }
+            .drag_preview_popover
+            .hide();
     }
 }
 

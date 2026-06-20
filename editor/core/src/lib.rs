@@ -900,6 +900,7 @@ pub enum Event {
         pos_client: f32,
     },
     DockBeginPreview {
+        initiator: WindowHandle,
         pane_rect: Rect<LogicalUnit>,
         tab_size: Size<LogicalUnit>,
         client_pos: Point<LogicalUnit>,
@@ -3189,8 +3190,6 @@ async fn run<'sys>(
     tracing::info!("app start");
     crate::perf_begin!(perf = INITIALIZE);
 
-    let drag_preview_popover = DragPreviewPopoverHandle::new(&system_link);
-
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
 
@@ -3494,7 +3493,6 @@ async fn run<'sys>(
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
-                    drag_preview_popover: &drag_preview_popover,
                     ht_manager: &ht_manager,
                 };
 
@@ -3567,7 +3565,6 @@ async fn run<'sys>(
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
-                    drag_preview_popover: &drag_preview_popover,
                     ht_manager: &ht_manager,
                 };
                 let mgr = window.keyboard_focus_state_mut();
@@ -3631,8 +3628,6 @@ async fn run<'sys>(
             } => {
                 #[cfg(feature = "wayland")]
                 drag_preview_popover.bind_parent_window(window);
-                #[cfg(windows)]
-                drag_preview_popover.bind_position_base_window(window);
                 #[cfg(target_os = "macos")]
                 drag_preview_popover.bind_position_base_window_link(window);
 
@@ -3652,7 +3647,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3676,7 +3670,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     window.ht_root(),
@@ -3700,7 +3693,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -3719,7 +3711,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -3736,7 +3727,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -3750,7 +3740,6 @@ async fn run<'sys>(
                     composite_tree: &mut composite_tree,
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
-                    drag_preview_popover: &drag_preview_popover,
                     ht_manager: &ht_manager,
                 });
 
@@ -3768,7 +3757,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -3796,7 +3784,6 @@ async fn run<'sys>(
                             composite_tree: &mut composite_tree,
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                             system_link: &mut system_link,
-                            drag_preview_popover: &drag_preview_popover,
                             ht_manager: &ht_manager,
                         },
                         &keyboard_focus_registry,
@@ -3817,7 +3804,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3837,7 +3823,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3857,7 +3842,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -3891,7 +3875,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     &keyboard_focus_registry,
@@ -4188,7 +4171,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -4212,7 +4194,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     target.ht_root(),
@@ -4235,7 +4216,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                     button,
@@ -4252,7 +4232,6 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
-                        drag_preview_popover: &drag_preview_popover,
                         ht_manager: &ht_manager,
                     },
                 );
@@ -4396,6 +4375,7 @@ async fn run<'sys>(
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::DockBeginPreview {
+                initiator,
                 pane_rect,
                 tab_size,
                 client_pos,
@@ -4403,7 +4383,7 @@ async fn run<'sys>(
                 let (state, popover_rect) =
                     uikit::dock::begin_preview(pane_rect, tab_size, &client_pos);
 
-                drag_preview_popover.show(&popover_rect.left_top(), &popover_rect.size());
+                system_link.begin_pane_drag(initiator, &popover_rect);
                 docking_preview_state = Some(state);
             }
             Event::DockMovePreview {
@@ -4424,14 +4404,13 @@ async fn run<'sys>(
                     };
 
                     target_window.set_foreground();
-                    drag_preview_popover.bind_position_base_window(target_window);
                     let popover_rect = uikit::dock::move_preview(
                         &unsafe { target_window.extra_data_ref::<PerWindowData>() }.docking_manager,
                         &dock_store,
                         final_client_pos,
                         state,
                     );
-                    drag_preview_popover.set_rect(&popover_rect);
+                    system_link.update_pane_drag(target_window, &popover_rect);
                 }
             }
             Event::DockConfirm {
@@ -4458,7 +4437,7 @@ async fn run<'sys>(
                     let dm = &mut unsafe { target_window.extra_data_mut::<PerWindowData>() }
                         .docking_manager;
 
-                    drag_preview_popover.hide();
+                    system_link.end_pane_drag();
                     let (op, suggested_rect) =
                         uikit::dock::end_preview(dm, &mut dock_store, final_client_pos, state);
                     let (diverged_content, undock_result) = dm.redock(
@@ -4603,7 +4582,6 @@ async fn run<'sys>(
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
-                                drag_preview_popover: &drag_preview_popover,
                                 ht_manager: &ht_manager,
                             },
                             &request,
@@ -4640,7 +4618,6 @@ async fn run<'sys>(
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
-                                drag_preview_popover: &drag_preview_popover,
                                 ht_manager: &ht_manager,
                             },
                             &e,
@@ -4677,7 +4654,6 @@ async fn run<'sys>(
                                 composite_tree: &mut composite_tree,
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
-                                drag_preview_popover: &drag_preview_popover,
                                 ht_manager: &ht_manager,
                             },
                             &e,
@@ -5298,8 +5274,7 @@ pub type DragPreviewPopoverHandle = platform::mac::DragPreviewPopoverHandle;
 
 #[cfg(windows)]
 pub use platform::windows::{
-    DragPreviewPopoverHandle, PointerID, WindowHandle,
-    flyout_surface::Handle as FlyoutSurfaceHandle,
+    PointerID, WindowHandle, flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
@@ -5391,14 +5366,12 @@ impl SyncEventBus {
 }
 
 // platform-dependent constants
-impl DragPreviewPopoverHandle {
-    pub const BG_COLOR: Color32 = Color32 {
-        r: 16,
-        g: 176,
-        b: 255,
-        a: 16,
-    };
-}
+pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
+    r: 16,
+    g: 176,
+    b: 255,
+    a: 16,
+};
 
 pub struct FileSystem {
     resources_base_path: PathBuf,
