@@ -51,24 +51,24 @@ use windows::{
                 VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP,
             },
             WindowsAndMessaging::{
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
-                GetCursorPos, GetSystemMetrics, GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM,
-                HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON,
-                HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM,
-                IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW,
-                NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, SC_CLOSE, SC_MAXIMIZE,
-                SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
-                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
-                SetCursorPos, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-                WA_INACTIVE, WHEEL_DELTA, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
-                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
-                WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
-                WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
-                WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
-                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
-                WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP, WindowFromPoint,
+                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GCW_ATOM,
+                GetClassLongPtrW, GetClassNameW, GetClientRect, GetCursorPos, GetSystemMetrics,
+                GetWindowLongPtrW, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
+                HTCAPTION, HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP,
+                HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE,
+                IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
+                PostQuitMessage, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED,
+                SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE,
+                SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                SWP_NOZORDER, SetCursor, SetCursorPos, SetForegroundWindow, SetWindowLongPtrW,
+                SetWindowPos, ShowWindow, WA_INACTIVE, WHEEL_DELTA, WINDOW_LONG_PTR_INDEX,
+                WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN,
+                WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+                WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP,
+                WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN,
+                WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
+                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP, WindowFromPoint,
             },
         },
     },
@@ -167,6 +167,15 @@ impl WindowHandle {
         }
 
         data
+    }
+
+    #[inline(always)]
+    fn event_handler_mut<'a>(&'a mut self) -> &'a mut WindowEventHandler {
+        unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut(
+                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
+            )
+        }
     }
 
     #[inline(always)]
@@ -427,6 +436,7 @@ impl NativeWindow {
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        app_context: *mut ApplicationContext,
     ) -> Self {
         let w = unsafe {
             CreateWindowExW(
@@ -457,6 +467,7 @@ impl NativeWindow {
                 root_focus_group: root_kf_group,
                 destroying: false,
             },
+            app_context,
             event_dispatcher,
             edit_context: None,
             modifier_key_state: ModifierKey::empty(),
@@ -526,6 +537,7 @@ pub unsafe fn unlocate_non_client_hittest_managers() {
 #[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
 struct WindowEventHandler {
     state: WindowState,
+    app_context: *mut ApplicationContext,
     event_dispatcher: LogicFiberEventDispatcher,
     edit_context: Option<CoreTextEditContext>,
     modifier_key_state: ModifierKey,
@@ -632,6 +644,41 @@ impl WindowEventHandler {
 
     #[tracing::instrument(skip(self))]
     fn mouse_move(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
+        if let Some(_) = unsafe { &*self.app_context }.pane_drag_state {
+            // in pane dragging
+            let mut cursor_pos = core::mem::MaybeUninit::uninit();
+            unsafe {
+                GetCursorPos(cursor_pos.as_mut_ptr()).expect("GetCursorPos");
+            }
+            let mut p = [unsafe { cursor_pos.assume_init() }];
+
+            let w = unsafe { WindowFromPoint(p[0]) };
+            let pointing_window = if w.is_invalid() {
+                None
+            } else {
+                let wc_atom = unsafe { GetClassLongPtrW(w, GCW_ATOM) as u16 };
+                if wc_atom == unsafe { &*self.app_context }.wc_set.main {
+                    Some(WindowHandle(w))
+                } else {
+                    None
+                }
+            };
+
+            let dest_window = pointing_window.unwrap_or(WindowHandle(hwnd));
+            unsafe {
+                MapWindowPoints(None, Some(dest_window.0), &mut p);
+            }
+            let client_pos_in_dest =
+                Point::from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
+
+            self.event_dispatcher.dispatch(Event::DockMovePreview {
+                dest_window,
+                client_pos_in_dest,
+            });
+
+            return;
+        }
+
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
@@ -656,6 +703,10 @@ impl WindowEventHandler {
 
     #[tracing::instrument(skip(self))]
     fn left_button_up(&mut self, hwnd: HWND) {
+        if self.try_perform_confirm_drag(hwnd) {
+            return;
+        }
+
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
@@ -680,11 +731,54 @@ impl WindowEventHandler {
 
     #[tracing::instrument(skip(self))]
     fn right_button_up(&mut self, hwnd: HWND) {
+        if self.try_perform_confirm_drag(hwnd) {
+            return;
+        }
+
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Secondary,
         });
+    }
+
+    fn try_perform_confirm_drag(&mut self, hwnd: HWND) -> bool {
+        let Some(_) = unsafe { &mut *self.app_context }.pane_drag_state.take() else {
+            return false;
+        };
+
+        // was pane dragging
+        let mut cursor_pos = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetCursorPos(cursor_pos.as_mut_ptr()).expect("GetCursorPos");
+        }
+        let mut p = [unsafe { cursor_pos.assume_init() }];
+
+        let w = unsafe { WindowFromPoint(p[0]) };
+        let pointing_window = if w.is_invalid() {
+            None
+        } else {
+            let wc_atom = unsafe { GetClassLongPtrW(w, GCW_ATOM) as u16 };
+            if wc_atom == unsafe { &*self.app_context }.wc_set.main {
+                Some(WindowHandle(w))
+            } else {
+                None
+            }
+        };
+
+        let dest_window = pointing_window.unwrap_or(WindowHandle(hwnd));
+        unsafe {
+            MapWindowPoints(None, Some(dest_window.0), &mut p);
+        }
+        let client_pos_in_dest = Point::from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
+
+        dest_window.set_foreground();
+        self.event_dispatcher.dispatch(Event::DockConfirm {
+            destination_window: dest_window,
+            client_pos_in_dest,
+        });
+
+        true
     }
 
     fn non_client_hittest(&self, hwnd: HWND, screen_pos: Point<PixelsUnit>) -> Option<u32> {
@@ -1447,6 +1541,10 @@ impl DragPreviewPopover {
     }
 }
 
+struct PaneDragState {
+    initiator: HWND,
+}
+
 pub struct ApplicationContext {
     hinstance: HINSTANCE,
     wc_set: WindowClassSet,
@@ -1456,6 +1554,7 @@ pub struct ApplicationContext {
     native_compositor_interop: ICompositorInterop,
     ctm: CoreTextServicesManager,
     drag_preview_popover: DragPreviewPopover,
+    pane_drag_state: Option<PaneDragState>,
 }
 impl ApplicationContext {
     pub fn new() -> Self {
@@ -1487,6 +1586,7 @@ impl ApplicationContext {
             native_compositor_interop: native_compositor.cast().expect("native_compositor.cast"),
             native_compositor,
             ctm,
+            pane_drag_state: None,
         }
     }
 }
@@ -1554,7 +1654,7 @@ pub struct SystemLink<'sys> {
     pub vk_device: *const VulkanDevice<'sys>,
     pub rt_sender: RenderMessageSender,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
-    pub app_context_ptr: *const ApplicationContext,
+    pub app_context_ptr: *mut ApplicationContext,
     pub pointer_hovering_timer: *const WaitableTimer,
     pub flyout_surface_context: flyout_surface::SharedState,
     pub known_window_handles: HashSet<WindowHandle>,
@@ -1603,6 +1703,7 @@ impl SystemLink<'_> {
             ht,
             unsafe { &*self.event_dispatcher }.clone(),
             keyboard_focus_registry,
+            self.app_context_ptr,
         );
         let h = w.make_handle();
         ht_manager.get_data_mut(ht).root_of_window = Some(h);
@@ -1666,6 +1767,7 @@ impl SystemLink<'_> {
             }),
             unsafe { &*self.event_dispatcher }.clone(),
             keyboard_focus_registry,
+            self.app_context_ptr,
         );
         let h = w.make_handle();
         self.known_window_handles.insert(h);
@@ -1752,40 +1854,16 @@ impl SystemLink<'_> {
             .expect("pointer_hovering_timer.cancel");
     }
 
-    pub fn query_window_under_pointer(&self, pointer: &PointerID) -> Option<WindowHandle> {
-        let mut cursor_pos = core::mem::MaybeUninit::uninit();
-        unsafe {
-            GetCursorPos(cursor_pos.as_mut_ptr()).expect("GetCursorPos");
-        }
-
-        match unsafe { WindowFromPoint(cursor_pos.assume_init()) } {
-            h if !self.known_window_handles.contains(&WindowHandle(h)) => None,
-            h => Some(WindowHandle(h)),
-        }
-    }
-
-    pub fn translate_client_pos_to_another_window(
-        client_pos: Point<LogicalUnit>,
-        source_window: WindowHandle,
-        dest_window: WindowHandle,
-    ) -> Point<LogicalUnit> {
-        let mut translated_pos = [client_pos
-            .to_pixels_round(source_window.ui_scale_factor())
-            .to_win32()];
-        unsafe {
-            MapWindowPoints(
-                Some(source_window.0),
-                Some(dest_window.0),
-                &mut translated_pos,
-            )
-        };
-        Point::from_win32(translated_pos[0]).to_logical(dest_window.ui_scale_factor())
-    }
-
     pub fn begin_pane_drag(&self, initiator_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
         unsafe { &*self.app_context_ptr }
             .drag_preview_popover
             .show(initiator_surface.0, rect);
+        unsafe {
+            SetCapture(initiator_surface.0);
+        }
+        unsafe { &mut *self.app_context_ptr }.pane_drag_state = Some(PaneDragState {
+            initiator: initiator_surface.0,
+        });
     }
 
     pub fn update_pane_drag(&self, on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
@@ -1795,6 +1873,11 @@ impl SystemLink<'_> {
     }
 
     pub fn end_pane_drag(&self) {
+        unsafe {
+            ReleaseCapture().expect("win32.release_capture");
+        }
+
+        unsafe { &mut *self.app_context_ptr }.pane_drag_state = None;
         unsafe { &*self.app_context_ptr }
             .drag_preview_popover
             .hide();

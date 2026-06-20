@@ -105,7 +105,7 @@ pub fn launch() {
     let fs = FileSystem::new();
 
     #[cfg(windows)]
-    let app_context = platform::windows::ApplicationContext::new();
+    let mut app_context = platform::windows::ApplicationContext::new();
     #[cfg(windows)]
     let dx_context = platform::windows::DxContext::new();
 
@@ -150,7 +150,7 @@ pub fn launch() {
         rt_receiver,
         root_font_set,
         #[cfg(windows)]
-        &app_context,
+        &mut app_context,
         #[cfg(windows)]
         &dx_context,
         #[cfg(feature = "wayland")]
@@ -174,7 +174,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     rt_sender: RenderMessageSender,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     root_font_set: FontSet,
-    #[cfg(windows)] app_context: &'sys platform::windows::ApplicationContext,
+    #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
     #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
     #[cfg(feature = "wayland")] static_pixbufs: &'sys platform::unix::wayland::StaticPixbufs,
@@ -901,21 +901,19 @@ pub enum Event {
     },
     DockBeginPreview {
         initiator: WindowHandle,
+        source_dock: uikit::dock::DockID,
+        tab_index: usize,
         pane_rect: Rect<LogicalUnit>,
         tab_size: Size<LogicalUnit>,
         client_pos: Point<LogicalUnit>,
     },
     DockMovePreview {
-        window: WindowHandle,
-        pointing_window: Option<WindowHandle>,
-        client_pos: Point<LogicalUnit>,
+        dest_window: WindowHandle,
+        client_pos_in_dest: Point<LogicalUnit>,
     },
     DockConfirm {
-        window: WindowHandle,
-        pointing_window: Option<WindowHandle>,
-        source_dock: uikit::dock::DockID,
-        tab_index: usize,
-        client_pos: Point<LogicalUnit>,
+        destination_window: WindowHandle,
+        client_pos_in_dest: Point<LogicalUnit>,
     },
     #[cfg(not(target_os = "macos"))]
     GlobalMouseClicked,
@@ -4376,70 +4374,53 @@ async fn run<'sys>(
             }
             Event::DockBeginPreview {
                 initiator,
+                source_dock,
+                tab_index,
                 pane_rect,
                 tab_size,
                 client_pos,
             } => {
-                let (state, popover_rect) =
-                    uikit::dock::begin_preview(pane_rect, tab_size, &client_pos);
+                let (state, popover_rect) = uikit::dock::begin_preview(
+                    pane_rect,
+                    tab_size,
+                    &client_pos,
+                    initiator,
+                    source_dock,
+                    tab_index,
+                );
 
                 system_link.begin_pane_drag(initiator, &popover_rect);
                 docking_preview_state = Some(state);
             }
             Event::DockMovePreview {
-                window,
-                pointing_window,
-                client_pos,
+                dest_window,
+                client_pos_in_dest,
             } => {
                 if let Some(ref mut state) = docking_preview_state {
-                    let (target_window, final_client_pos) = if let Some(w) = pointing_window {
-                        (
-                            w,
-                            SystemLink::translate_client_pos_to_another_window(
-                                client_pos, window, w,
-                            ),
-                        )
-                    } else {
-                        (window, client_pos)
-                    };
-
-                    target_window.set_foreground();
                     let popover_rect = uikit::dock::move_preview(
-                        &unsafe { target_window.extra_data_ref::<PerWindowData>() }.docking_manager,
+                        &unsafe { dest_window.extra_data_ref::<PerWindowData>() }.docking_manager,
                         &dock_store,
-                        final_client_pos,
+                        client_pos_in_dest,
                         state,
                     );
-                    system_link.update_pane_drag(target_window, &popover_rect);
+                    system_link.update_pane_drag(dest_window, &popover_rect);
                 }
             }
             Event::DockConfirm {
-                mut window,
-                pointing_window,
-                source_dock,
-                tab_index,
-                client_pos,
+                mut destination_window,
+                client_pos_in_dest,
             } => {
                 if let Some(state) = docking_preview_state.take() {
-                    let (mut target_window, final_client_pos) = if let Some(w) = pointing_window {
-                        (
-                            w,
-                            SystemLink::translate_client_pos_to_another_window(
-                                client_pos, window, w,
-                            ),
-                        )
-                    } else {
-                        (window, client_pos)
-                    };
-
-                    target_window.set_foreground();
-                    let mount_target = target_window;
-                    let dm = &mut unsafe { target_window.extra_data_mut::<PerWindowData>() }
+                    let mount_target = destination_window;
+                    let dm = &mut unsafe { destination_window.extra_data_mut::<PerWindowData>() }
                         .docking_manager;
 
+                    let mut source_window = state.source_window;
+                    let source_dock = state.source_dock;
+                    let tab_index = state.tab_index;
                     system_link.end_pane_drag();
                     let (op, suggested_rect) =
-                        uikit::dock::end_preview(dm, &mut dock_store, final_client_pos, state);
+                        uikit::dock::end_preview(dm, &mut dock_store, client_pos_in_dest, state);
                     let (diverged_content, undock_result) = dm.redock(
                         source_dock,
                         &mut dock_store,
@@ -4467,10 +4448,10 @@ async fn run<'sys>(
                         uikit::dock::UndockResult::Success => {}
                         uikit::dock::UndockResult::ToBeEmpty => {
                             unsafe {
-                                drop(window.take_extra_data::<PerWindowData>());
+                                drop(source_window.take_extra_data::<PerWindowData>());
                             }
                             system_link.close_window(
-                                window,
+                                source_window,
                                 &mut composite_tree,
                                 &mut ht_manager,
                                 &mut keyboard_focus_registry,
@@ -4490,7 +4471,7 @@ async fn run<'sys>(
                                     suggested_rect.height + ui::window_header::View::THICKNESS,
                                 ),
                             ),
-                            target_window,
+                            destination_window,
                             &mut composite_tree,
                             &mut ht_manager,
                             &mut keyboard_focus_registry,

@@ -859,6 +859,9 @@ pub struct DockingPreviewState {
     tab_size: Size<LogicalUnit>,
     original_rect: Rect<LogicalUnit>,
     offset: Point<LogicalUnit>,
+    pub source_window: WindowHandle,
+    pub source_dock: DockID,
+    pub tab_index: usize,
 }
 
 /// RedockingのPreviewを開始する
@@ -866,6 +869,9 @@ pub fn begin_preview(
     pane_rect: Rect<LogicalUnit>,
     tab_size: Size<LogicalUnit>,
     client_pos: &Point<LogicalUnit>,
+    source_window: WindowHandle,
+    source_dock: DockID,
+    tab_index: usize,
 ) -> (DockingPreviewState, Rect<LogicalUnit>) {
     let popover_rect = Rect::from_lt_size(
         Point::new_logical(pane_rect.left, pane_rect.top),
@@ -877,6 +883,9 @@ pub fn begin_preview(
             offset: Point::new_logical(pane_rect.left - client_pos.x, pane_rect.top - client_pos.y),
             tab_size,
             original_rect: pane_rect,
+            source_window,
+            source_dock,
+            tab_index,
         },
         popover_rect,
     )
@@ -2012,60 +2021,12 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                 pane_rect: Rect::from_lt_size(Point::new_logical(x, y), Size::new_logical(w, h)),
                 tab_size: self.size.clone(),
                 client_pos: args.client_pos,
+                source_dock: gc.dock.get(),
+                tab_index: gc.tab_index(self).expect("not in any group"),
             });
         }
 
-        EventContinueControl::CAPTURE_ELEMENT | EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_drag_move(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context.system_link.dispatch_event(Event::DockMovePreview {
-            window: context
-                .ht_manager
-                .query_root_window(sender)
-                .expect("not mounted"),
-            pointing_window: context
-                .system_link
-                .query_window_under_pointer(&args.pointer_id),
-            client_pos: args.client_pos,
-        });
-
         EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_drag_end(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        if args.button != PointerButton::Primary {
-            return EventContinueControl::empty();
-        }
-
-        let Some(gc) = self.group_controller.upgrade() else {
-            return EventContinueControl::empty();
-        };
-
-        context.system_link.dispatch_event(Event::DockConfirm {
-            window: context
-                .ht_manager
-                .query_root_window(sender)
-                .expect("not mounted"),
-            pointing_window: context
-                .system_link
-                .query_window_under_pointer(&args.pointer_id),
-            client_pos: args.client_pos,
-            source_dock: gc.dock.get(),
-            tab_index: gc.tab_index(self).expect("not in any group"),
-        });
-
-        EventContinueControl::RELEASE_CAPTURE_ELEMENT | EventContinueControl::STOP_PROPAGATION
     }
 }
 impl PaneGroupTabEventHandler {
