@@ -611,6 +611,7 @@ impl WindowEventHandler {
         tracing::trace!("dpi changed");
 
         self.state.content_scale = new_scale;
+        *self.state.latest_ui_scale_changes.lock().expect("poisoned") = Some(new_scale);
         self.event_dispatcher.dispatch(Event::WindowRescaleUI {
             window: WindowHandle(hwnd),
             new_scale,
