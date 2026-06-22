@@ -165,8 +165,18 @@ impl Handle {
     }
 
     pub fn on_click_sys_close_button(&self) {
-        // TODO: 自身がMainかSubかでやることが変わる
-        tracing::warn!("TODO: on_click_sys_close_button");
+        match self.event_listener().window_type {
+            WindowType::Main {
+                ref termination_event,
+            } => {
+                termination_event.inc(1).expect("termination_event.inc");
+            }
+            WindowType::Sub => {
+                self.event_listener()
+                    .event_dispatcher
+                    .dispatch(Event::SubWindowClose { window: *self });
+            }
+        }
     }
 
     pub fn on_click_sys_maximize_button(&self) {
@@ -190,7 +200,7 @@ impl Handle {
             .expect("xdg_toplevel.set_maximized");
     }
 
-    pub fn begin_drag(&self, event_id: PointerEventID) {
+    pub fn begin_drag(&self, event_id: &PointerEventID) {
         self.state()
             .xdg_toplevel
             .r#move(unsafe { &*event_id.seat_ptr }, event_id.serial)
@@ -218,8 +228,24 @@ impl Handle {
         }
     }
 
-    pub fn set_foreground(&self) {
-        // TODO: set_foreground
+    pub fn toggle_maximized(&self) {
+        if self
+            .state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .maximized
+        {
+            self.state()
+                .xdg_toplevel
+                .unset_maximized()
+                .expect("xdg_toplevel.unset_maximized");
+        } else {
+            self.state()
+                .xdg_toplevel
+                .set_maximized()
+                .expect("xdg_toplevel.set_maximized");
+        }
     }
 }
 impl crate::input::ShellPointerActions for Handle {

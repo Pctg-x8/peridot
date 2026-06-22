@@ -3652,15 +3652,6 @@ async fn run<'sys>(
                 #[cfg(target_os = "macos")]
                 drag_preview_popover.bind_position_base_window_link(window);
 
-                // waylandの場合はここでTitleBarロールの判定をする
-                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
-                #[cfg(feature = "wayland")]
-                if pointer_input_manager.role_focus(&ht_manager)
-                    == Some(input::hittest::Role::TitleBar)
-                {
-                    window.begin_drag(event_id);
-                }
-
                 pointer_input_manager.handle_mouse_down(
                     pointer_id,
                     &ht_manager,
@@ -3673,6 +3664,8 @@ async fn run<'sys>(
                     button,
                     window.ht_root(),
                     &mut keyboard_focus_registry,
+                    #[cfg(feature = "wayland")]
+                    event_id,
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -4177,16 +4170,6 @@ async fn run<'sys>(
                 #[cfg(feature = "wayland")]
                 event_id,
             } => {
-                // waylandの場合はここでTitleBarロールの判定をする
-                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
-                // TODO: Flyoutの要素としてTitleBarが必要になったときに対応
-                /*#[cfg(feature = "wayland")]
-                if pointer_input_manager.role_focus(&ht_manager)
-                    == Some(input::hittest::Role::TitleBar)
-                {
-                    target.begin_drag(event_id);
-                }*/
-
                 pointer_input_manager.handle_mouse_down(
                     pointer_id,
                     &ht_manager,
@@ -4199,6 +4182,8 @@ async fn run<'sys>(
                     button,
                     target.ht_root(),
                     &mut keyboard_focus_registry,
+                    #[cfg(feature = "wayland")]
+                    event_id,
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);

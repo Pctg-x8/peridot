@@ -154,6 +154,8 @@ pub struct PointerInputManager {
     last_client_pointer_pos: HashMap<PointerID, (NativeDesktopSurface, Point<PointerInputUnit>)>,
     pointer_focus: PointerFocusState,
     down_gesture: PointerDownGestureState,
+    #[cfg(feature = "wayland")]
+    last_pointer_down_event_id: Option<crate::platform::unix::wayland::PointerEventID>,
     last_click: Option<LastClickState>,
 }
 impl PointerInputManager {
@@ -162,6 +164,8 @@ impl PointerInputManager {
             last_client_pointer_pos: HashMap::new(),
             pointer_focus: PointerFocusState::None,
             down_gesture: PointerDownGestureState::None,
+            #[cfg(feature = "wayland")]
+            last_pointer_down_event_id: None,
             last_click: None,
         }
     }
@@ -319,7 +323,7 @@ impl PointerInputManager {
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         action_args: &PointerButtonActionArgs,
-        shell: &(impl ShellPointerActions + ?Sized),
+        surface: &NativeDesktopSurface,
         pointer: PointerID,
     ) {
         self.down_gesture = PointerDownGestureState::Drag;
@@ -327,6 +331,20 @@ impl PointerInputManager {
         match self.pointer_focus {
             PointerFocusState::None => unreachable!("drag started without focus?"),
             PointerFocusState::Capturing(e) | PointerFocusState::Grabbing { target: e, .. } => {
+                // waylandの場合はここでTitleBarロールの判定をする
+                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
+                // TODO: Flyout系へは必要になったら実装
+                #[cfg(feature = "wayland")]
+                if ht.get_data(e).role == Some(Role::TitleBar)
+                    && let NativeDesktopSurface::Window(window) = surface
+                {
+                    window.begin_drag(
+                        self.last_pointer_down_event_id
+                            .as_ref()
+                            .expect("no pointer down before begin_drag"),
+                    );
+                }
+
                 let _ = ht
                     .get_data(e)
                     .action_handler()
@@ -336,6 +354,21 @@ impl PointerInputManager {
                 // TODO: begin_dragでなんらかのフラグを処理する必要があるか？
             }
             PointerFocusState::Entering(e) => {
+                // waylandの場合はここでTitleBarロールの判定をする
+                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
+                // TODO: Flyout系へは必要になったら実装
+                #[cfg(feature = "wayland")]
+                if ht.iter_ascending_from(e).find_map(|x| ht.get_data(x).role)
+                    == Some(Role::TitleBar)
+                    && let NativeDesktopSurface::Window(window) = surface
+                {
+                    window.begin_drag(
+                        self.last_pointer_down_event_id
+                            .as_ref()
+                            .expect("no pointer down before begin_drag"),
+                    );
+                }
+
                 for ht_ref in ht.iter_ascending_from(e) {
                     let Some(a) = ht.get_data(ht_ref).action_handler() else {
                         continue;
@@ -344,7 +377,7 @@ impl PointerInputManager {
                     let flags = a.on_drag_start(ht_ref, action_context, action_args);
                     if flags.contains(EventContinueControl::CAPTURE_ELEMENT) {
                         self.pointer_focus = PointerFocusState::Capturing(ht_ref);
-                        shell.capture_pointer();
+                        surface.capture_pointer();
                     }
                     if flags.contains(EventContinueControl::GRAB_POINTER) {
                         self.pointer_focus = PointerFocusState::Grabbing {
@@ -768,6 +801,7 @@ impl PointerInputManager {
         button: PointerButton,
         ht_root: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
+        #[cfg(feature = "wayland")] event_id: crate::platform::unix::wayland::PointerEventID,
     ) {
         let Some(&(mut entering_surface, client_pos)) =
             self.last_client_pointer_pos.get(&pointer_id)
@@ -776,6 +810,11 @@ impl PointerInputManager {
             return;
         };
         let ws = entering_surface.size();
+
+        #[cfg(feature = "wayland")]
+        {
+            self.last_pointer_down_event_id = Some(event_id);
+        }
 
         self.down_gesture = PointerDownGestureState::Click {
             base_client_pos: client_pos,
@@ -868,6 +907,7 @@ impl PointerInputManager {
             return;
         };
         let ws = entering_surface.size();
+        self.last_pointer_down_event_id = None;
 
         if self.down_gesture.is_dragging() {
             // ドラッグ状態だった
@@ -1120,6 +1160,16 @@ impl PointerInputManager {
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref)
             | PointerFocusState::Grabbing { target: ht_ref, .. } => {
+                // waylandの場合はここでTitleBarロールの判定をする
+                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
+                // TODO: Flyout系へは必要になったら実装
+                #[cfg(feature = "wayland")]
+                if ht.get_data(ht_ref).role == Some(Role::TitleBar)
+                    && let NativeDesktopSurface::Window(window) = surface
+                {
+                    window.toggle_maximized();
+                }
+
                 let flags = ht
                     .get_data(ht_ref)
                     .action_handler()
@@ -1143,6 +1193,19 @@ impl PointerInputManager {
                 }
             }
             PointerFocusState::Entering(ht_ref) => {
+                // waylandの場合はここでTitleBarロールの判定をする
+                // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
+                // TODO: Flyout系へは必要になったら実装
+                #[cfg(feature = "wayland")]
+                if ht
+                    .iter_ascending_from(ht_ref)
+                    .find_map(|x| ht.get_data(x).role)
+                    == Some(Role::TitleBar)
+                    && let NativeDesktopSurface::Window(window) = surface
+                {
+                    window.toggle_maximized();
+                }
+
                 let mut needs_recompute_pointer_enter = false;
                 let mut new_captured = None;
 
