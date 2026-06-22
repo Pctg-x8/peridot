@@ -71,8 +71,6 @@ impl SurfaceScaling {
     }
 }
 
-pub const APPMENU_OBJECT_PATH: &core::ffi::CStr = c"/AppMenu";
-
 struct DragPreviewPopover {
     wl_interfaces: *const GlobalInterfaces,
     buf: DragPreviewPopoverBuffer,

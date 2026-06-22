@@ -512,9 +512,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     let _enter = span.enter();
                     match m.r#type() {
                         dbus::MessageType::MethodCall
-                            if m.path().is_some_and(|x| {
-                                x == platform::unix::wayland::APPMENU_OBJECT_PATH
-                            }) && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
+                            if m.path()
+                                .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                                 && m.member() == Some(c"GetLayout") =>
                         {
                             let args =
@@ -540,7 +540,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                                                 enabled: Some(true),
                                                 visible: Some(true),
                                                 icon_name: Some(c"window-close"),
-                                                shortcut: Some(&[&[c"Alt", c"F4"]]),
+                                                shortcut: Some(&[
+                                                    &[c"Alt", c"F4"],
+                                                    &[c"Meta", c"Q"],
+                                                ]),
                                                 ..Default::default()
                                             },
                                             children: &[],
@@ -582,9 +585,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                             }
                         }
                         dbus::MessageType::MethodCall
-                            if m.path().is_some_and(|x| {
-                                x == platform::unix::wayland::APPMENU_OBJECT_PATH
-                            }) && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
+                            if m.path()
+                                .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                                 && m.member() == Some(c"Event") =>
                         {
                             let mut args_iter = m.iter();
@@ -611,9 +614,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                             }
                         }
                         dbus::MessageType::MethodCall
-                            if m.path().is_some_and(|x| {
-                                x == platform::unix::wayland::APPMENU_OBJECT_PATH
-                            }) && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
+                            if m.path()
+                                .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                                 && m.member() == Some(c"AboutToShow") =>
                         {
                             let mut args_iter = m.iter();

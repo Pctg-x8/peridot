@@ -13,9 +13,12 @@ use crate::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     },
-    platform::unix::wayland::{
-        APPMENU_OBJECT_PATH, DisplayServerContext, GlobalInterfaces, PointerEventID,
-        SurfaceScaling, SurfaceState, SurfaceStateTag,
+    platform::unix::{
+        APPMENU_OBJECT_PATH,
+        wayland::{
+            DisplayServerContext, GlobalInterfaces, PointerEventID, SurfaceScaling, SurfaceState,
+            SurfaceStateTag,
+        },
     },
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
