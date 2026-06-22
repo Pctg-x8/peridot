@@ -71,28 +71,19 @@ impl SurfaceScaling {
     }
 }
 
+struct DragPreviewDndIcon {
+    shown: bool,
+    offset: Point<LogicalUnit>,
+    blur: Option<wl::Owned<wl::OrgKdeKwinBlur>>,
+    viewport: wl::Owned<wl::WpViewport>,
+    surface: wl::Owned<wl::Surface>,
+}
+
 struct DragPreviewPopover {
     wl_interfaces: *const GlobalInterfaces,
     buf: DragPreviewPopoverBuffer,
-    dnd_icon: core::cell::UnsafeCell<
-        Option<(
-            bool,
-            Point<LogicalUnit>,
-            Option<wl::Owned<wl::OrgKdeKwinBlur>>,
-            wl::Owned<wl::WpViewport>,
-            wl::Owned<wl::Surface>,
-        )>,
-    >,
-    popup: core::cell::UnsafeCell<
-        Option<(
-            Option<wl::Owned<wl::OrgKdeKwinBlur>>,
-            wl::Owned<wl::XdgPopup>,
-            wl::Owned<wl::XdgSurface>,
-            wl::Owned<wl::WpViewport>,
-            wl::Owned<wl::Surface>,
-            Box<PopupState>,
-        )>,
-    >,
+    dnd_icon: Option<DragPreviewDndIcon>,
+    popup: Option<DragPreviewPopoverCore>,
     popup_rect: Rect<LogicalUnit>,
 }
 impl DragPreviewPopover {
@@ -100,8 +91,8 @@ impl DragPreviewPopover {
         Self {
             wl_interfaces: &display_server.global_interfaces,
             buf: static_pixbufs.create_drag_preview_popover_bufs(&display_server.global_interfaces),
-            dnd_icon: core::cell::UnsafeCell::new(None),
-            popup: core::cell::UnsafeCell::new(None),
+            dnd_icon: None,
+            popup: None,
             popup_rect: Rect::from_lt_size(
                 Point::new_logical(0.0, 0.0),
                 Size::new_logical(100.0, 100.0),
@@ -110,18 +101,14 @@ impl DragPreviewPopover {
     }
 
     fn setup_dnd_icon_surface(&mut self, offset: Point<LogicalUnit>, size: &Size<LogicalUnit>) {
-        let surface = unsafe {
-            (*self.wl_interfaces)
-                .compositor
-                .create_surface()
-                .expect("surface.create")
-        };
-        let viewport = unsafe {
-            (*self.wl_interfaces)
-                .viewporter
-                .get_viewport(&surface)
-                .expect("surface.get_viewport")
-        };
+        let surface = unsafe { &*self.wl_interfaces }
+            .compositor
+            .create_surface()
+            .expect("surface.create");
+        let viewport = unsafe { &*self.wl_interfaces }
+            .viewporter
+            .get_viewport(&surface)
+            .expect("surface.get_viewport");
 
         viewport
             .set_source(
@@ -144,85 +131,83 @@ impl DragPreviewPopover {
             None
         };
 
-        *self.dnd_icon.get_mut() = Some((false, offset, blur, viewport, surface));
+        self.dnd_icon = Some(DragPreviewDndIcon {
+            shown: false,
+            offset,
+            blur,
+            viewport,
+            surface,
+        });
     }
 
     fn post_commit_dnd_icon(&self) {
-        let Some((_, _, _, _, surface)) = unsafe { &*self.dnd_icon.get() }.as_ref() else {
+        let Some(ref x) = self.dnd_icon else {
             return;
         };
 
-        surface.commit().expect("surface.commit");
+        x.surface.commit().expect("surface.commit");
     }
 
     fn show_dnd_icon(&mut self) {
-        let Some((shown, offset, blur, _, surface)) = self.dnd_icon.get_mut().as_mut() else {
+        let Some(ref mut x) = self.dnd_icon else {
             return;
         };
 
-        if *shown {
+        if x.shown {
             return;
         }
 
-        surface
+        x.surface
             .attach(Some(&self.buf.buffer()), 0, 0)
             .expect("surface.attach");
-        surface
-            .offset(offset.x.round() as _, offset.y.round() as _)
+        x.surface
+            .offset(x.offset.x.round() as _, x.offset.y.round() as _)
             .expect("surface.offset");
-        surface.damage(0, 0, -1, -1).expect("surface.damage");
-        surface.commit().expect("surface.commit");
-        if let Some(b) = blur {
+        x.surface.damage(0, 0, -1, -1).expect("surface.damage");
+        x.surface.commit().expect("surface.commit");
+        if let Some(ref b) = x.blur {
             b.commit().expect("blur.commit");
         }
-        *shown = true;
+        x.shown = true;
     }
 
     fn hide_dnd_icon(&mut self) {
-        let Some((shown, offset, _, _, surface)) = self.dnd_icon.get_mut().as_mut() else {
+        let Some(ref mut x) = self.dnd_icon else {
             return;
         };
 
-        if !*shown {
+        if !x.shown {
             return;
         }
 
         // buffer detach前にleft-topを0, 0にもどす そうしないとだんだんズレていく
-        surface
-            .offset(-offset.x.round() as _, -offset.y.round() as _)
+        x.surface
+            .offset(-x.offset.x.round() as _, -x.offset.y.round() as _)
             .expect("surface.offset");
-        surface.attach(None, 0, 0).expect("surface.attach");
-        surface.damage(0, 0, -1, -1).expect("surface.damage");
-        surface.commit().expect("surface.commit");
-        *shown = false;
+        x.surface.attach(None, 0, 0).expect("surface.attach");
+        x.surface.damage(0, 0, -1, -1).expect("surface.damage");
+        x.surface.commit().expect("surface.commit");
+        x.shown = false;
     }
 
-    fn show(&self, on_surface: &wl::XdgSurface) {
-        let wl_popup_surface = unsafe {
-            (*self.wl_interfaces)
-                .compositor
-                .create_surface()
-                .expect("wl_popup_surface.create")
-        };
-        let mut xdg_popup_surface = unsafe {
-            (*self.wl_interfaces)
-                .xdg_wm_base
-                .get_xdg_surface(&wl_popup_surface)
-                .expect("xdg_popup_surface.create")
-        };
-        let viewport = unsafe {
-            (*self.wl_interfaces)
-                .viewporter
-                .get_viewport(&wl_popup_surface)
-                .expect("popup_viewport.create")
-        };
+    fn show(&mut self, on_surface: &wl::XdgSurface) {
+        let wl_popup_surface = unsafe { &*self.wl_interfaces }
+            .compositor
+            .create_surface()
+            .expect("wl_popup_surface.create");
+        let mut xdg_popup_surface = unsafe { &*self.wl_interfaces }
+            .xdg_wm_base
+            .get_xdg_surface(&wl_popup_surface)
+            .expect("xdg_popup_surface.create");
+        let viewport = unsafe { &*self.wl_interfaces }
+            .viewporter
+            .get_viewport(&wl_popup_surface)
+            .expect("popup_viewport.create");
 
-        let positioner = unsafe {
-            (*self.wl_interfaces)
-                .xdg_wm_base
-                .create_positioner()
-                .expect("pos.create")
-        };
+        let positioner = unsafe { &*self.wl_interfaces }
+            .xdg_wm_base
+            .create_positioner()
+            .expect("pos.create");
         positioner
             .set_size(self.popup_rect.width as _, self.popup_rect.height as _)
             .expect("pos.set_size");
@@ -263,12 +248,10 @@ impl DragPreviewPopover {
             .expect("pop.set_listener");
 
         // ignore all inputs for popup surface
-        let input_region = unsafe {
-            (*self.wl_interfaces)
-                .compositor
-                .create_region()
-                .expect("input_region.create")
-        };
+        let input_region = unsafe { &*self.wl_interfaces }
+            .compositor
+            .create_region()
+            .expect("input_region.create");
         wl_popup_surface
             .set_input_region(Some(&input_region))
             .expect("wl_popup_surface.set_input_region");
@@ -285,7 +268,7 @@ impl DragPreviewPopover {
             .set_destination(self.popup_rect.width as _, self.popup_rect.height as _)
             .expect("viewport.set_destination");
 
-        let blur = if let Some(bm) = unsafe { (*self.wl_interfaces).kde_blur_manager.as_ref() } {
+        let blur = if let Some(ref bm) = unsafe { &*self.wl_interfaces }.kde_blur_manager {
             let blur = bm.create(&wl_popup_surface).expect("blur.create");
             blur.commit().expect("blur.commit");
 
@@ -297,30 +280,27 @@ impl DragPreviewPopover {
         wl_popup_surface.commit().expect("wl_popup_surface.commit");
         tracing::debug!("popup commit");
 
-        unsafe {
-            (*self.popup.get()) = Some((
-                blur,
-                pp,
-                xdg_popup_surface,
-                viewport,
-                wl_popup_surface,
-                popup_state,
-            ));
-        }
+        self.popup = Some(DragPreviewPopoverCore {
+            blur,
+            xdg_popup: pp,
+            xdg_surface: xdg_popup_surface,
+            viewport,
+            surface: wl_popup_surface,
+            state: popup_state,
+        });
     }
 
     fn set_rect(&mut self, r: &Rect<LogicalUnit>) {
-        let Some((_, pp, _, _, _, _)) = (unsafe { &*self.popup.get() }) else {
+        self.popup_rect = r.clone();
+
+        let Some(ref mut x) = self.popup else {
             return;
         };
 
-        self.popup_rect = r.clone();
-        let pos = unsafe {
-            (*self.wl_interfaces)
-                .xdg_wm_base
-                .create_positioner()
-                .expect("pos.create")
-        };
+        let pos = unsafe { &*self.wl_interfaces }
+            .xdg_wm_base
+            .create_positioner()
+            .expect("pos.create");
         pos.set_offset(r.left as _, r.top as _)
             .expect("pos.set_offset");
         pos.set_size(r.width as _, r.height as _)
@@ -331,21 +311,27 @@ impl DragPreviewPopover {
             .expect("pos.set_anchor_rect");
         pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
             .expect("pos.set_gravity");
-        pp.reposition(&pos, 0).expect("pp.reposition");
+        x.xdg_popup.reposition(&pos, 0).expect("pp.reposition");
     }
 
-    fn hide(&self) {
-        unsafe {
-            (*self.popup.get()) = None;
-        }
+    fn hide(&mut self) {
+        self.popup = None;
     }
 
     fn teardown_dynamic_resoureces(&mut self) {
-        *self.popup.get_mut() = None;
-        *self.dnd_icon.get_mut() = None;
+        self.popup = None;
+        self.dnd_icon = None;
     }
 }
 
+struct DragPreviewPopoverCore {
+    blur: Option<wl::Owned<wl::OrgKdeKwinBlur>>,
+    xdg_popup: wl::Owned<wl::XdgPopup>,
+    xdg_surface: wl::Owned<wl::XdgSurface>,
+    viewport: wl::Owned<wl::WpViewport>,
+    surface: wl::Owned<wl::Surface>,
+    state: Box<PopupState>,
+}
 struct PopupState {
     surface_ptr: *mut wl::Surface,
     xdg_surface_ptr: *mut wl::XdgSurface,
@@ -773,12 +759,16 @@ impl crate::SystemLink<'_> {
                 // Note: 仕様上はnullにできるはずだがHyprlandでやるとCompositorごとおちる
                 Some(&data_source),
                 unsafe { initiator.0.as_ref() },
-                Some(unsafe {
-                    &(*global_msg.drag_preview_popover.dnd_icon.get())
-                        .as_ref()
-                        .unwrap_unchecked()
-                        .4
-                }),
+                Some(
+                    &unsafe {
+                        global_msg
+                            .drag_preview_popover
+                            .dnd_icon
+                            .as_ref()
+                            .unwrap_unchecked()
+                    }
+                    .surface,
+                ),
                 pointer_enter_state
                     .implicit_grab_serial
                     .expect("not grabbing implicitly"),
