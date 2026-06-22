@@ -250,9 +250,9 @@ struct CommittedState {
     maximized: bool,
 }
 
-struct InstanceState {
+pub(super) struct InstanceState {
     surface_ptr: NonNull<wl::Surface>,
-    xdg_surface: wl::Owned<wl::XdgSurface>,
+    pub(super) xdg_surface: wl::Owned<wl::XdgSurface>,
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,

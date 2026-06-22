@@ -202,6 +202,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging::new(
         dp_context,
+        static_pixbufs,
         empty_dispatcher.clone()
     ));
     #[cfg(feature = "wayland")]
@@ -276,7 +277,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             display_server: platform::unix::DisplayServerLink {
                 context: dp_context,
                 static_pixbufs,
-                global_messaging_ptr: wl_global_msg.as_ref().get_ref() as *const _,
+                global_messaging_ptr: unsafe { wl_global_msg.as_mut().get_unchecked_mut() },
             },
             #[cfg(target_os = "linux")]
             terminate_event: terminate_event.clone(),
@@ -5265,9 +5266,7 @@ pub use platform::windows::{
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]
-pub use platform::unix::wayland::{
-    DragPreviewPopoverHandle, FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle,
-};
+pub use platform::unix::wayland::{FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle};
 
 #[cfg(target_os = "macos")]
 pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;

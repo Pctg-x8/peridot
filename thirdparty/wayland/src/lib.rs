@@ -582,6 +582,12 @@ impl Surface {
             .marshal_array_void(8, &mut [ffi::Argument { i: scale }])
     }
 
+    #[inline]
+    pub fn offset(&self, x: i32, y: i32) -> Result<()> {
+        self.0
+            .marshal_array_void(10, &mut [ffi::Argument { i: x }, ffi::Argument { i: y }])
+    }
+
     pub fn set_listener<'l, L: SurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
