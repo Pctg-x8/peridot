@@ -3264,93 +3264,98 @@ async fn run<'sys>(
     );
     window_header_view.mount(&mut view_init_ctx, &main_window);
 
-    let app_menu_view = ui::app_menu_bar::View::new(
-        &mut view_init_ctx,
-        ui::window_header::View::THICKNESS,
-        vec![
-            (
-                "ファイル(F)".into(),
-                vec![
-                    MenuItem::Command {
-                        label: "新規プロジェクト...".into(),
-                        command_id: 0,
-                    },
-                    MenuItem::Command {
-                        label: "新規ファイル...".into(),
-                        command_id: 0,
-                    },
-                    MenuItem::Separator,
-                    MenuItem::Command {
-                        label: "プロジェクトを開く...".into(),
-                        command_id: 0,
-                    },
-                    MenuItem::Command {
-                        label: "保存".into(),
-                        command_id: 0,
-                    },
-                    MenuItem::Command {
-                        label: "名前をつけて保存...".into(),
-                        command_id: 0,
-                    },
-                    MenuItem::Separator,
-                    MenuItem::Command {
-                        label: "Peridot Marble Editor を終了".into(),
-                        command_id: 1000,
-                    },
-                ],
-            ),
-            (
-                "編集(E)".into(),
-                vec![MenuItem::Command {
-                    label: "項目2".into(),
-                    command_id: 1,
-                }],
-            ),
-            (
-                "ウィンドウ(W)".into(),
-                vec![
-                    MenuItem::Command {
-                        label: "項目3".into(),
-                        command_id: 2,
-                    },
-                    MenuItem::SubMenu {
-                        label: "その他".into(),
-                        items: vec![
-                            MenuItem::Command {
-                                label: "ウィンドウ1".into(),
-                                command_id: 201,
-                            },
-                            MenuItem::Command {
-                                label: "ウィンドウ2".into(),
-                                command_id: 202,
-                            },
-                        ],
-                    },
-                ],
-            ),
-            (
-                "ヘルプ(H)".into(),
-                vec![
-                    MenuItem::Command {
-                        label: "項目4".into(),
-                        command_id: 3,
-                    },
-                    MenuItem::Command {
-                        label: "バージョン情報".into(),
-                        command_id: 100,
-                    },
-                ],
-            ),
-        ],
-    );
-    app_menu_view.mount(&mut view_init_ctx, &main_window);
+    let app_menu_view = if system_link.needs_app_menu_in_surface() {
+        let app_menu_view = ui::app_menu_bar::View::new(
+            &mut view_init_ctx,
+            ui::window_header::View::THICKNESS,
+            vec![
+                (
+                    "ファイル(F)".into(),
+                    vec![
+                        MenuItem::Command {
+                            label: "新規プロジェクト...".into(),
+                            command_id: 0,
+                        },
+                        MenuItem::Command {
+                            label: "新規ファイル...".into(),
+                            command_id: 0,
+                        },
+                        MenuItem::Separator,
+                        MenuItem::Command {
+                            label: "プロジェクトを開く...".into(),
+                            command_id: 0,
+                        },
+                        MenuItem::Command {
+                            label: "保存".into(),
+                            command_id: 0,
+                        },
+                        MenuItem::Command {
+                            label: "名前をつけて保存...".into(),
+                            command_id: 0,
+                        },
+                        MenuItem::Separator,
+                        MenuItem::Command {
+                            label: "Peridot Marble Editor を終了".into(),
+                            command_id: 1000,
+                        },
+                    ],
+                ),
+                (
+                    "編集(E)".into(),
+                    vec![MenuItem::Command {
+                        label: "項目2".into(),
+                        command_id: 1,
+                    }],
+                ),
+                (
+                    "ウィンドウ(W)".into(),
+                    vec![
+                        MenuItem::Command {
+                            label: "項目3".into(),
+                            command_id: 2,
+                        },
+                        MenuItem::SubMenu {
+                            label: "その他".into(),
+                            items: vec![
+                                MenuItem::Command {
+                                    label: "ウィンドウ1".into(),
+                                    command_id: 201,
+                                },
+                                MenuItem::Command {
+                                    label: "ウィンドウ2".into(),
+                                    command_id: 202,
+                                },
+                            ],
+                        },
+                    ],
+                ),
+                (
+                    "ヘルプ(H)".into(),
+                    vec![
+                        MenuItem::Command {
+                            label: "項目4".into(),
+                            command_id: 3,
+                        },
+                        MenuItem::Command {
+                            label: "バージョン情報".into(),
+                            command_id: 100,
+                        },
+                    ],
+                ),
+            ],
+        );
+        app_menu_view.mount(&mut view_init_ctx, &main_window);
+        Some(app_menu_view)
+    } else {
+        None
+    };
 
     let window_footer_view = ui::window_footer::View::new(&mut view_init_ctx);
     window_footer_view.mount(&mut view_init_ctx, &main_window);
 
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
-        has_appmenu: true,
+        has_appmenu: app_menu_view.is_some(),
         header: window_header_view,
         footer: Some(window_footer_view),
         docking_manager: uikit::dock::DockingManager::new(
@@ -3359,7 +3364,12 @@ async fn run<'sys>(
             Rect::from_lt_size(
                 Point::new_logical(
                     0.0,
-                    ui::window_header::View::THICKNESS + ui::app_menu_bar::View::HEIGHT,
+                    ui::window_header::View::THICKNESS
+                        + if app_menu_view.is_some() {
+                            ui::app_menu_bar::View::HEIGHT
+                        } else {
+                            0.0
+                        },
                 ),
                 Size::new_logical(320.0, 256.0),
             ),
@@ -3509,10 +3519,12 @@ async fn run<'sys>(
                 // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
                 if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
                     if window == main_window {
-                        app_menu_view.on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
+                        if let Some(ref a) = app_menu_view {
+                            a.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
+                        }
                     }
 
                     c.terminate(
@@ -3584,10 +3596,12 @@ async fn run<'sys>(
                 {
                     // フォーカスロストした時もコンテキストメニューを閉じる
                     if window == main_window {
-                        app_menu_view.on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
+                        if let Some(ref a) = app_menu_view {
+                            a.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
+                        }
                     }
 
                     c.terminate(
@@ -3605,10 +3619,12 @@ async fn run<'sys>(
                 if !activated {
                     if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
                         if window == main_window {
-                            app_menu_view.on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
+                            if let Some(ref a) = app_menu_view {
+                                a.on_close_all(
+                                    &mut composite_tree,
+                                    global_time_base.elapsed().as_secs_f32(),
+                                );
+                            }
                         }
 
                         c.terminate(
@@ -4036,10 +4052,12 @@ async fn run<'sys>(
             Event::MenuCloseAll => {
                 if let Some(c) = current_active_menu_session.take() {
                     if c.parent == main_window {
-                        app_menu_view.on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
+                        if let Some(ref a) = app_menu_view {
+                            a.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
+                        }
                     }
 
                     c.terminate(
@@ -4247,10 +4265,12 @@ async fn run<'sys>(
                 // コマンド選択したらとじる
                 if let Some(c) = current_active_menu_session.take() {
                     if c.parent == main_window {
-                        app_menu_view.on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
+                        if let Some(ref a) = app_menu_view {
+                            a.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
+                        }
                     }
 
                     c.terminate(
@@ -4296,10 +4316,12 @@ async fn run<'sys>(
                 if !system_link.any_pointer_on_context_menu() {
                     if let Some(c) = current_active_menu_session.take() {
                         if c.parent == main_window {
-                            app_menu_view.on_global_mouse_click(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
+                            if let Some(ref a) = app_menu_view {
+                                a.on_close_all(
+                                    &mut composite_tree,
+                                    global_time_base.elapsed().as_secs_f32(),
+                                );
+                            }
                         }
 
                         c.terminate(

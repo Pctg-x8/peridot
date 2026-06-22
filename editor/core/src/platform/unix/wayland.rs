@@ -509,6 +509,13 @@ impl crate::SystemLink<'_> {
             .expect("roundtrip");
     }
 
+    pub fn needs_app_menu_in_surface(&self) -> bool {
+        unsafe { &*self.display_server.context }
+            .global_interfaces
+            .kde_appmenu_manager
+            .is_none()
+    }
+
     pub fn create_main_window(
         &self,
         composite_tree: &mut CompositeTree<SyncEvent>,
