@@ -1417,8 +1417,8 @@ pub trait KeyInputEventHandler {
     fn ime_state_changes(
         &self,
         context: &mut InputEventContext,
-        new_committed_string: &str,
-        new_preedit_string: &str,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
     ) {
     }
 }
@@ -1658,10 +1658,11 @@ impl PerWindowKeyboardFocusState {
         eh.keyup(context, code, modifier);
     }
 
+    #[tracing::instrument(skip(self, context, registry))]
     pub fn handle_ime_state_changes(
         &self,
-        new_committed_string: &str,
-        new_preedit_string: &str,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
         context: &mut InputEventContext,
         registry: &KeyboardFocusTokenRegistry,
     ) {

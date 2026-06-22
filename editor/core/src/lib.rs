@@ -796,8 +796,8 @@ pub enum Event {
     },
     IMEStateChanges {
         window: WindowHandle,
-        committed_string: String,
-        preedit_string: String,
+        committed_string: Option<String>,
+        preedit_string: Option<String>,
     },
     WindowMove {
         window: WindowHandle,
@@ -2236,8 +2236,8 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
     fn ime_state_changes(
         &self,
         context: &mut InputEventContext,
-        new_committed_string: &str,
-        new_preedit_string: &str,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
     ) {
         self.raw
             .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
@@ -3850,8 +3850,8 @@ async fn run<'sys>(
                 preedit_string,
             } => {
                 window.keyboard_focus_state().handle_ime_state_changes(
-                    &committed_string,
-                    &preedit_string,
+                    committed_string.as_deref(),
+                    preedit_string.as_deref(),
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),

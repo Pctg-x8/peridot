@@ -1075,8 +1075,8 @@ impl KeyboardState {
 }
 
 struct IMEPendingState {
-    committed_text: String,
-    preedit_text: String,
+    committed_text: Option<String>,
+    preedit_text: Option<String>,
 }
 
 struct DataDeviceActiveOfferState {
@@ -1145,8 +1145,8 @@ impl GlobalMessaging {
                 .map(|x| unsafe { x.copy_ptr() }),
             event_dispatcher,
             ime_pending_state: IMEPendingState {
-                committed_text: String::new(),
-                preedit_text: String::new(),
+                committed_text: None,
+                preedit_text: None,
             },
             drag_preview_popover: DragPreviewPopover::new(ctx, static_pixbufs),
             _pinned: core::marker::PhantomPinned,
@@ -2072,18 +2072,20 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
     ) {
         event_trace!();
 
-        self.ime_pending_state.preedit_text = text
-            .map(|t| t.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        self.ime_pending_state.preedit_text = Some(
+            text.map(|t| t.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
     }
 
     #[tracing::instrument(name = "text_input_v3::commit_string", skip(self, _sender))]
     fn commit_string(&mut self, _sender: &mut wl::ZwpTextInputV3, text: Option<&core::ffi::CStr>) {
         event_trace!();
 
-        self.ime_pending_state.committed_text = text
-            .map(|t| t.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        self.ime_pending_state.committed_text = Some(
+            text.map(|t| t.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        );
     }
 
     #[tracing::instrument(name = "text_input_v3::delete_surrounding_text", skip(self, _sender))]
@@ -2105,16 +2107,17 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
             return;
         };
 
+        let committed_string = self.ime_pending_state.committed_text.take();
+        let preedit_string = self.ime_pending_state.preedit_text.take();
+        if committed_string.is_none() && preedit_string.is_none() {
+            // no changes occured
+            return;
+        }
+
         self.event_dispatcher.dispatch(Event::IMEStateChanges {
             window: toplevel::Handle(k_enter_state.surface),
-            committed_string: core::mem::replace(
-                &mut self.ime_pending_state.committed_text,
-                String::new(),
-            ),
-            preedit_string: core::mem::replace(
-                &mut self.ime_pending_state.preedit_text,
-                String::new(),
-            ),
+            committed_string,
+            preedit_string,
         });
     }
 }

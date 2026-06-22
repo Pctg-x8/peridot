@@ -101,6 +101,15 @@ impl Handle {
     }
 
     #[inline(always)]
+    pub fn is_maximized(&self) -> bool {
+        self.state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .maximized
+    }
+
+    #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
         self.state()
             .committed_state
