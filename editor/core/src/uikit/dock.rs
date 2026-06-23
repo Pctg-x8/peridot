@@ -27,12 +27,47 @@ use crate::{
     utils::{LogicalUnit, Point, Rect, SafeF32, Size, UnsafeMainThreadOnlyOnceCell},
 };
 
+/// デザイン定数
+struct DesignMetrics {
+    /// Splitterの太さ
+    splitter_thickness: f32,
+    /// タブの余白(X方向)
+    tab_padding_x: f32,
+    /// タブの余白(Y方向)
+    tab_padding_y: f32,
+    /// タブの内容(表示テキスト)の高さ
+    tab_content_height: f32,
+    /// タブの角丸
+    tab_rounding: f32,
+}
+impl DesignMetrics {
+    /// タブの高さを計算する
+    const fn tab_height(&self) -> f32 {
+        self.tab_content_height + self.tab_padding_y * 2.0
+    }
+}
+
+/// デザイン定数
+const DESIGN_METRICS: DesignMetrics = DesignMetrics {
+    splitter_thickness: 4.0,
+    tab_padding_x: 12.0,
+    tab_padding_y: 6.0,
+    tab_content_height: 16.0,
+    tab_rounding: 8.0,
+};
+
+/// Paneの表示内容
 pub trait PaneContentPresenter {
+    /// タブ名
     fn name(&self) -> String;
+    /// マウント
     fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget);
+    /// アンマウント
     fn unmount(&self, ctx: &mut MountContext);
+    /// 後始末
     fn teardown(&mut self, ctx: &mut TeardownContext);
 
+    /// サイズ変更
     #[allow(unused_variables)]
     #[inline(always)]
     fn resize(
@@ -216,7 +251,7 @@ impl DockStore {
 
         let mut sink = String::new();
         rec(self, root, 0, &mut sink);
-        tracing::debug!("{}", sink);
+        tracing::debug!("{sink}");
     }
 }
 
@@ -233,8 +268,8 @@ pub enum DockDirection {
 impl DockDirection {
     const fn splitter_direction(&self) -> DockedPaneSplitDirection {
         match self {
-            Self::ToLeft(_) | Self::ToRight(_) => DockedPaneSplitDirection::Vertical,
-            Self::ToTop(_) | Self::ToBottom(_) => DockedPaneSplitDirection::Horizontal,
+            Self::ToLeft(_) | Self::ToRight(_) => DockedPaneSplitDirection::Horizontal,
+            Self::ToTop(_) | Self::ToBottom(_) => DockedPaneSplitDirection::Vertical,
         }
     }
 
@@ -248,10 +283,10 @@ impl DockDirection {
                 let width = w.get();
                 let l_rect = full.slice_left(width);
                 let r_rect =
-                    full.slice_right(full.width - width - DockedPaneSplitterView::THICKNESS);
+                    full.slice_right(full.width - width - DESIGN_METRICS.splitter_thickness);
                 let s_rect = Rect::from_lt_size(
                     Point::new_logical(l_rect.right(), full.top),
-                    Size::new_logical(DockedPaneSplitterView::THICKNESS, full.height),
+                    Size::new_logical(DESIGN_METRICS.splitter_thickness, full.height),
                 );
 
                 (l_rect, r_rect, s_rect)
@@ -259,11 +294,11 @@ impl DockDirection {
             Self::ToRight(w) => {
                 let width = w.get();
                 let l_rect =
-                    full.slice_left(full.width - width - DockedPaneSplitterView::THICKNESS);
+                    full.slice_left(full.width - width - DESIGN_METRICS.splitter_thickness);
                 let r_rect = full.slice_right(width);
                 let s_rect = Rect::from_lt_size(
                     Point::new_logical(l_rect.right(), full.top),
-                    Size::new_logical(DockedPaneSplitterView::THICKNESS, full.height),
+                    Size::new_logical(DESIGN_METRICS.splitter_thickness, full.height),
                 );
 
                 (r_rect, l_rect, s_rect)
@@ -272,10 +307,10 @@ impl DockDirection {
                 let height = h.get();
                 let t_rect = full.slice_top(height);
                 let b_rect =
-                    full.slice_bottom(full.height - height - DockedPaneSplitterView::THICKNESS);
+                    full.slice_bottom(full.height - height - DESIGN_METRICS.splitter_thickness);
                 let s_rect = Rect::from_lt_size(
                     Point::new_logical(full.left, t_rect.bottom()),
-                    Size::new_logical(full.width, DockedPaneSplitterView::THICKNESS),
+                    Size::new_logical(full.width, DESIGN_METRICS.splitter_thickness),
                 );
 
                 (t_rect, b_rect, s_rect)
@@ -283,11 +318,11 @@ impl DockDirection {
             Self::ToBottom(h) => {
                 let height = h.get();
                 let t_rect =
-                    full.slice_top(full.height - height - DockedPaneSplitterView::THICKNESS);
+                    full.slice_top(full.height - height - DESIGN_METRICS.splitter_thickness);
                 let b_rect = full.slice_bottom(height);
                 let s_rect = Rect::from_lt_size(
                     Point::new_logical(full.left, t_rect.bottom()),
-                    Size::new_logical(full.width, DockedPaneSplitterView::THICKNESS),
+                    Size::new_logical(full.width, DESIGN_METRICS.splitter_thickness),
                 );
 
                 (b_rect, t_rect, s_rect)
@@ -795,7 +830,7 @@ pub fn move_splitter(
             ..
         } => {
             let new_fixed_size = (self_rect.right()
-                - (new_splitter_client_pos + DockedPaneSplitterView::THICKNESS))
+                - (new_splitter_client_pos + DESIGN_METRICS.splitter_thickness))
                 .clamp(10.0, self_rect.width - 10.0);
             width.set(new_fixed_size);
         }
@@ -812,7 +847,7 @@ pub fn move_splitter(
             ..
         } => {
             let new_fixed_size = (self_rect.bottom()
-                - (new_splitter_client_pos + DockedPaneSplitterView::THICKNESS))
+                - (new_splitter_client_pos + DESIGN_METRICS.splitter_thickness))
                 .clamp(10.0, self_rect.height - 10.0);
             height.set(new_fixed_size);
         }
@@ -895,16 +930,16 @@ pub fn begin_preview(
 pub fn move_preview(
     root_manager: &DockingManager,
     store: &DockStore,
-    client_pos: Point<LogicalUnit>,
+    client_pos: &Point<LogicalUnit>,
     state: &mut DockingPreviewState,
 ) -> Rect<LogicalUnit> {
     compute_recommended_operation(
         root_manager.root_id,
         store,
-        state.original_rect.clone(),
-        state.tab_size.clone(),
+        &state.original_rect,
+        &state.tab_size,
         client_pos,
-        state.offset.clone(),
+        &state.offset,
     )
     .1
 }
@@ -913,16 +948,16 @@ pub fn move_preview(
 pub fn end_preview(
     root_manager: &DockingManager,
     store: &DockStore,
-    client_pos: Point<LogicalUnit>,
+    client_pos: &Point<LogicalUnit>,
     state: DockingPreviewState,
 ) -> (DockingOperation, Rect<LogicalUnit>) {
     compute_recommended_operation(
         root_manager.root_id,
         store,
-        state.original_rect,
-        state.tab_size,
+        &state.original_rect,
+        &state.tab_size,
         client_pos,
-        state.offset,
+        &state.offset,
     )
 }
 
@@ -934,10 +969,10 @@ const MAX_DOCKED_SIZE_RATE: f32 = 0.7;
 fn compute_recommended_operation(
     this: DockID,
     store: &DockStore,
-    source_rect: Rect<LogicalUnit>,
-    source_tab_size: Size<LogicalUnit>,
-    pos: Point<LogicalUnit>,
-    drag_offset: Point<LogicalUnit>,
+    source_rect: &Rect<LogicalUnit>,
+    source_tab_size: &Size<LogicalUnit>,
+    pos: &Point<LogicalUnit>,
+    drag_offset: &Point<LogicalUnit>,
 ) -> (DockingOperation, Rect<LogicalUnit>) {
     fn try_parent_dock(
         this: DockID,
@@ -978,10 +1013,7 @@ fn compute_recommended_operation(
         // not hit to the rect
         return (
             DockingOperation::Diverge,
-            Rect::from_lt_size(
-                Point::new_logical(pos.x + drag_offset.x, pos.y + drag_offset.y),
-                source_rect.size(),
-            ),
+            source_rect.ref_relocate(&pos.with_offset(drag_offset.clone())),
         );
     }
 
@@ -997,7 +1029,7 @@ fn compute_recommended_operation(
             );
         }
         Dock::Fill { group_view, .. } => {
-            if pos.y <= dock_rect.top + PaneGroupTabView::PADDING_Y * 2.0 + 16.0 {
+            if pos.y <= dock_rect.top + DESIGN_METRICS.tab_height() {
                 // dock to tab index
                 let local_pos = Point::new_logical(pos.x - dock_rect.left, pos.y - dock_rect.top);
                 let (index, tab_lt) = group_view.hittest_tab_index(local_pos);
@@ -1005,8 +1037,8 @@ fn compute_recommended_operation(
                 return (
                     DockingOperation::MergeAtTabIndex(this, index),
                     Rect::from_lt_size(
-                        Point::new_logical(tab_lt.x + dock_rect.left, tab_lt.y + dock_rect.top),
-                        source_tab_size,
+                        tab_lt.with_offset(dock_rect.left_top()),
+                        source_tab_size.clone(),
                     ),
                 );
             }
@@ -1068,6 +1100,7 @@ fn compute_recommended_operation(
             ..
         } => {
             if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
+                // dock to parent
                 return op;
             }
 
@@ -1084,7 +1117,7 @@ fn compute_recommended_operation(
                 );
             }
             let r =
-                dock_rect.slice_right(dock_rect.width - width - DockedPaneSplitterView::THICKNESS);
+                dock_rect.slice_right(dock_rect.width - width - DESIGN_METRICS.splitter_thickness);
             if pos.x >= r.left {
                 return compute_recommended_operation(
                     rest,
@@ -1103,12 +1136,13 @@ fn compute_recommended_operation(
             ..
         } => {
             if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
+                // dock to parent
                 return op;
             }
 
             let width = width.get();
             let r =
-                dock_rect.slice_left(dock_rect.width - width - DockedPaneSplitterView::THICKNESS);
+                dock_rect.slice_left(dock_rect.width - width - DESIGN_METRICS.splitter_thickness);
             if pos.x <= r.right() {
                 return compute_recommended_operation(
                     rest,
@@ -1138,6 +1172,7 @@ fn compute_recommended_operation(
             ..
         } => {
             if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
+                // dock to parent
                 return op;
             }
 
@@ -1154,7 +1189,7 @@ fn compute_recommended_operation(
                 );
             }
             let r = dock_rect
-                .slice_bottom(dock_rect.height - height - DockedPaneSplitterView::THICKNESS);
+                .slice_bottom(dock_rect.height - height - DESIGN_METRICS.splitter_thickness);
             if pos.y >= r.top {
                 return compute_recommended_operation(
                     rest,
@@ -1173,12 +1208,13 @@ fn compute_recommended_operation(
             ..
         } => {
             if let Some(op) = try_parent_dock(this, &source_rect, &dock_rect, &pos) {
+                // dock to parent
                 return op;
             }
 
             let height = height.get();
             let r =
-                dock_rect.slice_top(dock_rect.height - height - DockedPaneSplitterView::THICKNESS);
+                dock_rect.slice_top(dock_rect.height - height - DESIGN_METRICS.splitter_thickness);
             if pos.y <= r.bottom() {
                 return compute_recommended_operation(
                     rest,
@@ -1205,21 +1241,41 @@ fn compute_recommended_operation(
 
     (
         DockingOperation::Diverge,
-        source_rect.relocate(pos.with_offset(drag_offset)),
+        source_rect.ref_relocate(&pos.with_offset(drag_offset.clone())),
     )
 }
 
+/// Pane分割方向
+#[derive(Clone, Copy)]
 pub enum DockedPaneSplitDirection {
+    /// 横
     Horizontal,
+    /// 縦
     Vertical,
 }
+impl DockedPaneSplitDirection {
+    /// Splitterに適切なカーソル形状を得る
+    const fn cursor_shape(&self) -> CursorShape {
+        match self {
+            Self::Horizontal => CursorShape::ResizeHorizontal,
+            Self::Vertical => CursorShape::ResizeVertical,
+        }
+    }
 
-pub struct DockedPaneSplitterView {
-    eh: Rc<DockedPaneSplitterEventHandler>,
+    /// Splitterが制御する方向の値を得る
+    const fn dominant_coordinate(&self, p: &Point<LogicalUnit>) -> f32 {
+        match self {
+            Self::Horizontal => p.x,
+            Self::Vertical => p.y,
+        }
+    }
 }
-impl DockedPaneSplitterView {
-    const THICKNESS: f32 = 4.0;
 
+/// Dock間のSplitter
+#[repr(transparent)]
+pub struct DockedPaneSplitterView(Rc<DockedPaneSplitterEventHandler>);
+impl DockedPaneSplitterView {
+    /// 生成
     pub fn new(
         ctx: &mut ViewInitContext,
         dir: DockedPaneSplitDirection,
@@ -1235,10 +1291,7 @@ impl DockedPaneSplitterView {
             ..Default::default()
         });
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            cursor_shape: match dir {
-                DockedPaneSplitDirection::Horizontal => CursorShape::ResizeVertical,
-                DockedPaneSplitDirection::Vertical => CursorShape::ResizeHorizontal,
-            },
+            cursor_shape: dir.cursor_shape(),
             ..Default::default()
         });
 
@@ -1255,25 +1308,28 @@ impl DockedPaneSplitterView {
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.view_registry.set_event_handler(eh.view_id, &eh);
 
-        Self { eh }
+        Self(eh)
     }
 
-    pub fn teardown(self, ctx: &mut TeardownContext) {
-        ctx.mount_context.ht_manager.remove_child(self.eh.ht_root);
+    /// 後始末
+    fn teardown(self, ctx: &mut TeardownContext) {
+        ctx.mount_context.ht_manager.remove_child(self.0.ht_root);
         ctx.mount_context
             .composite_tree
-            .remove_child(self.eh.ct_root);
+            .remove_child(self.0.ct_root);
 
-        ctx.mount_context.ht_manager.free_all(self.eh.ht_root);
-        ctx.mount_context.composite_tree.free_all(self.eh.ct_root);
+        ctx.mount_context.ht_manager.free_all(self.0.ht_root);
+        ctx.mount_context.composite_tree.free_all(self.0.ct_root);
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+    /// マウント
+    fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+            .add_child(target.ct_root(), self.0.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.0.ht_root);
     }
 
+    /// サイズ調整
     #[inline(always)]
     fn resize<E>(
         &self,
@@ -1281,23 +1337,33 @@ impl DockedPaneSplitterView {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        self.eh.perform_relayout(rect, composite_tree, ht_manager);
+        self.0.perform_relayout(rect, composite_tree, ht_manager);
     }
 
+    /// 制御対象のDockを変更
     #[inline(always)]
     fn rebind_controlling_dock(&self, dock: DockID) {
-        self.eh.controlling_dock.set(dock);
+        self.0.controlling_dock.set(dock);
     }
 }
 
+/// Splitterのイベントハンドラ
 struct DockedPaneSplitterEventHandler {
+    /// View ID
     view_id: ViewIdentifier,
+    /// 分割方向
     dir: DockedPaneSplitDirection,
+    /// 制御対象のDock
     controlling_dock: Cell<DockID>,
+    /// ビジュアルツリー
     ct_root: CompositeTreeRef,
+    /// 入力ツリー
     ht_root: HitTestTreeRef,
+    /// ポインタ押下中か？
     pressing: Cell<bool>,
+    /// レイアウト適用待ちの矩形
     pending_relayout: Cell<Option<Rect<LogicalUnit>>>,
+    /// ドラッグ操作のオフセット
     drag_delta: Cell<f32>,
 }
 impl ViewEventHandler for DockedPaneSplitterEventHandler {
@@ -1320,10 +1386,10 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
     ) -> EventContinueControl {
         self.drag_delta.set(match self.dir {
             DockedPaneSplitDirection::Horizontal => {
-                args.client_pos.y - context.ht_manager.compute_global_rect_autoroot(sender).1
+                args.client_pos.x - context.ht_manager.compute_global_rect_autoroot(sender).0
             }
             DockedPaneSplitDirection::Vertical => {
-                args.client_pos.x - context.ht_manager.compute_global_rect_autoroot(sender).0
+                args.client_pos.y - context.ht_manager.compute_global_rect_autoroot(sender).1
             }
         });
         self.pressing.set(true);
@@ -1367,21 +1433,19 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
     }
 }
 impl DockedPaneSplitterEventHandler {
+    /// 動かす
     fn r#move(
         &self,
         client_pos: &Point<PointerInputUnit>,
         event_dispatcher: &LogicFiberEventDispatcher,
     ) {
-        let pos = match self.dir {
-            DockedPaneSplitDirection::Horizontal => client_pos.y + self.drag_delta.get(),
-            DockedPaneSplitDirection::Vertical => client_pos.x + self.drag_delta.get(),
-        };
         event_dispatcher.dispatch(Event::DockMoveSplitter {
             controlling_dock: self.controlling_dock.get(),
-            pos_client: pos,
+            pos_client: self.dir.dominant_coordinate(client_pos) + self.drag_delta.get(),
         });
     }
 
+    /// レイアウトを適用する
     fn perform_relayout<E>(
         &self,
         new_rect: Rect<LogicalUnit>,
@@ -1417,10 +1481,14 @@ fn pane_group_tab_active_gradient<E>(composite_tree: &mut CompositeTree<E>) -> G
     })
 }
 
+/// Paneのグループ
+#[repr(transparent)]
 pub struct PaneGroupView {
+    /// コントローラインスタンス
     controller: Rc<PaneGroupViewController>,
 }
 impl PaneGroupView {
+    /// 生成
     pub fn new(
         ctx: &mut ViewInitContext,
         contents: Vec<Box<dyn PaneContentPresenter>>,
@@ -1445,11 +1513,11 @@ impl PaneGroupView {
             relative_size_adjustment: [1.0, 1.0],
             offset: [
                 AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(16.0 + PaneGroupTabView::PADDING_Y * 2.0),
+                AnimatableFloat::Value(DESIGN_METRICS.tab_height()),
             ],
             size: [
                 AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(-16.0 - PaneGroupTabView::PADDING_Y * 2.0),
+                AnimatableFloat::Value(-DESIGN_METRICS.tab_height()),
             ],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -1458,8 +1526,8 @@ impl PaneGroupView {
             ..Default::default()
         });
         let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
-            top: 16.0 + PaneGroupTabView::PADDING_Y * 2.0,
-            height: -16.0 - PaneGroupTabView::PADDING_Y * 2.0,
+            top: DESIGN_METRICS.tab_height(),
+            height: -DESIGN_METRICS.tab_height(),
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
             ..Default::default()
@@ -1502,7 +1570,8 @@ impl PaneGroupView {
         Self { controller }
     }
 
-    pub fn teardown(self, ctx: &mut TeardownContext) {
+    /// 後始末
+    fn teardown(self, ctx: &mut TeardownContext) {
         ctx.mount_context
             .composite_tree
             .remove_child(self.controller.ct_root);
@@ -1523,13 +1592,15 @@ impl PaneGroupView {
         }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+    /// マウント
+    fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree
             .add_child(target.ct_root(), self.controller.ct_root);
         ctx.ht_manager
             .add_child(target.ht_root(), self.controller.ht_root);
     }
 
+    /// 矩形を設定する
     #[inline(always)]
     pub fn set_rect(
         &self,
@@ -1541,22 +1612,24 @@ impl PaneGroupView {
             .perform_set_rect(rect, composite_tree, ht_manager);
     }
 
+    /// このグループが乗っているDockを変更する
     #[inline(always)]
     fn rebind_dock(&self, dock: DockID) {
         self.controller.dock.set(dock);
     }
 
-    pub fn hittest_tab_index(&self, pos: Point<LogicalUnit>) -> (usize, Point<LogicalUnit>) {
+    /// タブとのヒットテストを行い、ヒットしたタブのインデックス番号と左上の座標を返す
+    fn hittest_tab_index(&self, pos: Point<LogicalUnit>) -> (usize, Point<LogicalUnit>) {
         if pos.x < 0.0 {
             return (0, Point::new_logical(0.0, 0.0));
         }
 
         let mut leftmost = 0.0;
         for (index, (_, tv)) in self.controller.contents.borrow().iter().enumerate() {
-            if leftmost <= pos.x && pos.x <= leftmost + tv.eh.size.width {
+            if leftmost <= pos.x && pos.x <= leftmost + tv.size.width {
                 return (index, Point::new_logical(leftmost, 0.0));
             }
-            leftmost += tv.eh.size.width;
+            leftmost += tv.size.width;
         }
 
         (
@@ -1565,6 +1638,7 @@ impl PaneGroupView {
         )
     }
 
+    /// コンテンツを追加する
     fn add_content(
         &self,
         content: Box<dyn PaneContentPresenter>,
@@ -1595,6 +1669,7 @@ impl PaneGroupView {
         }
     }
 
+    /// コンテンツを挿入する
     fn insert_content(
         &self,
         content: Box<dyn PaneContentPresenter>,
@@ -1628,6 +1703,7 @@ impl PaneGroupView {
         }
     }
 
+    /// コンテンツを削除する
     fn remove_content(
         &self,
         index: usize,
@@ -1661,11 +1737,13 @@ impl PaneGroupView {
         content
     }
 
+    /// コンテンツが一つ以上存在するかどうかを返す
     #[inline(always)]
     fn has_contents(&self) -> bool {
         !self.controller.contents.borrow().is_empty()
     }
 
+    /// タブを再配置する
     fn relocate_tabs<'t, E>(
         tabs: impl Iterator<Item = &'t PaneGroupTabView>,
         composite_tree: &mut CompositeTree<E>,
@@ -1678,21 +1756,32 @@ impl PaneGroupView {
                 composite_tree,
                 ht_manager,
             );
-            left_offset += t.eh.size.width;
+            left_offset += t.size.width;
         }
     }
 }
 
+/// PaneGroupViewのコントローラ
 struct PaneGroupViewController {
+    /// View ID
     view_id: ViewIdentifier,
+    /// ビジュアルツリー ルート
     ct_root: CompositeTreeRef,
+    /// 入力ツリー ルート
     ht_root: HitTestTreeRef,
+    /// コンテンツのビジュアルツリー ルート
     ct_content_root: CompositeTreeRef,
+    /// コンテンツの入力ツリー ルート
     ht_content_root: HitTestTreeRef,
+    /// 所属Dock
     dock: Cell<DockID>,
+    /// 内容物とそのタブViewのリスト
     contents: RefCell<Vec<(Box<dyn PaneContentPresenter>, PaneGroupTabView)>>,
+    /// 現在アクティブなコンテンツのインデックス
     current_active_index: Cell<usize>,
+    /// アクティブなコンテンツの変更待ちインデックス
     pending_active_changes: Cell<Option<usize>>,
+    /// コンテンツのリサイズ待ち情報
     pending_set_rect: Cell<Option<Rect<LogicalUnit>>>,
 }
 impl ViewEventHandler for PaneGroupViewController {
@@ -1711,14 +1800,16 @@ impl ViewEventHandler for PaneGroupViewController {
     }
 }
 impl PaneGroupViewController {
+    /// タブViewのインスタンス参照からインデックスを計算する
     #[inline(always)]
     fn tab_index(&self, tab: &PaneGroupTabEventHandler) -> Option<usize> {
         self.contents
             .borrow()
             .iter()
-            .position(|x| core::ptr::addr_eq(x.1.eh.as_ref(), tab))
+            .position(|x| core::ptr::addr_eq(x.1.as_ref(), tab))
     }
 
+    /// タブを選択する
     fn select_tab(&self, tab: &PaneGroupTabEventHandler, e: &LogicFiberEventDispatcher) {
         let Some(index) = self.tab_index(tab) else {
             tracing::warn!("no tab found");
@@ -1729,6 +1820,7 @@ impl PaneGroupViewController {
         e.dispatch(Event::UpdateView { id: self.view_id });
     }
 
+    /// アクティブなコンテンツを変更する
     fn perform_change_active(&self, new_active_index: usize, ctx: &mut MountContext) {
         let old_active = self.current_active_index.replace(new_active_index);
         if old_active != new_active_index {
@@ -1736,13 +1828,13 @@ impl PaneGroupViewController {
             old_active.0.unmount(ctx);
             old_active
                 .1
-                .eh
                 .set_active(false, ctx.composite_tree, ctx.current_sec);
 
             self.activate(new_active_index, ctx);
         }
     }
 
+    /// コンテンツをアクティブ状態にする
     fn activate(&self, index: usize, context: &mut MountContext) {
         let target = &self.contents.borrow()[index];
         target.0.mount(
@@ -1754,10 +1846,10 @@ impl PaneGroupViewController {
         );
         target
             .1
-            .eh
             .set_active(true, context.composite_tree, context.current_sec);
     }
 
+    /// コンテンツのリサイズを実行する
     fn perform_set_rect(
         &self,
         rect: Rect<LogicalUnit>,
@@ -1778,25 +1870,26 @@ impl PaneGroupViewController {
         ht_manager.get_data_mut(self.ht_root).width = rect.width;
         ht_manager.get_data_mut(self.ht_root).height = rect.height;
 
-        let content_size = Size::new_logical(
-            rect.width,
-            rect.height - 16.0 - PaneGroupTabView::PADDING_Y * 2.0,
-        );
+        let content_size = Size::new_logical(rect.width, rect.height - DESIGN_METRICS.tab_height());
         for (c, _) in self.contents.borrow().iter() {
             c.resize(&content_size, composite_tree, ht_manager);
         }
     }
 }
 
-struct PaneGroupTabView {
-    ht_root: HitTestTreeRef,
-    eh: Rc<PaneGroupTabEventHandler>,
+/// タブView
+#[repr(transparent)]
+struct PaneGroupTabView(Rc<PaneGroupTabEventHandler>);
+impl core::ops::Deref for PaneGroupTabView {
+    type Target = Rc<PaneGroupTabEventHandler>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 impl PaneGroupTabView {
-    const PADDING_X: f32 = 8.0;
-    const PADDING_Y: f32 = 4.0;
-    const ROUNDING: f32 = 8.0;
-
+    /// 生成
     fn new(
         ctx: &mut ViewInitContext,
         label: String,
@@ -1805,7 +1898,10 @@ impl PaneGroupTabView {
         let active_gradient = pane_group_tab_active_gradient(ctx.composite_tree);
         let tw =
             TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
-        let size = Size::new_logical(tw + Self::PADDING_X * 2.0, 16.0 + Self::PADDING_Y * 2.0);
+        let size = Size::new_logical(
+            tw + DESIGN_METRICS.tab_padding_x * 2.0,
+            DESIGN_METRICS.tab_height(),
+        );
 
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -1815,7 +1911,7 @@ impl PaneGroupTabView {
             ],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            corner_radius: CornerRadius::all(Self::ROUNDING),
+            corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
             text: Some(CompositeRectText {
                 runs: vec![CompositeRectTextRun {
                     content: label,
@@ -1833,7 +1929,7 @@ impl PaneGroupTabView {
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            corner_radius: CornerRadius::all(Self::ROUNDING),
+            corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
             ..Default::default()
         });
         let ct_underline = ctx.composite_tree.create(CompositeRect {
@@ -1842,7 +1938,7 @@ impl PaneGroupTabView {
             relative_offset_adjustment: [0.0, 0.0],
             has_bitmap: true,
             composite_mode: CompositeMode::FillLinearGradient(active_gradient),
-            corner_radius: CornerRadius::all(Self::ROUNDING),
+            corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
             scale_x: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
@@ -1860,51 +1956,64 @@ impl PaneGroupTabView {
             ct_root,
             ct_active,
             ct_underline,
+            ht_root,
             size,
             active: Cell::new(false),
             group_controller,
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-        Self { ht_root, eh }
+        Self(eh)
     }
 
-    pub fn teardown(self, ctx: &mut TeardownContext) {
+    /// 後始末
+    fn teardown(self, ctx: &mut TeardownContext) {
         ctx.mount_context
             .composite_tree
-            .remove_child(self.eh.ct_root);
+            .remove_child(self.0.ct_root);
         ctx.mount_context.ht_manager.remove_child(self.ht_root);
 
-        ctx.mount_context.composite_tree.free_all(self.eh.ct_root);
+        ctx.mount_context.composite_tree.free_all(self.0.ct_root);
         ctx.mount_context.ht_manager.free_all(self.ht_root);
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+    /// マウント
+    fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
         ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
+            .add_child(target.ct_root(), self.0.ct_root);
         ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
     }
 
-    pub fn place<E>(
+    /// 配置
+    fn place<E>(
         &self,
         pos: Point<LogicalUnit>,
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        composite_tree.get_mut(self.eh.ct_root).offset =
+        composite_tree.get_mut(self.0.ct_root).offset =
             [AnimatableFloat::Value(pos.x), AnimatableFloat::Value(pos.y)];
-        composite_tree.mark_dirty(self.eh.ct_root);
+        composite_tree.mark_dirty(self.0.ct_root);
         ht_manager.get_data_mut(self.ht_root).left = pos.x;
         ht_manager.get_data_mut(self.ht_root).top = pos.y;
     }
 }
 
+/// タブViewのイベントハンドラ
 struct PaneGroupTabEventHandler {
+    /// ビジュアルツリー ルート
     ct_root: CompositeTreeRef,
+    /// ビジュアルツリー アクティブ表示
     ct_active: CompositeTreeRef,
+    /// ビジュアルツリー 下線
     ct_underline: CompositeTreeRef,
+    /// 入力ツリー ルート
+    ht_root: HitTestTreeRef,
+    /// 大きさ
     size: Size<LogicalUnit>,
+    /// アクティブ状態か？
     active: Cell<bool>,
+    /// 所属するPaneGroupViewControllerの弱参照
     group_controller: std::rc::Weak<PaneGroupViewController>,
 }
 impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
@@ -2031,6 +2140,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
     }
 }
 impl PaneGroupTabEventHandler {
+    /// アクティブ状態の切り替え
     fn set_active<E>(&self, active: bool, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
         if self.active.replace(active) == active {
             // active not changed

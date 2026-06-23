@@ -401,6 +401,21 @@ impl<U: Unit> Rect<U> {
             _marker: PhantomData,
         }
     }
+
+    #[inline(always)]
+    pub fn ref_relocate(&self, new_lt: &Point<U>) -> Self
+    where
+        U::SignedValueType: Copy,
+        U::UnsignedValueType: Copy,
+    {
+        Self {
+            left: new_lt.x,
+            top: new_lt.y,
+            width: self.width,
+            height: self.height,
+            _marker: PhantomData,
+        }
+    }
 }
 impl<U: Unit<SignedValueType: Zero>> From<Size<U>> for Rect<U> {
     #[inline(always)]

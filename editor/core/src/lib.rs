@@ -3383,7 +3383,7 @@ async fn run<'sys>(
                         parent: root_id,
                         splitter: uikit::dock::DockedPaneSplitterView::new(
                             view_init_ctx,
-                            uikit::dock::DockedPaneSplitDirection::Horizontal,
+                            uikit::dock::DockedPaneSplitDirection::Vertical,
                             parent_id1,
                         ),
                         direction: uikit::dock::DockDirection::ToBottom(Cell::new(320.0)),
@@ -3395,7 +3395,7 @@ async fn run<'sys>(
                                 parent: parent_id1,
                                 splitter: uikit::dock::DockedPaneSplitterView::new(
                                     view_init_ctx,
-                                    uikit::dock::DockedPaneSplitDirection::Vertical,
+                                    uikit::dock::DockedPaneSplitDirection::Horizontal,
                                     parent_id2,
                                 ),
                                 direction: uikit::dock::DockDirection::ToRight(Cell::new(256.0)),
@@ -3407,7 +3407,7 @@ async fn run<'sys>(
                                         parent: parent_id2,
                                         splitter: uikit::dock::DockedPaneSplitterView::new(
                                             view_init_ctx,
-                                            uikit::dock::DockedPaneSplitDirection::Horizontal,
+                                            uikit::dock::DockedPaneSplitDirection::Vertical,
                                             parent_id1,
                                         ),
                                         direction: uikit::dock::DockDirection::ToTop(Cell::new(
@@ -3421,7 +3421,7 @@ async fn run<'sys>(
                                                 parent: parent_id1,
                                                 splitter: uikit::dock::DockedPaneSplitterView::new(
                                                     view_init_ctx,
-                                                    uikit::dock::DockedPaneSplitDirection::Vertical,
+                                                    uikit::dock::DockedPaneSplitDirection::Horizontal,
                                                     parent_id2,
                                                 ),
                                                 direction: uikit::dock::DockDirection::ToLeft(
@@ -4415,7 +4415,7 @@ async fn run<'sys>(
                     let popover_rect = uikit::dock::move_preview(
                         &unsafe { dest_window.extra_data_ref::<PerWindowData>() }.docking_manager,
                         &dock_store,
-                        client_pos_in_dest,
+                        &client_pos_in_dest,
                         state,
                     );
                     system_link.update_pane_drag(dest_window, &popover_rect);
@@ -4436,7 +4436,7 @@ async fn run<'sys>(
                     let tab_index = state.tab_index;
                     system_link.end_pane_drag(&pointer);
                     let (op, suggested_rect) =
-                        uikit::dock::end_preview(dm, &mut dock_store, client_pos_in_dest, state);
+                        uikit::dock::end_preview(dm, &mut dock_store, &client_pos_in_dest, state);
                     let (diverged_content, undock_result) = dm.redock(
                         source_dock,
                         &mut dock_store,
@@ -5371,6 +5371,7 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
 pub struct FileSystem {
     resources_base_path: PathBuf,
     cache_base_path: PathBuf,
+    persist_state_base_path: PathBuf,
 }
 impl FileSystem {
     #[tracing::instrument]
@@ -5423,19 +5424,44 @@ impl FileSystem {
             p
         };
 
+        #[cfg(target_os = "linux")]
+        let persist_state_base_path = 'persist_state_base_path: {
+            if let Some(p) = std::env::var_os("XDG_DATA_HOME") {
+                break 'persist_state_base_path PathBuf::from(p).join("io.ct2.peridot.editor");
+            }
+
+            if let Some(p) = std::env::var_os("HOME") {
+                break 'persist_state_base_path PathBuf::from(p)
+                    .join(".local/share/io.ct2.peridot.editor");
+            }
+
+            tracing::warn!(
+                "neither XDG_CACHE_HOME nor HOME is set, generating cache into current working directory"
+            );
+            std::env::current_dir()
+                .expect("fs.persist_state_base_path.current_dir")
+                .join(".persist-state/io.ct2.peridot.editor")
+        };
+
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
             tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");
+        }
+
+        if let Err(e) = std::fs::create_dir_all(&persist_state_base_path) {
+            tracing::error!(reason = %e, "fs.persist_state_base_path.create_dir_all");
         }
 
         tracing::info!(
             resources_base_path = %resources_base_path.display(),
             cache_base_path = %cache_base_path.display(),
+            persist_state_base_path = %persist_state_base_path.display(),
             "filesystem initialized"
         );
 
         Self {
             resources_base_path,
             cache_base_path,
+            persist_state_base_path,
         }
     }
 
