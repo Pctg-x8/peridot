@@ -825,6 +825,77 @@ impl<Event> CompositeRect<Event> {
     }
 }
 
+#[must_use]
+pub struct CompositeRectModificationChain<'r, Event> {
+    storage: &'r mut CompositeTree<Event>,
+    target: *mut CompositeRect<Event>,
+    r: CompositeTreeRef,
+    dirty: bool,
+}
+impl<'r, Event> Drop for CompositeRectModificationChain<'r, Event> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        tracing::warn!("CompositeRectModificationChain does not finished correctly!");
+    }
+}
+impl<'r, Event> CompositeRectModificationChain<'r, Event> {
+    pub fn finish(self) {
+        if self.dirty {
+            self.storage.mark_dirty(self.r);
+        }
+    }
+
+    pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.offset = [x, y];
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn offset_imm(self, x: f32, y: f32) -> Self {
+        self.offset(AnimatableFloat::Value(x), AnimatableFloat::Value(y))
+    }
+
+    pub fn size(mut self, w: AnimatableFloat<Event>, h: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.size = [w, h];
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn size_imm(self, w: f32, h: f32) -> Self {
+        self.size(AnimatableFloat::Value(w), AnimatableFloat::Value(h))
+    }
+
+    pub fn scale_x(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.scale_x = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn scale_x_imm(self, v: f32) -> Self {
+        self.scale_x(AnimatableFloat::Value(v))
+    }
+
+    pub fn opacity(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.opacity = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn opacity_imm(self, v: f32) -> Self {
+        self.opacity(AnimatableFloat::Value(v))
+    }
+
+    pub fn composite_mode(mut self, v: CompositeMode<Event>) -> Self {
+        unsafe { &mut *self.target }.composite_mode = v;
+        self.dirty = true;
+        self
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Gradient {
     Linear {
@@ -2309,12 +2380,26 @@ impl<Event> CompositeTree<Event> {
         self.custom_render_unused.insert(token.0);
     }
 
+    #[inline(always)]
     pub fn get(&self, index: CompositeTreeRef) -> &CompositeRect<Event> {
         &self.rects[index.0]
     }
 
+    #[inline(always)]
     pub fn get_mut(&mut self, index: CompositeTreeRef) -> &mut CompositeRect<Event> {
         &mut self.rects[index.0]
+    }
+
+    pub fn begin_mod_chain<'r>(
+        &'r mut self,
+        r: CompositeTreeRef,
+    ) -> CompositeRectModificationChain<'r, Event> {
+        CompositeRectModificationChain {
+            target: &mut self.rects[r.0],
+            storage: self,
+            r,
+            dirty: false,
+        }
     }
 
     pub fn set_gradient(&mut self, r: GradientRef, data: Gradient) {

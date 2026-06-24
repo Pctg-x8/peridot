@@ -1452,15 +1452,11 @@ impl DockedPaneSplitterEventHandler {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        composite_tree.get_mut(self.ct_root).offset = [
-            AnimatableFloat::Value(new_rect.left),
-            AnimatableFloat::Value(new_rect.top),
-        ];
-        composite_tree.get_mut(self.ct_root).size = [
-            AnimatableFloat::Value(new_rect.width),
-            AnimatableFloat::Value(new_rect.height),
-        ];
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .offset_imm(new_rect.left, new_rect.top)
+            .size_imm(new_rect.width, new_rect.height)
+            .finish();
         ht_manager.get_data_mut(self.ht_root).left = new_rect.left;
         ht_manager.get_data_mut(self.ht_root).top = new_rect.top;
         ht_manager.get_data_mut(self.ht_root).width = new_rect.width;
@@ -1856,15 +1852,11 @@ impl PaneGroupViewController {
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        composite_tree.get_mut(self.ct_root).offset = [
-            AnimatableFloat::Value(rect.left),
-            AnimatableFloat::Value(rect.top),
-        ];
-        composite_tree.get_mut(self.ct_root).size = [
-            AnimatableFloat::Value(rect.width),
-            AnimatableFloat::Value(rect.height),
-        ];
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .offset_imm(rect.left, rect.top)
+            .size_imm(rect.width, rect.height)
+            .finish();
         ht_manager.get_data_mut(self.ht_root).left = rect.left;
         ht_manager.get_data_mut(self.ht_root).top = rect.top;
         ht_manager.get_data_mut(self.ht_root).width = rect.width;
@@ -1991,9 +1983,10 @@ impl PaneGroupTabView {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
     ) {
-        composite_tree.get_mut(self.0.ct_root).offset =
-            [AnimatableFloat::Value(pos.x), AnimatableFloat::Value(pos.y)];
-        composite_tree.mark_dirty(self.0.ct_root);
+        composite_tree
+            .begin_mod_chain(self.0.ct_root)
+            .offset_imm(pos.x, pos.y)
+            .finish();
         ht_manager.get_data_mut(self.ht_root).left = pos.x;
         ht_manager.get_data_mut(self.ht_root).top = pos.y;
     }
@@ -2023,16 +2016,18 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
                 to_value: [1.0, 1.0, 1.0, 0.25],
                 start_sec: context.current_sec,
                 end_sec: context.current_sec + 0.1,
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .finish();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -2043,16 +2038,18 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.25],
                 to_value: [1.0, 1.0, 1.0, 0.0],
                 start_sec: context.current_sec,
                 end_sec: context.current_sec + 0.1,
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .finish();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -2148,55 +2145,59 @@ impl PaneGroupTabEventHandler {
         }
 
         if active {
-            composite_tree.get_mut(self.ct_underline).scale_x = AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 1.0,
-                start_sec: current_sec,
-                end_sec: current_sec + 0.2,
-                curve: AnimationCurve::EASE_OUT_HARD,
-                event_on_complete: None,
-            };
-            composite_tree.get_mut(self.ct_underline).opacity = AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 1.0,
-                start_sec: current_sec,
-                end_sec: current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            composite_tree.mark_dirty(self.ct_underline);
-
-            composite_tree.get_mut(self.ct_active).composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Animated {
+            composite_tree
+                .begin_mod_chain(self.ct_underline)
+                .scale_x(AnimatableFloat::Animated {
+                    from_value: 0.0,
+                    to_value: 1.0,
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.2,
+                    curve: AnimationCurve::EASE_OUT_HARD,
+                    event_on_complete: None,
+                })
+                .opacity(AnimatableFloat::Animated {
+                    from_value: 0.0,
+                    to_value: 1.0,
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.1,
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                })
+                .finish();
+            composite_tree
+                .begin_mod_chain(self.ct_active)
+                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.0],
                     to_value: [1.0, 1.0, 1.0, 0.1],
                     start_sec: current_sec,
                     end_sec: current_sec + 0.2,
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
-                });
-            composite_tree.mark_dirty(self.ct_active);
+                }))
+                .finish();
         } else {
-            composite_tree.get_mut(self.ct_underline).scale_x = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 0.0,
-                start_sec: current_sec,
-                end_sec: current_sec + 0.2,
-                curve: AnimationCurve::EASE_IN,
-                event_on_complete: None,
-            };
-            composite_tree.mark_dirty(self.ct_underline);
-
-            composite_tree.get_mut(self.ct_active).composite_mode =
-                CompositeMode::FillColor(AnimatableColor::Animated {
+            composite_tree
+                .begin_mod_chain(self.ct_underline)
+                .scale_x(AnimatableFloat::Animated {
+                    from_value: 1.0,
+                    to_value: 0.0,
+                    start_sec: current_sec,
+                    end_sec: current_sec + 0.2,
+                    curve: AnimationCurve::EASE_IN,
+                    event_on_complete: None,
+                })
+                .finish();
+            composite_tree
+                .begin_mod_chain(self.ct_active)
+                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.1],
                     to_value: [1.0, 1.0, 1.0, 0.0],
                     start_sec: current_sec,
                     end_sec: current_sec + 0.2,
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
-                });
-            composite_tree.mark_dirty(self.ct_active);
+                }))
+                .finish();
         }
     }
 }
