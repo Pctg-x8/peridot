@@ -290,8 +290,7 @@ impl ItemView {
             CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
                 to_value: [1.0, 1.0, 1.0, 0.25],
-                start_sec: current_sec,
-                end_sec: current_sec + 0.1,
+                sec_duration: (current_sec..current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
             });
@@ -308,8 +307,7 @@ impl ItemView {
             CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.25],
                 to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: current_sec,
-                end_sec: current_sec + 0.1,
+                sec_duration: (current_sec..current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
             });

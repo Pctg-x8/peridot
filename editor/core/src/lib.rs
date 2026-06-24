@@ -1298,8 +1298,7 @@ impl HitTestTreeActionHandler for RadioButtonEventHandler {
             .color = AnimatableColor::Animated {
             from_value: [1.0, 1.0, 1.0, 0.5],
             to_value: [1.0, 1.0, 1.0, 1.0],
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
+            sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
             curve: AnimationCurve::Linear,
             event_on_complete: None,
         };
@@ -1323,8 +1322,7 @@ impl HitTestTreeActionHandler for RadioButtonEventHandler {
             .color = AnimatableColor::Animated {
             from_value: [1.0, 1.0, 1.0, 1.0],
             to_value: [1.0, 1.0, 1.0, 0.5],
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
+            sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
             curve: AnimationCurve::Linear,
             event_on_complete: None,
         };
@@ -1352,8 +1350,7 @@ impl RadioButtonEventHandler {
             composite_tree.get_mut(self.ct_mark).opacity = AnimatableFloat::Animated {
                 from_value: 0.0,
                 to_value: 1.0,
-                start_sec: current_sec,
-                end_sec: current_sec + 0.1,
+                sec_duration: (current_sec..current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
             };
@@ -1361,8 +1358,7 @@ impl RadioButtonEventHandler {
             composite_tree.get_mut(self.ct_mark).opacity = AnimatableFloat::Animated {
                 from_value: 1.0,
                 to_value: 0.0,
-                start_sec: current_sec,
-                end_sec: current_sec + 0.1,
+                sec_duration: (current_sec..current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
             };

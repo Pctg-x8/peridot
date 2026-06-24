@@ -22,7 +22,10 @@ use crate::{
         text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
         vg::VectorRasterizationState,
     },
-    utils::SafeF32,
+    utils::{
+        SafeF32,
+        range_helper::{is_beyond, range_from_len, rate_of},
+    },
 };
 
 pub const BLUR_SAMPLE_STEPS: usize = 4;
@@ -130,12 +133,29 @@ impl<Event> FloatParameter<Event> {
 }
 
 #[derive(Clone)]
+pub struct FloatAnimationTemplate {
+    pub from_value: f32,
+    pub to_value: f32,
+    pub curve: AnimationCurve,
+    pub duration: f32,
+}
+impl FloatAnimationTemplate {
+    pub const fn flip(&self, curve: AnimationCurve) -> Self {
+        Self {
+            from_value: self.to_value,
+            to_value: self.from_value,
+            duration: self.duration,
+            curve,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub enum AnimatableFloat<Event> {
     Value(f32),
     Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender<Event>) -> f32 + Sync + Send>),
     Animated {
-        start_sec: f32,
-        end_sec: f32,
+        sec_duration: core::range::Range<f32>,
         from_value: f32,
         to_value: f32,
         curve: AnimationCurve,
@@ -151,16 +171,14 @@ impl<Event> core::fmt::Debug for AnimatableFloat<Event> {
                 .field(&"<fn>")
                 .finish(),
             Self::Animated {
-                start_sec,
-                end_sec,
+                sec_duration,
                 from_value,
                 to_value,
                 curve,
                 ..
             } => f
                 .debug_struct("AnimatableFloat::Animated")
-                .field("start_sec", start_sec)
-                .field("end_sec", end_sec)
+                .field("sec_duration", sec_duration)
                 .field("from_value", from_value)
                 .field("to_value", to_value)
                 .field("curve", curve)
@@ -170,6 +188,30 @@ impl<Event> core::fmt::Debug for AnimatableFloat<Event> {
     }
 }
 impl<Event> AnimatableFloat<Event> {
+    pub fn from_template(template: &FloatAnimationTemplate, start_sec: f32) -> Self {
+        Self::Animated {
+            sec_duration: range_from_len(start_sec, template.duration),
+            from_value: template.from_value,
+            to_value: template.to_value,
+            curve: template.curve.clone(),
+            event_on_complete: None,
+        }
+    }
+
+    pub fn from_template_with_completion(
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+        on_complete: Event,
+    ) -> Self {
+        Self::Animated {
+            sec_duration: range_from_len(start_sec, template.duration),
+            from_value: template.from_value,
+            to_value: template.to_value,
+            curve: template.curve.clone(),
+            event_on_complete: Some(on_complete),
+        }
+    }
+
     pub fn evaluate(
         &self,
         current_sec: f32,
@@ -181,12 +223,11 @@ impl<Event> AnimatableFloat<Event> {
             &Self::Animated {
                 from_value,
                 to_value,
-                start_sec,
-                end_sec,
+                ref sec_duration,
                 ref curve,
                 ..
             } => lerp(
-                curve.interpolate((current_sec - start_sec) / (end_sec - start_sec)),
+                curve.interpolate(rate_of(sec_duration, current_sec)),
                 from_value,
                 to_value,
             ),
@@ -195,11 +236,11 @@ impl<Event> AnimatableFloat<Event> {
 
     fn process_on_complete(&mut self, current_sec: f32, cb: impl FnOnce(Event)) {
         if let &mut Self::Animated {
-            end_sec,
+            ref sec_duration,
             ref mut event_on_complete,
             ..
         } = self
-            && end_sec <= current_sec
+            && is_beyond(sec_duration, current_sec)
         {
             if let Some(e) = event_on_complete.take() {
                 cb(e);
@@ -213,8 +254,7 @@ pub enum AnimatableColor<Event> {
     Value([f32; 4]),
     Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender<Event>) -> [f32; 4] + Sync + Send>),
     Animated {
-        start_sec: f32,
-        end_sec: f32,
+        sec_duration: core::range::Range<f32>,
         from_value: [f32; 4],
         to_value: [f32; 4],
         curve: AnimationCurve,
@@ -222,7 +262,7 @@ pub enum AnimatableColor<Event> {
     },
 }
 impl<Event> core::fmt::Debug for AnimatableColor<Event> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Value(x) => f.debug_tuple("AnimatableColor::Value").field(x).finish(),
             Self::Expression(_) => f
@@ -230,16 +270,14 @@ impl<Event> core::fmt::Debug for AnimatableColor<Event> {
                 .field(&"<fn>")
                 .finish(),
             Self::Animated {
-                start_sec,
-                end_sec,
+                sec_duration,
                 from_value,
                 to_value,
                 curve,
                 ..
             } => f
                 .debug_struct("AnimatableColor::Animated")
-                .field("start_sec", start_sec)
-                .field("end_sec", end_sec)
+                .field("sec_duration", sec_duration)
                 .field("from_value", from_value)
                 .field("to_value", to_value)
                 .field("curve", curve)
@@ -260,12 +298,11 @@ impl<Event> AnimatableColor<Event> {
             &Self::Animated {
                 from_value,
                 to_value,
-                start_sec,
-                end_sec,
+                ref sec_duration,
                 ref curve,
                 ..
             } => lerp4(
-                curve.interpolate((current_sec - start_sec) / (end_sec - start_sec)),
+                curve.interpolate(rate_of(sec_duration, current_sec)),
                 from_value,
                 to_value,
             ),
@@ -274,11 +311,11 @@ impl<Event> AnimatableColor<Event> {
 
     fn process_on_complete(&mut self, current_sec: f32, cb: impl FnOnce(Event)) {
         if let &mut Self::Animated {
-            end_sec,
+            ref sec_duration,
             ref mut event_on_complete,
             ..
         } = self
-            && end_sec <= current_sec
+            && is_beyond(sec_duration, current_sec)
         {
             if let Some(e) = event_on_complete.take() {
                 cb(e);
@@ -839,10 +876,12 @@ impl<'r, Event> Drop for CompositeRectModificationChain<'r, Event> {
     }
 }
 impl<'r, Event> CompositeRectModificationChain<'r, Event> {
-    pub fn finish(self) {
+    pub fn apply(self) {
         if self.dirty {
             self.storage.mark_dirty(self.r);
         }
+
+        core::mem::forget(self);
     }
 
     pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self {
@@ -856,6 +895,46 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self.offset(AnimatableFloat::Value(x), AnimatableFloat::Value(y))
     }
 
+    pub fn y(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.offset[1] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn y_imm(self, v: f32) -> Self {
+        self.y(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn y_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.y(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn x(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.offset[0] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn x_imm(self, v: f32) -> Self {
+        self.x(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn x_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.x(AnimatableFloat::from_template(template, start_sec))
+    }
+
     pub fn size(mut self, w: AnimatableFloat<Event>, h: AnimatableFloat<Event>) -> Self {
         unsafe { &mut *self.target }.size = [w, h];
         self.dirty = true;
@@ -865,6 +944,46 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
     #[inline(always)]
     pub fn size_imm(self, w: f32, h: f32) -> Self {
         self.size(AnimatableFloat::Value(w), AnimatableFloat::Value(h))
+    }
+
+    pub fn width(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.size[0] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn width_imm(self, v: f32) -> Self {
+        self.width(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn width_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.width(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn height(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.size[1] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn height_imm(self, v: f32) -> Self {
+        self.height(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn height_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.height(AnimatableFloat::from_template(template, start_sec))
     }
 
     pub fn scale_x(mut self, v: AnimatableFloat<Event>) -> Self {
@@ -878,6 +997,65 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self.scale_x(AnimatableFloat::Value(v))
     }
 
+    #[inline(always)]
+    pub fn scale_x_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.scale_x(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn scale_y(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.scale_y = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn scale_y_imm(self, v: f32) -> Self {
+        self.scale_y(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn scale_y_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.scale_y(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn scale(mut self, v: AnimatableFloat<Event>) -> Self
+    where
+        Event: Clone,
+    {
+        unsafe { &mut *self.target }.scale_x = v.clone();
+        unsafe { &mut *self.target }.scale_y = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn scale_imm(self, v: f32) -> Self
+    where
+        Event: Clone,
+    {
+        self.scale(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn scale_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self
+    where
+        Event: Clone,
+    {
+        self.scale(AnimatableFloat::from_template(template, start_sec))
+    }
+
     pub fn opacity(mut self, v: AnimatableFloat<Event>) -> Self {
         unsafe { &mut *self.target }.opacity = v;
         self.dirty = true;
@@ -889,8 +1067,37 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self.opacity(AnimatableFloat::Value(v))
     }
 
+    #[inline(always)]
+    pub fn opacity_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.opacity(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    #[inline(always)]
+    pub fn opacity_animated_from_template_with_completion(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+        on_complete: Event,
+    ) -> Self {
+        self.opacity(AnimatableFloat::from_template_with_completion(
+            template,
+            start_sec,
+            on_complete,
+        ))
+    }
+
     pub fn composite_mode(mut self, v: CompositeMode<Event>) -> Self {
         unsafe { &mut *self.target }.composite_mode = v;
+        self.dirty = true;
+        self
+    }
+
+    pub fn corner_radius(mut self, v: CornerRadius) -> Self {
+        unsafe { &mut *self.target }.corner_radius = v;
         self.dirty = true;
         self
     }

@@ -16,7 +16,7 @@ use crate::{
             CompositeRect, CompositeRectScaleFactor, CompositeRectText,
             CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, CornerRadius,
-            Gradient, GradientRef,
+            FloatAnimationTemplate, Gradient, GradientRef,
         },
         text::{FontID, TextLayout},
     },
@@ -1456,7 +1456,7 @@ impl DockedPaneSplitterEventHandler {
             .begin_mod_chain(self.ct_root)
             .offset_imm(new_rect.left, new_rect.top)
             .size_imm(new_rect.width, new_rect.height)
-            .finish();
+            .apply();
         ht_manager.get_data_mut(self.ht_root).left = new_rect.left;
         ht_manager.get_data_mut(self.ht_root).top = new_rect.top;
         ht_manager.get_data_mut(self.ht_root).width = new_rect.width;
@@ -1856,7 +1856,7 @@ impl PaneGroupViewController {
             .begin_mod_chain(self.ct_root)
             .offset_imm(rect.left, rect.top)
             .size_imm(rect.width, rect.height)
-            .finish();
+            .apply();
         ht_manager.get_data_mut(self.ht_root).left = rect.left;
         ht_manager.get_data_mut(self.ht_root).top = rect.top;
         ht_manager.get_data_mut(self.ht_root).width = rect.width;
@@ -1986,7 +1986,7 @@ impl PaneGroupTabView {
         composite_tree
             .begin_mod_chain(self.0.ct_root)
             .offset_imm(pos.x, pos.y)
-            .finish();
+            .apply();
         ht_manager.get_data_mut(self.ht_root).left = pos.x;
         ht_manager.get_data_mut(self.ht_root).top = pos.y;
     }
@@ -2022,12 +2022,11 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
                 to_value: [1.0, 1.0, 1.0, 0.25],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
             }))
-            .finish();
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -2044,12 +2043,11 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.25],
                 to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
             }))
-            .finish();
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -2137,6 +2135,21 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
     }
 }
 impl PaneGroupTabEventHandler {
+    const UNDERLINE_ACTIVATE_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+        from_value: 0.0,
+        to_value: 1.0,
+        curve: AnimationCurve::Linear,
+        duration: 0.1,
+    };
+    const UNDERLINE_ACTIVATE_SCALEX_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+        from_value: 0.0,
+        to_value: 1.0,
+        curve: AnimationCurve::EASE_OUT_HARD,
+        duration: 0.2,
+    };
+    const UNDERLINE_DEACTIVATE_SCALEX_ANIM: FloatAnimationTemplate =
+        Self::UNDERLINE_ACTIVATE_SCALEX_ANIM.flip(AnimationCurve::EASE_IN);
+
     /// アクティブ状態の切り替え
     fn set_active<E>(&self, active: bool, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
         if self.active.replace(active) == active {
@@ -2147,57 +2160,37 @@ impl PaneGroupTabEventHandler {
         if active {
             composite_tree
                 .begin_mod_chain(self.ct_underline)
-                .scale_x(AnimatableFloat::Animated {
-                    from_value: 0.0,
-                    to_value: 1.0,
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.2,
-                    curve: AnimationCurve::EASE_OUT_HARD,
-                    event_on_complete: None,
-                })
-                .opacity(AnimatableFloat::Animated {
-                    from_value: 0.0,
-                    to_value: 1.0,
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                })
-                .finish();
+                .scale_x_animated_from_template(&Self::UNDERLINE_ACTIVATE_SCALEX_ANIM, current_sec)
+                .opacity_animated_from_template(&Self::UNDERLINE_ACTIVATE_ANIM, current_sec)
+                .apply();
             composite_tree
                 .begin_mod_chain(self.ct_active)
                 .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.0],
                     to_value: [1.0, 1.0, 1.0, 0.1],
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.2,
+                    sec_duration: (current_sec..current_sec + 0.2).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 }))
-                .finish();
+                .apply();
         } else {
             composite_tree
                 .begin_mod_chain(self.ct_underline)
-                .scale_x(AnimatableFloat::Animated {
-                    from_value: 1.0,
-                    to_value: 0.0,
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.2,
-                    curve: AnimationCurve::EASE_IN,
-                    event_on_complete: None,
-                })
-                .finish();
+                .scale_x_animated_from_template(
+                    &Self::UNDERLINE_DEACTIVATE_SCALEX_ANIM,
+                    current_sec,
+                )
+                .apply();
             composite_tree
                 .begin_mod_chain(self.ct_active)
                 .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.1],
                     to_value: [1.0, 1.0, 1.0, 0.0],
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.2,
+                    sec_duration: (current_sec..current_sec + 0.2).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 }))
-                .finish();
+                .apply();
         }
     }
 }

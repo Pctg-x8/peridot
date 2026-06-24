@@ -10,8 +10,8 @@ use crate::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
-            CompositeTree, CompositeTreeRef, Gradient, GradientRef, TextureMappingMode,
-            TextureType,
+            CompositeTree, CompositeTreeRef, FloatAnimationTemplate, Gradient, GradientRef,
+            TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
@@ -234,8 +234,28 @@ const TEXT_INLINE_MARGIN: f32 = 8.0;
 const MINIMUM_WIDTH: SafeF32 = unsafe { SafeF32::new_unchecked(16.0) };
 const MINIMUM_HEIGHT: SafeF32 = unsafe { SafeF32::new_unchecked(8.0) };
 const LR_TEXT_MINIMUM_MARGIN: SafeF32 = unsafe { SafeF32::new_unchecked(16.0) };
+
 const ANIMATION_DELAY_PER_ELEMENT: f32 = 0.025;
-const ANIMATION_DURATION: f32 = 0.125;
+const INTRO_X_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+    from_value: 4.0,
+    to_value: 0.0,
+    curve: AnimationCurve::EASE_OUT,
+    duration: 0.125,
+};
+const INTRO_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+    from_value: 0.0,
+    to_value: 1.0,
+    curve: AnimationCurve::Linear,
+    duration: 0.125,
+};
+
+const LIT_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+    from_value: 0.0,
+    to_value: 1.0,
+    curve: AnimationCurve::Linear,
+    duration: 0.1,
+};
+const UNLIT_OPACITY_ANIM: FloatAnimationTemplate = LIT_OPACITY_ANIM.flip(AnimationCurve::Linear);
 
 pub struct HeadingView {
     ct_root: CompositeTreeRef,
@@ -310,24 +330,10 @@ impl CommandView {
                 AnimatableFloat::Value(ITEM_HEIGHT),
             ],
             offset: [
-                AnimatableFloat::Animated {
-                    from_value: 4.0,
-                    to_value: 0.0,
-                    start_sec: animation_base_time,
-                    end_sec: animation_base_time + ANIMATION_DURATION,
-                    curve: AnimationCurve::EASE_OUT,
-                    event_on_complete: None,
-                },
+                AnimatableFloat::from_template(&INTRO_X_ANIM, animation_base_time),
                 AnimatableFloat::Value(placement_y),
             ],
-            opacity: AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 1.0,
-                start_sec: animation_base_time,
-                end_sec: animation_base_time + ANIMATION_DURATION,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            },
+            opacity: AnimatableFloat::from_template(&INTRO_OPACITY_ANIM, animation_base_time),
             ..Default::default()
         });
         let ct_label = ctx.composite_tree.create(CompositeRect {
@@ -435,24 +441,10 @@ impl SubMenuView {
                 AnimatableFloat::Value(ITEM_HEIGHT),
             ],
             offset: [
-                AnimatableFloat::Animated {
-                    from_value: 4.0,
-                    to_value: 0.0,
-                    start_sec: animation_base_time,
-                    end_sec: animation_base_time + ANIMATION_DURATION,
-                    curve: AnimationCurve::EASE_OUT,
-                    event_on_complete: None,
-                },
+                AnimatableFloat::from_template(&INTRO_X_ANIM, animation_base_time),
                 AnimatableFloat::Value(placement_y),
             ],
-            opacity: AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 1.0,
-                start_sec: animation_base_time,
-                end_sec: animation_base_time + ANIMATION_DURATION,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            },
+            opacity: AnimatableFloat::from_template(&INTRO_OPACITY_ANIM, animation_base_time),
             ..Default::default()
         });
         let ct_label = ctx.composite_tree.create(CompositeRect {
@@ -623,27 +615,17 @@ impl HitTestTreeActionHandler for CommandViewEventHandler {
 }
 impl CommandViewEventHandler {
     pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 0.0,
-            to_value: 1.0,
-            start_sec: current_sec,
-            end_sec: current_sec + 0.1,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        composite_tree.mark_dirty(self.ct_light);
+        composite_tree
+            .begin_mod_chain(self.ct_light)
+            .opacity_animated_from_template(&LIT_OPACITY_ANIM, current_sec)
+            .apply();
     }
 
     pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 1.0,
-            to_value: 0.0,
-            start_sec: current_sec,
-            end_sec: current_sec + 0.1,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        composite_tree.mark_dirty(self.ct_light);
+        composite_tree
+            .begin_mod_chain(self.ct_light)
+            .opacity_animated_from_template(&UNLIT_OPACITY_ANIM, current_sec)
+            .apply();
     }
 }
 
@@ -669,26 +651,16 @@ impl HitTestTreeActionHandler for SubMenuViewEventHandler {
 }
 impl SubMenuViewEventHandler {
     pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 0.0,
-            to_value: 1.0,
-            start_sec: current_sec,
-            end_sec: current_sec + 0.1,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        composite_tree.mark_dirty(self.ct_light);
+        composite_tree
+            .begin_mod_chain(self.ct_light)
+            .opacity_animated_from_template(&LIT_OPACITY_ANIM, current_sec)
+            .apply();
     }
 
     pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree.get_mut(self.ct_light).opacity = AnimatableFloat::Animated {
-            from_value: 1.0,
-            to_value: 0.0,
-            start_sec: current_sec,
-            end_sec: current_sec + 0.1,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        composite_tree.mark_dirty(self.ct_light);
+        composite_tree
+            .begin_mod_chain(self.ct_light)
+            .opacity_animated_from_template(&UNLIT_OPACITY_ANIM, current_sec)
+            .apply();
     }
 }

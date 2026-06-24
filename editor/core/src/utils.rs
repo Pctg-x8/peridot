@@ -3,6 +3,7 @@ pub use self::color::*;
 mod coord;
 pub use self::coord::*;
 pub mod platform;
+pub mod range_helper;
 
 /// identity function
 #[inline(always)]

@@ -244,8 +244,7 @@ impl SystemCommandButtonActionHandler {
                 AnimatableFloat::Animated {
                     from_value: 0.0,
                     to_value: 1.0,
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 }
@@ -253,8 +252,7 @@ impl SystemCommandButtonActionHandler {
                 AnimatableFloat::Animated {
                     from_value: 1.0,
                     to_value: 0.0,
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 }

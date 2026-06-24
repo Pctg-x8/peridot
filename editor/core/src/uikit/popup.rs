@@ -9,9 +9,10 @@ use crate::{
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
+        FloatAnimationTemplate,
     },
     uikit::{MountContext, MountTarget, RawMountTarget, ViewInitContext},
-    utils::{LogicalUnit, Size},
+    utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
 
 #[repr(transparent)]
@@ -144,6 +145,14 @@ impl MountTarget for OverlayPopupBasicMaskView {
 }
 impl OverlayPopupBasicMaskView {
     pub const ANIMATION_DURATION: f32 = 0.125;
+    const OPEN_BLUR_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+        from_value: 0.0,
+        to_value: 3.0,
+        curve: AnimationCurve::Linear,
+        duration: Self::ANIMATION_DURATION,
+    };
+    const CLOSE_BLUR_ANIM: FloatAnimationTemplate =
+        Self::OPEN_BLUR_ANIM.flip(AnimationCurve::Linear);
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -183,25 +192,19 @@ impl OverlayPopupBasicMaskView {
         composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
-        composite_tree.get_mut(self.ct_root).composite_mode = CompositeMode::FillColorBackdropBlur(
-            AnimatableColor::Animated {
-                from_value: [0.0, 0.0, 0.0, 0.0],
-                to_value: [0.0, 0.0, 0.0, 0.25],
-                start_sec: current_sec,
-                end_sec: current_sec + Self::ANIMATION_DURATION,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            },
-            AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 3.0,
-                start_sec: current_sec,
-                end_sec: current_sec + Self::ANIMATION_DURATION,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            },
-        );
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColorBackdropBlur(
+                AnimatableColor::Animated {
+                    from_value: [0.0, 0.0, 0.0, 0.0],
+                    to_value: [0.0, 0.0, 0.0, 0.25],
+                    curve: AnimationCurve::Linear,
+                    sec_duration: (current_sec..current_sec + Self::ANIMATION_DURATION).into(),
+                    event_on_complete: None,
+                },
+                AnimatableFloat::from_template(&Self::OPEN_BLUR_ANIM, current_sec),
+            ))
+            .apply();
     }
 
     pub fn play_close_animation(
@@ -209,25 +212,19 @@ impl OverlayPopupBasicMaskView {
         composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
-        composite_tree.get_mut(self.ct_root).composite_mode = CompositeMode::FillColorBackdropBlur(
-            AnimatableColor::Animated {
-                from_value: [0.0, 0.0, 0.0, 0.25],
-                to_value: [0.0, 0.0, 0.0, 0.0],
-                start_sec: current_sec,
-                end_sec: current_sec + Self::ANIMATION_DURATION,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            },
-            AnimatableFloat::Animated {
-                from_value: 3.0,
-                to_value: 0.0,
-                start_sec: current_sec,
-                end_sec: current_sec + Self::ANIMATION_DURATION,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            },
-        );
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColorBackdropBlur(
+                AnimatableColor::Animated {
+                    from_value: [0.0, 0.0, 0.0, 0.25],
+                    to_value: [0.0, 0.0, 0.0, 0.0],
+                    curve: AnimationCurve::Linear,
+                    sec_duration: (current_sec..current_sec + Self::ANIMATION_DURATION).into(),
+                    event_on_complete: None,
+                },
+                AnimatableFloat::from_template(&Self::CLOSE_BLUR_ANIM, current_sec),
+            ))
+            .apply();
     }
 }
 
@@ -251,6 +248,28 @@ impl MountTarget for OverlayPopupBasicFrameView {
 }
 impl OverlayPopupBasicFrameView {
     pub const ANIMATION_DURATION: f32 = OverlayPopupBasicMaskView::ANIMATION_DURATION;
+    const OPEN_SCALE_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+        from_value: 0.95,
+        to_value: 1.0,
+        curve: AnimationCurve::CubicBezier {
+            p1: (0.5, 0.5),
+            p2: (0.5, 1.0),
+        },
+        duration: Self::ANIMATION_DURATION,
+    };
+    const OPEN_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+        from_value: 0.0,
+        to_value: 1.0,
+        curve: AnimationCurve::Linear,
+        duration: Self::ANIMATION_DURATION,
+    };
+    const CLOSE_SCALE_ANIM: FloatAnimationTemplate =
+        Self::OPEN_SCALE_ANIM.flip(AnimationCurve::CubicBezier {
+            p1: (0.5, 0.5),
+            p2: (0.5, 1.0),
+        });
+    const CLOSE_OPACITY_ANIM: FloatAnimationTemplate =
+        Self::OPEN_OPACITY_ANIM.flip(AnimationCurve::Linear);
 
     pub fn new(ctx: &mut ViewInitContext, size: Size<LogicalUnit>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
@@ -328,48 +347,21 @@ impl OverlayPopupBasicFrameView {
         composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
-        composite_tree.get_mut(self.ct_root).offset[1] = AnimatableFloat::Animated {
-            from_value: -self.size.height * 0.5 + 4.0,
-            to_value: -self.size.height * 0.5,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::CubicBezier {
-                p1: (0.5, 0.5),
-                p2: (0.5, 1.0),
-            },
-            event_on_complete: None,
-        };
-        composite_tree.get_mut(self.ct_root).scale_x = AnimatableFloat::Animated {
-            from_value: 0.95,
-            to_value: 1.0,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::CubicBezier {
-                p1: (0.5, 0.5),
-                p2: (0.5, 1.0),
-            },
-            event_on_complete: None,
-        };
-        composite_tree.get_mut(self.ct_root).scale_y = AnimatableFloat::Animated {
-            from_value: 0.95,
-            to_value: 1.0,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::CubicBezier {
-                p1: (0.5, 0.5),
-                p2: (0.5, 1.0),
-            },
-            event_on_complete: None,
-        };
-        composite_tree.get_mut(self.ct_root).opacity = AnimatableFloat::Animated {
-            from_value: 0.0,
-            to_value: 1.0,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .y(AnimatableFloat::Animated {
+                from_value: -self.size.height * 0.5 + 4.0,
+                to_value: -self.size.height * 0.5,
+                curve: AnimationCurve::CubicBezier {
+                    p1: (0.5, 0.5),
+                    p2: (0.5, 1.0),
+                },
+                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
+                event_on_complete: None,
+            })
+            .scale_animated_from_template(&Self::OPEN_SCALE_ANIM, current_sec)
+            .opacity_animated_from_template(&Self::OPEN_OPACITY_ANIM, current_sec)
+            .apply();
     }
 
     pub fn play_close_animation(
@@ -378,47 +370,24 @@ impl OverlayPopupBasicFrameView {
         current_sec: f32,
         event_on_complete: SyncEvent,
     ) {
-        composite_tree.get_mut(self.ct_root).offset[1] = AnimatableFloat::Animated {
-            from_value: -self.size.height * 0.5,
-            to_value: -self.size.height * 0.5 + 4.0,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::CubicBezier {
-                p1: (0.5, 0.5),
-                p2: (0.5, 1.0),
-            },
-            event_on_complete: None,
-        };
-        composite_tree.get_mut(self.ct_root).scale_x = AnimatableFloat::Animated {
-            from_value: 1.0,
-            to_value: 0.95,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::CubicBezier {
-                p1: (0.5, 0.5),
-                p2: (0.5, 1.0),
-            },
-            event_on_complete: None,
-        };
-        composite_tree.get_mut(self.ct_root).scale_y = AnimatableFloat::Animated {
-            from_value: 1.0,
-            to_value: 0.95,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::CubicBezier {
-                p1: (0.5, 0.5),
-                p2: (0.5, 1.0),
-            },
-            event_on_complete: None,
-        };
-        composite_tree.get_mut(self.ct_root).opacity = AnimatableFloat::Animated {
-            from_value: 1.0,
-            to_value: 0.0,
-            start_sec: current_sec,
-            end_sec: current_sec + Self::ANIMATION_DURATION,
-            curve: AnimationCurve::Linear,
-            event_on_complete: Some(event_on_complete),
-        };
-        composite_tree.mark_dirty(self.ct_root);
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .y(AnimatableFloat::Animated {
+                from_value: -self.size.height * 0.5,
+                to_value: -self.size.height * 0.5 + 4.0,
+                curve: AnimationCurve::CubicBezier {
+                    p1: (0.5, 0.5),
+                    p2: (0.5, 1.0),
+                },
+                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
+                event_on_complete: None,
+            })
+            .scale_animated_from_template(&Self::CLOSE_SCALE_ANIM, current_sec)
+            .opacity_animated_from_template_with_completion(
+                &Self::CLOSE_OPACITY_ANIM,
+                current_sec,
+                event_on_complete,
+            )
+            .apply();
     }
 }

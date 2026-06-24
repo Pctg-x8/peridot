@@ -17,13 +17,22 @@ use crate::{
             CompositeRect, CompositeRectScaleFactor, CompositeRectText,
             CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
             CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
-            CornerRadius, TextureMappingMode, TextureType,
+            CornerRadius, FloatAnimationTemplate, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{MountContext, MountTarget, ViewInitContext},
     utils::{LogicalUnit, Point, Rect, SafeF32, UnsafeMainThreadOnlyOnceCell},
 };
+
+const ARROW_PRESS_Y_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+    from_value: -8.0,
+    to_value: -7.0,
+    curve: AnimationCurve::EASE_OUT,
+    duration: 0.1,
+};
+const ARROW_RELEASE_Y_ANIM: FloatAnimationTemplate =
+    ARROW_PRESS_Y_ANIM.flip(AnimationCurve::EASE_OUT);
 
 struct SharedResources {
     down_arrow_tex: TextureID,
@@ -191,16 +200,17 @@ impl HitTestTreeActionHandler for EventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
                 to_value: [1.0, 1.0, 1.0, 0.0625],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -211,16 +221,17 @@ impl HitTestTreeActionHandler for EventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0625],
                 to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -231,15 +242,11 @@ impl HitTestTreeActionHandler for EventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_down_arrow).offset[1] = AnimatableFloat::Animated {
-            from_value: -8.0,
-            to_value: -7.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
-            curve: AnimationCurve::EASE_OUT,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_down_arrow);
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_down_arrow)
+            .y_animated_from_template(&ARROW_PRESS_Y_ANIM, context.current_sec)
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -250,15 +257,11 @@ impl HitTestTreeActionHandler for EventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_down_arrow).offset[1] = AnimatableFloat::Animated {
-            from_value: -7.0,
-            to_value: -8.0,
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
-            curve: AnimationCurve::EASE_OUT,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_down_arrow);
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_down_arrow)
+            .y_animated_from_template(&ARROW_RELEASE_Y_ANIM, context.current_sec)
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -453,16 +456,17 @@ impl HitTestTreeActionHandler for MenuItemEventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
-                to_value: [1.0, 1.0, 1.0, 0.0625],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                to_value: [1.0, 1.0, 1.0, 0.125],
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -473,16 +477,17 @@ impl HitTestTreeActionHandler for MenuItemEventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.0625],
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.125],
                 to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
