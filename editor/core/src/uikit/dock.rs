@@ -50,8 +50,8 @@ impl DesignMetrics {
 /// デザイン定数
 const DESIGN_METRICS: DesignMetrics = DesignMetrics {
     splitter_thickness: 4.0,
-    tab_padding_x: 12.0,
-    tab_padding_y: 6.0,
+    tab_padding_x: 8.0,
+    tab_padding_y: 4.0,
     tab_content_height: 16.0,
     tab_rounding: 8.0,
 };
