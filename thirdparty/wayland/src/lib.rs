@@ -1190,15 +1190,116 @@ pub enum OutputTransform {
 pub struct Output(Proxy);
 unsafe impl Interface for Output {
     const DEF: *const ffi::Interface = unsafe { &wl_output_interface };
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Ouptut as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        if self.0.version() >= 3 {
+            self.0.call_simple_dtor(0);
+        } else {
+            unsafe {
+                Interface::destruct(self);
+            }
+        }
+    }
+}
+impl Output {
+    pub fn set_listener<'l, L: OutputEventListener + 'l>(
+        &'l mut self,
+        listener: &'l mut L,
+    ) -> SetListenerResult {
+        unsafe {
+            self.0.set_listener(
+                    EventFnTable! {
+                        for L: OutputEventListener {
+                            geometry(x: i32 => x, y: i32 => y, physical_width: i32 => physical_width, physical_height: i32 => physical_height, subpixel: i32 => subpixel, make: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(make) }, model: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(model) }, transform: i32 => transform),
+                            mode(flags: u32 => flags, width: i32 => width, height: i32 => height, refresh: i32 => refresh),
+                            done(),
+                            scale(factor: i32 => factor),
+                            name(name: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(name) }),
+                            description(description: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(description) }),
+                        }
+                    } as *const _ as _,
+                    listener as *mut _ as _
+                )
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_listener_impl_only(
+        &mut self,
+        listener: &'static OutputEventListenerImpl,
+    ) -> SetListenerResult {
+        unsafe {
+            self.0
+                .set_listener(core::ptr::from_ref(listener).cast(), core::ptr::null_mut())
+        }
+    }
+
+    pub fn set_user_data(&mut self, data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(data);
+        }
+    }
 }
 
-// pub trait OutputEventListener {
-//     fn geometry(&mut self, output: &mut Output, x: i32, y: i32, physical_width: i32, physical_height: i32, subpixel: i32, make: &core::ffi::CStr, model: &core::ffi::CStr, transform: i32);
-//     fn mode(&mut self, output: &mut Output, flags: u32, width: i32, height: i32, refresh: i32);
-//     // -- version 2 additions ---
-//     fn done(&mut self, output: &mut Output);
-//     fn scale(&mut self, output: &mut Output, factor: i32);
-// }
+pub trait OutputEventListener {
+    fn geometry(
+        &mut self,
+        sender: &mut Output,
+        x: i32,
+        y: i32,
+        physical_width: i32,
+        physical_height: i32,
+        subpixel: i32,
+        make: &core::ffi::CStr,
+        model: &core::ffi::CStr,
+        transform: i32,
+    );
+    fn mode(&mut self, sender: &mut Output, flags: u32, width: i32, height: i32, refresh: i32);
+    // -- version 2 additions ---
+    fn done(&mut self, sender: &mut Output);
+    fn scale(&mut self, sender: &mut Output, factor: i32);
+    // -- version 4 additions ---
+    fn name(&mut self, sender: &mut Output, name: &core::ffi::CStr);
+    fn description(&mut self, sender: &mut Output, description: &core::ffi::CStr);
+}
+pub struct OutputEventListenerImpl {
+    pub geometry: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        x: i32,
+        y: i32,
+        physical_width: i32,
+        physical_height: i32,
+        subpixel: i32,
+        make: *const core::ffi::c_char,
+        model: *const core::ffi::c_char,
+        transform: i32,
+    ),
+    pub mode: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        flags: u32,
+        width: i32,
+        height: i32,
+        refresh: i32,
+    ),
+    pub done: extern "C" fn(context: *mut core::ffi::c_void, sender: *mut Output),
+    pub scale: extern "C" fn(context: *mut core::ffi::c_void, sender: *mut Output, factor: i32),
+    pub name: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        name: *const core::ffi::c_char,
+    ),
+    pub description: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        description: *const core::ffi::c_char,
+    ),
+}
 
 #[repr(transparent)]
 pub struct DataOffer(Proxy);
@@ -1663,6 +1764,7 @@ Ext!("wlr-layer-shell-unstable-v1", layer_shell);
 Ext!("kde-blur", kde_blur);
 Ext!("kde-appmenu", kde_appmenu);
 Ext!("kde-shadow", kde_shadow);
+Ext!("kde-plasma-shell", kde_plasma_shell);
 
 // external
 Ext!("gtk-shell", gtk_shell);

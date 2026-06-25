@@ -9,7 +9,8 @@ use peridot_tp_wayland as wl;
 use peridot_tp_xkbcommon as xkbcommon;
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
+    Event, LogicFiberEventDispatcher, MainWindowInitialState, SubWindowInitialState, SyncEvent,
+    WindowType,
     graphics::VulkanDevice,
     input::{
         KeyInputCode, KeyboardFocusTokenRegistry, ModifierKey,
@@ -502,6 +503,7 @@ impl crate::SystemLink<'_> {
 
     pub fn create_main_window(
         &self,
+        initial_state: MainWindowInitialState,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -512,7 +514,33 @@ impl crate::SystemLink<'_> {
                 #[cfg(target_os = "linux")]
                 termination_event: self.terminate_event.clone(),
             },
+            match initial_state {
+                MainWindowInitialState::Maximized { monitor_index } => Some(
+                    &unsafe { &*self.display_server.context }
+                        .global_interfaces
+                        .outputs
+                        .get(monitor_index)
+                        .unwrap_or(
+                            &unsafe { &*self.display_server.context }
+                                .global_interfaces
+                                .outputs[0],
+                        )
+                        .0,
+                ),
+                MainWindowInitialState::Unsized => None,
+                MainWindowInitialState::Sized(_) => None,
+            },
             None,
+            match initial_state {
+                MainWindowInitialState::Maximized { .. } => None,
+                MainWindowInitialState::Unsized => None,
+                MainWindowInitialState::Sized(size) => Some(size),
+            },
+            match initial_state {
+                MainWindowInitialState::Maximized { .. } => true,
+                MainWindowInitialState::Unsized => false,
+                MainWindowInitialState::Sized(_) => false,
+            },
             unsafe { &*self.display_server.context },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
@@ -530,7 +558,7 @@ impl crate::SystemLink<'_> {
 
     pub fn open_window<'h>(
         &self,
-        rect: Rect<LogicalUnit>,
+        initial_state: SubWindowInitialState,
         position_ref_window: toplevel::Handle,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
@@ -546,7 +574,33 @@ impl crate::SystemLink<'_> {
     ) -> toplevel::Handle {
         let w = toplevel::NativeWindow::new(
             WindowType::Sub,
-            Some(rect),
+            match initial_state {
+                SubWindowInitialState::Maximized { monitor_index } => Some(
+                    &unsafe { &*self.display_server.context }
+                        .global_interfaces
+                        .outputs
+                        .get(monitor_index)
+                        .unwrap_or(
+                            &unsafe { &*self.display_server.context }
+                                .global_interfaces
+                                .outputs[0],
+                        )
+                        .0,
+                ),
+                SubWindowInitialState::Windowed(_) => None,
+            },
+            match initial_state {
+                SubWindowInitialState::Maximized { .. } => Some(Point::new_logical(0.0, 0.0)),
+                SubWindowInitialState::Windowed(ref r) => Some(r.left_top()),
+            },
+            match initial_state {
+                SubWindowInitialState::Maximized { .. } => None,
+                SubWindowInitialState::Windowed(ref r) => Some(r.size()),
+            },
+            match initial_state {
+                SubWindowInitialState::Maximized { .. } => true,
+                SubWindowInitialState::Windowed(_) => false,
+            },
             unsafe { &*self.display_server.context },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
@@ -2144,7 +2198,7 @@ impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
 }
 
 struct GlobalInterfaces {
-    outputs: Vec<wl::Owned<wl::Output>>,
+    outputs: Vec<(wl::Owned<wl::Output>, Box<OutputProperties>)>,
     compositor: wl::Owned<wl::Compositor>,
     subcompositor: wl::Owned<wl::Subcompositor>,
     xdg_wm_base: wl::Owned<wl::XdgWmBase>,
@@ -2164,6 +2218,7 @@ struct GlobalInterfaces {
     alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
     pointer_constraints: Option<wl::Owned<wl::ZwpPointerConstraintsV1>>,
     relative_pointer_manager: Option<wl::Owned<wl::ZwpRelativePointerManagerV1>>,
+    kde_plasma_shell: Option<wl::Owned<wl::OrgKdePlasmaShell>>,
     // flags
     is_hyprland: bool,
 }
@@ -2197,6 +2252,7 @@ impl GlobalInterfaces {
             alpha_modifier: rl.alpha_modifier,
             pointer_constraints: rl.pointer_constraints,
             relative_pointer_manager: rl.relative_pointer_manager,
+            kde_plasma_shell: rl.kde_plasma_shell,
             is_hyprland: rl.is_hyprland,
         })
     }
@@ -2217,7 +2273,7 @@ impl GlobalInterfaces {
 struct RegistryListener {
     compositor: Option<wl::Owned<wl::Compositor>>,
     subcompositor: Option<wl::Owned<wl::Subcompositor>>,
-    outputs: Vec<wl::Owned<wl::Output>>,
+    outputs: Vec<(wl::Owned<wl::Output>, Box<OutputProperties>)>,
     xdg_wm_base: Option<wl::Owned<wl::XdgWmBase>>,
     seat: Option<wl::Owned<wl::Seat>>,
     data_device_manager: Option<wl::Owned<wl::DataDeviceManager>>,
@@ -2234,12 +2290,13 @@ struct RegistryListener {
     alpha_modifier: Option<wl::Owned<wl::WpAlphaModifierV1>>,
     pointer_constraints: Option<wl::Owned<wl::ZwpPointerConstraintsV1>>,
     relative_pointer_manager: Option<wl::Owned<wl::ZwpRelativePointerManagerV1>>,
+    kde_plasma_shell: Option<wl::Owned<wl::OrgKdePlasmaShell>>,
     is_hyprland: bool,
 }
 impl wl::RegistryListener for RegistryListener {
     fn global(
         &mut self,
-        registry: &mut peridot_tp_wayland::Registry,
+        registry: &mut wl::Registry,
         name: u32,
         interface: &core::ffi::CStr,
         version: u32,
@@ -2260,8 +2317,15 @@ impl wl::RegistryListener for RegistryListener {
             return;
         }
         if interface == c"wl_output" {
-            self.outputs
-                .push(registry.bind(name, version).expect("bind output"));
+            let mut o = registry
+                .bind::<wl::Output>(name, version)
+                .expect("bind output");
+            let mut properties_store = Box::new(OutputProperties { x: 0, y: 0 });
+            o.set_listener_impl_only(OUTPUT_EVENT_LISTENER_IMPL)
+                .into_result()
+                .expect("output.set_listener_impl_only");
+            o.set_user_data(core::ptr::from_mut(properties_store.as_mut()).cast());
+            self.outputs.push((o, properties_store));
             return;
         }
         if interface == c"xdg_wm_base" {
@@ -2370,9 +2434,119 @@ impl wl::RegistryListener for RegistryListener {
             );
             return;
         }
+        if interface == c"org_kde_plasma_shell" {
+            self.kde_plasma_shell =
+                Some(registry.bind(name, version).expect("bind kde_plasma_shell"));
+            return;
+        }
     }
 
-    fn global_remove(&mut self, _registry: &mut peridot_tp_wayland::Registry, name: u32) {
+    fn global_remove(&mut self, _registry: &mut wl::Registry, name: u32) {
         tracing::info!(target: "wl::diag", name, "wl interface remove");
     }
 }
+
+struct OutputProperties {
+    x: i32,
+    y: i32,
+}
+
+extern "C" fn output_event_geometry(
+    context: *mut core::ffi::c_void,
+    sender: *mut wl::Output,
+    x: i32,
+    y: i32,
+    physical_width: i32,
+    physical_height: i32,
+    subpixel: i32,
+    make: *const core::ffi::c_char,
+    model: *const core::ffi::c_char,
+    transform: i32,
+) {
+    if context.is_null() {
+        return;
+    }
+
+    let store = unsafe { &mut *context.cast::<OutputProperties>() };
+    let make = unsafe { core::ffi::CStr::from_ptr(make) };
+    let model = unsafe { core::ffi::CStr::from_ptr(model) };
+
+    tracing::debug!(
+        x,
+        y,
+        physical_width,
+        physical_height,
+        subpixel,
+        ?make,
+        ?model,
+        transform,
+        "output geometry {sender:p}"
+    );
+    store.x = x;
+    store.y = y;
+}
+extern "C" fn output_event_mode(
+    context: *mut core::ffi::c_void,
+    sender: *mut wl::Output,
+    flags: u32,
+    width: i32,
+    height: i32,
+    refresh: i32,
+) {
+    if context.is_null() {
+        return;
+    }
+
+    tracing::debug!(flags, width, height, refresh, "output mode");
+}
+extern "C" fn output_event_done(context: *mut core::ffi::c_void, sender: *mut wl::Output) {
+    if context.is_null() {
+        return;
+    }
+
+    tracing::debug!("output done {sender:p}");
+    unsafe { &mut *sender }.set_user_data(core::ptr::null_mut());
+}
+extern "C" fn output_event_scale(
+    context: *mut core::ffi::c_void,
+    sender: *mut wl::Output,
+    scale: i32,
+) {
+    if context.is_null() {
+        return;
+    }
+
+    tracing::debug!(scale, "output scale");
+}
+extern "C" fn output_event_name(
+    context: *mut core::ffi::c_void,
+    sender: *mut wl::Output,
+    name: *const core::ffi::c_char,
+) {
+    if context.is_null() {
+        return;
+    }
+
+    let name = unsafe { core::ffi::CStr::from_ptr(name) };
+    tracing::debug!(?name, "output name");
+}
+extern "C" fn output_event_description(
+    context: *mut core::ffi::c_void,
+    sender: *mut wl::Output,
+    description: *const core::ffi::c_char,
+) {
+    if context.is_null() {
+        return;
+    }
+
+    let description = unsafe { core::ffi::CStr::from_ptr(description) };
+    tracing::debug!(?description, "output description");
+}
+const OUTPUT_EVENT_LISTENER_IMPL: &wl::OutputEventListenerImpl = &wl::OutputEventListenerImpl {
+    geometry: output_event_geometry,
+    mode: output_event_mode,
+    done: output_event_done,
+    scale: output_event_scale,
+    name: output_event_name,
+    description: output_event_description,
+};

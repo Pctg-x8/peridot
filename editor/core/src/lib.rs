@@ -249,6 +249,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_queue: EventQueue { event_store },
             global_time_base,
             renderer_sync,
+            file_system: fs
         },
         #[cfg(windows)]
         SystemLink {
@@ -2523,93 +2524,6 @@ impl FlyoutSurfaceViewConstructor for EditableColorButtonPickerFlyoutViewConstru
     }
 }
 
-pub struct TestPane1View {
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-}
-impl TestPane1View {
-    pub fn new(ctx: &mut ViewInitContext) -> Self {
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "test content1".into(),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            ..Default::default()
-        });
-
-        Self { ct_root, ht_root }
-    }
-}
-impl uikit::dock::PaneContentPresenter for TestPane1View {
-    fn name(&self) -> String {
-        "test".into()
-    }
-
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    fn unmount(&self, ctx: &mut MountContext) {
-        ctx.composite_tree.remove_child(self.ct_root);
-        ctx.ht_manager.remove_child(self.ht_root);
-    }
-
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
-}
-
-pub struct TestPane2View {
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-}
-impl TestPane2View {
-    pub fn new(ctx: &mut ViewInitContext) -> Self {
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "test content2".into(),
-                    color: AnimatableColor::Value([1.0, 0.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            ..Default::default()
-        });
-
-        Self { ct_root, ht_root }
-    }
-}
-impl uikit::dock::PaneContentPresenter for TestPane2View {
-    fn name(&self) -> String {
-        "test2".into()
-    }
-
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    fn unmount(&self, ctx: &mut MountContext) {
-        ctx.composite_tree.remove_child(self.ct_root);
-        ctx.ht_manager.remove_child(self.ht_root);
-    }
-
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
-}
-
 struct ColorPickerTestBackingStore {
     color: Cell<u32>,
 }
@@ -2622,7 +2536,13 @@ impl ColorPickerBackingStoreEvent for ColorPickerTestBackingStore {
     }
 }
 
-pub struct UIKitPreviewPaneView {
+macro_rules! internal_pane_identifier {
+    ($name: literal) => {
+        concat!("io.ct2.peridot.editor.internal.pane.", $name)
+    };
+}
+
+pub struct UIKitPreviewPanePresenter {
     scroll_container: ScrollContainer,
     test_alert_btn: SimpleButtonView,
     test_alert_btn2: SimpleButtonView,
@@ -2643,7 +2563,9 @@ pub struct UIKitPreviewPaneView {
     radio_button3: RadioButtonView,
     radio_button4: RadioButtonView,
 }
-impl UIKitPreviewPaneView {
+impl UIKitPreviewPanePresenter {
+    const ID: &str = internal_pane_identifier!("UIKitPreview");
+
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let scroll_container = ScrollContainer::new(
             ctx,
@@ -3051,7 +2973,11 @@ impl UIKitPreviewPaneView {
         }
     }
 }
-impl uikit::dock::PaneContentPresenter for UIKitPreviewPaneView {
+impl uikit::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
     fn name(&self) -> String {
         "uikit on stage".into()
     }
@@ -3078,7 +3004,14 @@ impl uikit::dock::PaneContentPresenter for UIKitPreviewPaneView {
 }
 
 struct TimelinePanePresenter {}
+impl TimelinePanePresenter {
+    const ID: &str = internal_pane_identifier!("Timeline");
+}
 impl uikit::dock::PaneContentPresenter for TimelinePanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
     fn name(&self) -> String {
         "Timeline".into()
     }
@@ -3091,7 +3024,14 @@ impl uikit::dock::PaneContentPresenter for TimelinePanePresenter {
 }
 
 struct ObjectTreePanePresenter {}
+impl ObjectTreePanePresenter {
+    const ID: &str = internal_pane_identifier!("ObjectTree");
+}
 impl uikit::dock::PaneContentPresenter for ObjectTreePanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
     fn name(&self) -> String {
         "Object Tree".into()
     }
@@ -3104,7 +3044,14 @@ impl uikit::dock::PaneContentPresenter for ObjectTreePanePresenter {
 }
 
 struct InspectorPanePresenter {}
+impl InspectorPanePresenter {
+    const ID: &str = internal_pane_identifier!("Inspector");
+}
 impl uikit::dock::PaneContentPresenter for InspectorPanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
     fn name(&self) -> String {
         "Inspector".into()
     }
@@ -3117,7 +3064,14 @@ impl uikit::dock::PaneContentPresenter for InspectorPanePresenter {
 }
 
 struct AssetExplorerPanePresenter {}
+impl AssetExplorerPanePresenter {
+    const ID: &str = internal_pane_identifier!("AssetExplorer");
+}
 impl uikit::dock::PaneContentPresenter for AssetExplorerPanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
     fn name(&self) -> String {
         "Asset Explorer".into()
     }
@@ -3130,7 +3084,14 @@ impl uikit::dock::PaneContentPresenter for AssetExplorerPanePresenter {
 }
 
 struct ProjectSettingsPanePresenter {}
+impl ProjectSettingsPanePresenter {
+    const ID: &str = internal_pane_identifier!("ProjectSettings");
+}
 impl uikit::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
     fn name(&self) -> String {
         "Project Settings".into()
     }
@@ -3176,6 +3137,7 @@ struct LaunchArgs<'sys> {
     pub event_queue: EventQueue,
     pub global_time_base: &'sys std::time::Instant,
     pub renderer_sync: &'sys Mutex<RendererSync>,
+    pub file_system: &'sys FileSystem,
 }
 
 crate::perf_section!(INITIALIZE = "LogicFiber.Initialize");
@@ -3187,6 +3149,7 @@ async fn run<'sys>(
         event_queue,
         global_time_base,
         renderer_sync,
+        file_system,
     }: LaunchArgs<'sys>,
     mut system_link: SystemLink<'sys>,
 ) {
@@ -3221,25 +3184,49 @@ async fn run<'sys>(
     let mut dock_store = uikit::dock::DockStore::new();
     let mut docking_preview_state = None;
 
+    let last_window_state = 'try_restore_last_window_state: {
+        let fp = match std::fs::File::open(file_system.window_state_save_path()) {
+            Ok(fp) => fp,
+            Err(e) => {
+                tracing::warn!(reason = %e, "persist.open.window_state");
+                break 'try_restore_last_window_state None;
+            }
+        };
+        let mut r = std::io::BufReader::new(fp);
+        match PersistStateWindowData::deserialize(&mut std::io::BufReader::new(r)) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                tracing::warn!(reason = %e, "persist.restore.window_state");
+                break 'try_restore_last_window_state None;
+            }
+        }
+    };
+    tracing::debug!(?last_window_state);
+
     let window_bg_gradient = composite_tree.create_gradient(Gradient::Corner {
         right_top: [0.1, 0.1, 0.1, 1.0],
         left_bottom: [0.1, 0.1, 0.1, 1.0],
         right_bottom: [0.1, 0.05, 0.0, 1.0],
     });
 
+    let mut sub_windows = HashSet::new();
     let mut main_window = system_link.create_main_window(
+        match last_window_state {
+            None => MainWindowInitialState::Unsized,
+            Some(ref x) => match x.main.geometry {
+                WindowGeometryState::Restored { ref rect } => {
+                    MainWindowInitialState::Sized(rect.size())
+                }
+                WindowGeometryState::Maximized { monitor_index } => {
+                    MainWindowInitialState::Maximized { monitor_index }
+                }
+            },
+        },
         &mut composite_tree,
         &mut ht_manager,
         &mut keyboard_focus_registry,
         &mut delayed_render_messages,
     );
-    composite_tree.get_mut(main_window.ct_root()).composite_mode =
-        CompositeMode::FillCornerGradient(
-            window_bg_gradient,
-            AnimatableColor::Value([0.0, 0.05, 0.1, 1.0]),
-        );
-    composite_tree.get_mut(main_window.ct_root()).has_bitmap = true;
-    composite_tree.mark_dirty(main_window.ct_root());
 
     let mut view_init_ctx = ViewInitContext {
         mount_context: MountContext {
@@ -3253,6 +3240,16 @@ async fn run<'sys>(
         system_link: &system_link,
         main_thread_texture_id_issuer: &mut texture_id_issuer,
     };
+
+    view_init_ctx
+        .composite_tree
+        .begin_mod_chain(main_window.ct_root())
+        .composite_mode(CompositeMode::FillCornerGradient(
+            window_bg_gradient,
+            AnimatableColor::Value([0.0, 0.05, 0.1, 1.0]),
+        ))
+        .has_bitmap(true)
+        .apply();
 
     let window_header_view = ui::window_header::View::new(
         &mut view_init_ctx,
@@ -3352,6 +3349,42 @@ async fn run<'sys>(
     let window_footer_view = ui::window_footer::View::new(&mut view_init_ctx);
     window_footer_view.mount(&mut view_init_ctx, &main_window);
 
+    let initial_dock_state = DockState::Splitted {
+        direction: DockDirection::Bottom(320.0),
+        content: Box::new(DockState::Filled {
+            content_ids: vec![AssetExplorerPanePresenter::ID.into()],
+            active_index: 0,
+        }),
+        rest: Box::new(DockState::Splitted {
+            direction: DockDirection::Right(256.0),
+            content: Box::new(DockState::Filled {
+                content_ids: vec![InspectorPanePresenter::ID.into()],
+                active_index: 0,
+            }),
+            rest: Box::new(DockState::Splitted {
+                direction: DockDirection::Top(120.0),
+                content: Box::new(DockState::Filled {
+                    content_ids: vec![TimelinePanePresenter::ID.into()],
+                    active_index: 0,
+                }),
+                rest: Box::new(DockState::Splitted {
+                    direction: DockDirection::Left(160.0),
+                    content: Box::new(DockState::Filled {
+                        content_ids: vec![ObjectTreePanePresenter::ID.into()],
+                        active_index: 0,
+                    }),
+                    rest: Box::new(DockState::Filled {
+                        content_ids: vec![
+                            UIKitPreviewPanePresenter::ID.into(),
+                            ProjectSettingsPanePresenter::ID.into(),
+                        ],
+                        active_index: 0,
+                    }),
+                }),
+            }),
+        }),
+    };
+
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
         has_appmenu: app_menu_view.is_some(),
@@ -3374,85 +3407,117 @@ async fn run<'sys>(
             ),
             &mut dock_store,
             |view_init_ctx, store| {
-                store.alloc_root(|root_id, store| {
-                    store.alloc_recurse(|parent_id1, store| uikit::dock::Dock::Splitted {
-                        parent: root_id,
-                        splitter: uikit::dock::DockedPaneSplitterView::new(
-                            view_init_ctx,
-                            uikit::dock::DockedPaneSplitDirection::Vertical,
-                            parent_id1,
-                        ),
-                        direction: uikit::dock::DockDirection::ToBottom(Cell::new(320.0)),
-                        docked: store.alloc_fill(parent_id1, view_init_ctx, |_| {
-                            vec![Box::new(AssetExplorerPanePresenter {})]
-                        }),
-                        rest: store.alloc_recurse(|parent_id2, store| {
-                            uikit::dock::Dock::Splitted {
-                                parent: parent_id1,
-                                splitter: uikit::dock::DockedPaneSplitterView::new(
-                                    view_init_ctx,
-                                    uikit::dock::DockedPaneSplitDirection::Horizontal,
-                                    parent_id2,
-                                ),
-                                direction: uikit::dock::DockDirection::ToRight(Cell::new(256.0)),
-                                docked: store.alloc_fill(parent_id2, view_init_ctx, |_| {
-                                    vec![Box::new(InspectorPanePresenter {})]
-                                }),
-                                rest: store.alloc_recurse(|parent_id1, store| {
-                                    uikit::dock::Dock::Splitted {
-                                        parent: parent_id2,
-                                        splitter: uikit::dock::DockedPaneSplitterView::new(
-                                            view_init_ctx,
-                                            uikit::dock::DockedPaneSplitDirection::Vertical,
-                                            parent_id1,
-                                        ),
-                                        direction: uikit::dock::DockDirection::ToTop(Cell::new(
-                                            120.0,
-                                        )),
-                                        docked: store.alloc_fill(parent_id1, view_init_ctx, |_| {
-                                            vec![Box::new(TimelinePanePresenter {})]
-                                        }),
-                                        rest: store.alloc_recurse(|parent_id2, store| {
-                                            uikit::dock::Dock::Splitted {
-                                                parent: parent_id1,
-                                                splitter: uikit::dock::DockedPaneSplitterView::new(
-                                                    view_init_ctx,
-                                                    uikit::dock::DockedPaneSplitDirection::Horizontal,
-                                                    parent_id2,
-                                                ),
-                                                direction: uikit::dock::DockDirection::ToLeft(
-                                                    Cell::new(160.0),
-                                                ),
-                                                docked: store.alloc_fill(
-                                                    parent_id2,
-                                                    view_init_ctx,
-                                                    |_| vec![Box::new(ObjectTreePanePresenter {})],
-                                                ),
-                                                rest: store.alloc_fill(
-                                                    parent_id2,
-                                                    view_init_ctx,
-                                                    |view_init_ctx| {
-                                                        vec![
-                                                            Box::new(UIKitPreviewPaneView::new(
-                                                                view_init_ctx,
-                                                            )),
-                                                            Box::new(
-                                                                ProjectSettingsPanePresenter {},
-                                                            ),
-                                                        ]
-                                                    },
-                                                ),
-                                            }
-                                        }),
-                                    }
-                                }),
-                            }
-                        }),
-                    })
+                match last_window_state {
+                    None => &initial_dock_state,
+                    Some(ref x) => &x.main.dock,
+                }
+                .construct(view_init_ctx, store, |id, view_init_ctx| match id {
+                    // TODO: このへんうまい具合にRegistryつくりたい
+                    UIKitPreviewPanePresenter::ID => {
+                        Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
+                    }
+                    ObjectTreePanePresenter::ID => Box::new(ObjectTreePanePresenter {}),
+                    InspectorPanePresenter::ID => Box::new(InspectorPanePresenter {}),
+                    AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
+                    ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
+                    TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
+                    id => todo!("generic pane id handling: {id:?}"),
                 })
             },
         ),
     }));
+
+    if let Some(ref last_window_state) = last_window_state {
+        for sub in last_window_state.sub.iter() {
+            let new_window = system_link.open_window(
+                match sub.geometry {
+                    WindowGeometryState::Maximized { monitor_index } => {
+                        SubWindowInitialState::Maximized { monitor_index }
+                    }
+                    WindowGeometryState::Restored { ref rect } => {
+                        SubWindowInitialState::Windowed(rect.clone())
+                    }
+                },
+                main_window,
+                &mut composite_tree,
+                &mut ht_manager,
+                &mut keyboard_focus_registry,
+                &mut delayed_render_messages,
+                |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
+                    ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
+
+                    composite_tree
+                        .begin_mod_chain(w.ct_root())
+                        .has_bitmap(true)
+                        .composite_mode(CompositeMode::FillColor(AnimatableColor::Value([
+                            0.0, 0.1, 0.2, 1.0,
+                        ])))
+                        .apply();
+
+                    let mut view_init_ctx = ViewInitContext {
+                        mount_context: MountContext {
+                            composite_tree,
+                            ht_manager,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry,
+                        },
+                        view_registry: &mut view_registry,
+                        ui_scale_factor: w.ui_scale_factor(),
+                        system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                    };
+                    let window_header_view = ui::window_header::View::new(
+                        &mut view_init_ctx,
+                        ui::window_header::Caption::Sub,
+                        w.needs_system_command_buttons(),
+                    );
+                    window_header_view.mount(&mut view_init_ctx, &w);
+
+                    w.associate_extra_data(Box::new(PerWindowData {
+                        screen_reposition_interests: HashSet::new(),
+                        has_appmenu: false,
+                        header: window_header_view,
+                        footer: None,
+                        docking_manager: uikit::dock::DockingManager::new(
+                            w,
+                            &mut view_init_ctx,
+                            Rect::from_lt_size(
+                                Point::new_logical(0.0, ui::window_header::View::THICKNESS),
+                                Size::new_logical(320.0, 240.0),
+                            ),
+                            &mut dock_store,
+                            |view_init_ctx, store| {
+                                sub.dock
+                                    .construct(view_init_ctx, store, |id, view_init_ctx| match id {
+                                        // TODO: このへんうまい具合にRegistryつくりたい
+                                        UIKitPreviewPanePresenter::ID => {
+                                            Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
+                                        }
+                                        ObjectTreePanePresenter::ID => {
+                                            Box::new(ObjectTreePanePresenter {})
+                                        }
+                                        InspectorPanePresenter::ID => {
+                                            Box::new(InspectorPanePresenter {})
+                                        }
+                                        AssetExplorerPanePresenter::ID => {
+                                            Box::new(AssetExplorerPanePresenter {})
+                                        }
+                                        ProjectSettingsPanePresenter::ID => {
+                                            Box::new(ProjectSettingsPanePresenter {})
+                                        }
+                                        TimelinePanePresenter::ID => {
+                                            Box::new(TimelinePanePresenter {})
+                                        }
+                                        id => todo!("generic pane id handling: {id:?}"),
+                                    })
+                            },
+                        ),
+                    }));
+                },
+            );
+            sub_windows.insert(new_window);
+        }
+    }
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
     ht_manager.dump(main_window.ht_root());
@@ -3469,10 +3534,10 @@ async fn run<'sys>(
         match e {
             Event::Quit => break,
             Event::SubWindowClose { mut window } => {
-                tracing::trace!("subWindowClose");
                 unsafe {
                     drop(window.take_extra_data::<PerWindowData>());
                 }
+                sub_windows.remove(&window);
                 system_link.close_window(
                     window,
                     &mut composite_tree,
@@ -4462,6 +4527,7 @@ async fn run<'sys>(
                             unsafe {
                                 drop(source_window.take_extra_data::<PerWindowData>());
                             }
+                            sub_windows.remove(&source_window);
                             system_link.close_window(
                                 source_window,
                                 &mut composite_tree,
@@ -4472,8 +4538,8 @@ async fn run<'sys>(
                     }
 
                     if let Some(content) = diverged_content {
-                        system_link.open_window(
-                            Rect::from_lt_size(
+                        let new_window = system_link.open_window(
+                            SubWindowInitialState::Windowed(Rect::from_lt_size(
                                 Point::new_logical(
                                     suggested_rect.left,
                                     suggested_rect.top - ui::window_header::View::THICKNESS,
@@ -4482,7 +4548,7 @@ async fn run<'sys>(
                                     suggested_rect.width,
                                     suggested_rect.height + ui::window_header::View::THICKNESS,
                                 ),
-                            ),
+                            )),
                             destination_window,
                             &mut composite_tree,
                             &mut ht_manager,
@@ -4539,15 +4605,19 @@ async fn run<'sys>(
                                         &mut dock_store,
                                         |view_init_ctx, store| {
                                             store.alloc_root(|root_id, store| {
-                                                store.alloc_fill(root_id, view_init_ctx, |_| {
-                                                    vec![content]
-                                                })
+                                                store.alloc_fill(
+                                                    root_id,
+                                                    view_init_ctx,
+                                                    |_| vec![content],
+                                                    0,
+                                                )
                                             })
                                         },
                                     ),
                                 }));
                             },
                         );
+                        sub_windows.insert(new_window);
                     }
 
                     composite_tree
@@ -4671,6 +4741,37 @@ async fn run<'sys>(
 
         for msg in delayed_render_messages.drain(..) {
             system_link.rt_sender().send(msg).expect("rt_sender.send");
+        }
+    }
+
+    tracing::info!("saving window state");
+    let window_state_persist = PersistStateWindowData {
+        main: WindowState {
+            geometry: main_window.geometry_state_snapshot(&system_link),
+            dock: unsafe { main_window.extra_data_ref::<PerWindowData>() }
+                .docking_manager
+                .state_snapshot(&dock_store),
+        },
+        sub: sub_windows
+            .iter()
+            .map(|w| WindowState {
+                geometry: w.geometry_state_snapshot(&system_link),
+                dock: unsafe { w.extra_data_ref::<PerWindowData>() }
+                    .docking_manager
+                    .state_snapshot(&dock_store),
+            })
+            .collect(),
+    };
+    'try_save_window_state: {
+        let fp = match std::fs::File::create(file_system.window_state_save_path()) {
+            Ok(fp) => fp,
+            Err(e) => {
+                tracing::warn!(reason = %e, "persist.create.window_state");
+                break 'try_save_window_state;
+            }
+        };
+        if let Err(e) = window_state_persist.serialize(&mut std::io::BufWriter::new(fp)) {
+            tracing::warn!(reason = %e, "persist.save.window_state");
         }
     }
 
@@ -5138,6 +5239,17 @@ impl MenuSession {
     }
 }
 
+pub enum MainWindowInitialState {
+    Unsized,
+    Sized(Size<LogicalUnit>),
+    Maximized { monitor_index: usize },
+}
+
+pub enum SubWindowInitialState {
+    Windowed(Rect<LogicalUnit>),
+    Maximized { monitor_index: usize },
+}
+
 #[cfg(windows)]
 pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
 
@@ -5364,6 +5476,359 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
     a: 16,
 };
 
+#[derive(thiserror::Error, Debug)]
+pub enum PersistStateDeserializeError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error("persist_state_deserialize_error.invalid_format")]
+    InvalidFormat,
+}
+
+#[derive(Debug)]
+pub enum DockDirection {
+    Left(f32),
+    Right(f32),
+    Top(f32),
+    Bottom(f32),
+}
+impl DockDirection {
+    pub fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        match self {
+            &Self::Left(x) => {
+                w.write_all(&[0x01])?;
+                w.write_all(&f32::to_ne_bytes(x))?;
+            }
+            &Self::Right(x) => {
+                w.write_all(&[0x02])?;
+                w.write_all(&f32::to_ne_bytes(x))?;
+            }
+            &Self::Top(x) => {
+                w.write_all(&[0x03])?;
+                w.write_all(&f32::to_ne_bytes(x))?;
+            }
+            &Self::Bottom(x) => {
+                w.write_all(&[0x04])?;
+                w.write_all(&f32::to_ne_bytes(x))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError> {
+        let mut buf = [0u8; 1];
+        r.read_exact(&mut buf)?;
+        match buf[0] {
+            0x01 => {
+                let mut buf = [0u8; size_of::<f32>()];
+                r.read_exact(&mut buf)?;
+                Ok(Self::Left(f32::from_ne_bytes(buf)))
+            }
+            0x02 => {
+                let mut buf = [0u8; size_of::<f32>()];
+                r.read_exact(&mut buf)?;
+                Ok(Self::Right(f32::from_ne_bytes(buf)))
+            }
+            0x03 => {
+                let mut buf = [0u8; size_of::<f32>()];
+                r.read_exact(&mut buf)?;
+                Ok(Self::Top(f32::from_ne_bytes(buf)))
+            }
+            0x04 => {
+                let mut buf = [0u8; size_of::<f32>()];
+                r.read_exact(&mut buf)?;
+                Ok(Self::Bottom(f32::from_ne_bytes(buf)))
+            }
+            _ => Err(PersistStateDeserializeError::InvalidFormat),
+        }
+    }
+}
+#[derive(Debug)]
+pub enum DockState {
+    Filled {
+        content_ids: Vec<String>,
+        active_index: usize,
+    },
+    Splitted {
+        direction: DockDirection,
+        content: Box<DockState>,
+        rest: Box<DockState>,
+    },
+}
+impl DockState {
+    pub fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        match self {
+            Self::Filled {
+                content_ids,
+                active_index,
+            } => {
+                w.write_all(&[0x01])?;
+                w.write_all(&usize::to_ne_bytes(content_ids.len()))?;
+                for id in content_ids {
+                    w.write_all(&usize::to_ne_bytes(id.len()))?;
+                    w.write_all(id.as_bytes())?;
+                }
+                w.write_all(&usize::to_ne_bytes(*active_index))?;
+            }
+            Self::Splitted {
+                direction,
+                content,
+                rest,
+            } => {
+                w.write_all(&[0x02])?;
+                direction.serialize(w)?;
+                content.serialize(w)?;
+                rest.serialize(w)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError> {
+        let mut buf = [0u8; 1];
+        r.read_exact(&mut buf)?;
+        match buf[0] {
+            0x01 => {
+                let mut content_count = 0usize;
+                r.read_exact(unsafe {
+                    core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut content_count)
+                })?;
+                let mut content_ids = Vec::with_capacity(content_count);
+                for _ in 0..content_count {
+                    let mut id_length = 0usize;
+                    r.read_exact(unsafe {
+                        core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut id_length)
+                    })?;
+                    let mut id = Vec::with_capacity(id_length);
+                    r.read_exact(unsafe { core::mem::transmute(id.spare_capacity_mut()) })?;
+                    unsafe {
+                        id.set_len(id_length);
+                    }
+                    content_ids.push(unsafe { String::from_utf8_unchecked(id) });
+                }
+                let mut active_index = 0usize;
+                r.read_exact(unsafe {
+                    core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut active_index)
+                })?;
+
+                Ok(Self::Filled {
+                    content_ids,
+                    active_index,
+                })
+            }
+            0x02 => {
+                let direction = DockDirection::deserialize(r)?;
+                let content = Self::deserialize(r)?;
+                let rest = Self::deserialize(r)?;
+
+                Ok(Self::Splitted {
+                    direction,
+                    content: Box::new(content),
+                    rest: Box::new(rest),
+                })
+            }
+            _ => Err(PersistStateDeserializeError::InvalidFormat),
+        }
+    }
+
+    pub fn construct(
+        &self,
+        view_init_ctx: &mut ViewInitContext,
+        store: &mut uikit::dock::DockStore,
+        mut pane_constructor: impl FnMut(
+            &str,
+            &mut ViewInitContext,
+        ) -> Box<dyn uikit::dock::PaneContentPresenter>,
+    ) -> uikit::dock::DockID {
+        fn rec(
+            this: &DockState,
+            view_init_ctx: &mut ViewInitContext,
+            store: &mut uikit::dock::DockStore,
+            parent: uikit::dock::DockID,
+            pane_constructor: &mut impl FnMut(
+                &str,
+                &mut ViewInitContext,
+            ) -> Box<dyn uikit::dock::PaneContentPresenter>,
+        ) -> uikit::dock::DockID {
+            match this {
+                &DockState::Filled {
+                    ref content_ids,
+                    active_index,
+                } => store.alloc_fill(
+                    parent,
+                    view_init_ctx,
+                    |view_init_ctx| {
+                        content_ids
+                            .iter()
+                            .map(|x| pane_constructor(x, view_init_ctx))
+                            .collect()
+                    },
+                    active_index,
+                ),
+                DockState::Splitted {
+                    direction,
+                    content,
+                    rest,
+                } => store.alloc_recurse(|parent1, store| uikit::dock::Dock::Splitted {
+                    parent,
+                    direction: match direction {
+                        &DockDirection::Left(w) => uikit::dock::DockDirection::ToLeft(Cell::new(w)),
+                        &DockDirection::Right(w) => {
+                            uikit::dock::DockDirection::ToRight(Cell::new(w))
+                        }
+                        &DockDirection::Top(w) => uikit::dock::DockDirection::ToTop(Cell::new(w)),
+                        &DockDirection::Bottom(w) => {
+                            uikit::dock::DockDirection::ToBottom(Cell::new(w))
+                        }
+                    },
+                    splitter: uikit::dock::DockedPaneSplitterView::new(
+                        view_init_ctx,
+                        match direction {
+                            DockDirection::Left(_) | DockDirection::Right(_) => {
+                                uikit::dock::DockedPaneSplitDirection::Horizontal
+                            }
+                            DockDirection::Top(_) | DockDirection::Bottom(_) => {
+                                uikit::dock::DockedPaneSplitDirection::Vertical
+                            }
+                        },
+                        parent1,
+                    ),
+                    docked: rec(content, view_init_ctx, store, parent1, pane_constructor),
+                    rest: rec(rest, view_init_ctx, store, parent1, pane_constructor),
+                }),
+            }
+        }
+
+        store.alloc_root(|parent, store| {
+            rec(self, view_init_ctx, store, parent, &mut pane_constructor)
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum WindowGeometryState {
+    Maximized { monitor_index: usize },
+    Restored { rect: Rect<LogicalUnit> },
+}
+impl WindowGeometryState {
+    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        match self {
+            Self::Maximized { monitor_index } => {
+                w.write_all(&[0x01])?;
+                w.write_all(&usize::to_ne_bytes(*monitor_index))?;
+            }
+            Self::Restored { rect } => {
+                w.write_all(&[0x02])?;
+                w.write_all(&f32::to_ne_bytes(rect.left))?;
+                w.write_all(&f32::to_ne_bytes(rect.top))?;
+                w.write_all(&f32::to_ne_bytes(rect.width))?;
+                w.write_all(&f32::to_ne_bytes(rect.height))?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError> {
+        let mut buf = [0u8; 1];
+        r.read_exact(&mut buf)?;
+        match buf[0] {
+            0x01 => {
+                let mut monitor_index = 0usize;
+                r.read_exact(unsafe {
+                    core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut monitor_index)
+                })?;
+                Ok(Self::Maximized { monitor_index })
+            }
+            0x02 => {
+                let mut x = 0f32;
+                let mut y = 0f32;
+                let mut width = 0f32;
+                let mut height = 0f32;
+                r.read_exact(unsafe {
+                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut x)
+                })?;
+                r.read_exact(unsafe {
+                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut y)
+                })?;
+                r.read_exact(unsafe {
+                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut width)
+                })?;
+                r.read_exact(unsafe {
+                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut height)
+                })?;
+                Ok(Self::Restored {
+                    rect: Rect::from_lt_size(
+                        Point::new_logical(x, y),
+                        Size::new_logical(width, height),
+                    ),
+                })
+            }
+            _ => Err(PersistStateDeserializeError::InvalidFormat),
+        }
+    }
+}
+#[derive(Debug)]
+pub struct WindowState {
+    geometry: WindowGeometryState,
+    dock: DockState,
+}
+impl WindowState {
+    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        self.geometry.serialize(w)?;
+        self.dock.serialize(w)?;
+
+        Ok(())
+    }
+
+    fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError> {
+        let geometry = WindowGeometryState::deserialize(r)?;
+        let dock = DockState::deserialize(r)?;
+
+        Ok(Self { geometry, dock })
+    }
+}
+#[derive(Debug)]
+pub struct PersistStateWindowData {
+    main: WindowState,
+    sub: Vec<WindowState>,
+}
+impl PersistStateWindowData {
+    pub fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        self.main.serialize(w)?;
+        w.write_all(&usize::to_ne_bytes(self.sub.len()))?;
+        for sub in &self.sub {
+            sub.serialize(w)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError> {
+        let main = WindowState::deserialize(r)?;
+        let mut sub_len = 0usize;
+        r.read_exact(unsafe {
+            core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut sub_len)
+        })?;
+        let mut sub = Vec::with_capacity(sub_len);
+        for _ in 0..sub_len {
+            sub.push(WindowState::deserialize(r)?);
+        }
+        Ok(Self { main, sub })
+    }
+}
+
 pub struct FileSystem {
     resources_base_path: PathBuf,
     cache_base_path: PathBuf,
@@ -5432,7 +5897,7 @@ impl FileSystem {
             }
 
             tracing::warn!(
-                "neither XDG_CACHE_HOME nor HOME is set, generating cache into current working directory"
+                "neither XDG_DATA_HOME nor HOME is set, generating persisted-state data into current working directory"
             );
             std::env::current_dir()
                 .expect("fs.persist_state_base_path.current_dir")
@@ -5469,6 +5934,16 @@ impl FileSystem {
     #[inline(always)]
     pub fn resolve_cache_path(&self, path: impl AsRef<Path>) -> PathBuf {
         self.cache_base_path.join(path)
+    }
+
+    #[inline(always)]
+    pub fn resolve_persist_state_path(&self, path: impl AsRef<Path>) -> PathBuf {
+        self.persist_state_base_path.join(path)
+    }
+
+    #[inline(always)]
+    pub fn window_state_save_path(&self) -> PathBuf {
+        self.resolve_persist_state_path("window_state")
     }
 }
 

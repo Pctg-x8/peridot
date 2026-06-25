@@ -1090,6 +1090,12 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         ))
     }
 
+    pub fn has_bitmap(mut self, has: bool) -> Self {
+        unsafe { &mut *self.target }.has_bitmap = has;
+        self.dirty = true;
+        self
+    }
+
     pub fn composite_mode(mut self, v: CompositeMode<Event>) -> Self {
         unsafe { &mut *self.target }.composite_mode = v;
         self.dirty = true;

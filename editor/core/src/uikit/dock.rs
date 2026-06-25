@@ -58,6 +58,8 @@ const DESIGN_METRICS: DesignMetrics = DesignMetrics {
 
 /// Paneの表示内容
 pub trait PaneContentPresenter {
+    /// Pane ID(復帰時の識別につかわれる)
+    fn id(&self) -> String;
     /// タブ名
     fn name(&self) -> String;
     /// マウント
@@ -212,12 +214,13 @@ impl DockStore {
         parent: DockID,
         view_init_ctx: &mut ViewInitContext,
         contents: impl FnOnce(&mut ViewInitContext) -> Vec<Box<dyn PaneContentPresenter>>,
+        initial_active_index: usize,
     ) -> DockID {
         self.alloc(move |id| {
             let contents = contents(view_init_ctx);
 
             Dock::Fill {
-                group_view: PaneGroupView::new(view_init_ctx, contents, id),
+                group_view: PaneGroupView::new(view_init_ctx, contents, id, initial_active_index),
                 parent,
             }
         })
@@ -528,6 +531,44 @@ impl DockingManager {
         store.dump(self.root_id);
         r
     }
+
+    /// Dockの構成状態をとる
+    pub fn state_snapshot(&self, store: &DockStore) -> crate::DockState {
+        fn rec(target: DockID, store: &DockStore) -> crate::DockState {
+            match store.get(target) {
+                &Dock::RootContainer { content } => rec(content, store),
+                &Dock::Fill { ref group_view, .. } => crate::DockState::Filled {
+                    content_ids: group_view
+                        .controller
+                        .contents
+                        .borrow()
+                        .iter()
+                        .map(|c| c.0.id())
+                        .collect(),
+                    active_index: group_view.controller.current_active_index.get(),
+                },
+                &Dock::Splitted {
+                    docked,
+                    rest,
+                    ref direction,
+                    ..
+                } => crate::DockState::Splitted {
+                    direction: match direction {
+                        DockDirection::ToLeft(width) => crate::DockDirection::Left(width.get()),
+                        DockDirection::ToRight(width) => crate::DockDirection::Right(width.get()),
+                        DockDirection::ToTop(height) => crate::DockDirection::Top(height.get()),
+                        DockDirection::ToBottom(height) => {
+                            crate::DockDirection::Bottom(height.get())
+                        }
+                    },
+                    content: Box::new(rec(docked, store)),
+                    rest: Box::new(rec(rest, store)),
+                },
+            }
+        }
+
+        rec(self.root_id, store)
+    }
 }
 
 /// Dockの内容を再帰的にmountする
@@ -571,7 +612,7 @@ fn split_new(
             docked: store.alloc(|id| {
                 let d = Dock::Fill {
                     parent: parent_id,
-                    group_view: PaneGroupView::new(view_init_ctx, vec![content], id),
+                    group_view: PaneGroupView::new(view_init_ctx, vec![content], id, 0),
                 };
                 d.mount(view_init_ctx, mount_target);
                 d
@@ -1489,6 +1530,7 @@ impl PaneGroupView {
         ctx: &mut ViewInitContext,
         contents: Vec<Box<dyn PaneContentPresenter>>,
         dock: DockID,
+        initial_active_index: usize,
     ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -1532,6 +1574,7 @@ impl PaneGroupView {
         ctx.composite_tree.add_child(ct_root, ct_content_root);
         ctx.ht_manager.add_child(ht_root, ht_content_root);
 
+        let initial_active_index = initial_active_index.clamp(0, contents.len() - 1);
         let controller = Rc::new_cyclic(|wgc| PaneGroupViewController {
             view_id: ctx.view_registry.alloc(),
             ct_root,
@@ -1549,7 +1592,7 @@ impl PaneGroupView {
                     })
                     .collect(),
             ),
-            current_active_index: Cell::new(0),
+            current_active_index: Cell::new(initial_active_index),
             pending_active_changes: Cell::new(None),
             pending_set_rect: Cell::new(None),
         });
@@ -1561,7 +1604,7 @@ impl PaneGroupView {
             ctx.mount_context.composite_tree,
             ctx.mount_context.ht_manager,
         );
-        controller.activate(0, ctx);
+        controller.activate(initial_active_index, ctx);
 
         Self { controller }
     }

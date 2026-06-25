@@ -7,7 +7,7 @@ use peridot_tp_dbus as dbus;
 use peridot_tp_wayland::{self as wl, ProxyObject};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, WindowType,
+    Event, LogicFiberEventDispatcher, MainWindowInitialState, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -24,7 +24,7 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, PixelsUnit, Rect, Size},
+    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
 
 #[repr(transparent)]
@@ -256,6 +256,36 @@ impl Handle {
                 .expect("xdg_toplevel.set_maximized");
         }
     }
+
+    pub fn geometry_state_snapshot(
+        &self,
+        system_link: &crate::SystemLink,
+    ) -> crate::WindowGeometryState {
+        let committed_state = self.state().committed_state.lock().expect("poisoned");
+        if committed_state.maximized {
+            crate::WindowGeometryState::Maximized {
+                monitor_index: unsafe {
+                    (*system_link.display_server.context)
+                        .global_interfaces
+                        .outputs
+                        .iter()
+                        .position(|(o, _)| o.ref_eq(&*self.state().entering_output_ptr))
+                        .unwrap_or_else(|| {
+                            tracing::error!("Failed to find output index");
+                            0
+                        })
+                },
+            }
+        } else {
+            crate::WindowGeometryState::Restored {
+                // Note: Waylandではウィンドウの位置を取得することができないのでいったん0をいれておく
+                rect: Rect::from_lt_size(
+                    Point::new_logical(0.0, 0.0),
+                    committed_state.active_size_logical,
+                ),
+            }
+        }
+    }
 }
 impl crate::input::ShellPointerActions for Handle {
     #[inline(always)]
@@ -294,6 +324,7 @@ pub(super) struct InstanceState {
     xdg_toplevel: wl::Owned<wl::XdgToplevel>,
     _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
+    entering_output_ptr: *mut wl::Output,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     extra_data: *mut core::ffi::c_void,
@@ -321,9 +352,12 @@ struct EventListener {
     event_dispatcher: LogicFiberEventDispatcher,
 }
 impl wl::SurfaceEventListener for EventListener {
-    #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, _output))]
-    fn enter(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {
+    #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, output))]
+    fn enter(&mut self, _surface: &mut wl::Surface, output: &mut wl::Output) {
         super::event_trace!();
+        tracing::debug!("enter output {output:p}");
+
+        self.state.data.entering_output_ptr = output;
     }
 
     #[tracing::instrument(name = "wl_surface::leave", skip(self, _surface, _output))]
@@ -621,7 +655,10 @@ impl NativeWindow {
 
     pub fn new<E>(
         r#type: WindowType,
-        rect: Option<Rect<LogicalUnit>>,
+        target_output: Option<&wl::Output>,
+        pos: Option<Point<LogicalUnit>>,
+        size: Option<Size<LogicalUnit>>,
+        maximized: bool,
         dpsv: &DisplayServerContext,
         dbus: &dbus::Connection,
         event_dispatcher: LogicFiberEventDispatcher,
@@ -634,8 +671,8 @@ impl NativeWindow {
     ) -> Self {
         // TODO: displaying surface at specific rectangle
         let size = Size::new_logical(
-            rect.as_ref().map_or(1280.0, |r| r.width),
-            rect.as_ref().map_or(720.0, |r| r.height),
+            size.as_ref().map_or(1280.0, |r| r.width),
+            size.as_ref().map_or(720.0, |r| r.height),
         );
 
         let mut surface = dpsv
@@ -718,6 +755,26 @@ impl NativeWindow {
             core::ptr::null_mut()
         };
 
+        if let Some(ref kp) = dpsv.global_interfaces.kde_plasma_shell {
+            let window = kp
+                .get_surface(&surface)
+                .expect("kde_plasma_shell.get_surface");
+            if let Some(o) = target_output {
+                window.set_output(o).expect("window.set_output");
+            }
+            if let Some(p) = pos {
+                window
+                    .set_position(p.x.round() as _, p.y.round() as _)
+                    .expect("window.set_position");
+            }
+        }
+
+        if maximized {
+            xdg_toplevel
+                .set_maximized()
+                .expect("xdg_toplevel.set_maximized");
+        }
+
         let composite_root = composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
@@ -742,6 +799,7 @@ impl NativeWindow {
                     xdg_toplevel,
                     _appmenu: appmenu,
                     _deco: deco,
+                    entering_output_ptr: core::ptr::null_mut(),
                     composite_root,
                     ht_root,
                     extra_data: core::ptr::null_mut(),
