@@ -91,8 +91,6 @@ pub struct FontSet {
     #[cfg(target_os = "macos")]
     ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
     #[cfg(feature = "freetype")]
-    ft_lib: FreeType,
-    #[cfg(feature = "freetype")]
     ui_default: FaceSet,
     #[cfg(feature = "freetype")]
     ui_title_project_name: FaceSet,
@@ -100,6 +98,8 @@ pub struct FontSet {
     ui_default_shaping: FaceShapingSet,
     #[cfg(feature = "harfbuzz")]
     ui_title_project_name_shaping: FaceShapingSet,
+    #[cfg(feature = "freetype")]
+    _ft_lib: FreeType,
     #[cfg(windows)]
     dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
     #[cfg(windows)]
@@ -302,7 +302,7 @@ impl FontSet {
             .collect::<Vec<_>>();
 
         Self {
-            ft_lib,
+            _ft_lib: ft_lib,
             ui_default: FaceSet { faces: ui_default },
             ui_title_project_name: FaceSet {
                 faces: ui_title_project_name,
