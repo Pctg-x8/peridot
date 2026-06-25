@@ -390,7 +390,7 @@ float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   // let x = 1.0 - abs(distanceFromEdge) / 128.0;
   // return float4(x, x, x, 1.0);
 
-  let cornerAlpha = smoothstep(0.0, 1.0, distanceFromEdge);
+  let cornerAlpha = smoothstep(-1.0, 0.0, distanceFromEdge);
   let softEdgeAlpha = smoothstep(0.0, input.softedge, distanceFromEdge);
 
   // apply softmask, opacity and premultiply
