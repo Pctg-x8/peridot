@@ -9,8 +9,8 @@ use peridot_tp_wayland as wl;
 use peridot_tp_xkbcommon as xkbcommon;
 
 use crate::{
-    Event, LogicFiberEventDispatcher, MainWindowInitialState, SubWindowInitialState, SyncEvent,
-    WindowType,
+    Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent,
+    WindowGeometryState, WindowType,
     graphics::VulkanDevice,
     input::{
         KeyInputCode, KeyboardFocusTokenRegistry, ModifierKey,
@@ -30,6 +30,8 @@ mod toplevel;
 
 pub use self::flyout_surface::Handle as FlyoutSurfaceHandle;
 pub use self::toplevel::Handle as ToplevelHandle;
+
+pub type WindowPersistentStateNativeGeometryUnit = LogicalUnit;
 
 macro_rules! event_trace {
     ($($args:tt)+) => {
@@ -160,44 +162,56 @@ impl crate::SystemLink<'_> {
 
     pub fn create_main_window(
         &self,
-        initial_state: MainWindowInitialState,
+        mode: MainWindowOpenMode,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> toplevel::Handle {
+        let (target_output, pos, size, initial_maximize);
+        match mode {
+            MainWindowOpenMode::New => {
+                target_output = None;
+                pos = None;
+                size = None;
+                initial_maximize = false;
+            }
+            MainWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+                target_output = None;
+                pos = Some(rect.left_top());
+                size = Some(rect.size());
+                initial_maximize = false;
+            }
+            MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+                let target_monitor = &unsafe { &*self.display_server.context }
+                    .global_interfaces
+                    .outputs
+                    .get(monitor_index)
+                    .unwrap_or(
+                        &unsafe { &*self.display_server.context }
+                            .global_interfaces
+                            .outputs[0],
+                    );
+
+                target_output = Some::<&wl::Output>(&target_monitor.0);
+                pos = Some(Point::new_logical(
+                    target_monitor.1.x as _,
+                    target_monitor.1.y as _,
+                ));
+                size = None;
+                initial_maximize = true;
+            }
+        }
+
         toplevel::NativeWindow::new(
             WindowType::Main {
                 #[cfg(target_os = "linux")]
                 termination_event: self.terminate_event.clone(),
             },
-            match initial_state {
-                MainWindowInitialState::Maximized { monitor_index } => Some(
-                    &unsafe { &*self.display_server.context }
-                        .global_interfaces
-                        .outputs
-                        .get(monitor_index)
-                        .unwrap_or(
-                            &unsafe { &*self.display_server.context }
-                                .global_interfaces
-                                .outputs[0],
-                        )
-                        .0,
-                ),
-                MainWindowInitialState::Unsized => None,
-                MainWindowInitialState::Sized(_) => None,
-            },
-            None,
-            match initial_state {
-                MainWindowInitialState::Maximized { .. } => None,
-                MainWindowInitialState::Unsized => None,
-                MainWindowInitialState::Sized(size) => Some(size),
-            },
-            match initial_state {
-                MainWindowInitialState::Maximized { .. } => true,
-                MainWindowInitialState::Unsized => false,
-                MainWindowInitialState::Sized(_) => false,
-            },
+            target_output,
+            pos,
+            size,
+            initial_maximize,
             unsafe { &*self.display_server.context },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),
@@ -215,8 +229,7 @@ impl crate::SystemLink<'_> {
 
     pub fn open_window<'h>(
         &self,
-        initial_state: SubWindowInitialState,
-        _position_ref_window: toplevel::Handle,
+        mode: SubWindowOpenMode,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -229,35 +242,44 @@ impl crate::SystemLink<'_> {
             &Self,
         ),
     ) -> toplevel::Handle {
+        let (target_output, pos, size, initial_maximize);
+        match mode {
+            SubWindowOpenMode::DockDiverge { rect, .. } => {
+                target_output = None;
+                pos = Some(rect.left_top());
+                size = Some(rect.size());
+                initial_maximize = false;
+            }
+            SubWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+                target_output = None;
+                pos = Some(rect.left_top());
+                size = Some(rect.size());
+                initial_maximize = false;
+            }
+            SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+                let target = &unsafe { &*self.display_server.context }
+                    .global_interfaces
+                    .outputs
+                    .get(monitor_index)
+                    .unwrap_or(
+                        &unsafe { &*self.display_server.context }
+                            .global_interfaces
+                            .outputs[0],
+                    );
+
+                target_output = Some::<&wl::Output>(&target.0);
+                pos = Some(Point::new_logical(target.1.x as _, target.1.y as _));
+                size = None;
+                initial_maximize = true;
+            }
+        }
+
         let w = toplevel::NativeWindow::new(
             WindowType::Sub,
-            match initial_state {
-                SubWindowInitialState::Maximized { monitor_index } => Some(
-                    &unsafe { &*self.display_server.context }
-                        .global_interfaces
-                        .outputs
-                        .get(monitor_index)
-                        .unwrap_or(
-                            &unsafe { &*self.display_server.context }
-                                .global_interfaces
-                                .outputs[0],
-                        )
-                        .0,
-                ),
-                SubWindowInitialState::Windowed(_) => None,
-            },
-            match initial_state {
-                SubWindowInitialState::Maximized { .. } => Some(Point::new_logical(0.0, 0.0)),
-                SubWindowInitialState::Windowed(ref r) => Some(r.left_top()),
-            },
-            match initial_state {
-                SubWindowInitialState::Maximized { .. } => None,
-                SubWindowInitialState::Windowed(ref r) => Some(r.size()),
-            },
-            match initial_state {
-                SubWindowInitialState::Maximized { .. } => true,
-                SubWindowInitialState::Windowed(_) => false,
-            },
+            target_output,
+            pos,
+            size,
+            initial_maximize,
             unsafe { &*self.display_server.context },
             unsafe { &*self.dbus },
             unsafe { &*self.event_dispatcher }.clone(),

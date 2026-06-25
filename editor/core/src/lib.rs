@@ -5376,7 +5376,10 @@ pub use platform::windows::{
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]
-pub use platform::unix::wayland::{FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle};
+pub use platform::unix::wayland::{
+    FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle,
+    WindowPersistentStateNativeGeometryUnit,
+};
 
 #[cfg(target_os = "macos")]
 pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
