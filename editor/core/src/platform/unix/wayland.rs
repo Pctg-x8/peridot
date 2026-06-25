@@ -18,12 +18,13 @@ use crate::{
     },
     rendering::{RenderMessage, composite::CompositeTree},
     utils::{
-        LogicalUnit, Point, Rect, Size,
+        LogicalUnit, Point, Rect,
         platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},
         rup2,
     },
 };
 
+mod drag_preview;
 pub mod flyout_surface;
 mod toplevel;
 
@@ -69,350 +70,6 @@ impl SurfaceScaling {
     #[inline(always)]
     const fn is_manual(&self) -> bool {
         matches!(self, Self::Manual { .. })
-    }
-}
-
-struct DragPreviewDndIcon {
-    shown: bool,
-    offset: Point<LogicalUnit>,
-    blur: Option<wl::Owned<wl::OrgKdeKwinBlur>>,
-    viewport: wl::Owned<wl::WpViewport>,
-    surface: wl::Owned<wl::Surface>,
-}
-
-struct DragPreviewPopover {
-    wl_interfaces: *const GlobalInterfaces,
-    buf: DragPreviewPopoverBuffer,
-    dnd_icon: Option<DragPreviewDndIcon>,
-    popup: Option<DragPreviewPopoverCore>,
-    popup_rect: Rect<LogicalUnit>,
-}
-impl DragPreviewPopover {
-    fn new(display_server: &mut DisplayServerContext, static_pixbufs: &StaticPixbufs) -> Self {
-        Self {
-            wl_interfaces: &display_server.global_interfaces,
-            buf: static_pixbufs.create_drag_preview_popover_bufs(&display_server.global_interfaces),
-            dnd_icon: None,
-            popup: None,
-            popup_rect: Rect::from_lt_size(
-                Point::new_logical(0.0, 0.0),
-                Size::new_logical(100.0, 100.0),
-            ),
-        }
-    }
-
-    fn setup_dnd_icon_surface(&mut self, offset: Point<LogicalUnit>, size: &Size<LogicalUnit>) {
-        let surface = unsafe { &*self.wl_interfaces }
-            .compositor
-            .create_surface()
-            .expect("surface.create");
-        let viewport = unsafe { &*self.wl_interfaces }
-            .viewporter
-            .get_viewport(&surface)
-            .expect("surface.get_viewport");
-
-        viewport
-            .set_source(
-                wl::Fixed::ZERO,
-                wl::Fixed::ZERO,
-                wl::Fixed::ONE,
-                wl::Fixed::ONE,
-            )
-            .expect("viewport.set_source");
-        viewport
-            .set_destination(size.width.ceil() as _, size.height.ceil() as _)
-            .expect("viewport.set_destination");
-
-        let blur = if let Some(bm) = unsafe { (*self.wl_interfaces).kde_blur_manager.as_ref() } {
-            let blur = bm.create(&surface).expect("blur.create");
-            blur.commit().expect("blur.commit");
-
-            Some(blur)
-        } else {
-            None
-        };
-
-        self.dnd_icon = Some(DragPreviewDndIcon {
-            shown: false,
-            offset,
-            blur,
-            viewport,
-            surface,
-        });
-    }
-
-    fn post_commit_dnd_icon(&self) {
-        let Some(ref x) = self.dnd_icon else {
-            return;
-        };
-
-        x.surface.commit().expect("surface.commit");
-    }
-
-    fn show_dnd_icon(&mut self) {
-        let Some(ref mut x) = self.dnd_icon else {
-            return;
-        };
-
-        if x.shown {
-            return;
-        }
-
-        x.surface
-            .attach(Some(&self.buf.buffer()), 0, 0)
-            .expect("surface.attach");
-        x.surface
-            .offset(x.offset.x.round() as _, x.offset.y.round() as _)
-            .expect("surface.offset");
-        x.surface.damage(0, 0, -1, -1).expect("surface.damage");
-        x.surface.commit().expect("surface.commit");
-        if let Some(ref b) = x.blur {
-            b.commit().expect("blur.commit");
-        }
-        x.shown = true;
-    }
-
-    fn hide_dnd_icon(&mut self) {
-        let Some(ref mut x) = self.dnd_icon else {
-            return;
-        };
-
-        if !x.shown {
-            return;
-        }
-
-        // buffer detach前にleft-topを0, 0にもどす そうしないとだんだんズレていく
-        x.surface
-            .offset(-x.offset.x.round() as _, -x.offset.y.round() as _)
-            .expect("surface.offset");
-        x.surface.attach(None, 0, 0).expect("surface.attach");
-        x.surface.damage(0, 0, -1, -1).expect("surface.damage");
-        x.surface.commit().expect("surface.commit");
-        x.shown = false;
-    }
-
-    fn show(&mut self, on_surface: &wl::XdgSurface) {
-        let wl_popup_surface = unsafe { &*self.wl_interfaces }
-            .compositor
-            .create_surface()
-            .expect("wl_popup_surface.create");
-        let mut xdg_popup_surface = unsafe { &*self.wl_interfaces }
-            .xdg_wm_base
-            .get_xdg_surface(&wl_popup_surface)
-            .expect("xdg_popup_surface.create");
-        let viewport = unsafe { &*self.wl_interfaces }
-            .viewporter
-            .get_viewport(&wl_popup_surface)
-            .expect("popup_viewport.create");
-
-        let positioner = unsafe { &*self.wl_interfaces }
-            .xdg_wm_base
-            .create_positioner()
-            .expect("pos.create");
-        positioner
-            .set_size(self.popup_rect.width as _, self.popup_rect.height as _)
-            .expect("pos.set_size");
-        positioner
-            .set_offset(self.popup_rect.left as _, self.popup_rect.top as _)
-            .expect("pos.set_offset");
-        positioner
-            .set_anchor(wl::XdgPositionerAnchor::TopLeft)
-            .expect("pos.set_anchor");
-        positioner
-            .set_anchor_rect(0, 0, 1, 1)
-            .expect("pos.set_anchor_rect");
-        positioner
-            .set_gravity(wl::XdgPositionerGravity::BottomRight)
-            .expect("pos.set_gravity");
-        positioner
-            .set_constraint_adjustment(wl::XdgPositionerConstraintAdjustment::None)
-            .expect("pos.set_constraint_adjustment");
-        let mut pp = xdg_popup_surface
-            .get_popup(Some(on_surface), &positioner)
-            .expect("pop.create");
-        let mut popup_state = Box::new(PopupState {
-            surface_ptr: wl_popup_surface.as_ptr(),
-            xdg_surface_ptr: xdg_popup_surface.as_ptr(),
-            viewport_ptr: viewport.as_ptr(),
-            buffer_ptr: self.buf.buffer(),
-            buffer_attached: false,
-            active_size: self.popup_rect.size(),
-            pending_new_width: None,
-            pending_new_height: None,
-        });
-        xdg_popup_surface
-            .set_listener(&mut *popup_state)
-            .into_result()
-            .expect("xdg_popup_surface.set_listener");
-        pp.set_listener(&mut *popup_state)
-            .into_result()
-            .expect("pop.set_listener");
-
-        // ignore all inputs for popup surface
-        let input_region = unsafe { &*self.wl_interfaces }
-            .compositor
-            .create_region()
-            .expect("input_region.create");
-        wl_popup_surface
-            .set_input_region(Some(&input_region))
-            .expect("wl_popup_surface.set_input_region");
-
-        viewport
-            .set_source(
-                wl::Fixed::ZERO,
-                wl::Fixed::ZERO,
-                wl::Fixed::ONE,
-                wl::Fixed::ONE,
-            )
-            .expect("viewport.set_source");
-        viewport
-            .set_destination(self.popup_rect.width as _, self.popup_rect.height as _)
-            .expect("viewport.set_destination");
-
-        let blur = if let Some(ref bm) = unsafe { &*self.wl_interfaces }.kde_blur_manager {
-            let blur = bm.create(&wl_popup_surface).expect("blur.create");
-            blur.commit().expect("blur.commit");
-
-            Some(blur)
-        } else {
-            None
-        };
-
-        wl_popup_surface.commit().expect("wl_popup_surface.commit");
-        tracing::debug!("popup commit");
-
-        self.popup = Some(DragPreviewPopoverCore {
-            blur,
-            xdg_popup: pp,
-            xdg_surface: xdg_popup_surface,
-            viewport,
-            surface: wl_popup_surface,
-            state: popup_state,
-        });
-    }
-
-    fn set_rect(&mut self, r: &Rect<LogicalUnit>) {
-        self.popup_rect = r.clone();
-
-        let Some(ref mut x) = self.popup else {
-            return;
-        };
-
-        let pos = unsafe { &*self.wl_interfaces }
-            .xdg_wm_base
-            .create_positioner()
-            .expect("pos.create");
-        pos.set_offset(r.left as _, r.top as _)
-            .expect("pos.set_offset");
-        pos.set_size(r.width as _, r.height as _)
-            .expect("pos.set_size");
-        pos.set_anchor(wl::XdgPositionerAnchor::TopLeft)
-            .expect("pos.set_anchor");
-        pos.set_anchor_rect(0, 0, 1, 1)
-            .expect("pos.set_anchor_rect");
-        pos.set_gravity(wl::XdgPositionerGravity::BottomRight)
-            .expect("pos.set_gravity");
-        x.xdg_popup.reposition(&pos, 0).expect("pp.reposition");
-    }
-
-    fn hide(&mut self) {
-        self.popup = None;
-    }
-
-    fn teardown_dynamic_resoureces(&mut self) {
-        self.popup = None;
-        self.dnd_icon = None;
-    }
-}
-
-struct DragPreviewPopoverCore {
-    blur: Option<wl::Owned<wl::OrgKdeKwinBlur>>,
-    xdg_popup: wl::Owned<wl::XdgPopup>,
-    xdg_surface: wl::Owned<wl::XdgSurface>,
-    viewport: wl::Owned<wl::WpViewport>,
-    surface: wl::Owned<wl::Surface>,
-    state: Box<PopupState>,
-}
-struct PopupState {
-    surface_ptr: *mut wl::Surface,
-    xdg_surface_ptr: *mut wl::XdgSurface,
-    viewport_ptr: *mut wl::WpViewport,
-    buffer_ptr: *const wl::Buffer,
-    buffer_attached: bool,
-    active_size: Size<LogicalUnit>,
-    pending_new_width: Option<i32>,
-    pending_new_height: Option<i32>,
-}
-impl wl::XdgSurfaceEventListener for PopupState {
-    #[tracing::instrument(name = "xdg_surface(Popup)::configure", skip(self, sender))]
-    fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
-        event_trace!();
-        sender.ack_configure(serial).expect("popup.ack_configure");
-
-        if !self.buffer_attached {
-            unsafe { &*self.surface_ptr }
-                .attach(Some(unsafe { &*self.buffer_ptr }), 0, 0)
-                .expect("wl_popup_surface.attach");
-            unsafe { &*self.surface_ptr }
-                .damage(0, 0, -1, -1)
-                .expect("wl_popup_surface.damage");
-            self.buffer_attached = true;
-        }
-
-        if self.pending_new_width.is_some() || self.pending_new_height.is_some() {
-            // resize occured
-            let new_logical_size = Size::new_logical(
-                self.pending_new_width
-                    .take()
-                    .map_or(self.active_size.width, |x| x as _),
-                self.pending_new_height
-                    .take()
-                    .map_or(self.active_size.height, |x| x as _),
-            );
-            self.active_size = new_logical_size;
-
-            unsafe { &*self.xdg_surface_ptr }
-                .set_window_geometry(
-                    0,
-                    0,
-                    self.active_size.width.ceil() as _,
-                    self.active_size.height.ceil() as _,
-                )
-                .expect("xdg_surface.set_window_geometry");
-            unsafe { &*self.viewport_ptr }
-                .set_destination(
-                    self.active_size.width.ceil() as _,
-                    self.active_size.height.ceil() as _,
-                )
-                .expect("viewport.set_destination");
-        }
-
-        unsafe {
-            (*self.surface_ptr).commit().expect("popup.surface.commit");
-        }
-    }
-}
-impl wl::XdgPopupEventListener for PopupState {
-    #[tracing::instrument(name = "xdg_popup::configure", skip(self, _sender))]
-    fn configure(&mut self, _sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
-        event_trace!();
-
-        if width != 0 {
-            self.pending_new_width = Some(width);
-        }
-        if height != 0 {
-            self.pending_new_height = Some(height);
-        }
-    }
-
-    #[tracing::instrument(name = "xdg_popup::popup_done", skip(self, _sender))]
-    fn popup_done(&mut self, _sender: &mut wl::XdgPopup) {
-        event_trace!();
-    }
-
-    #[tracing::instrument(name = "xdg_popup::repositioned", skip(self, _sender))]
-    fn repositioned(&mut self, _sender: &mut wl::XdgPopup, token: u32) {
-        event_trace!();
     }
 }
 
@@ -559,7 +216,7 @@ impl crate::SystemLink<'_> {
     pub fn open_window<'h>(
         &self,
         initial_state: SubWindowInitialState,
-        position_ref_window: toplevel::Handle,
+        _position_ref_window: toplevel::Handle,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -752,15 +409,6 @@ impl crate::SystemLink<'_> {
             == SurfaceStateTag::FlyoutSurface
     }
 
-    pub fn translate_client_pos_to_another_window(
-        client_pos: Point<LogicalUnit>,
-        source_window: toplevel::Handle,
-        dest_window: toplevel::Handle,
-    ) -> Point<LogicalUnit> {
-        // TODO
-        client_pos
-    }
-
     pub fn query_window_under_pointer(&self, pointer: &PointerID) -> Option<toplevel::Handle> {
         let global_msg = unsafe { &mut *(*pointer.0).user_data().cast::<GlobalMessaging>() };
         let surface = global_msg
@@ -797,9 +445,11 @@ impl crate::SystemLink<'_> {
             .into_result()
             .expect("data_source.add_listener");
 
-        global_msg
-            .drag_preview_popover
-            .setup_dnd_icon_surface(offset, &rect.size());
+        global_msg.drag_preview_popover.setup_dnd_icon_surface(
+            &unsafe { &*self.display_server.context }.global_interfaces,
+            offset,
+            &rect.size(),
+        );
         let pointer_enter_state = global_msg
             .pointer
             .as_ref()
@@ -813,16 +463,7 @@ impl crate::SystemLink<'_> {
                 // Note: 仕様上はnullにできるはずだがHyprlandでやるとCompositorごとおちる
                 Some(&data_source),
                 unsafe { initiator.0.as_ref() },
-                Some(
-                    &unsafe {
-                        global_msg
-                            .drag_preview_popover
-                            .dnd_icon
-                            .as_ref()
-                            .unwrap_unchecked()
-                    }
-                    .surface,
-                ),
+                Some(global_msg.drag_preview_popover.dnd_icon_surface()),
                 pointer_enter_state
                     .implicit_grab_serial
                     .expect("not grabbing implicitly"),
@@ -832,17 +473,19 @@ impl crate::SystemLink<'_> {
         dd.pane_drag_state = Some(PaneDragState {
             source: data_source,
             initiator,
-            offset,
         });
     }
 
-    pub fn update_pane_drag(&self, on_surface: toplevel::Handle, rect: &Rect<LogicalUnit>) {
+    pub fn update_pane_drag(&self, _on_surface: toplevel::Handle, rect: &Rect<LogicalUnit>) {
         let global_msg = unsafe { &mut *self.display_server.global_messaging_ptr };
-        global_msg.drag_preview_popover.set_rect(rect);
+        global_msg.drag_preview_popover.set_surface_rect(
+            &unsafe { &*self.display_server.context }.global_interfaces,
+            rect,
+        );
     }
 
-    pub fn end_pane_drag(&self, pointer: &PointerID) {
-        let global_msg = unsafe { &mut *(*pointer.0).user_data().cast::<GlobalMessaging>() };
+    pub fn end_pane_drag(&self) {
+        let global_msg = unsafe { &mut *self.display_server.global_messaging_ptr };
         global_msg
             .drag_preview_popover
             .teardown_dynamic_resoureces();
@@ -943,14 +586,14 @@ impl StaticPixbufs {
     fn create_drag_preview_popover_bufs(
         &self,
         interfaces: &GlobalInterfaces,
-    ) -> DragPreviewPopoverBuffer {
+    ) -> drag_preview::Buffer {
         if let Some(ref spb) = interfaces.single_pixel_buffer_manager {
             let c = crate::DRAG_PREVIEW_POPOVER_BG_COLOR.premultiplied();
             let b = spb
                 .create_u32_rgba_buffer(c.r_u32(), c.g_u32(), c.b_u32(), c.a_u32())
                 .expect("popup_buf.create.single_pixel_buffer");
 
-            DragPreviewPopoverBuffer::SinglePixel(b)
+            drag_preview::Buffer::SinglePixel(b)
         } else {
             // traditional shm-based single pixel buffer
             let (shm, _, _) = self.shm.as_ref().expect("no shm");
@@ -959,22 +602,7 @@ impl StaticPixbufs {
                 .create_buffer(0, 1, 1, 4, wl::ShmFormat::ARGB8888)
                 .expect("buf.create.popup");
 
-            DragPreviewPopoverBuffer::Shm { buf }
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub enum DragPreviewPopoverBuffer {
-    SinglePixel(wl::Owned<wl::Buffer>),
-    Shm { buf: wl::Owned<wl::Buffer> },
-}
-impl DragPreviewPopoverBuffer {
-    #[inline(always)]
-    pub fn buffer(&self) -> &wl::Buffer {
-        match self {
-            Self::SinglePixel(x) => x,
-            Self::Shm { buf, .. } => buf,
+            drag_preview::Buffer::Shm { buf }
         }
     }
 }
@@ -1144,7 +772,6 @@ struct DataDeviceActiveOfferState {
 struct PaneDragState {
     source: wl::Owned<wl::DataSource>,
     initiator: toplevel::Handle,
-    offset: Point<LogicalUnit>,
 }
 
 struct DataDeviceState {
@@ -1154,6 +781,7 @@ struct DataDeviceState {
 }
 
 pub struct GlobalMessaging {
+    global_interfaces: *const GlobalInterfaces,
     text_input_manager: NonNull<wl::ZwpTextInputManagerV3>,
     data_device_manager: NonNull<wl::DataDeviceManager>,
     xkb_context: xkbcommon::Context,
@@ -1165,7 +793,7 @@ pub struct GlobalMessaging {
     relative_pointer_manager: Option<NonNull<wl::ZwpRelativePointerManagerV1>>,
     event_dispatcher: LogicFiberEventDispatcher,
     ime_pending_state: IMEPendingState,
-    drag_preview_popover: DragPreviewPopover,
+    drag_preview_popover: drag_preview::Controller,
     _pinned: core::marker::PhantomPinned,
 }
 impl GlobalMessaging {
@@ -1175,6 +803,7 @@ impl GlobalMessaging {
         event_dispatcher: LogicFiberEventDispatcher,
     ) -> Self {
         Self {
+            global_interfaces: &ctx.global_interfaces,
             text_input_manager: unsafe { ctx.global_interfaces.text_input_manager.copy_ptr() },
             data_device_manager: unsafe { ctx.global_interfaces.data_device_manager.copy_ptr() },
             xkb_context: xkbcommon::Context::new(xkbcommon::ContextFlags::NO_FLAGS)
@@ -1202,7 +831,7 @@ impl GlobalMessaging {
                 committed_text: None,
                 preedit_text: None,
             },
-            drag_preview_popover: DragPreviewPopover::new(ctx, static_pixbufs),
+            drag_preview_popover: drag_preview::Controller::new(ctx, static_pixbufs),
             _pinned: core::marker::PhantomPinned,
         }
     }
@@ -1645,7 +1274,7 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         });
     }
 
-    #[tracing::instrument(name = "data_device::enter", skip(self, _sender, surface, id))]
+    #[tracing::instrument(name = "data_device::enter", skip(self, _sender, surface, _id))]
     fn enter(
         &mut self,
         _sender: &mut wl::DataDevice,
@@ -1653,13 +1282,13 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         surface: &wl::Surface,
         x: wl::Fixed,
         y: wl::Fixed,
-        id: Option<&wl::DataOffer>,
+        _id: Option<&wl::DataOffer>,
     ) {
         event_trace!();
 
         let surface_state_ptr = surface.user_data().cast::<SurfaceStateUntyped>();
         if surface_state_ptr.is_null() {
-            self.drag_preview_popover.hide();
+            self.drag_preview_popover.hide_surface();
             self.drag_preview_popover.show_dnd_icon();
             self.data_device
                 .as_mut()
@@ -1670,7 +1299,7 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         }
         let surface_state = unsafe { &*surface_state_ptr };
         if surface_state.tag != SurfaceStateTag::ToplevelWindow {
-            self.drag_preview_popover.hide();
+            self.drag_preview_popover.hide_surface();
             self.drag_preview_popover.show_dnd_icon();
             self.data_device
                 .as_mut()
@@ -1681,7 +1310,8 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         }
 
         self.drag_preview_popover.hide_dnd_icon();
-        self.drag_preview_popover.show(
+        self.drag_preview_popover.show_surface(
+            unsafe { &*self.global_interfaces },
             &unsafe {
                 core::mem::transmute::<_, &SurfaceState<toplevel::InstanceState>>(surface_state)
             }
@@ -1789,21 +1419,21 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         })
     }
 
-    #[tracing::instrument(name = "data_device::selection", skip(self, _sender, id))]
-    fn selection(&mut self, _sender: &mut wl::DataDevice, id: Option<&wl::DataOffer>) {
+    #[tracing::instrument(name = "data_device::selection", skip(self, _sender, _id))]
+    fn selection(&mut self, _sender: &mut wl::DataDevice, _id: Option<&wl::DataOffer>) {
         event_trace!();
     }
 }
 impl wl::DataSourceEventListener for GlobalMessaging {
-    #[tracing::instrument(name = "data_source::target", skip(self, sender))]
-    fn target(&mut self, sender: &mut wl::DataSource, mime_type: Option<&core::ffi::CStr>) {
+    #[tracing::instrument(name = "data_source::target", skip(self, _sender))]
+    fn target(&mut self, _sender: &mut wl::DataSource, mime_type: Option<&core::ffi::CStr>) {
         event_trace!();
     }
 
-    #[tracing::instrument(name = "data_source::send", skip(self, sender))]
+    #[tracing::instrument(name = "data_source::send", skip(self, _sender))]
     fn send(
         &mut self,
-        sender: &mut wl::DataSource,
+        _sender: &mut wl::DataSource,
         mime_type: &core::ffi::CStr,
         fd: std::os::fd::RawFd,
     ) {
@@ -1819,7 +1449,6 @@ impl wl::DataSourceEventListener for GlobalMessaging {
     fn cancelled(&mut self, sender: &mut wl::DataSource) {
         event_trace!();
 
-        tracing::debug!("dnd cancelled");
         let Some(state) = self
             .data_device
             .as_mut()
@@ -1843,8 +1472,8 @@ impl wl::DataSourceEventListener for GlobalMessaging {
         })
     }
 
-    #[tracing::instrument(name = "data_source::dnd_drop_performed", skip(self, sender))]
-    fn dnd_drop_performed(&mut self, sender: &mut wl::DataSource) {
+    #[tracing::instrument(name = "data_source::dnd_drop_performed", skip(self, _sender))]
+    fn dnd_drop_performed(&mut self, _sender: &mut wl::DataSource) {
         event_trace!();
     }
 
@@ -1852,7 +1481,6 @@ impl wl::DataSourceEventListener for GlobalMessaging {
     fn dnd_finished(&mut self, sender: &mut wl::DataSource) {
         event_trace!();
 
-        tracing::debug!("dnd finished");
         self.data_device
             .as_mut()
             .expect("no data device")
@@ -1860,8 +1488,8 @@ impl wl::DataSourceEventListener for GlobalMessaging {
             .take_if(|x| x.source.ref_eq(sender));
     }
 
-    #[tracing::instrument(name = "data_source::action", skip(self, sender))]
-    fn action(&mut self, sender: &mut wl::DataSource, dnd_action: wl::DataDeviceManagerDndAction) {
+    #[tracing::instrument(name = "data_source::action", skip(self, _sender))]
+    fn action(&mut self, _sender: &mut wl::DataSource, dnd_action: wl::DataDeviceManagerDndAction) {
         event_trace!();
     }
 }
@@ -1900,8 +1528,8 @@ impl wl::DataOfferEventListener for GlobalMessaging {
         active_offer.source_actions |= source_actions;
     }
 
-    #[tracing::instrument(name = "data_offer::action", skip(self, sender))]
-    fn action(&mut self, sender: &mut wl::DataOffer, dnd_action: wl::DataDeviceManagerDndAction) {
+    #[tracing::instrument(name = "data_offer::action", skip(self, _sender))]
+    fn action(&mut self, _sender: &mut wl::DataOffer, dnd_action: wl::DataDeviceManagerDndAction) {
         event_trace!();
     }
 }
@@ -2211,7 +1839,6 @@ struct GlobalInterfaces {
     single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
     kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
-    kde_shadow_manager: Option<wl::Owned<wl::OrgKdeKwinShadowManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
@@ -2245,7 +1872,6 @@ impl GlobalInterfaces {
             single_pixel_buffer_manager: rl.single_pixel_buffer_manager,
             kde_blur_manager: rl.kde_blur_manager,
             kde_appmenu_manager: rl.kde_appmenu_manager,
-            kde_shadow_manager: rl.kde_shadow_manager,
             zxdg_decoration_manager: rl.zxdg_decoration_manager,
             cursor_shape_manager: rl.cursor_shape_manager,
             fractional_scale_manager: rl.fractional_scale_manager,
@@ -2283,7 +1909,6 @@ struct RegistryListener {
     single_pixel_buffer_manager: Option<wl::Owned<wl::WpSinglePixelBufferManagerV1>>,
     kde_blur_manager: Option<wl::Owned<wl::OrgKdeKwinBlurManager>>,
     kde_appmenu_manager: Option<wl::Owned<wl::OrgKdeKwinAppmenuManager>>,
-    kde_shadow_manager: Option<wl::Owned<wl::OrgKdeKwinShadowManager>>,
     zxdg_decoration_manager: Option<wl::Owned<wl::ZxdgDecorationManagerV1>>,
     cursor_shape_manager: Option<wl::Owned<wl::WpCursorShapeManagerV1>>,
     fractional_scale_manager: Option<wl::Owned<wl::WpFractionalScaleManagerV1>>,
@@ -2371,14 +1996,6 @@ impl wl::RegistryListener for RegistryListener {
                 registry
                     .bind(name, version)
                     .expect("bind kde_appmenu_manager"),
-            );
-            return;
-        }
-        if interface == c"org_kde_kwin_shadow_manager" {
-            self.kde_shadow_manager = Some(
-                registry
-                    .bind(name, version)
-                    .expect("bind kde_shadow_manager"),
             );
             return;
         }
@@ -2487,7 +2104,7 @@ extern "C" fn output_event_geometry(
 }
 extern "C" fn output_event_mode(
     context: *mut core::ffi::c_void,
-    sender: *mut wl::Output,
+    _sender: *mut wl::Output,
     flags: u32,
     width: i32,
     height: i32,
@@ -2509,7 +2126,7 @@ extern "C" fn output_event_done(context: *mut core::ffi::c_void, sender: *mut wl
 }
 extern "C" fn output_event_scale(
     context: *mut core::ffi::c_void,
-    sender: *mut wl::Output,
+    _sender: *mut wl::Output,
     scale: i32,
 ) {
     if context.is_null() {
@@ -2520,7 +2137,7 @@ extern "C" fn output_event_scale(
 }
 extern "C" fn output_event_name(
     context: *mut core::ffi::c_void,
-    sender: *mut wl::Output,
+    _sender: *mut wl::Output,
     name: *const core::ffi::c_char,
 ) {
     if context.is_null() {
@@ -2532,7 +2149,7 @@ extern "C" fn output_event_name(
 }
 extern "C" fn output_event_description(
     context: *mut core::ffi::c_void,
-    sender: *mut wl::Output,
+    _sender: *mut wl::Output,
     description: *const core::ffi::c_char,
 ) {
     if context.is_null() {

@@ -4496,7 +4496,7 @@ async fn run<'sys>(
                     let mut source_window = state.source_window;
                     let source_dock = state.source_dock;
                     let tab_index = state.tab_index;
-                    system_link.end_pane_drag(&pointer);
+                    system_link.end_pane_drag();
                     let (op, suggested_rect) =
                         ui::dock::end_preview(dm, &mut dock_store, &client_pos_in_dest, state);
                     let (diverged_content, undock_result) = dm.redock(

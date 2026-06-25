@@ -7,7 +7,7 @@ use peridot_tp_dbus as dbus;
 use peridot_tp_wayland::{self as wl, ProxyObject};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, MainWindowInitialState, WindowType,
+    Event, LogicFiberEventDispatcher, WindowType,
     graphics::{VulkanDevice, VulkanSurface},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
