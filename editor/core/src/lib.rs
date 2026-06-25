@@ -257,14 +257,13 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             rt_sender: rt_sender.clone(),
             vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
-            app_context_ptr: app_context,
+            app_context: app_context,
             pointer_hovering_timer: pointer_hovering_timer.as_ref().get_ref(),
             flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
                 app_context,
                 &dx_context,
                 context_menu_delayed_action_timer.as_ref(),
             ),
-            known_window_handles: HashSet::new(),
         },
         #[cfg(not(windows))]
         SystemLink {
@@ -5918,14 +5917,6 @@ impl FileSystem {
             .expect("fs.cache_base_path.invalid_str")
         })
         .join("peridot/.editor");
-        #[cfg(windows)]
-        let cache_base_path = {
-            let base =
-                PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("fs.cache_base_path.no_env"));
-            let p = base.join("peridot/.editor/cache");
-
-            p
-        };
 
         #[cfg(target_os = "linux")]
         let persist_state_base_path = 'persist_state_base_path: {
@@ -5945,15 +5936,15 @@ impl FileSystem {
                 .expect("fs.persist_state_base_path.current_dir")
                 .join(".persist-state/io.ct2.peridot.editor")
         };
-        #[cfg(windows)]
-        let persist_state_base_path = {
-            let base = PathBuf::from(
-                std::env::var_os("LOCALAPPDATA").expect("fs.persist_state_base_path.no_env"),
-            );
-            let p = base.join("peridot/.editor/state");
 
-            p
-        };
+        #[cfg(windows)]
+        let appdata_base_path =
+            PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("fs.appdata_base_path.no_env"))
+                .join("peridot/.editor");
+        #[cfg(windows)]
+        let cache_base_path = appdata_base_path.join("cache");
+        #[cfg(windows)]
+        let persist_state_base_path = appdata_base_path.join("state");
 
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
             tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");

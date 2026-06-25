@@ -645,7 +645,7 @@ impl super::SystemLink<'_> {
                 pixels_size.height as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
                 Some(parent.0),
                 None,
-                Some((&*self.app_context_ptr).hinstance),
+                Some(self.app_context.hinstance),
                 None,
             )
             .expect("context_menu.create_window")
@@ -669,12 +669,13 @@ impl super::SystemLink<'_> {
             ..Default::default()
         });
         let c_target = unsafe {
-            (*self.app_context_ptr)
+            self.app_context
                 .native_compositor_desktop_interop
                 .CreateDesktopWindowTarget(h, true)
                 .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
         };
-        let cv_root = unsafe { &*self.app_context_ptr }
+        let cv_root = self
+            .app_context
             .native_compositor
             .CreateSpriteVisual()
             .expect("compositor.CreateSpriteVisual");
@@ -715,11 +716,13 @@ impl super::SystemLink<'_> {
         fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
         fx.SetOptimization(EffectOptimization::Speed)
             .expect("drag.fx.set_optimization");
-        let effect_factory = unsafe { &*self.app_context_ptr }
+        let effect_factory = self
+            .app_context
             .native_compositor
             .CreateEffectFactory(&fx)
             .expect("drag.fx.create_factory");
-        let backdrop_brush = unsafe { &*self.app_context_ptr }
+        let backdrop_brush = self
+            .app_context
             .native_compositor
             .CreateBackdropBrush()
             .expect("drag.backdrop_brush.create");
@@ -747,7 +750,8 @@ impl super::SystemLink<'_> {
             .expect("drag.visual.blur.set_brush");
         cv_root
             .SetShadow(&{
-                let x = unsafe { &*self.app_context_ptr }
+                let x = self
+                    .app_context
                     .native_compositor
                     .CreateDropShadow()
                     .expect("drag.visual.shadow.create");
@@ -759,16 +763,18 @@ impl super::SystemLink<'_> {
                 x
             })
             .expect("drag.visual.set_shadow");
-        let cv_composited = unsafe { &*self.app_context_ptr }
+        let cv_composited = self
+            .app_context
             .native_compositor
             .CreateSpriteVisual()
             .expect("drag.visual.color_tint.create");
         cv_composited
             .SetBrush(
-                &unsafe { &*self.app_context_ptr }
+                &self
+                    .app_context
                     .native_compositor
                     .CreateSurfaceBrushWithSurface(&unsafe {
-                        (*self.app_context_ptr)
+                        self.app_context
                             .native_compositor_interop
                             .CreateCompositionSurfaceForSwapChain(&swapchain)
                             .expect("compositor_interop.CreateCompositionSurfaceForSwapChain")

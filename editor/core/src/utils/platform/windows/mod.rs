@@ -54,10 +54,16 @@ pub unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum EnumerateDisplayMonitorContinuous {
+    Continue,
+    Stop,
+}
+
 #[inline(always)]
 pub fn enumerate_display_monitors<F>(mut f: F)
 where
-    F: FnMut(HMONITOR, &RECT) -> bool,
+    F: FnMut(HMONITOR, &RECT) -> EnumerateDisplayMonitorContinuous,
 {
     unsafe extern "system" fn callback<F>(
         mon: HMONITOR,
@@ -66,11 +72,15 @@ where
         param: LPARAM,
     ) -> BOOL
     where
-        F: FnMut(HMONITOR, &RECT) -> bool,
+        F: FnMut(HMONITOR, &RECT) -> EnumerateDisplayMonitorContinuous,
     {
-        BOOL::from((unsafe {
+        match (unsafe {
             &mut *core::ptr::with_exposed_provenance_mut::<F>(param.0.cast_unsigned())
-        })(mon, unsafe { &*rect }))
+        })(mon, unsafe { &*rect })
+        {
+            EnumerateDisplayMonitorContinuous::Continue => BOOL(1),
+            EnumerateDisplayMonitorContinuous::Stop => BOOL(0),
+        }
     }
     let _ = unsafe {
         EnumDisplayMonitors(
