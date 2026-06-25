@@ -702,15 +702,27 @@ impl PointerID {
             .expect("not entering surface")
             .lock_state = None;
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct PointerEventID {
-    serial: u32,
-    seat_ptr: *mut wl::Seat,
+    pub fn seat(&self) -> &wl::Seat {
+        unsafe {
+            &*(*(*self.0).user_data().cast::<GlobalMessaging>())
+                .pointer
+                .as_ref()
+                .expect("no pointer?")
+                .seat_ptr
+        }
+    }
+
+    pub fn implicit_grab_serial(&self) -> Option<u32> {
+        unsafe { &*(*self.0).user_data().cast::<GlobalMessaging>() }
+            .pointer
+            .as_ref()
+            .expect("no pointer?")
+            .enter_state
+            .as_ref()?
+            .implicit_grab_serial
+    }
 }
-unsafe impl Sync for PointerEventID {}
-unsafe impl Send for PointerEventID {}
 
 struct PointerEnterState {
     surface: NonNull<wl::Surface>,
@@ -1135,10 +1147,6 @@ impl wl::PointerEventListener for GlobalMessaging {
                         } else {
                             PointerButton::Secondary
                         },
-                        event_id: PointerEventID {
-                            serial,
-                            seat_ptr: pointer_state.seat_ptr,
-                        },
                     });
                 }
                 SurfaceStateTag::FlyoutSurface => {
@@ -1149,10 +1157,6 @@ impl wl::PointerEventListener for GlobalMessaging {
                             PointerButton::Primary
                         } else {
                             PointerButton::Secondary
-                        },
-                        event_id: PointerEventID {
-                            serial,
-                            seat_ptr: pointer_state.seat_ptr,
                         },
                     });
                 }

@@ -13,7 +13,7 @@ use crate::{
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     rendering::composite::CompositeTree,
-    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub mod hittest;
@@ -154,8 +154,6 @@ pub struct PointerInputManager {
     last_client_pointer_pos: HashMap<PointerID, (NativeDesktopSurface, Point<PointerInputUnit>)>,
     pointer_focus: PointerFocusState,
     down_gesture: PointerDownGestureState,
-    #[cfg(feature = "wayland")]
-    last_pointer_down_event_id: Option<crate::platform::unix::wayland::PointerEventID>,
     last_click: Option<LastClickState>,
 }
 impl PointerInputManager {
@@ -164,8 +162,6 @@ impl PointerInputManager {
             last_client_pointer_pos: HashMap::new(),
             pointer_focus: PointerFocusState::None,
             down_gesture: PointerDownGestureState::None,
-            #[cfg(feature = "wayland")]
-            last_pointer_down_event_id: None,
             last_click: None,
         }
     }
@@ -338,11 +334,7 @@ impl PointerInputManager {
                 if ht.get_data(e).role == Some(Role::TitleBar)
                     && let NativeDesktopSurface::Window(window) = surface
                 {
-                    window.begin_drag(
-                        self.last_pointer_down_event_id
-                            .as_ref()
-                            .expect("no pointer down before begin_drag"),
-                    );
+                    window.begin_drag(&pointer);
                 }
 
                 let _ = ht
@@ -362,11 +354,7 @@ impl PointerInputManager {
                     == Some(Role::TitleBar)
                     && let NativeDesktopSurface::Window(window) = surface
                 {
-                    window.begin_drag(
-                        self.last_pointer_down_event_id
-                            .as_ref()
-                            .expect("no pointer down before begin_drag"),
-                    );
+                    window.begin_drag(&pointer);
                 }
 
                 for ht_ref in ht.iter_ascending_from(e) {
@@ -801,7 +789,6 @@ impl PointerInputManager {
         button: PointerButton,
         ht_root: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
-        #[cfg(feature = "wayland")] event_id: crate::platform::unix::wayland::PointerEventID,
     ) {
         let Some(&(mut entering_surface, client_pos)) =
             self.last_client_pointer_pos.get(&pointer_id)
@@ -810,11 +797,6 @@ impl PointerInputManager {
             return;
         };
         let ws = entering_surface.size();
-
-        #[cfg(feature = "wayland")]
-        {
-            self.last_pointer_down_event_id = Some(event_id);
-        }
 
         self.down_gesture = PointerDownGestureState::Click {
             base_client_pos: client_pos,
@@ -907,10 +889,6 @@ impl PointerInputManager {
             return;
         };
         let ws = entering_surface.size();
-        #[cfg(feature = "wayland")]
-        {
-            self.last_pointer_down_event_id = None;
-        }
 
         if self.down_gesture.is_dragging() {
             // ドラッグ状態だった

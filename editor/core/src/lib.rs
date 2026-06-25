@@ -757,8 +757,6 @@ pub enum Event {
         window: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
-        #[cfg(feature = "wayland")]
-        event_id: platform::unix::wayland::PointerEventID,
     },
     PointerMove {
         pointer_id: PointerID,
@@ -875,8 +873,6 @@ pub enum Event {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
         button: PointerButton,
-        #[cfg(feature = "wayland")]
-        event_id: platform::unix::wayland::PointerEventID,
     },
     MenuPointerMove {
         pointer_id: PointerID,
@@ -3692,8 +3688,6 @@ async fn run<'sys>(
                 window,
                 pointer_id,
                 button,
-                #[cfg(feature = "wayland")]
-                event_id,
             } => {
                 #[cfg(target_os = "macos")]
                 drag_preview_popover.bind_position_base_window_link(window);
@@ -3710,8 +3704,6 @@ async fn run<'sys>(
                     button,
                     window.ht_root(),
                     &mut keyboard_focus_registry,
-                    #[cfg(feature = "wayland")]
-                    event_id,
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -4213,8 +4205,6 @@ async fn run<'sys>(
                 pointer_id,
                 target,
                 button,
-                #[cfg(feature = "wayland")]
-                event_id,
             } => {
                 pointer_input_manager.handle_mouse_down(
                     pointer_id,
@@ -4228,8 +4218,6 @@ async fn run<'sys>(
                     button,
                     target.ht_root(),
                     &mut keyboard_focus_registry,
-                    #[cfg(feature = "wayland")]
-                    event_id,
                 );
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);

@@ -16,8 +16,7 @@ use crate::{
     platform::unix::{
         APPMENU_OBJECT_PATH,
         wayland::{
-            DisplayServerContext, GlobalInterfaces, PointerEventID, SurfaceScaling, SurfaceState,
-            SurfaceStateTag,
+            DisplayServerContext, GlobalInterfaces, SurfaceScaling, SurfaceState, SurfaceStateTag,
         },
     },
     rendering::{
@@ -209,10 +208,14 @@ impl Handle {
             .expect("xdg_toplevel.set_maximized");
     }
 
-    pub fn begin_drag(&self, event_id: &PointerEventID) {
+    pub fn begin_drag(&self, pointer: &super::PointerID) {
+        let Some(serial) = pointer.implicit_grab_serial() else {
+            return;
+        };
+
         self.state()
             .xdg_toplevel
-            .r#move(unsafe { &*event_id.seat_ptr }, event_id.serial)
+            .r#move(pointer.seat(), serial)
             .expect("xdg_toplevel.move");
     }
 
