@@ -358,21 +358,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .add(&memory_sample_timer_fd, EpollEventBits::IN, 5)
             .expect("epoll.add");
         #[cfg(target_os = "linux")]
-        let evdevs = (0..32)
-            .filter_map(|x| {
-                linux_input::EventDevice::open(
-                    &std::ffi::CString::new(format!("/dev/input/event{x}")).expect("invalid str"),
-                )
-                .ok()
-            })
-            .collect::<Vec<_>>();
-        #[cfg(target_os = "linux")]
-        for (n, e) in evdevs.iter().enumerate() {
-            epoll
-                .add(e, EpollEventBits::IN, (10 + n) as _)
-                .expect("epoll.add");
-        }
-        #[cfg(target_os = "linux")]
         let poll_id_to_watch_ref = core::cell::UnsafeCell::new(std::collections::HashMap::new());
         #[cfg(target_os = "linux")]
         dbus.set_watch_functions(Box::new(DBusWatcher {
@@ -397,7 +382,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             let mut events_signal = false;
             let mut pointer_hovering_timer_signal = false;
             let mut delayed_action_timer_signal = false;
-            let mut global_mouse_clicked = false;
             for n in 0..active_events {
                 let e = unsafe { eventbuf[n as usize].assume_init_ref() };
                 if e.value() == 0 {
@@ -418,21 +402,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 }
                 if e.value() == 4 {
                     delayed_action_timer_signal = true;
-                    continue;
-                }
-                if e.value() >= 10 && e.value() < 10 + 32 {
-                    let ed = evdevs[(e.value() - 10) as usize]
-                        .read()
-                        .expect("evdev.read");
-                    if ed.type_ == linux_input::EventType::Key as u16
-                        && ed.value == 1
-                        && ed.code >= linux_input::Key::MouseLeft as u16
-                        && ed.code < linux_input::Key::Joystick as u16
-                    {
-                        // tracing::debug!("mouse button input");
-                        global_mouse_clicked = true;
-                    }
-                    // tracing::debug!(n = e.value() - 10, ?ed, "evdev");
                     continue;
                 }
                 if let Some(&wr) = unsafe { (*poll_id_to_watch_ref.get()).get(&e.value()) } {
@@ -494,10 +463,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
             if delayed_action_timer_signal {
                 app_event_dispatcher.dispatch(Event::MenuPerformDelayedAction);
-            }
-
-            if global_mouse_clicked {
-                app_event_dispatcher.dispatch(Event::GlobalMouseClicked);
             }
 
             if dbus_signal {
@@ -914,8 +879,6 @@ pub enum Event {
         destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     },
-    #[cfg(not(target_os = "macos"))]
-    GlobalMouseClicked,
     #[cfg(windows)]
     CoreTextLayoutRequested {
         ht: HitTestTreeRef,
@@ -982,7 +945,6 @@ impl Event {
             Self::DockMovePreview { .. } => "DockMovePreview",
             Self::DockConfirm { .. } => "DockConfirm",
             #[cfg(not(target_os = "macos"))]
-            Self::GlobalMouseClicked => "GlobalMouseClicked",
             #[cfg(windows)]
             Self::CoreTextLayoutRequested { .. } => "CoreTextLayoutRequested",
             #[cfg(windows)]
@@ -3685,6 +3647,55 @@ async fn run<'sys>(
                 #[cfg(target_os = "macos")]
                 drag_preview_popover.bind_position_base_window_link(window);
 
+                if let Some(ref a) = app_menu_view {
+                    a.on_close_all(
+                        &mut composite_tree,
+                        global_time_base.elapsed().as_secs_f32(),
+                    );
+                }
+
+                if !system_link.any_pointer_on_context_menu() {
+                    if let Some(c) = current_active_menu_session.take() {
+                        if c.parent == main_window
+                            && let Some(ref a) = app_menu_view
+                        {
+                            a.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
+                        }
+
+                        c.terminate(
+                            &system_link,
+                            &mut composite_tree,
+                            &mut ht_manager,
+                            &mut keyboard_focus_registry,
+                        );
+                    }
+                }
+
+                if !system_link.any_pointer_on_dropdown_menu() {
+                    if let Some(mut c) = current_active_dropdown_menu_session.take() {
+                        c.close_all(
+                            &system_link,
+                            &mut composite_tree,
+                            &mut ht_manager,
+                            &mut keyboard_focus_registry,
+                        );
+                    }
+                }
+
+                if !system_link.any_pointer_on_dropdown_menu() {
+                    if let Some(c) = custom_view_flyout_session.take() {
+                        c.terminate(
+                            &system_link,
+                            &mut composite_tree,
+                            &mut ht_manager,
+                            &mut keyboard_focus_registry,
+                        );
+                    }
+                }
+
                 pointer_input_manager.handle_mouse_down(
                     pointer_id,
                     &ht_manager,
@@ -4313,63 +4324,6 @@ async fn run<'sys>(
                     );
 
                     should_commit_ct = true;
-                }
-
-                if should_commit_ct {
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            Event::GlobalMouseClicked => {
-                let mut should_commit_ct = false;
-
-                if !system_link.any_pointer_on_context_menu() {
-                    if let Some(c) = current_active_menu_session.take() {
-                        if c.parent == main_window
-                            && let Some(ref a) = app_menu_view
-                        {
-                            a.on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
-                        }
-
-                        c.terminate(
-                            &system_link,
-                            &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
-                        );
-
-                        should_commit_ct = true;
-                    }
-                }
-
-                if !system_link.any_pointer_on_dropdown_menu() {
-                    if let Some(mut c) = current_active_dropdown_menu_session.take() {
-                        c.close_all(
-                            &system_link,
-                            &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
-                        );
-
-                        should_commit_ct = true;
-                    }
-                }
-
-                if !system_link.any_pointer_on_dropdown_menu() {
-                    if let Some(c) = custom_view_flyout_session.take() {
-                        c.terminate(
-                            &system_link,
-                            &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
-                        );
-
-                        should_commit_ct = true;
-                    }
                 }
 
                 if should_commit_ct {
@@ -5424,12 +5378,12 @@ impl SyncEventBus {
 
     fn notify_clear(&self) -> std::io::Result<()> {
         #[cfg(target_os = "linux")]
-        match self.efd.take() {
+        return match self.efd.take() {
             // WouldBlock(EAGAIN)はでてきてもOK
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
             Err(e) => Err(e),
             Ok(_) => Ok(()),
-        }
+        };
         #[cfg(windows)]
         {
             self.event_notify.reset().map_err(From::from)
