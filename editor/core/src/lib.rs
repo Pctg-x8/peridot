@@ -120,13 +120,7 @@ pub fn launch() {
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
-    #[cfg(feature = "freetype")]
-    let ft = crate::rendering::text::FreeType::init().expect("freetype.init");
-    let root_font_set = FontSet::new(
-        #[cfg(feature = "freetype")]
-        &ft,
-    );
-
+    let root_font_set = FontSet::new();
     let vk_device = VulkanDevice::new(&fs);
     #[cfg(windows)]
     assert!(
@@ -3153,9 +3147,12 @@ async fn run<'sys>(
 
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
-
     let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
     let mut pointer_input_manager = PointerInputManager::new();
+    let mut view_registry = ViewRegistry::new();
+    let mut dock_store = ui::dock::DockStore::new();
+    let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
+    let mut popup_manager = PopupManager::new();
 
     // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
     #[cfg(windows)]
@@ -3163,10 +3160,6 @@ async fn run<'sys>(
         platform::windows::locate_non_client_hittest_managers(&pointer_input_manager, &ht_manager);
     }
 
-    let mut view_registry = ViewRegistry::new();
-
-    let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
-    let mut popup_manager = PopupManager::new();
     let context_menu_common_resources = MenuItemCommonResources::new(
         &mut composite_tree,
         &mut texture_id_issuer,
@@ -3175,8 +3168,8 @@ async fn run<'sys>(
     let mut current_active_menu_session = None::<MenuSession>;
     let mut current_active_dropdown_menu_session = None::<DropdownMenuSession>;
     let mut custom_view_flyout_session = None::<CustomViewFlyoutSession>;
+
     let mut delayed_render_messages = Vec::new();
-    let mut dock_store = ui::dock::DockStore::new();
     let mut docking_preview_state = None;
 
     let last_window_state = 'try_restore_last_window_state: {
@@ -3640,13 +3633,13 @@ async fn run<'sys>(
                     && let Some(c) = current_active_menu_session.take_if(|x| x.parent == window)
                 {
                     // フォーカスロストした時もコンテキストメニューを閉じる
-                    if window == main_window {
-                        if let Some(ref a) = app_menu_view {
-                            a.on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
-                        }
+                    if window == main_window
+                        && let Some(ref a) = app_menu_view
+                    {
+                        a.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
                     }
 
                     c.terminate(
@@ -3663,13 +3656,13 @@ async fn run<'sys>(
             Event::WindowActivatingStateChanged { window, activated } => {
                 if !activated {
                     if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
-                        if window == main_window {
-                            if let Some(ref a) = app_menu_view {
-                                a.on_close_all(
-                                    &mut composite_tree,
-                                    global_time_base.elapsed().as_secs_f32(),
-                                );
-                            }
+                        if window == main_window
+                            && let Some(ref a) = app_menu_view
+                        {
+                            a.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
                         }
 
                         c.terminate(
@@ -4085,13 +4078,13 @@ async fn run<'sys>(
             }
             Event::MenuCloseAll => {
                 if let Some(c) = current_active_menu_session.take() {
-                    if c.parent == main_window {
-                        if let Some(ref a) = app_menu_view {
-                            a.on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
-                        }
+                    if c.parent == main_window
+                        && let Some(ref a) = app_menu_view
+                    {
+                        a.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
                     }
 
                     c.terminate(
@@ -4107,10 +4100,6 @@ async fn run<'sys>(
             }
             Event::MenuRescale { scale } => {
                 let mut should_commit_ct = false;
-
-                if let Some(ref c) = current_active_dropdown_menu_session {
-                    should_commit_ct = true;
-                }
 
                 if let Some(ref c) = custom_view_flyout_session {
                     c.rescale(scale, &mut composite_tree, &ht_manager, &system_link);
@@ -4286,13 +4275,13 @@ async fn run<'sys>(
 
                 // コマンド選択したらとじる
                 if let Some(c) = current_active_menu_session.take() {
-                    if c.parent == main_window {
-                        if let Some(ref a) = app_menu_view {
-                            a.on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
-                        }
+                    if c.parent == main_window
+                        && let Some(ref a) = app_menu_view
+                    {
+                        a.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
                     }
 
                     c.terminate(
@@ -4337,13 +4326,13 @@ async fn run<'sys>(
 
                 if !system_link.any_pointer_on_context_menu() {
                     if let Some(c) = current_active_menu_session.take() {
-                        if c.parent == main_window {
-                            if let Some(ref a) = app_menu_view {
-                                a.on_close_all(
-                                    &mut composite_tree,
-                                    global_time_base.elapsed().as_secs_f32(),
-                                );
-                            }
+                        if c.parent == main_window
+                            && let Some(ref a) = app_menu_view
+                        {
+                            a.on_close_all(
+                                &mut composite_tree,
+                                global_time_base.elapsed().as_secs_f32(),
+                            );
                         }
 
                         c.terminate(
