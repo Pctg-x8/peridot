@@ -1534,12 +1534,7 @@ impl PaneGroupView {
     ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
-            clip_child: Some(ClipConfig {
-                left_softness: SafeF32::ZERO,
-                top_softness: SafeF32::ZERO,
-                right_softness: SafeF32::ZERO,
-                bottom_softness: SafeF32::ZERO,
-            }),
+            clip_child: Some(ClipConfig::HARD),
             ..Default::default()
         });
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
@@ -1763,8 +1758,6 @@ impl PaneGroupView {
                 self.controller.current_active_index.set(new_active);
             }
         }
-        // TODO: ここのアクティブインデックスのメンテ処理が不十分なので直す（最後のタブがアクティブのときに他のタブをグループから外すと次に切り替えしたときに範囲外参照になる）
-        // アクティブタブをインデックスで持つんじゃなくてインスタンスアドレスで持つ形にするのがよさそうかも
 
         Self::relocate_tabs(
             self.controller.contents.borrow().iter().map(|(_, t)| t),

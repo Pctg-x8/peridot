@@ -519,6 +519,14 @@ pub struct ClipConfig {
     pub right_softness: SafeF32,
     pub bottom_softness: SafeF32,
 }
+impl ClipConfig {
+    pub const HARD: Self = Self {
+        left_softness: SafeF32::ZERO,
+        top_softness: SafeF32::ZERO,
+        right_softness: SafeF32::ZERO,
+        bottom_softness: SafeF32::ZERO,
+    };
+}
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
