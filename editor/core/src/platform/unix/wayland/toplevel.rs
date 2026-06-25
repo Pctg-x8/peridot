@@ -719,10 +719,12 @@ impl NativeWindow {
         };
         // memo: HyprlandのViewporterはsrcの座標範囲の判定が間違っているので特殊判定して影を出さないようにする
         // (将来的になおったら外す)
-        let decoration = if !dpsv.global_interfaces.is_hyprland {
+        let decoration = if !dpsv.global_interfaces.is_hyprland
+            && let Some(deco_pixbuf) = deco_pixbuf
+        {
             Some(Decoration::new(
                 &dpsv.global_interfaces,
-                deco_pixbuf.expect("pixbuf required"),
+                deco_pixbuf,
                 &surface,
                 &xdg_toplevel,
             ))

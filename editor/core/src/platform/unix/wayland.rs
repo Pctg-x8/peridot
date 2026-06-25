@@ -1615,10 +1615,14 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         &mut self,
         _sender: &mut wl::Keyboard,
         serial: u32,
-        surface: &mut wl::Surface,
+        surface: Option<&mut wl::Surface>,
         keys: &[u32],
     ) {
         event_trace!();
+
+        let Some(surface) = surface else {
+            return;
+        };
 
         let state = self.keyboard.as_mut().expect("no keyboard");
         state.enter_state = Some(KeyboardEnterState {
