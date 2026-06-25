@@ -353,12 +353,6 @@ impl WindowHandle {
         self.state().root_focus_group
     }
 
-    pub fn set_foreground(&self) {
-        unsafe {
-            SetForegroundWindow(self.0).expect("SetForegroundWindow");
-        }
-    }
-
     pub fn geometry_state_snapshot(&self, _system_link: &SystemLink) -> crate::WindowGeometryState {
         if unsafe { IsZoomed(self.0) }.as_bool() {
             let hm = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
@@ -724,6 +718,9 @@ impl WindowEventHandler {
             let client_pos_in_dest =
                 Point::from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
 
+            unsafe {
+                SetForegroundWindow(dest_window.0).expect("dest_window.set_foreground");
+            }
             self.event_dispatcher.dispatch(Event::DockMovePreview {
                 dest_window,
                 client_pos_in_dest,
@@ -825,7 +822,9 @@ impl WindowEventHandler {
         }
         let client_pos_in_dest = Point::from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
 
-        dest_window.set_foreground();
+        unsafe {
+            SetForegroundWindow(dest_window.0).expect("dest_window.set_foreground");
+        }
         self.event_dispatcher.dispatch(Event::DockConfirm {
             pointer: PointerID(),
             destination_window: dest_window,
