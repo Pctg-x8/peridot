@@ -904,13 +904,13 @@ pub enum Event {
         id: ViewIdentifier,
     },
     DockMoveSplitter {
-        controlling_dock: uikit::dock::DockID,
+        controlling_dock: ui::dock::DockID,
         pos_client: f32,
     },
     DockBeginPreview {
         initiator: WindowHandle,
         pointer: PointerID,
-        source_dock: uikit::dock::DockID,
+        source_dock: ui::dock::DockID,
         tab_index: usize,
         pane_rect: Rect<LogicalUnit>,
         tab_size: Size<LogicalUnit>,
@@ -2973,7 +2973,7 @@ impl UIKitPreviewPanePresenter {
         }
     }
 }
-impl uikit::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
+impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
     fn id(&self) -> String {
         Self::ID.into()
     }
@@ -3007,7 +3007,7 @@ struct TimelinePanePresenter {}
 impl TimelinePanePresenter {
     const ID: &str = internal_pane_identifier!("Timeline");
 }
-impl uikit::dock::PaneContentPresenter for TimelinePanePresenter {
+impl ui::dock::PaneContentPresenter for TimelinePanePresenter {
     fn id(&self) -> String {
         Self::ID.into()
     }
@@ -3027,7 +3027,7 @@ struct ObjectTreePanePresenter {}
 impl ObjectTreePanePresenter {
     const ID: &str = internal_pane_identifier!("ObjectTree");
 }
-impl uikit::dock::PaneContentPresenter for ObjectTreePanePresenter {
+impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
     fn id(&self) -> String {
         Self::ID.into()
     }
@@ -3047,7 +3047,7 @@ struct InspectorPanePresenter {}
 impl InspectorPanePresenter {
     const ID: &str = internal_pane_identifier!("Inspector");
 }
-impl uikit::dock::PaneContentPresenter for InspectorPanePresenter {
+impl ui::dock::PaneContentPresenter for InspectorPanePresenter {
     fn id(&self) -> String {
         Self::ID.into()
     }
@@ -3067,7 +3067,7 @@ struct AssetExplorerPanePresenter {}
 impl AssetExplorerPanePresenter {
     const ID: &str = internal_pane_identifier!("AssetExplorer");
 }
-impl uikit::dock::PaneContentPresenter for AssetExplorerPanePresenter {
+impl ui::dock::PaneContentPresenter for AssetExplorerPanePresenter {
     fn id(&self) -> String {
         Self::ID.into()
     }
@@ -3087,7 +3087,7 @@ struct ProjectSettingsPanePresenter {}
 impl ProjectSettingsPanePresenter {
     const ID: &str = internal_pane_identifier!("ProjectSettings");
 }
-impl uikit::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
+impl ui::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
     fn id(&self) -> String {
         Self::ID.into()
     }
@@ -3108,7 +3108,7 @@ struct PerWindowData {
     has_appmenu: bool,
     header: ui::window_header::View,
     footer: Option<ui::window_footer::View>,
-    docking_manager: uikit::dock::DockingManager,
+    docking_manager: ui::dock::DockingManager,
 }
 impl PerWindowData {
     fn compute_content_area(&self, surface_size: Size<LogicalUnit>) -> Rect<LogicalUnit> {
@@ -3181,7 +3181,7 @@ async fn run<'sys>(
     let mut current_active_dropdown_menu_session = None::<DropdownMenuSession>;
     let mut custom_view_flyout_session = None::<CustomViewFlyoutSession>;
     let mut delayed_render_messages = Vec::new();
-    let mut dock_store = uikit::dock::DockStore::new();
+    let mut dock_store = ui::dock::DockStore::new();
     let mut docking_preview_state = None;
 
     let last_window_state = 'try_restore_last_window_state: {
@@ -3206,7 +3206,7 @@ async fn run<'sys>(
     let window_bg_gradient = composite_tree.create_gradient(Gradient::Corner {
         right_top: [0.1, 0.1, 0.1, 1.0],
         left_bottom: [0.1, 0.1, 0.1, 1.0],
-        right_bottom: [0.1, 0.05, 0.0, 1.0],
+        right_bottom: [0.05, 0.025, 0.0, 1.0],
     });
 
     let mut sub_windows = HashSet::new();
@@ -3244,11 +3244,11 @@ async fn run<'sys>(
     view_init_ctx
         .composite_tree
         .begin_mod_chain(main_window.ct_root())
+        .has_bitmap(true)
         .composite_mode(CompositeMode::FillCornerGradient(
             window_bg_gradient,
-            AnimatableColor::Value([0.0, 0.05, 0.1, 1.0]),
+            AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
         ))
-        .has_bitmap(true)
         .apply();
 
     let window_header_view = ui::window_header::View::new(
@@ -3390,7 +3390,7 @@ async fn run<'sys>(
         has_appmenu: app_menu_view.is_some(),
         header: window_header_view,
         footer: Some(window_footer_view),
-        docking_manager: uikit::dock::DockingManager::new(
+        docking_manager: ui::dock::DockingManager::new(
             main_window,
             &mut view_init_ctx,
             Rect::from_lt_size(
@@ -3449,9 +3449,10 @@ async fn run<'sys>(
                     composite_tree
                         .begin_mod_chain(w.ct_root())
                         .has_bitmap(true)
-                        .composite_mode(CompositeMode::FillColor(AnimatableColor::Value([
-                            0.0, 0.1, 0.2, 1.0,
-                        ])))
+                        .composite_mode(CompositeMode::FillCornerGradient(
+                            window_bg_gradient,
+                            AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
+                        ))
                         .apply();
 
                     let mut view_init_ctx = ViewInitContext {
@@ -3478,7 +3479,7 @@ async fn run<'sys>(
                         has_appmenu: false,
                         header: window_header_view,
                         footer: None,
-                        docking_manager: uikit::dock::DockingManager::new(
+                        docking_manager: ui::dock::DockingManager::new(
                             w,
                             &mut view_init_ctx,
                             Rect::from_lt_size(
@@ -4436,7 +4437,7 @@ async fn run<'sys>(
                 controlling_dock,
                 pos_client,
             } => {
-                uikit::dock::move_splitter(
+                ui::dock::move_splitter(
                     controlling_dock,
                     &mut dock_store,
                     pos_client,
@@ -4456,7 +4457,7 @@ async fn run<'sys>(
                 tab_size,
                 client_pos,
             } => {
-                let (state, popover_rect) = uikit::dock::begin_preview(
+                let (state, popover_rect) = ui::dock::begin_preview(
                     pane_rect,
                     tab_size,
                     &client_pos,
@@ -4473,7 +4474,7 @@ async fn run<'sys>(
                 client_pos_in_dest,
             } => {
                 if let Some(ref mut state) = docking_preview_state {
-                    let popover_rect = uikit::dock::move_preview(
+                    let popover_rect = ui::dock::move_preview(
                         &unsafe { dest_window.extra_data_ref::<PerWindowData>() }.docking_manager,
                         &dock_store,
                         &client_pos_in_dest,
@@ -4497,14 +4498,14 @@ async fn run<'sys>(
                     let tab_index = state.tab_index;
                     system_link.end_pane_drag(&pointer);
                     let (op, suggested_rect) =
-                        uikit::dock::end_preview(dm, &mut dock_store, &client_pos_in_dest, state);
+                        ui::dock::end_preview(dm, &mut dock_store, &client_pos_in_dest, state);
                     let (diverged_content, undock_result) = dm.redock(
                         source_dock,
                         &mut dock_store,
                         tab_index,
                         op,
                         &suggested_rect,
-                        &mut uikit::dock::RedockingContext {
+                        &mut ui::dock::RedockingContext {
                             view_init_ctx: ViewInitContext {
                                 mount_context: MountContext {
                                     composite_tree: &mut composite_tree,
@@ -4522,8 +4523,8 @@ async fn run<'sys>(
                     );
 
                     match undock_result {
-                        uikit::dock::UndockResult::Success => {}
-                        uikit::dock::UndockResult::ToBeEmpty => {
+                        ui::dock::UndockResult::Success => {}
+                        ui::dock::UndockResult::ToBeEmpty => {
                             unsafe {
                                 drop(source_window.take_extra_data::<PerWindowData>());
                             }
@@ -4561,12 +4562,14 @@ async fn run<'sys>(
                              system_link| {
                                 ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
 
-                                composite_tree.get_mut(w.ct_root()).has_bitmap = true;
-                                composite_tree.get_mut(w.ct_root()).composite_mode =
-                                    CompositeMode::FillColor(AnimatableColor::Value([
-                                        0.0, 0.1, 0.2, 1.0,
-                                    ]));
-                                composite_tree.mark_dirty(w.ct_root());
+                                composite_tree
+                                    .begin_mod_chain(w.ct_root())
+                                    .has_bitmap(true)
+                                    .composite_mode(CompositeMode::FillCornerGradient(
+                                        window_bg_gradient,
+                                        AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
+                                    ))
+                                    .apply();
 
                                 let mut view_init_ctx = ViewInitContext {
                                     mount_context: MountContext {
@@ -4592,7 +4595,7 @@ async fn run<'sys>(
                                     has_appmenu: false,
                                     header: window_header_view,
                                     footer: None,
-                                    docking_manager: uikit::dock::DockingManager::new(
+                                    docking_manager: ui::dock::DockingManager::new(
                                         w,
                                         &mut view_init_ctx,
                                         Rect::from_lt_size(
@@ -5639,22 +5642,22 @@ impl DockState {
     pub fn construct(
         &self,
         view_init_ctx: &mut ViewInitContext,
-        store: &mut uikit::dock::DockStore,
+        store: &mut ui::dock::DockStore,
         mut pane_constructor: impl FnMut(
             &str,
             &mut ViewInitContext,
-        ) -> Box<dyn uikit::dock::PaneContentPresenter>,
-    ) -> uikit::dock::DockID {
+        ) -> Box<dyn ui::dock::PaneContentPresenter>,
+    ) -> ui::dock::DockID {
         fn rec(
             this: &DockState,
             view_init_ctx: &mut ViewInitContext,
-            store: &mut uikit::dock::DockStore,
-            parent: uikit::dock::DockID,
+            store: &mut ui::dock::DockStore,
+            parent: ui::dock::DockID,
             pane_constructor: &mut impl FnMut(
                 &str,
                 &mut ViewInitContext,
-            ) -> Box<dyn uikit::dock::PaneContentPresenter>,
-        ) -> uikit::dock::DockID {
+            ) -> Box<dyn ui::dock::PaneContentPresenter>,
+        ) -> ui::dock::DockID {
             match this {
                 &DockState::Filled {
                     ref content_ids,
@@ -5674,26 +5677,24 @@ impl DockState {
                     direction,
                     content,
                     rest,
-                } => store.alloc_recurse(|parent1, store| uikit::dock::Dock::Splitted {
+                } => store.alloc_recurse(|parent1, store| ui::dock::Dock::Splitted {
                     parent,
                     direction: match direction {
-                        &DockDirection::Left(w) => uikit::dock::DockDirection::ToLeft(Cell::new(w)),
-                        &DockDirection::Right(w) => {
-                            uikit::dock::DockDirection::ToRight(Cell::new(w))
-                        }
-                        &DockDirection::Top(w) => uikit::dock::DockDirection::ToTop(Cell::new(w)),
+                        &DockDirection::Left(w) => ui::dock::DockDirection::ToLeft(Cell::new(w)),
+                        &DockDirection::Right(w) => ui::dock::DockDirection::ToRight(Cell::new(w)),
+                        &DockDirection::Top(w) => ui::dock::DockDirection::ToTop(Cell::new(w)),
                         &DockDirection::Bottom(w) => {
-                            uikit::dock::DockDirection::ToBottom(Cell::new(w))
+                            ui::dock::DockDirection::ToBottom(Cell::new(w))
                         }
                     },
-                    splitter: uikit::dock::DockedPaneSplitterView::new(
+                    splitter: ui::dock::DockedPaneSplitterView::new(
                         view_init_ctx,
                         match direction {
                             DockDirection::Left(_) | DockDirection::Right(_) => {
-                                uikit::dock::DockedPaneSplitDirection::Horizontal
+                                ui::dock::DockedPaneSplitDirection::Horizontal
                             }
                             DockDirection::Top(_) | DockDirection::Bottom(_) => {
-                                uikit::dock::DockedPaneSplitDirection::Vertical
+                                ui::dock::DockedPaneSplitDirection::Vertical
                             }
                         },
                         parent1,

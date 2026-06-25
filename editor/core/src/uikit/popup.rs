@@ -303,9 +303,7 @@ impl OverlayPopupBasicFrameView {
             scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                0.025, 0.025, 0.025, 1.0,
-            ])),
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.1, 0.1, 1.0])),
             corner_radius: CornerRadius::all(16.0),
             border: Some(Border {
                 thickness: 0.5,

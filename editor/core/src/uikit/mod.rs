@@ -245,5 +245,3 @@ pub mod dropdown_box;
 
 pub mod checkbox;
 pub use self::checkbox::{CheckboxView, ToggleButtonView};
-
-pub mod dock;
