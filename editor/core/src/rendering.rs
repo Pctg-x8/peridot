@@ -1432,7 +1432,6 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(not(windows))]
         {
             let backbuffer_index = self.swapchain.acquire_next(
-                w,
                 None,
                 br::CompletionHandlerMut::Queue(
                     self.backbuffer_ready_semaphore.as_transparent_ref_mut(),
@@ -1874,6 +1873,10 @@ impl<'d> WindowRenderer<'d> {
                 )
             })
             .inject(|r| {
+                if self.w.is_maximized() {
+                    // no curout rendering when maximized
+                    return r;
+                }
                 let Some(ref renderer) = self.corner_cutout_renderer else {
                     // no corner cutout rendering required
                     return r;

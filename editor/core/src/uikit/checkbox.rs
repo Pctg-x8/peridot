@@ -16,13 +16,31 @@ use crate::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
             CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTreeRef, CornerRadius,
-            TextureMappingMode, TextureType,
+            FloatAnimationTemplate, TextureMappingMode, TextureType,
         },
         text::FontID,
     },
     uikit::{MountContext, MountTarget, ViewInitContext},
-    utils::{LogicalUnit, Rect, UnsafeMainThreadOnlyOnceCell},
+    utils::{LogicalUnit, Rect, UnsafeMainThreadOnlyOnceCell, range_helper::range_from_len},
 };
+
+const CHECKMARK_ACTIVATE_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+    from_value: 0.0,
+    to_value: 1.0,
+    curve: AnimationCurve::Linear,
+    duration: 0.1,
+};
+const CHECKMARK_DEACTIVATE_OPACITY_ANIM: FloatAnimationTemplate =
+    CHECKMARK_ACTIVATE_OPACITY_ANIM.flip(AnimationCurve::Linear);
+
+const CHECKMARK_ACTIVATE_SCALE_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+    from_value: 1.5,
+    to_value: 1.0,
+    curve: AnimationCurve::EASE_IN,
+    duration: 0.15,
+};
+const CHECKMARK_DEACTIVATE_SCALE_ANIM: FloatAnimationTemplate =
+    CHECKMARK_ACTIVATE_SCALE_ANIM.flip(AnimationCurve::EASE_IN);
 
 struct SharedCheckIcon {
     check_icon: TextureID,
@@ -171,16 +189,17 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
                 to_value: [1.0, 1.0, 1.0, 0.25],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                sec_duration: range_from_len(context.current_sec, 0.1),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -191,16 +210,17 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        context.composite_tree.get_mut(self.ct_root).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Animated {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.25],
                 to_value: [1.0, 1.0, 1.0, 0.0],
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
+                sec_duration: range_from_len(context.current_sec, 0.1),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
-            });
-        context.composite_tree.mark_dirty(self.ct_root);
+            }))
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -212,59 +232,28 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         self.current.update(|x| !x);
+        let active = self.current.get();
 
-        if self.current.get() {
-            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 1.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
-                from_value: 1.5,
-                to_value: 1.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_IN,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
-                from_value: 1.5,
-                to_value: 1.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_IN,
-                event_on_complete: None,
-            };
-        } else {
-            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 0.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 1.5,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_IN,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 1.5,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_IN,
-                event_on_complete: None,
-            };
-        }
-        context.composite_tree.mark_dirty(self.ct_check);
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_check)
+            .opacity_animated_from_template(
+                if active {
+                    &CHECKMARK_ACTIVATE_OPACITY_ANIM
+                } else {
+                    &CHECKMARK_DEACTIVATE_OPACITY_ANIM
+                },
+                context.current_sec,
+            )
+            .scale_animated_from_template(
+                if active {
+                    &CHECKMARK_ACTIVATE_SCALE_ANIM
+                } else {
+                    &CHECKMARK_DEACTIVATE_SCALE_ANIM
+                },
+                context.current_sec,
+            )
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -378,8 +367,7 @@ impl HitTestTreeActionHandler for CheckboxEventHandler {
             .color = AnimatableColor::Animated {
             from_value: [1.0, 1.0, 1.0, 0.5],
             to_value: [1.0, 1.0, 1.0, 1.0],
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
+            sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
             curve: AnimationCurve::Linear,
             event_on_complete: None,
         };
@@ -403,8 +391,7 @@ impl HitTestTreeActionHandler for CheckboxEventHandler {
             .color = AnimatableColor::Animated {
             from_value: [1.0, 1.0, 1.0, 1.0],
             to_value: [1.0, 1.0, 1.0, 0.5],
-            start_sec: context.current_sec,
-            end_sec: context.current_sec + 0.1,
+            sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
             curve: AnimationCurve::Linear,
             event_on_complete: None,
         };
@@ -420,59 +407,28 @@ impl HitTestTreeActionHandler for CheckboxEventHandler {
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         self.current.update(|x| !x);
+        let active = self.current.get();
 
-        if self.current.get() {
-            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 1.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
-                from_value: 1.5,
-                to_value: 1.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_IN,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
-                from_value: 1.5,
-                to_value: 1.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_IN,
-                event_on_complete: None,
-            };
-        } else {
-            context.composite_tree.get_mut(self.ct_check).opacity = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 0.0,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.1,
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_x = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 1.5,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_OUT,
-                event_on_complete: None,
-            };
-            context.composite_tree.get_mut(self.ct_check).scale_y = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 1.5,
-                start_sec: context.current_sec,
-                end_sec: context.current_sec + 0.15,
-                curve: AnimationCurve::EASE_OUT,
-                event_on_complete: None,
-            };
-        }
-        context.composite_tree.mark_dirty(self.ct_check);
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_check)
+            .opacity_animated_from_template(
+                if active {
+                    &CHECKMARK_ACTIVATE_OPACITY_ANIM
+                } else {
+                    &CHECKMARK_DEACTIVATE_OPACITY_ANIM
+                },
+                context.current_sec,
+            )
+            .scale_animated_from_template(
+                if active {
+                    &CHECKMARK_ACTIVATE_SCALE_ANIM
+                } else {
+                    &CHECKMARK_DEACTIVATE_SCALE_ANIM
+                },
+                context.current_sec,
+            )
+            .apply();
 
         EventContinueControl::STOP_PROPAGATION
     }

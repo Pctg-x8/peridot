@@ -33,6 +33,7 @@ wlr-layer-shell-unstable-v1 = ["xdg-shell"]
 kde-blur = []
 kde-appmenu = []
 kde-shadow = []
+kde-plasma-shell = []
 
 # external
 gtk-shell = []

@@ -20,7 +20,7 @@ use crate::{
         text::FontID,
     },
     uikit::{MountContext, MountTarget, Positioning, ViewInitContext},
-    utils::{LogicalUnit, Size},
+    utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
 
 pub trait SimpleButtonEventHandler {
@@ -309,9 +309,8 @@ impl SimpleButtonActionHandler {
                 CompositeMode::FillColor(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, before],
                     to_value: [1.0, 1.0, 1.0, after],
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.05,
                     curve: AnimationCurve::Linear,
+                    sec_duration: range_from_len(current_sec, 0.05),
                     event_on_complete: None,
                 });
             composite_tree.mark_dirty(self.ct_root);

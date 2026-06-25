@@ -284,11 +284,12 @@ impl RawTextInputView {
     }
 
     #[cfg(feature = "wayland")]
+    #[tracing::instrument(skip(self, context))]
     pub fn fwd_ime_state_changes(
         &self,
         context: &mut InputEventContext,
-        new_committed_string: &str,
-        new_preedit_string: &str,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
     ) {
         let selection_range = self.eh.selection_range();
         if !selection_range.is_empty() {
@@ -306,7 +307,7 @@ impl RawTextInputView {
         let has_preedit_text =
             self.eh.preedit_range_start_bytes.get() != self.eh.preedit_range_end_bytes.get();
 
-        if has_preedit_text {
+        if has_preedit_text && let Some(new_preedit_string) = new_preedit_string {
             if !new_preedit_string.is_empty() {
                 // replace preedit
                 self.eh.content.borrow_mut().replace_range(
@@ -340,7 +341,9 @@ impl RawTextInputView {
             }
         }
 
-        if !new_committed_string.is_empty() {
+        if let Some(new_committed_string) = new_committed_string
+            && !new_committed_string.is_empty()
+        {
             // insert committed
             self.eh
                 .content
@@ -351,7 +354,10 @@ impl RawTextInputView {
                 .set(self.eh.cursor_pos_bytes.get() + new_committed_string.len());
         }
 
-        if !has_preedit_text && !new_preedit_string.is_empty() {
+        if !has_preedit_text
+            && let Some(new_preedit_string) = new_preedit_string
+            && !new_preedit_string.is_empty()
+        {
             // insert preedit
             self.eh
                 .content
@@ -783,8 +789,7 @@ impl RawTextInputViewEventHandler {
                 color: AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.5],
                     to_value: [1.0, 1.0, 1.0, 1.0],
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },
@@ -797,8 +802,8 @@ impl RawTextInputViewEventHandler {
                 color: AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 1.0],
                     to_value: [1.0, 1.0, 1.0, 0.5],
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
+
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },
@@ -812,6 +817,7 @@ impl RawTextInputViewEventHandler {
     }
 
     fn update_text<E>(&self, composite_tree: &mut CompositeTree<E>) {
+        tracing::debug!("update text");
         composite_tree.get_mut(self.ct_text).text = Some(CompositeRectText {
             runs: vec![CompositeRectTextRun {
                 font_id: FontID::UIDefault,
@@ -949,6 +955,7 @@ impl RawTextInputViewEventHandler {
         composite_tree.mark_dirty(self.ct_selection_bg);
     }
 
+    #[tracing::instrument(skip(self, composite_tree, system_link, ht_manager))]
     pub fn process_pending_updates_with_ht_mutation<E>(
         &self,
         composite_tree: &mut CompositeTree<E>,
@@ -993,6 +1000,7 @@ impl RawTextInputViewEventHandler {
         );
     }
 
+    #[tracing::instrument(skip(self, composite_tree, system_link, ht_manager))]
     pub fn update_views<E>(
         &self,
         mask: TextInputViewUpdateMask,
@@ -1779,8 +1787,8 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
     fn ime_state_changes(
         &self,
         context: &mut InputEventContext,
-        new_committed_string: &str,
-        new_preedit_string: &str,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
     ) {
         self.raw
             .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
@@ -1904,8 +1912,8 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn ime_state_changes(
         &self,
         context: &mut InputEventContext,
-        new_committed_string: &str,
-        new_preedit_string: &str,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
     ) {
         self.raw
             .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
@@ -2535,8 +2543,8 @@ impl KeyInputEventHandler for MultilineTextInputEventHandler {
     fn ime_state_changes(
         &self,
         context: &mut InputEventContext,
-        new_committed_string: &str,
-        new_preedit_string: &str,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
     ) {
         let selection_range = self.selection_range();
         if !selection_range.is_empty() {
@@ -2553,7 +2561,7 @@ impl KeyInputEventHandler for MultilineTextInputEventHandler {
         let has_preedit_text =
             self.preedit_range_start_bytes.get() != self.preedit_range_end_bytes.get();
 
-        if has_preedit_text {
+        if has_preedit_text && let Some(new_preedit_string) = new_preedit_string {
             if !new_preedit_string.is_empty() {
                 // replace preedit
                 self.content.borrow_mut().replace_range(
@@ -2581,7 +2589,9 @@ impl KeyInputEventHandler for MultilineTextInputEventHandler {
             }
         }
 
-        if !new_committed_string.is_empty() {
+        if let Some(new_committed_string) = new_committed_string
+            && !new_committed_string.is_empty()
+        {
             // insert committed
             self.content
                 .borrow_mut()
@@ -2590,7 +2600,10 @@ impl KeyInputEventHandler for MultilineTextInputEventHandler {
                 .set(self.cursor_pos_bytes.get() + new_committed_string.len());
         }
 
-        if !has_preedit_text && !new_preedit_string.is_empty() {
+        if !has_preedit_text
+            && let Some(new_preedit_string) = new_preedit_string
+            && !new_preedit_string.is_empty()
+        {
             // insert preedit
             self.content
                 .borrow_mut()
@@ -2981,8 +2994,7 @@ impl MultilineTextInputEventHandler {
                 color: AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.5],
                     to_value: [1.0, 1.0, 1.0, 1.0],
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },
@@ -2995,8 +3007,7 @@ impl MultilineTextInputEventHandler {
                 color: AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 1.0],
                     to_value: [1.0, 1.0, 1.0, 0.5],
-                    start_sec: current_sec,
-                    end_sec: current_sec + 0.1,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
                 },

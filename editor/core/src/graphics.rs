@@ -635,6 +635,8 @@ impl<'fs> VulkanDevice<'fs> {
 
     #[tracing::instrument(skip(self))]
     fn writeback_pipeline_cache(&self) {
+        tracing::info!("writing back pipeline cache");
+
         let data_length = unsafe {
             br::vkfn_wrapper::get_pipeline_cache_data_byte_length(self.native, self.pipeline_cache)
                 .inspect_err(|e| tracing::warn!(reason = %e, "pipeline_cache.get_data_byte_length"))
