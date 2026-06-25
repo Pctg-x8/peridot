@@ -653,12 +653,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
                         break 'app;
                     }
-                    if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN
-                        || msg.message == windows::Win32::UI::WindowsAndMessaging::WM_RBUTTONDOWN
-                        || msg.message == windows::Win32::UI::WindowsAndMessaging::WM_MBUTTONDOWN
-                    {
-                        app_event_dispatcher.dispatch(Event::GlobalMouseClicked);
-                    }
 
                     unsafe {
                         let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(msg);

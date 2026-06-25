@@ -141,7 +141,7 @@ impl NativeDesktopSurface {
     pub fn client_pos_to_screen_pos(
         &self,
         client_pos: Point<PointerInputUnit>,
-    ) -> Point<PixelsUnit> {
+    ) -> Point<crate::utils::PixelsUnit> {
         match self {
             Self::Window(w) => w.client_pos_to_screen_pos(client_pos),
             Self::ContextMenu(w) => w.client_pos_to_screen_pos(client_pos),
