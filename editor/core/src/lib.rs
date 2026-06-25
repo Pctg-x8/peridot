@@ -3212,15 +3212,8 @@ async fn run<'sys>(
     let mut sub_windows = HashSet::new();
     let mut main_window = system_link.create_main_window(
         match last_window_state {
-            None => MainWindowInitialState::Unsized,
-            Some(ref x) => match x.main.geometry {
-                WindowGeometryState::Restored { ref rect } => {
-                    MainWindowInitialState::Sized(rect.size())
-                }
-                WindowGeometryState::Maximized { monitor_index } => {
-                    MainWindowInitialState::Maximized { monitor_index }
-                }
-            },
+            None => MainWindowOpenMode::New,
+            Some(ref x) => MainWindowOpenMode::Restore(x.main.geometry.clone()),
         },
         &mut composite_tree,
         &mut ht_manager,
@@ -3430,15 +3423,7 @@ async fn run<'sys>(
     if let Some(ref last_window_state) = last_window_state {
         for sub in last_window_state.sub.iter() {
             let new_window = system_link.open_window(
-                match sub.geometry {
-                    WindowGeometryState::Maximized { monitor_index } => {
-                        SubWindowInitialState::Maximized { monitor_index }
-                    }
-                    WindowGeometryState::Restored { ref rect } => {
-                        SubWindowInitialState::Windowed(rect.clone())
-                    }
-                },
-                main_window,
+                SubWindowOpenMode::Restore(sub.geometry.clone()),
                 &mut composite_tree,
                 &mut ht_manager,
                 &mut keyboard_focus_registry,
@@ -4540,17 +4525,19 @@ async fn run<'sys>(
 
                     if let Some(content) = diverged_content {
                         let new_window = system_link.open_window(
-                            SubWindowInitialState::Windowed(Rect::from_lt_size(
-                                Point::new_logical(
-                                    suggested_rect.left,
-                                    suggested_rect.top - ui::window_header::View::THICKNESS,
+                            SubWindowOpenMode::DockDiverge {
+                                rect: Rect::from_lt_size(
+                                    Point::new_logical(
+                                        suggested_rect.left,
+                                        suggested_rect.top - ui::window_header::View::THICKNESS,
+                                    ),
+                                    Size::new_logical(
+                                        suggested_rect.width,
+                                        suggested_rect.height + ui::window_header::View::THICKNESS,
+                                    ),
                                 ),
-                                Size::new_logical(
-                                    suggested_rect.width,
-                                    suggested_rect.height + ui::window_header::View::THICKNESS,
-                                ),
-                            )),
-                            destination_window,
+                                position_ref_window: destination_window,
+                            },
                             &mut composite_tree,
                             &mut ht_manager,
                             &mut keyboard_focus_registry,
@@ -5242,15 +5229,17 @@ impl MenuSession {
     }
 }
 
-pub enum MainWindowInitialState {
-    Unsized,
-    Sized(Size<LogicalUnit>),
-    Maximized { monitor_index: usize },
+pub enum MainWindowOpenMode {
+    New,
+    Restore(WindowGeometryState),
 }
 
-pub enum SubWindowInitialState {
-    Windowed(Rect<LogicalUnit>),
-    Maximized { monitor_index: usize },
+pub enum SubWindowOpenMode {
+    DockDiverge {
+        rect: Rect<LogicalUnit>,
+        position_ref_window: WindowHandle,
+    },
+    Restore(WindowGeometryState),
 }
 
 #[cfg(windows)]
@@ -5382,7 +5371,8 @@ pub type DragPreviewPopoverHandle = platform::mac::DragPreviewPopoverHandle;
 
 #[cfg(windows)]
 pub use platform::windows::{
-    PointerID, WindowHandle, flyout_surface::Handle as FlyoutSurfaceHandle,
+    PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
+    flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 #[cfg(target_os = "macos")]
 pub type WindowHandle = platform::mac::WindowHandle;
@@ -5711,10 +5701,83 @@ impl DockState {
     }
 }
 
-#[derive(Debug)]
+trait PersistStateFormat: Sized {
+    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()>;
+    fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError>;
+}
+impl PersistStateFormat for Rect<crate::utils::LogicalUnit> {
+    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        w.write_all(&f32::to_ne_bytes(self.left))?;
+        w.write_all(&f32::to_ne_bytes(self.top))?;
+        w.write_all(&f32::to_ne_bytes(self.width))?;
+        w.write_all(&f32::to_ne_bytes(self.height))?;
+        Ok(())
+    }
+
+    fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError> {
+        let mut x = 0f32;
+        let mut y = 0f32;
+        let mut width = 0f32;
+        let mut height = 0f32;
+        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut x) })?;
+        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut y) })?;
+        r.read_exact(unsafe {
+            core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut width)
+        })?;
+        r.read_exact(unsafe {
+            core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut height)
+        })?;
+
+        Ok(Self::from_lt_size(
+            Point::new_logical(x, y),
+            Size::new_logical(width, height),
+        ))
+    }
+}
+impl PersistStateFormat for Rect<crate::utils::PixelsUnit> {
+    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
+        w.write_all(&i32::to_ne_bytes(self.left))?;
+        w.write_all(&i32::to_ne_bytes(self.top))?;
+        w.write_all(&u32::to_ne_bytes(self.width))?;
+        w.write_all(&u32::to_ne_bytes(self.height))?;
+        Ok(())
+    }
+
+    fn deserialize(
+        r: &mut (impl std::io::Read + ?Sized),
+    ) -> Result<Self, PersistStateDeserializeError> {
+        let mut left = 0i32;
+        let mut top = 0i32;
+        let mut width = 0u32;
+        let mut height = 0u32;
+        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<i32>()]>(&mut left) })?;
+        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<i32>()]>(&mut top) })?;
+        r.read_exact(unsafe {
+            core::mem::transmute::<_, &mut [u8; size_of::<u32>()]>(&mut width)
+        })?;
+        r.read_exact(unsafe {
+            core::mem::transmute::<_, &mut [u8; size_of::<u32>()]>(&mut height)
+        })?;
+
+        Ok(Self::from_lt_size(
+            Point::new_pixels(left, top),
+            Size::new_pixels(width, height),
+        ))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum WindowGeometryState {
-    Maximized { monitor_index: usize },
-    Restored { rect: Rect<LogicalUnit> },
+    Maximized {
+        monitor_index: usize,
+    },
+    Restored {
+        rect: Rect<WindowPersistentStateNativeGeometryUnit>,
+    },
 }
 impl WindowGeometryState {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
@@ -5725,10 +5788,7 @@ impl WindowGeometryState {
             }
             Self::Restored { rect } => {
                 w.write_all(&[0x02])?;
-                w.write_all(&f32::to_ne_bytes(rect.left))?;
-                w.write_all(&f32::to_ne_bytes(rect.top))?;
-                w.write_all(&f32::to_ne_bytes(rect.width))?;
-                w.write_all(&f32::to_ne_bytes(rect.height))?;
+                rect.serialize(w)?;
             }
         }
 
@@ -5749,28 +5809,9 @@ impl WindowGeometryState {
                 Ok(Self::Maximized { monitor_index })
             }
             0x02 => {
-                let mut x = 0f32;
-                let mut y = 0f32;
-                let mut width = 0f32;
-                let mut height = 0f32;
-                r.read_exact(unsafe {
-                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut x)
-                })?;
-                r.read_exact(unsafe {
-                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut y)
-                })?;
-                r.read_exact(unsafe {
-                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut width)
-                })?;
-                r.read_exact(unsafe {
-                    core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut height)
-                })?;
-                Ok(Self::Restored {
-                    rect: Rect::from_lt_size(
-                        Point::new_logical(x, y),
-                        Size::new_logical(width, height),
-                    ),
-                })
+                let rect = PersistStateFormat::deserialize(r)?;
+
+                Ok(Self::Restored { rect })
             }
             _ => Err(PersistStateDeserializeError::InvalidFormat),
         }
@@ -5881,7 +5922,7 @@ impl FileSystem {
         let cache_base_path = {
             let base =
                 PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("fs.cache_base_path.no_env"));
-            let p = base.join("peridot/.editor");
+            let p = base.join("peridot/.editor/cache");
 
             p
         };
@@ -5903,6 +5944,15 @@ impl FileSystem {
             std::env::current_dir()
                 .expect("fs.persist_state_base_path.current_dir")
                 .join(".persist-state/io.ct2.peridot.editor")
+        };
+        #[cfg(windows)]
+        let persist_state_base_path = {
+            let base = PathBuf::from(
+                std::env::var_os("LOCALAPPDATA").expect("fs.persist_state_base_path.no_env"),
+            );
+            let p = base.join("peridot/.editor/state");
+
+            p
         };
 
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {

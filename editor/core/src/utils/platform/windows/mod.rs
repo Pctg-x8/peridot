@@ -2,7 +2,8 @@ mod log_writer;
 
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HINSTANCE, HWND},
+        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, RECT},
+        Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR},
         System::{
             Diagnostics::Debug::OutputDebugStringA,
             LibraryLoader::GetModuleHandleW,
@@ -17,7 +18,7 @@ use windows::{
     },
     core::PCSTR,
 };
-use windows_core::PCWSTR;
+use windows_core::{BOOL, PCWSTR};
 
 pub use self::log_writer::DebugOutputWriter;
 
@@ -51,6 +52,34 @@ pub unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
         r if r == 0 => Err(std::io::Error::last_os_error()),
         r => Ok(r),
     }
+}
+
+#[inline(always)]
+pub fn enumerate_display_monitors<F>(mut f: F)
+where
+    F: FnMut(HMONITOR, &RECT) -> bool,
+{
+    unsafe extern "system" fn callback<F>(
+        mon: HMONITOR,
+        _dc: HDC,
+        rect: *mut RECT,
+        param: LPARAM,
+    ) -> BOOL
+    where
+        F: FnMut(HMONITOR, &RECT) -> bool,
+    {
+        BOOL::from((unsafe {
+            &mut *core::ptr::with_exposed_provenance_mut::<F>(param.0.cast_unsigned())
+        })(mon, unsafe { &*rect }))
+    }
+    let _ = unsafe {
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(callback::<F>),
+            LPARAM(core::ptr::from_mut(&mut f).addr().cast_signed()),
+        )
+    };
 }
 
 pub struct WindowByClassIter {

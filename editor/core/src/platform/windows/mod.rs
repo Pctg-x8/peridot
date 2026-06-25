@@ -29,8 +29,8 @@ use windows::{
             },
             Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, IDXGIFactory2},
             Gdi::{
-                GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
-                MonitorFromWindow,
+                GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
+                MONITORINFO, MapWindowPoints, MonitorFromPoint, MonitorFromWindow,
             },
         },
         System::{
@@ -43,7 +43,7 @@ use windows::{
         },
         UI::{
             Controls::{MARGINS, WM_MOUSELEAVE},
-            HiDpi::{GetDpiForMonitor, GetDpiForWindow},
+            HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{
                 ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
                 TrackMouseEvent, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_LCONTROL, VK_LEFT,
@@ -68,7 +68,8 @@ use windows::{
                 WM_NCMOUSELEAVE, WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN,
                 WM_RBUTTONUP, WM_SETFOCUS, WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW,
                 WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP,
-                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_OVERLAPPEDWINDOW, WS_POPUP, WindowFromPoint,
+                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZE, WS_OVERLAPPED, WS_OVERLAPPEDWINDOW,
+                WS_POPUP, WindowFromPoint,
             },
         },
     },
@@ -79,7 +80,8 @@ use windows_numerics::{Vector2, Vector3};
 use std::{collections::HashSet, rc::Rc, sync::Mutex};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, WindowType,
+    Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent,
+    WindowGeometryState, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{VulkanDevice, VulkanSurface},
     input::{
@@ -98,11 +100,15 @@ use crate::{
     uikit::MountTarget,
     utils::{
         LogicalUnit, PixelsUnit, Point, Rect, Size,
-        platform::windows::{WaitableTimer, current_instance_handle, register_class},
+        platform::windows::{
+            WaitableTimer, current_instance_handle, enumerate_display_monitors, register_class,
+        },
     },
 };
 
 pub mod flyout_surface;
+
+pub type WindowPersistentStateNativeGeometryUnit = PixelsUnit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WindowHandle(HWND);
@@ -240,6 +246,11 @@ impl WindowHandle {
     }
 
     #[inline(always)]
+    pub fn is_maximized(&self) -> bool {
+        unsafe { IsZoomed(self.0).as_bool() }
+    }
+
+    #[inline(always)]
     pub fn ui_scale_factor(&self) -> f32 {
         unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
     }
@@ -346,6 +357,42 @@ impl WindowHandle {
             SetForegroundWindow(self.0).expect("SetForegroundWindow");
         }
     }
+
+    pub fn geometry_state_snapshot(&self, _system_link: &SystemLink) -> crate::WindowGeometryState {
+        if unsafe { IsZoomed(self.0) }.as_bool() {
+            let hm = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
+            let mut monitor_index = 0;
+            enumerate_display_monitors(|m, _| {
+                if m == hm {
+                    return false;
+                }
+
+                monitor_index += 1;
+                true
+            });
+
+            crate::WindowGeometryState::Maximized { monitor_index }
+        } else {
+            let mut rc = core::mem::MaybeUninit::<RECT>::uninit();
+            unsafe {
+                DwmGetWindowAttribute(
+                    self.0,
+                    DWMWA_EXTENDED_FRAME_BOUNDS,
+                    rc.as_mut_ptr().cast(),
+                    size_of::<RECT>() as _,
+                )
+                .expect("dwmgetwindowattribute.extended_frame_bounds")
+            };
+            let rc = unsafe { rc.assume_init_ref() };
+
+            crate::WindowGeometryState::Restored {
+                rect: Rect::from_lt_size(
+                    Point::new_pixels(rc.left, rc.top),
+                    Size::new_pixels((rc.right - rc.left) as _, (rc.bottom - rc.top) as _),
+                ),
+            }
+        }
+    }
 }
 impl ShellPointerActions for WindowHandle {
     #[inline(always)]
@@ -431,23 +478,29 @@ impl NativeWindow {
     fn new(
         wc_set: &WindowClassSet,
         window_type: WindowType,
-        rect: Option<Rect<PixelsUnit>>,
+        pos: Option<Point<PixelsUnit>>,
+        size: Option<Size<PixelsUnit>>,
+        maximized: bool,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         app_context: *mut ApplicationContext,
     ) -> Self {
+        let mut window_style = WS_OVERLAPPEDWINDOW;
+        if maximized {
+            window_style |= WS_MAXIMIZE;
+        }
         let w = unsafe {
             CreateWindowExW(
                 WS_EX_APPWINDOW,
                 PCWSTR(core::ptr::without_provenance(wc_set.main as _)),
                 w!("Peridot Marble Editor"),
-                WS_OVERLAPPEDWINDOW,
-                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.left),
-                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.top),
-                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.width as _),
-                rect.as_ref().map_or(CW_USEDEFAULT, |r| r.height as _),
+                window_style,
+                pos.as_ref().map_or(CW_USEDEFAULT, |r| r.x),
+                pos.as_ref().map_or(CW_USEDEFAULT, |r| r.y),
+                size.as_ref().map_or(CW_USEDEFAULT, |r| r.width as _),
+                size.as_ref().map_or(CW_USEDEFAULT, |r| r.height as _),
                 None,
                 None,
                 Some(wc_set.hinstance),
@@ -775,6 +828,7 @@ impl WindowEventHandler {
 
         dest_window.set_foreground();
         self.event_dispatcher.dispatch(Event::DockConfirm {
+            pointer: PointerID(),
             destination_window: dest_window,
             client_pos_in_dest,
         });
@@ -1681,13 +1735,66 @@ impl SystemLink<'_> {
         unsafe { &*self.font_set }
     }
 
+    #[inline(always)]
+    pub const fn needs_app_menu_in_surface(&self) -> bool {
+        // Windowsは常に必要
+        true
+    }
+
     pub fn create_main_window(
         &mut self,
+        mode: MainWindowOpenMode,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> WindowHandle {
+        let primary_monitor =
+            unsafe { MonitorFromWindow(HWND(core::ptr::null_mut()), MONITOR_DEFAULTTOPRIMARY) };
+        let (target_monitor, target_monitor_left_top) = match mode {
+            MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+                let mut found_hm = None;
+                let mut primary_hm_left_top = None;
+                let mut enum_index = 0;
+                enumerate_display_monitors(|hm, r| {
+                    if hm == primary_monitor {
+                        primary_hm_left_top = Some(Point::new_pixels(r.left, r.top));
+                    }
+
+                    if enum_index == monitor_index {
+                        found_hm = Some((hm, Point::new_pixels(r.left, r.top)));
+                        return false;
+                    }
+
+                    enum_index += 1;
+                    true
+                });
+                found_hm.unwrap_or_else(|| {
+                    (
+                        primary_monitor,
+                        primary_hm_left_top.expect("no primary monitor enumerated?"),
+                    )
+                })
+            }
+            MainWindowOpenMode::Restore(WindowGeometryState::Restored { .. })
+            | MainWindowOpenMode::New => {
+                let mut primary_hm_left_top = None;
+                enumerate_display_monitors(|hm, r| {
+                    if hm == primary_monitor {
+                        primary_hm_left_top = Some(Point::new_pixels(r.left, r.top));
+                        return false;
+                    }
+
+                    true
+                });
+
+                (
+                    primary_monitor,
+                    primary_hm_left_top.expect("no primary monitor enumerated?"),
+                )
+            }
+        };
+
         let ht = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
@@ -1696,7 +1803,24 @@ impl SystemLink<'_> {
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },
             WindowType::Main {},
-            None,
+            match mode {
+                MainWindowOpenMode::Restore(WindowGeometryState::Maximized { .. }) => {
+                    Some(target_monitor_left_top)
+                }
+                MainWindowOpenMode::Restore(WindowGeometryState::Restored { .. }) => None,
+                MainWindowOpenMode::New => None,
+            },
+            match mode {
+                MainWindowOpenMode::Restore(WindowGeometryState::Maximized { .. }) => None,
+                MainWindowOpenMode::Restore(WindowGeometryState::Restored { ref rect }) => {
+                    Some(rect.size())
+                }
+                MainWindowOpenMode::New => None,
+            },
+            matches!(
+                mode,
+                MainWindowOpenMode::Restore(WindowGeometryState::Maximized { .. })
+            ),
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
@@ -1716,19 +1840,18 @@ impl SystemLink<'_> {
             vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
         }));
 
+        unsafe {
+            let _ = ShowWindow(h.0, SW_SHOWNORMAL);
+        }
+
         h
     }
 
-    pub fn prelaunch(&self, handle: WindowHandle) {
-        unsafe {
-            let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
-        }
-    }
+    pub fn prelaunch(&self, handle: WindowHandle) {}
 
     pub fn open_window<'h>(
         &mut self,
-        rect: Rect<LogicalUnit>,
-        position_ref_window: WindowHandle,
+        mode: SubWindowOpenMode,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager<'h>,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
@@ -1741,22 +1864,101 @@ impl SystemLink<'_> {
             &mut Self,
         ),
     ) -> WindowHandle {
-        let mut grect_lt = [rect
-            .left_top()
-            .to_pixels_round(position_ref_window.ui_scale_factor())
-            .to_win32()];
-        unsafe {
-            MapWindowPoints(Some(position_ref_window.0), None, &mut grect_lt);
-        }
+        let primary_monitor =
+            unsafe { MonitorFromWindow(HWND(core::ptr::null_mut()), MONITOR_DEFAULTTOPRIMARY) };
+        let (target_monitor, ui_scale_factor) = match mode {
+            SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+                let mut found_hm = None;
+                let mut enum_index = 0;
+                enumerate_display_monitors(|hm, _| {
+                    if enum_index == monitor_index {
+                        found_hm = Some(hm);
+                        return false;
+                    }
+
+                    enum_index += 1;
+                    true
+                });
+                let target_monitor = found_hm.unwrap_or(primary_monitor);
+
+                let mut dpi_x = core::mem::MaybeUninit::uninit();
+                let mut dpi_y = core::mem::MaybeUninit::uninit();
+                unsafe {
+                    GetDpiForMonitor(
+                        target_monitor,
+                        MDT_EFFECTIVE_DPI,
+                        dpi_x.as_mut_ptr(),
+                        dpi_y.as_mut_ptr(),
+                    )
+                    .expect("GetDpiForMonitor");
+                }
+                let ui_scale_factor = unsafe { dpi_x.assume_init() as f32 / 96.0 };
+                (target_monitor, ui_scale_factor)
+            }
+            SubWindowOpenMode::Restore(WindowGeometryState::Restored { ref rect }) => {
+                let hm = unsafe {
+                    MonitorFromPoint(
+                        POINT {
+                            x: rect.left,
+                            y: rect.top,
+                        },
+                        MONITOR_DEFAULTTONEAREST,
+                    )
+                };
+                let mut dpi_x = core::mem::MaybeUninit::uninit();
+                let mut dpi_y = core::mem::MaybeUninit::uninit();
+                unsafe {
+                    GetDpiForMonitor(
+                        hm,
+                        MDT_EFFECTIVE_DPI,
+                        dpi_x.as_mut_ptr(),
+                        dpi_y.as_mut_ptr(),
+                    )
+                    .expect("GetDpiForMonitor");
+                }
+                let ui_scale_factor = unsafe { dpi_x.assume_init() as f32 / 96.0 };
+                (hm, ui_scale_factor)
+            }
+            SubWindowOpenMode::DockDiverge {
+                position_ref_window,
+                ..
+            } => (primary_monitor, position_ref_window.ui_scale_factor()),
+        };
+
+        let rect = match mode {
+            SubWindowOpenMode::DockDiverge {
+                ref rect,
+                position_ref_window,
+            } => {
+                let mut grect_lt = [rect
+                    .left_top()
+                    .to_pixels_round(position_ref_window.ui_scale_factor())
+                    .to_win32()];
+                unsafe {
+                    MapWindowPoints(Some(position_ref_window.0), None, &mut grect_lt);
+                }
+
+                Some(Rect::from_lt_size(
+                    Point::from_win32(grect_lt[0]),
+                    rect.size()
+                        .to_pixels_ceil(position_ref_window.ui_scale_factor()),
+                ))
+            }
+            SubWindowOpenMode::Restore(WindowGeometryState::Maximized { .. }) => None,
+            SubWindowOpenMode::Restore(WindowGeometryState::Restored { ref rect }) => {
+                Some(rect.clone())
+            }
+        };
 
         let w = NativeWindow::new(
             unsafe { &(*self.app_context_ptr).wc_set },
             WindowType::Sub,
-            Some(Rect::from_lt_size(
-                Point::from_win32(grect_lt[0]),
-                rect.size()
-                    .to_pixels_ceil(position_ref_window.ui_scale_factor()),
-            )),
+            rect.as_ref().map(|r| r.left_top()),
+            rect.as_ref().map(|r| r.size()),
+            matches!(
+                mode,
+                SubWindowOpenMode::Restore(WindowGeometryState::Maximized { .. })
+            ),
             composite_tree.create(CompositeRect {
                 relative_size_adjustment: [1.0, 1.0],
                 ..Default::default()
@@ -1855,7 +2057,13 @@ impl SystemLink<'_> {
             .expect("pointer_hovering_timer.cancel");
     }
 
-    pub fn begin_pane_drag(&self, initiator_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
+    pub fn begin_pane_drag(
+        &self,
+        initiator_surface: WindowHandle,
+        _pointer: &PointerID,
+        _offset: Point<LogicalUnit>,
+        rect: &Rect<LogicalUnit>,
+    ) {
         unsafe { &*self.app_context_ptr }
             .drag_preview_popover
             .show(initiator_surface.0, rect);

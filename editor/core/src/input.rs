@@ -907,7 +907,10 @@ impl PointerInputManager {
             return;
         };
         let ws = entering_surface.size();
-        self.last_pointer_down_event_id = None;
+        #[cfg(feature = "wayland")]
+        {
+            self.last_pointer_down_event_id = None;
+        }
 
         if self.down_gesture.is_dragging() {
             // ドラッグ状態だった
