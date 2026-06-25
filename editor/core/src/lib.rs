@@ -4454,6 +4454,8 @@ async fn run<'sys>(
                     let dm = &mut unsafe { destination_window.extra_data_mut::<PerWindowData>() }
                         .docking_manager;
 
+                    tracing::debug!(?client_pos_in_dest, "dock confirm");
+
                     let mut source_window = state.source_window;
                     let source_dock = state.source_dock;
                     let tab_index = state.tab_index;

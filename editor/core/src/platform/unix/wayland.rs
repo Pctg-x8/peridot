@@ -1314,6 +1314,7 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
 
         let surface_state_ptr = surface.user_data().cast::<SurfaceStateUntyped>();
         if surface_state_ptr.is_null() {
+            tracing::warn!("data-device: entering unknown surface");
             self.drag_preview_popover.hide_surface();
             self.drag_preview_popover.show_dnd_icon();
             self.data_device
@@ -1368,6 +1369,13 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
             .object
             .accept(0, accepting_mime_type)
             .expect("data_offer.accept");
+        active_offer
+            .object
+            .set_actions(
+                wl::DataDeviceManagerDndAction::MOVE,
+                wl::DataDeviceManagerDndAction::MOVE,
+            )
+            .expect("data_offset.set_actions");
         active_offer.entering_surface = Some(NonNull::from_ref(surface));
         active_offer.client_pos = Point::new_logical(x.to_f32(), y.to_f32());
     }
@@ -1376,6 +1384,8 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
     fn leave(&mut self, _sender: &mut wl::DataDevice) {
         event_trace!();
 
+        self.drag_preview_popover.hide_surface();
+        self.drag_preview_popover.show_dnd_icon();
         self.data_device
             .as_mut()
             .expect("no data device")
