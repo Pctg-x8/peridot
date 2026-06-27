@@ -1005,147 +1005,6 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
-pub struct AlertDialogPresenter {
-    id: PopupID,
-    mask: OverlayPopupBasicMaskView,
-    frame: OverlayPopupBasicFrameView,
-    ct_message: CompositeTreeRef,
-    confirm_button: SimpleButtonView,
-}
-impl AlertDialogPresenter {
-    const AROUND_PADDING: f32 = 16.0;
-    const MESSAGE_BUTTON_SPACING: f32 = 12.0;
-
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        popup_id: PopupID,
-        message: String,
-        owner_window: WindowHandle,
-    ) -> Self {
-        let tl = TextLayout::new_single(
-            &message,
-            FontID::UIDefault,
-            ctx.system_link.font_set(),
-            CompositeRectTextHorizontalAlignment::Middle,
-            Some(owner_window.client_size().width * 0.8),
-        );
-        let text_width = tl
-            .visual_width(ctx.system_link.font_set())
-            .max(64.0)
-            .min(owner_window.client_size().width * 0.8);
-
-        let mask = OverlayPopupBasicMaskView::new(ctx);
-        let frame = OverlayPopupBasicFrameView::new(
-            ctx,
-            Size::new_logical(
-                text_width + Self::AROUND_PADDING * 2.0,
-                tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
-            ),
-        );
-        let confirm_button = SimpleButtonView::new(
-            ctx,
-            "OK".into(),
-            Size::new_logical(64.0, 24.0),
-            Some(Box::new(SimpleButtonConstantEventHandler(
-                Event::PopupClose { id: popup_id },
-            ))),
-        );
-        let ct_message = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [
-                AnimatableFloat::Value(text_width),
-                AnimatableFloat::Value(16.0),
-            ],
-            relative_offset_adjustment: [0.5, 0.0],
-            offset: [
-                AnimatableFloat::Value(-text_width * 0.5),
-                AnimatableFloat::Value(Self::AROUND_PADDING),
-            ],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: message,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    spacing_inline_start: 0.0,
-                }],
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Start,
-                allow_wrapping: true,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-
-        confirm_button.locate(
-            &Positioning {
-                parent_anchor: [0.5, 1.0],
-                anchor: [0.5, 1.0],
-                offset: [0.0, -Self::AROUND_PADDING],
-            },
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
-        );
-        ctx.composite_tree.add_child(frame.ct_root(), ct_message);
-        confirm_button.mount(ctx, &frame);
-        frame.mount(ctx, &mask);
-
-        Self {
-            id: popup_id,
-            mask,
-            frame,
-            ct_message,
-            confirm_button,
-        }
-    }
-}
-impl Popup for AlertDialogPresenter {
-    fn mount(&self, ctx: &mut MountContext, parent: &RawMountTarget) {
-        self.mask.mount(ctx, parent);
-        self.mask
-            .play_open_animation(ctx.composite_tree, ctx.current_sec);
-        self.frame
-            .play_open_animation(ctx.composite_tree, ctx.current_sec);
-    }
-
-    fn set_keyboard_focus_group(
-        &self,
-        group: KeyboardFocusGroupRef,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
-        self.confirm_button
-            .set_keyboard_focus_group(group, keyboard_focus_registry);
-    }
-
-    fn unmount(&self, ctx: &mut MountContext) {
-        self.mask.unmount(ctx);
-    }
-
-    fn close(
-        &self,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        current_sec: f32,
-    ) {
-        // disable button interaction while animating
-        self.confirm_button.set_interactive(false, ht_manager);
-
-        self.mask.play_close_animation(composite_tree, current_sec);
-        self.frame.play_close_animation(
-            composite_tree,
-            current_sec,
-            SyncEvent::PopupUnmount { id: self.id },
-        );
-    }
-
-    fn terminate(&mut self, ctx: &mut MountContext) {
-        self.confirm_button.unmount(ctx);
-        self.confirm_button.terminate(ctx);
-
-        ctx.composite_tree.free_all(self.mask.ct_root());
-        ctx.ht_manager.free_all(self.mask.ht_root());
-    }
-}
-
 pub struct RadioButtonView {
     eh: Rc<RadioButtonEventHandler>,
 }
@@ -3048,16 +2907,36 @@ impl ui::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
+struct AssetPreviewPanePresenter {}
+impl AssetPreviewPanePresenter {
+    const ID: &str = internal_pane_identifier!("AssetPreview");
+}
+impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
+    fn name(&self) -> String {
+        "Asset Preview".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+
+    fn unmount(&self, ctx: &mut MountContext) {}
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
-    has_appmenu: bool,
     header: ui::window_header::View,
+    appmenu: Option<ui::app_menu_bar::View>,
     footer: Option<ui::window_footer::View>,
     docking_manager: ui::dock::DockingManager,
 }
 impl PerWindowData {
     fn compute_content_area(&self, surface_size: Size<LogicalUnit>) -> Rect<LogicalUnit> {
-        let top_offset = if self.has_appmenu {
+        let top_offset = if self.appmenu.is_some() {
             ui::window_header::View::THICKNESS + ui::app_menu_bar::View::HEIGHT
         } else {
             ui::window_header::View::THICKNESS
@@ -3136,8 +3015,7 @@ async fn run<'sys>(
                 break 'try_restore_last_window_state None;
             }
         };
-        let mut r = std::io::BufReader::new(fp);
-        match PersistStateWindowData::deserialize(&mut std::io::BufReader::new(r)) {
+        match PersistStateWindowData::deserialize(&mut std::io::BufReader::new(fp)) {
             Ok(state) => Some(state),
             Err(e) => {
                 tracing::warn!(reason = %e, "persist.restore.window_state");
@@ -3145,7 +3023,6 @@ async fn run<'sys>(
             }
         }
     };
-    tracing::debug!(?last_window_state);
 
     let window_bg_gradient = composite_tree.create_gradient(Gradient::Corner {
         right_top: [0.1, 0.1, 0.1, 1.0],
@@ -3314,6 +3191,7 @@ async fn run<'sys>(
                         content_ids: vec![
                             UIKitPreviewPanePresenter::ID.into(),
                             ProjectSettingsPanePresenter::ID.into(),
+                            AssetPreviewPanePresenter::ID.into(),
                         ],
                         active_index: 0,
                     }),
@@ -3322,24 +3200,22 @@ async fn run<'sys>(
         }),
     };
 
+    let dock_top_offset = ui::window_header::View::THICKNESS
+        + if app_menu_view.is_some() {
+            ui::app_menu_bar::View::HEIGHT
+        } else {
+            0.0
+        };
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
-        has_appmenu: app_menu_view.is_some(),
         header: window_header_view,
+        appmenu: app_menu_view,
         footer: Some(window_footer_view),
         docking_manager: ui::dock::DockingManager::new(
             main_window,
             &mut view_init_ctx,
             Rect::from_lt_size(
-                Point::new_logical(
-                    0.0,
-                    ui::window_header::View::THICKNESS
-                        + if app_menu_view.is_some() {
-                            ui::app_menu_bar::View::HEIGHT
-                        } else {
-                            0.0
-                        },
-                ),
+                Point::new_logical(0.0, dock_top_offset),
                 Size::new_logical(320.0, 256.0),
             ),
             &mut dock_store,
@@ -3358,6 +3234,7 @@ async fn run<'sys>(
                     AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
                     ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
                     TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
+                    AssetPreviewPanePresenter::ID => Box::new(AssetPreviewPanePresenter {}),
                     id => todo!("generic pane id handling: {id:?}"),
                 })
             },
@@ -3405,8 +3282,8 @@ async fn run<'sys>(
 
                     w.associate_extra_data(Box::new(PerWindowData {
                         screen_reposition_interests: HashSet::new(),
-                        has_appmenu: false,
                         header: window_header_view,
+                        appmenu: None,
                         footer: None,
                         docking_manager: ui::dock::DockingManager::new(
                             w,
@@ -3437,6 +3314,9 @@ async fn run<'sys>(
                                         }
                                         TimelinePanePresenter::ID => {
                                             Box::new(TimelinePanePresenter {})
+                                        }
+                                        AssetPreviewPanePresenter::ID => {
+                                            Box::new(AssetPreviewPanePresenter {})
                                         }
                                         id => todo!("generic pane id handling: {id:?}"),
                                     })
@@ -3512,13 +3392,12 @@ async fn run<'sys>(
 
                 // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
                 if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
-                    if window == main_window {
-                        if let Some(ref a) = app_menu_view {
-                            a.on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
-                        }
+                    if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
+                    {
+                        a.on_close_all(
+                            &mut composite_tree,
+                            global_time_base.elapsed().as_secs_f32(),
+                        );
                     }
 
                     c.terminate(
@@ -3589,8 +3468,7 @@ async fn run<'sys>(
                     && let Some(c) = current_active_menu_session.take_if(|x| x.parent == window)
                 {
                     // フォーカスロストした時もコンテキストメニューを閉じる
-                    if window == main_window
-                        && let Some(ref a) = app_menu_view
+                    if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                     {
                         a.on_close_all(
                             &mut composite_tree,
@@ -3612,8 +3490,8 @@ async fn run<'sys>(
             Event::WindowActivatingStateChanged { window, activated } => {
                 if !activated {
                     if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
-                        if window == main_window
-                            && let Some(ref a) = app_menu_view
+                        if let Some(ref a) =
+                            unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                         {
                             a.on_close_all(
                                 &mut composite_tree,
@@ -3641,7 +3519,7 @@ async fn run<'sys>(
                 #[cfg(target_os = "macos")]
                 drag_preview_popover.bind_position_base_window_link(window);
 
-                if let Some(ref a) = app_menu_view {
+                if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu {
                     a.on_close_all(
                         &mut composite_tree,
                         global_time_base.elapsed().as_secs_f32(),
@@ -3650,8 +3528,8 @@ async fn run<'sys>(
 
                 if !system_link.any_pointer_on_context_menu() {
                     if let Some(c) = current_active_menu_session.take() {
-                        if c.parent == main_window
-                            && let Some(ref a) = app_menu_view
+                        if let Some(ref a) =
+                            unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                         {
                             a.on_close_all(
                                 &mut composite_tree,
@@ -3917,7 +3795,7 @@ async fn run<'sys>(
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
                     target_window,
-                    |id, ctx| AlertDialogPresenter::new(ctx, id, message, target_window),
+                    |id, ctx| uikit::AlertDialogPresenter::new(ctx, id, message, target_window),
                 );
                 popup_manager.post_open_action(
                     opened_id,
@@ -4083,8 +3961,8 @@ async fn run<'sys>(
             }
             Event::MenuCloseAll => {
                 if let Some(c) = current_active_menu_session.take() {
-                    if c.parent == main_window
-                        && let Some(ref a) = app_menu_view
+                    if let Some(ref a) =
+                        unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
                         a.on_close_all(
                             &mut composite_tree,
@@ -4280,8 +4158,8 @@ async fn run<'sys>(
 
                 // コマンド選択したらとじる
                 if let Some(c) = current_active_menu_session.take() {
-                    if c.parent == main_window
-                        && let Some(ref a) = app_menu_view
+                    if let Some(ref a) =
+                        unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
                         a.on_close_all(
                             &mut composite_tree,
@@ -4505,8 +4383,8 @@ async fn run<'sys>(
 
                                 w.associate_extra_data(Box::new(PerWindowData {
                                     screen_reposition_interests: HashSet::new(),
-                                    has_appmenu: false,
                                     header: window_header_view,
+                                    appmenu: None,
                                     footer: None,
                                     docking_manager: ui::dock::DockingManager::new(
                                         w,

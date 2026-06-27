@@ -217,6 +217,8 @@ mod popup;
 pub use self::popup::{
     OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, PopupManager,
 };
+mod dialog;
+pub use self::dialog::*;
 
 mod button;
 pub use self::button::{
