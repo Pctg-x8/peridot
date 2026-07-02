@@ -7,7 +7,7 @@ use std::{
 use bedrock::{
     self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut,
     ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, SpecializationConstants,
-    Swapchain, VkHandle, VkHandleMut,
+    SwapchainMut, VkHandle, VkHandleMut,
 };
 
 use crate::{
@@ -331,7 +331,6 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 window_glyph_atlas.color_manager.atlas(),
-                                self.font_set,
                                 self.event_bus,
                                 #[cfg(windows)]
                                 self.dx_context,
@@ -386,19 +385,17 @@ impl<'main> RenderThread<'main> {
             .inject(|r| composite_shared_buffers.sync_buffer(r))
             .end()
             .expect("shared_update_commands.end");
-            unsafe {
-                render_queue
-                    .submit_raw(
-                        &[br::SubmitInfo::new_array(
-                            &[],
-                            &[],
-                            &[shared_update_commands.as_transparent_ref()],
-                            &[],
-                        )],
-                        None,
-                    )
-                    .expect("shared_update.submit");
-            }
+            render_queue
+                .submit(
+                    &[br::SubmitInfo::new_array(
+                        &[],
+                        &[],
+                        &[shared_update_commands.as_transparent_ref()],
+                        &[],
+                    )],
+                    None,
+                )
+                .expect("shared_update.submit");
             render_queue.wait().expect("shared_update.wait");
             crate::perf_end!(perf);
 
@@ -483,7 +480,7 @@ impl<'main> RenderThread<'main> {
 
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
-                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                    Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                         x.invalidate_swapchain();
                         any_swapchain_invalidated = true;
                         continue;
@@ -655,7 +652,7 @@ impl<'main> RenderThread<'main> {
 
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
-                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                    Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                         x.invalidate_swapchain();
                         any_swapchain_invalidated = true;
                         continue;
@@ -866,24 +863,22 @@ impl<'main> RenderThread<'main> {
 
             crate::perf_begin!(perf = POST_QUEUE);
             if !submit_parameters.is_empty() {
-                unsafe {
-                    render_queue
-                        .submit_raw(
-                            &submit_parameters
-                                .iter()
-                                .map(|x| {
-                                    br::SubmitInfo::new(
-                                        &x.render_wait_semaphores,
-                                        &x.render_wait_stages,
-                                        &x.render_commands,
-                                        &x.render_signal_semaphores,
-                                    )
-                                })
-                                .collect::<Vec<_>>(),
-                            None,
-                        )
-                        .expect("queue submit")
-                };
+                render_queue
+                    .submit(
+                        &submit_parameters
+                            .iter()
+                            .map(|x| {
+                                br::SubmitInfo::new(
+                                    &x.render_wait_semaphores,
+                                    &x.render_wait_stages,
+                                    &x.render_commands,
+                                    &x.render_signal_semaphores,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                        None,
+                    )
+                    .expect("queue submit");
             }
 
             if !present_parameters.is_empty() {
@@ -907,7 +902,7 @@ impl<'main> RenderThread<'main> {
                     &mut results,
                 )) {
                     Ok(_) => (),
-                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
+                    Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
                     Err(e) => Err::<(), _>(e).expect("queue present"),
                 }
 
@@ -974,7 +969,11 @@ impl<'main> RenderThread<'main> {
         }
 
         unsafe {
-            self.vk_device.wait().expect("device wait");
+            // TODO: これdanglingつかわない方法にしたい スレッド専用のDeviceをつくるか......？
+            br::vkfn_wrapper::device_wait_idle(br::VkHandleRefMut::dangling(
+                self.vk_device.native_ptr(),
+            ))
+            .expect("device wait");
         }
         #[cfg(windows)]
         if let Err(e) =
@@ -1047,7 +1046,6 @@ impl<'d> ContextMenuRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         color_atlas: &ColorTextureAtlas,
-        root_font_set: &'d FontSet,
         event_bus: &SyncEventBus,
         #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
     ) -> Self {
@@ -1533,19 +1531,17 @@ impl<'d> ContextMenuRenderer<'d> {
         self.wait_for_last_update_completion();
         self.repopulate_update_commands();
 
-        unsafe {
-            device_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[self.update_cb.as_transparent_ref()],
-                        &[self.update_completion_semaphore.as_transparent_ref()],
-                    )],
-                    Some(self.update_completion_fence.as_transparent_ref_mut()),
-                )
-                .expect("gfx.update.submit");
-        }
+        device_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[self.update_cb.as_transparent_ref()],
+                    &[self.update_completion_semaphore.as_transparent_ref()],
+                )],
+                Some(self.update_completion_fence.as_transparent_ref_mut()),
+            )
+            .expect("gfx.update.submit");
         self.updating = true;
     }
 
@@ -1971,19 +1967,17 @@ impl<'d> WindowRenderer<'d> {
         self.wait_for_last_update_completion();
         self.repopulate_update_commands();
 
-        unsafe {
-            device_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[self.update_cb.as_transparent_ref()],
-                        &[self.update_completion_semaphore.as_transparent_ref()],
-                    )],
-                    Some(self.update_completion_fence.as_transparent_ref_mut()),
-                )
-                .expect("gfx.update.submit");
-        }
+        device_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[self.update_cb.as_transparent_ref()],
+                    &[self.update_completion_semaphore.as_transparent_ref()],
+                )],
+                Some(self.update_completion_fence.as_transparent_ref_mut()),
+            )
+            .expect("gfx.update.submit");
         self.updating = true;
     }
 
@@ -2162,7 +2156,7 @@ impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
         )
         .expect("pipeline_layout.create");
         let blending = br::PipelineColorBlendStateCreateInfo::new(&[
-            br::vk::VkPipelineColorBlendAttachmentState {
+            br::PipelineColorBlendAttachmentState(br::vk::VkPipelineColorBlendAttachmentState {
                 blendEnable: true as _,
                 srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
                 dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
@@ -2174,7 +2168,7 @@ impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
                     | br::vk::VK_COLOR_COMPONENT_G_BIT
                     | br::vk::VK_COLOR_COMPONENT_B_BIT
                     | br::vk::VK_COLOR_COMPONENT_A_BIT,
-            },
+            }),
             // br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
         ]);
         let [pipeline, pipeline_cont] = device
@@ -2250,12 +2244,14 @@ impl<'d> MaskTextureAtlasManager<'d> {
             &[br::VertexInputBindingDescription::per_vertex_typed::<
                 [f32; 2],
             >(0)],
-            &[br::VertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                offset: 0,
-                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-            }],
+            &[br::VertexInputAttributeDescription(
+                br::vk::VkVertexInputAttributeDescription {
+                    location: 0,
+                    binding: 0,
+                    offset: 0,
+                    format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                },
+            )],
         );
     const VI_STATE_FOR_CURVE: &'static br::PipelineVertexInputStateCreateInfo<'static> =
         &br::PipelineVertexInputStateCreateInfo::new(
@@ -2263,18 +2259,18 @@ impl<'d> MaskTextureAtlasManager<'d> {
                 [f32; 4],
             >(0)],
             &[
-                br::VertexInputAttributeDescription {
+                br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                     location: 0,
                     binding: 0,
                     offset: 0,
                     format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                },
-                br::VertexInputAttributeDescription {
+                }),
+                br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                     location: 1,
                     binding: 0,
                     offset: core::mem::size_of::<[f32; 2]>() as _,
                     format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                },
+                }),
             ],
         );
     const STENCIL_MASK: u32 = 0x01;
@@ -2282,11 +2278,11 @@ impl<'d> MaskTextureAtlasManager<'d> {
         &br::PipelineDepthStencilStateCreateInfo::new()
             .stencil_test(true)
             .stencil_state_front(
-                br::vk::VkStencilOpState::always_forall(br::StencilOp::Invert)
+                br::StencilOpState::always_forall(br::StencilOp::Invert)
                     .write_mask(Self::STENCIL_MASK),
             )
             .stencil_state_back(
-                br::vk::VkStencilOpState::always_forall(br::StencilOp::Invert)
+                br::StencilOpState::always_forall(br::StencilOp::Invert)
                     .write_mask(Self::STENCIL_MASK),
             );
     const STENCIL_STATE_FILTER_EQ_ONLY: &'static br::PipelineDepthStencilStateCreateInfo =
@@ -2483,20 +2479,18 @@ impl<'d> MaskTextureAtlasManager<'d> {
         })
         .end()
         .expect("init_cb.end");
-        unsafe {
-            init_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[init_cb.as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("init_cb.submit");
-            init_worker_queue.wait().expect("init_cb.wait");
-        }
+        init_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[init_cb.as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("init_cb.submit");
+        init_worker_queue.wait().expect("init_cb.wait");
 
         Self {
             device: common_res.device,
@@ -2899,9 +2893,11 @@ impl<'d> MaskTextureAtlasManager<'d> {
                 .updated_rects
                 .iter()
                 .map(|r| br::vk::VkImageResolve {
-                    srcSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1),
+                    srcSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1)
+                        .0,
                     srcOffset: r.offset.with_z(0),
-                    dstSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1),
+                    dstSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1)
+                        .0,
                     dstOffset: r.offset.with_z(0),
                     extent: r.extent.with_depth(1),
                 })
@@ -2934,19 +2930,18 @@ impl<'d> MaskTextureAtlasManager<'d> {
         })
         .end()
         .expect("cb end");
-        unsafe {
-            render_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[cb[0].as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("vector render submit");
-        }
+
+        render_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[cb[0].as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("vector render submit");
         render_worker_queue.wait().expect("vector render wait");
     }
 
@@ -2986,14 +2981,14 @@ impl<'d> ColorTextureAtlasManager<'d> {
         let init_rp = br::RenderPassObject::new(
             common_res.device,
             &br::RenderPassCreateInfo::new(
-                &[br::vk::VkAttachmentDescription::new(
+                &[br::AttachmentDescription::new(
                     atlas.format(),
                     br::ImageLayout::Undefined,
                     br::ImageLayout::ShaderReadOnlyOpt,
                 )
                 .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
                 &[br::SubpassDescription::new().color_attachments(
-                    &[br::vk::VkAttachmentReference::new(
+                    &[br::AttachmentReference::new(
                         0,
                         br::ImageLayout::ColorAttachmentOpt,
                     )],
@@ -3052,20 +3047,18 @@ impl<'d> ColorTextureAtlasManager<'d> {
         .end_render_pass()
         .end()
         .expect("init_cb.end");
-        unsafe {
-            init_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[init_cb.as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("init_cb.submit");
-            init_worker_queue.wait().expect("init_cb.wait");
-        }
+        init_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[init_cb.as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("init_cb.submit");
+        init_worker_queue.wait().expect("init_cb.wait");
 
         Self {
             device: common_res.device,
@@ -3209,19 +3202,17 @@ impl<'d> ColorTextureAtlasManager<'d> {
         .end()
         .expect("cb.end");
 
-        unsafe {
-            render_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[cb.as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("vector render submit");
-        }
+        render_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[cb.as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("vector render submit");
         render_worker_queue.wait().expect("vector render wait");
     }
 

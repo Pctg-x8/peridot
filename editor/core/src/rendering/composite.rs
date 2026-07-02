@@ -1150,11 +1150,27 @@ pub struct CompositeSharedBuffers {
 impl CompositeSharedBuffers {
     unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
-            br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.gradient_data_buffer_stg, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.gradient_data_memory_stg, None);
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_buffer_stg),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_memory_stg),
+                None,
+            );
 
-            br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.gradient_data_buffer, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.gradient_data_memory, None);
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_memory),
+                None,
+            );
         }
     }
 
@@ -1259,19 +1275,42 @@ struct CompositeInstanceManager {
     stg_mem_requires_flush: bool,
     capacity: usize,
     count: usize,
-    free: BTreeSet<usize>,
 }
 impl CompositeInstanceManager {
     unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
-            br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.buffer_stg, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory_stg, None);
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.buffer_stg),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.memory_stg),
+                None,
+            );
 
-            br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.streaming_buffer, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.streaming_memory, None);
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_memory),
+                None,
+            );
 
-            br::vkfn_wrapper::destroy_buffer(gfx.native_ptr(), self.buffer, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory, None);
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.memory),
+                None,
+            );
         }
     }
 
@@ -1368,21 +1407,7 @@ impl CompositeInstanceManager {
             stg_mem_requires_flush,
             capacity: Self::INIT_CAP,
             count: 0,
-            free: BTreeSet::new(),
         }
-    }
-
-    fn alloc(&mut self) -> usize {
-        if let Some(x) = self.free.pop_first() {
-            return x;
-        }
-
-        self.count += 1;
-        if self.count >= self.capacity {
-            todo!("instance buffer overflow!");
-        }
-
-        self.count - 1
     }
 
     fn sync_buffer<'cb>(&self, cr: br::CmdRecord<'cb>) -> br::CmdRecord<'cb> {
@@ -1398,10 +1423,6 @@ impl CompositeInstanceManager {
 
     const fn streaming_memory_requires_flush(&self) -> bool {
         self.streaming_memory_requires_flush
-    }
-
-    const fn count(&self) -> usize {
-        self.count
     }
 
     const fn memory_stg_requires_explicit_flush(&self) -> bool {
@@ -1440,10 +1461,9 @@ impl CompositeInstanceManager {
     ) -> br::Result<CompositeInstanceMappedStreamingMemory<'s, 'g>> {
         let ptr = unsafe {
             br::vkfn_wrapper::map_memory(
-                gfx_device.native_ptr(),
-                self.streaming_memory,
-                0,
-                core::mem::size_of::<CompositeStreamingData>() as _,
+                gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_memory),
+                0..core::mem::size_of::<CompositeStreamingData>() as _,
                 0,
             )?
         };
@@ -1462,7 +1482,10 @@ pub struct MappedStagingMemory<'g>(
 impl Drop for MappedStagingMemory<'_> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::unmap_memory(self.2.native_ptr(), self.1);
+            br::vkfn_wrapper::unmap_memory(
+                self.2.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.1),
+            );
         }
     }
 }
@@ -1480,7 +1503,10 @@ pub struct CompositeInstanceMappedStagingMemory<'m, 'g>(
 impl Drop for CompositeInstanceMappedStagingMemory<'_, '_> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::unmap_memory(self.2.native_ptr(), self.1.memory_stg);
+            br::vkfn_wrapper::unmap_memory(
+                self.2.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.1.memory_stg),
+            );
         }
     }
 }
@@ -1498,7 +1524,10 @@ pub struct CompositeInstanceMappedStreamingMemory<'m, 'g>(
 impl Drop for CompositeInstanceMappedStreamingMemory<'_, '_> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::unmap_memory(self.2.native_ptr(), self.1.streaming_memory);
+            br::vkfn_wrapper::unmap_memory(
+                self.2.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.1.streaming_memory),
+            );
         }
     }
 }
@@ -2013,10 +2042,9 @@ impl<Event> CompositeTreeRender<Event> {
         let gradient_ptr = MappedStagingMemory(
             unsafe {
                 br::vkfn_wrapper::map_memory(
-                    gfx.native_ptr(),
-                    shared_buffers.gradient_data_memory_stg,
-                    0,
-                    shared_buffers.available_byte_length() as _,
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(shared_buffers.gradient_data_memory_stg),
+                    0..shared_buffers.available_byte_length() as _,
                     0,
                 )
                 .expect("comopsite.instances.gradient_stg.map")
@@ -2835,77 +2863,117 @@ impl CompositeRenderer {
         Self::release_all_framebuffers(gfx, &mut self.backdrop_blur_destination_fbs);
 
         unsafe {
-            br::vkfn::destroy_descriptor_pool(
-                gfx.native_ptr(),
-                self.fixed_descriptor_pool,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_descriptor_pool(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.fixed_descriptor_pool),
+                None,
             );
-            br::vkfn::destroy_descriptor_pool(
-                gfx.native_ptr(),
-                self.input_backdrop_descriptor_pool,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_descriptor_pool(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.input_backdrop_descriptor_pool),
+                None,
             );
 
             for &(r, v) in self.backdrop_buffers.iter() {
-                br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
-                br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
             }
-            br::vkfn::free_memory(
-                gfx.native_ptr(),
-                self.backdrop_buffer_memory,
-                core::ptr::null(),
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.backdrop_buffer_memory),
+                None,
             );
 
-            br::vkfn::destroy_image_view(
-                gfx.native_ptr(),
-                self.grab_buffer_view,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_image_view(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_view),
+                None,
             );
-            br::vkfn::destroy_image(gfx.native_ptr(), self.grab_buffer, core::ptr::null());
-            br::vkfn::free_memory(gfx.native_ptr(), self.grab_buffer_memory, core::ptr::null());
+            br::vkfn_wrapper::destroy_image(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_memory),
+                None,
+            );
 
-            br::vkfn::destroy_pipeline(
-                gfx.native_ptr(),
-                self.pipeline_continue_final,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_final),
+                None,
             );
-            br::vkfn::destroy_pipeline(
-                gfx.native_ptr(),
-                self.pipeline_continue_grabbed,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_grabbed),
+                None,
             );
-            br::vkfn::destroy_pipeline(gfx.native_ptr(), self.pipeline_final, core::ptr::null());
-            br::vkfn::destroy_pipeline(gfx.native_ptr(), self.pipeline_grabbed, core::ptr::null());
-            br::vkfn::destroy_shader_module(gfx.native_ptr(), self.shader, core::ptr::null());
-            br::vkfn::destroy_pipeline_layout(
-                gfx.native_ptr(),
-                self.pipeline_layout,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_final),
+                None,
             );
-            br::vkfn::destroy_descriptor_set_layout(
-                gfx.native_ptr(),
-                self.dsl_input_backdrop,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_grabbed),
+                None,
             );
-            br::vkfn::destroy_descriptor_set_layout(
-                gfx.native_ptr(),
-                self.dsl_input,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_shader_module(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.shader),
+                None,
             );
-            br::vkfn::destroy_sampler(gfx.native_ptr(), self.sampler, core::ptr::null());
+            br::vkfn_wrapper::destroy_pipeline_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_layout),
+                None,
+            );
+            br::vkfn_wrapper::destroy_descriptor_set_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.dsl_input_backdrop),
+                None,
+            );
+            br::vkfn_wrapper::destroy_descriptor_set_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.dsl_input),
+                None,
+            );
+            br::vkfn_wrapper::destroy_sampler(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.sampler),
+                None,
+            );
 
-            br::vkfn::destroy_render_pass(
-                gfx.native_ptr(),
-                self.rp_continue_final,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_continue_final),
+                None,
             );
-            br::vkfn::destroy_render_pass(
-                gfx.native_ptr(),
-                self.rp_continue_grabbed,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_continue_grabbed),
+                None,
             );
-            br::vkfn::destroy_render_pass(gfx.native_ptr(), self.rp_final, core::ptr::null());
-            br::vkfn::destroy_render_pass(gfx.native_ptr(), self.rp_grabbed, core::ptr::null());
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_final),
+                None,
+            );
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_grabbed),
+                None,
+            );
 
             self.backdrop_fx_blur_processor.drop(gfx);
             self.instance_manager.drop(gfx);
@@ -2925,7 +2993,7 @@ impl CompositeRenderer {
         );
     const PIPELINE_BLEND_STATE: &'static br::PipelineColorBlendStateCreateInfo<'static> =
         &br::PipelineColorBlendStateCreateInfo::new(&[
-            br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
+            br::PipelineColorBlendAttachmentState::PREMULTIPLIED,
         ]);
 
     pub fn new<'b>(
@@ -3362,10 +3430,9 @@ impl CompositeRenderer {
         let ptr = MappedStagingMemory(
             unsafe {
                 br::vkfn_wrapper::map_memory(
-                    gfx.native_ptr(),
-                    self.instance_manager.memory_stg,
-                    0,
-                    self.instance_manager.available_byte_length() as _,
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(self.instance_manager.memory_stg),
+                    0..self.instance_manager.available_byte_length() as _,
                     0,
                 )
                 .expect("comopsite.instances.stg.map")
@@ -3441,7 +3508,11 @@ impl CompositeRenderer {
     ) {
         for x in fbs.drain(..) {
             unsafe {
-                br::vkfn_wrapper::destroy_framebuffer(gfx_device.native_ptr(), x, None);
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx_device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
         }
     }
@@ -3520,13 +3591,21 @@ impl CompositeRenderer {
 
         unsafe {
             // release first
-            br::vkfn::destroy_image_view(
-                gfx.native_ptr(),
-                self.grab_buffer_view,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_image_view(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_view),
+                None,
             );
-            br::vkfn::destroy_image(gfx.native_ptr(), self.grab_buffer, core::ptr::null());
-            br::vkfn::free_memory(gfx.native_ptr(), self.grab_buffer_memory, core::ptr::null());
+            br::vkfn_wrapper::destroy_image(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_memory),
+                None,
+            );
         }
         let mut grab_buffer = br::ImageObject::new(
             gfx,
@@ -3549,17 +3628,25 @@ impl CompositeRenderer {
         self.grab_buffer_memory = grab_buffer_memory.unmanage().0;
 
         unsafe {
-            br::vkfn::destroy_pipeline(gfx.native_ptr(), self.pipeline_grabbed, core::ptr::null());
-            br::vkfn::destroy_pipeline(gfx.native_ptr(), self.pipeline_final, core::ptr::null());
-            br::vkfn::destroy_pipeline(
-                gfx.native_ptr(),
-                self.pipeline_continue_grabbed,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_grabbed),
+                None,
             );
-            br::vkfn::destroy_pipeline(
-                gfx.native_ptr(),
-                self.pipeline_continue_final,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_final),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_grabbed),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_final),
+                None,
             );
         }
         let shader_stages = [
@@ -3694,12 +3781,11 @@ impl CompositeRenderer {
         } else {
             // just reset
             unsafe {
-                br::vkfn::reset_descriptor_pool(
-                    gfx.native_ptr(),
-                    self.input_backdrop_descriptor_pool,
+                br::vkfn_wrapper::reset_descriptor_pool(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(self.input_backdrop_descriptor_pool),
                     0,
                 )
-                .into_result()
                 .unwrap();
             }
         }
@@ -3707,8 +3793,8 @@ impl CompositeRenderer {
         let mut input_backdrop_descriptor_sets =
             Vec::<br::DescriptorSet>::with_capacity(object_count);
         unsafe {
-            br::vkfn::allocate_descriptor_sets(
-                gfx.native_ptr(),
+            br::vkfn_wrapper::allocate_descriptor_sets(
+                gfx.as_transparent_ref(),
                 &br::vk::VkDescriptorSetAllocateInfo {
                     sType: br::vk::VkDescriptorSetAllocateInfo::TYPE,
                     pNext: core::ptr::null(),
@@ -3718,12 +3804,8 @@ impl CompositeRenderer {
                         .collect::<Vec<_>>()
                         .as_ptr(),
                 },
-                input_backdrop_descriptor_sets
-                    .spare_capacity_mut()
-                    .as_mut_ptr()
-                    .cast(),
+                input_backdrop_descriptor_sets.spare_capacity_mut(),
             )
-            .into_result()
             .expect("input_backdrop_descriptor_sets.realloc");
             input_backdrop_descriptor_sets.set_len(object_count);
         }
@@ -3749,14 +3831,22 @@ impl CompositeRenderer {
         Self::release_all_framebuffers(gfx, &mut self.backdrop_blur_destination_fbs);
         unsafe {
             for (r, v) in self.backdrop_buffers.drain(..) {
-                br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
-                br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
             }
 
-            br::vkfn::free_memory(
-                gfx.native_ptr(),
-                self.backdrop_buffer_memory,
-                core::ptr::null(),
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.backdrop_buffer_memory),
+                None,
             );
         }
 
@@ -3889,18 +3979,16 @@ impl CompositeRenderer {
             .end()
             .expect("cb.end");
             let mut q = gfx.queue(gfx.present_queue_family_index(), 0);
-            unsafe {
-                q.submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[cb[0].as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("cb.submit");
-            }
+            q.submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[cb[0].as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("cb.submit");
             q.wait().expect("cb.submit.wait");
         }
 
@@ -4242,21 +4330,23 @@ impl CompositeRenderer {
                             br::ImageLayout::TransferSrcOpt,
                             br::VkHandleRef::from_raw_ref(&self.grab_buffer),
                             br::ImageLayout::TransferDestOpt,
-                            &[br::ImageCopy {
+                            &[br::ImageCopy(br::vk::VkImageCopy {
                                 srcSubresource: br::ImageSubresourceLayers::new(
                                     br::AspectMask::COLOR,
                                     0,
                                     0..1,
-                                ),
+                                )
+                                .0,
                                 dstSubresource: br::ImageSubresourceLayers::new(
                                     br::AspectMask::COLOR,
                                     0,
                                     0..1,
-                                ),
+                                )
+                                .0,
                                 srcOffset: br::Offset3D::ZERO,
                                 dstOffset: br::Offset3D::ZERO,
                                 extent: rt_size.with_depth(1),
-                            }],
+                            })],
                         )
                         .inject(|r| {
                             gfx.cmd_pipeline_barrier(
@@ -4381,34 +4471,58 @@ impl BackdropEffectBlurProcessor {
             self.destroy_framebuffers(gfx);
 
             for x in self.upsample_pipelines.drain(..) {
-                br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
             for x in self.downsample_pipelines.drain(..) {
-                br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
-            br::vkfn::destroy_pipeline_layout(
-                gfx.native_ptr(),
-                self.pipeline_layout,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_pipeline_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_layout),
+                None,
             );
-            br::vkfn::destroy_descriptor_set_layout(
-                gfx.native_ptr(),
-                self.input_dsl,
-                core::ptr::null(),
+            br::vkfn_wrapper::destroy_descriptor_set_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.input_dsl),
+                None,
             );
-            br::vkfn::destroy_sampler(gfx.native_ptr(), self.sampler, core::ptr::null());
+            br::vkfn_wrapper::destroy_sampler(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.sampler),
+                None,
+            );
 
             for (r, v) in self.temporal_buffers.drain(..) {
-                br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
-                br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
             }
-            br::vkfn::free_memory(
-                gfx.native_ptr(),
-                self.temporal_buffer_memory,
-                core::ptr::null(),
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.temporal_buffer_memory),
+                None,
             );
 
-            br::vkfn::destroy_render_pass(gfx.native_ptr(), self.render_pass, core::ptr::null());
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.render_pass),
+                None,
+            );
         }
     }
 
@@ -4710,12 +4824,20 @@ impl BackdropEffectBlurProcessor {
     unsafe fn destroy_framebuffers(&self, gfx: &VulkanDevice) {
         for &x in self.downsample_pass_fbs.iter() {
             unsafe {
-                br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
         }
         for &x in self.upsample_pass_fixed_fbs.iter() {
             unsafe {
-                br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
         }
     }
@@ -4899,10 +5021,18 @@ impl BackdropEffectBlurProcessor {
     ) {
         unsafe {
             for x in self.downsample_pipelines.drain(..) {
-                br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
             for x in self.upsample_pipelines.drain(..) {
-                br::vkfn::destroy_pipeline(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
         }
         let (downsample_pipelines, upsample_pipelines) = Self::create_pipelines(
@@ -4914,20 +5044,36 @@ impl BackdropEffectBlurProcessor {
 
         unsafe {
             for x in self.downsample_pass_fbs.drain(..) {
-                br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
             for x in self.upsample_pass_fixed_fbs.drain(..) {
-                br::vkfn::destroy_framebuffer(gfx.native_ptr(), x, core::ptr::null());
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
 
             for (r, v) in self.temporal_buffers.drain(..) {
-                br::vkfn::destroy_image_view(gfx.native_ptr(), v, core::ptr::null());
-                br::vkfn::destroy_image(gfx.native_ptr(), r, core::ptr::null());
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
             }
-            br::vkfn::free_memory(
-                gfx.native_ptr(),
-                self.temporal_buffer_memory,
-                core::ptr::null(),
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.temporal_buffer_memory),
+                None,
             );
         }
         let mut temporal_buffers = Vec::with_capacity(self.temporal_buffers.capacity());
@@ -4954,225 +5100,5 @@ impl BackdropEffectBlurProcessor {
                 let (v, r) = x.unmanage();
                 (r.unmanage().0, v)
             }));
-    }
-}
-
-pub struct CompositionSurfaceAtlas {
-    resource: br::vk::VkImage,
-    resource_view: br::vk::VkImageView,
-    memory: br::vk::VkDeviceMemory,
-    residency_bitmap: Vec<u8>,
-    format: br::Format,
-    size: u32,
-    region_manager: DynamicAtlasManager,
-}
-impl CompositionSurfaceAtlas {
-    pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
-        unsafe {
-            br::vkfn_wrapper::destroy_image_view(gfx.native_ptr(), self.resource_view, None);
-            br::vkfn_wrapper::destroy_image(gfx.native_ptr(), self.resource, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.memory, None);
-        }
-    }
-
-    // TODO: できればPhysical Deviceからとれる値をつかったほうがいい
-    // 1024なら大抵は問題ないとは思うが...
-    const GRANULARITY: u32 = 1024;
-
-    pub fn new(gfx: &VulkanDevice, size: u32, pixel_format: br::Format) -> Self {
-        let bpp = match pixel_format {
-            br::vk::VK_FORMAT_R8_UNORM => 1,
-            _ => unimplemented!("bpp"),
-        };
-
-        let image = match br::ImageObject::new(
-            gfx,
-            &br::ImageCreateInfo::new(br::Extent2D::spread1(size), pixel_format)
-                .with_usage(
-                    br::ImageUsageFlags::COLOR_ATTACHMENT
-                        | br::ImageUsageFlags::SAMPLED
-                        | br::ImageUsageFlags::TRANSFER_DEST,
-                )
-                .flags(br::ImageFlags::SPARSE_BINDING | br::ImageFlags::SPARSE_RESIDENCY),
-        ) {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::error!(reason = ?e, "Failed to create image");
-                std::process::abort();
-            }
-        };
-        let resource = match br::ImageViewBuilder::new(
-            image,
-            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-        )
-        .create()
-        {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::error!(reason = ?e, "Failed to create image view");
-                std::process::abort();
-            }
-        };
-
-        assert!(size % Self::GRANULARITY == 0);
-        let bitmap_div = size / Self::GRANULARITY;
-        let mut residency_bitmap = vec![0; (bitmap_div * bitmap_div) as usize];
-        tracing::debug!(
-            size,
-            granularity = Self::GRANULARITY,
-            block_count = bitmap_div * bitmap_div,
-            "ComositionSurfaceAtlas management parameters",
-        );
-
-        let image_memory_requirements = resource.image().sparse_requirements_alloc();
-        for x in image_memory_requirements.iter() {
-            tracing::debug!(?x, "image memory requirements");
-        }
-
-        let image_memory_requirements = resource.image().requirements();
-        tracing::debug!(?image_memory_requirements, "image memory requirements");
-
-        let memory_index =
-            match gfx.find_device_local_memory_index(image_memory_requirements.memoryTypeBits) {
-                Some(x) => x,
-                None => {
-                    tracing::error!(
-                        memory_type_mask =
-                            format!("0x{:08x}", image_memory_requirements.memoryTypeBits),
-                        "No suitable memory for surface atlas"
-                    );
-                    std::process::abort();
-                }
-            };
-        let memory = match br::DeviceMemoryObject::new(
-            gfx,
-            &br::MemoryAllocateInfo::new(
-                (Self::GRANULARITY * Self::GRANULARITY * bpp) as _,
-                memory_index,
-            ),
-        ) {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::error!(
-                    size = Self::GRANULARITY * Self::GRANULARITY * bpp,
-                    memory_index,
-                    reason = ?e,
-                    "Failed to allocate first memory block"
-                );
-                std::process::abort();
-            }
-        };
-
-        if let Err(e) = unsafe {
-            gfx.bind_sparse(
-                &[
-                    br::BindSparseInfo::new().image_binds(&[br::SparseImageMemoryBindInfo::new(
-                        resource.image(),
-                        &[br::SparseImageMemoryBind::new(
-                            br::ImageSubresource::new(br::AspectMask::COLOR, 0, 0),
-                            br::Offset3D::ZERO,
-                            br::Extent2D::spread1(Self::GRANULARITY).with_depth(1),
-                            &memory,
-                            0,
-                        )],
-                    )]),
-                ],
-                None,
-            )
-        } {
-            tracing::warn!(reason = ?e, "Failed to bind initial block");
-        }
-        residency_bitmap[0] = 0x01;
-
-        let mut region_manager = DynamicAtlasManager::new();
-        // free entire region
-        region_manager.free(AtlasRect {
-            left: 0,
-            top: 0,
-            right: Self::GRANULARITY,
-            bottom: Self::GRANULARITY,
-        });
-
-        let (memory, _) = memory.unmanage();
-        let (resource_view, resource) = resource.unmanage();
-        let (resource, _, _, _, _) = resource.unmanage();
-
-        Self {
-            resource_view,
-            resource,
-            memory,
-            residency_bitmap,
-            size,
-            format: pixel_format,
-            region_manager,
-        }
-    }
-
-    pub const fn resource_view_transparent_ref<'x>(
-        &'x self,
-    ) -> &'x br::VkHandleRef<'x, br::vk::VkImageView> {
-        br::VkHandleRef::from_raw_ref(&self.resource_view)
-    }
-
-    pub const fn image_transparent_ref<'x>(&'x self) -> &'x br::VkHandleRef<'x, br::vk::VkImage> {
-        br::VkHandleRef::from_raw_ref(&self.resource)
-    }
-
-    pub const fn size(&self) -> u32 {
-        self.size
-    }
-
-    pub const fn format(&self) -> br::Format {
-        self.format
-    }
-
-    pub const fn vk_extent(&self) -> br::Extent2D {
-        br::Extent2D::spread1(self.size)
-    }
-
-    pub const fn uv_from_pixels(&self, pixels: f32) -> f32 {
-        pixels / self.size as f32
-    }
-
-    #[tracing::instrument(skip(self), ret(level = tracing::Level::TRACE))]
-    pub fn alloc(&mut self, required_width: u32, required_height: u32) -> AtlasRect {
-        match self.region_manager.alloc(required_width, required_height) {
-            Some(x) => x,
-            None => {
-                todo!("alloc new tile");
-            }
-        }
-    }
-
-    pub fn free(&mut self, rect: AtlasRect) {
-        self.region_manager.free(rect);
-    }
-}
-
-pub struct BoundCompositionSurfaceAtlas<'d> {
-    gfx: &'d VulkanDevice<'d>,
-    raw: CompositionSurfaceAtlas,
-}
-impl Drop for BoundCompositionSurfaceAtlas<'_> {
-    fn drop(&mut self) {
-        unsafe {
-            self.raw.drop(self.gfx);
-        }
-    }
-}
-impl<'d> BoundCompositionSurfaceAtlas<'d> {
-    #[tracing::instrument(skip(gfx))]
-    pub fn new(gfx: &'d VulkanDevice, size: u32, pixel_format: br::vk::VkFormat) -> Self {
-        Self {
-            raw: CompositionSurfaceAtlas::new(gfx, size, pixel_format),
-            gfx,
-        }
-    }
-
-    pub const fn unbound(self) -> CompositionSurfaceAtlas {
-        let raw = unsafe { core::ptr::read(&self.raw) };
-        core::mem::forget(self);
-
-        raw
     }
 }

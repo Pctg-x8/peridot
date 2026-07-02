@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use bedrock::{
-    self as br, Device, Instance, InstanceChild, PhysicalDevice, ResolverInterface, Swapchain,
-    VkHandle, VkRawHandle, VulkanStructure,
+    self as br, Device, DeviceCreateRenderPass2Extension, Instance, InstanceChild, PhysicalDevice,
+    Swapchain, VkHandle, VkRawHandle, VulkanStructure,
 };
 
 use crate::{
@@ -26,9 +26,7 @@ pub const RASTER_STATE_DEFAULT_FILL_NOCULL: &br::PipelineRasterizationStateCreat
     );
 
 pub const BLEND_STATE_SINGLE_NONE: &br::PipelineColorBlendStateCreateInfo =
-    &br::PipelineColorBlendStateCreateInfo::new(&[
-        br::vk::VkPipelineColorBlendAttachmentState::NOBLEND,
-    ]);
+    &br::PipelineColorBlendStateCreateInfo::new(&[br::PipelineColorBlendAttachmentState::NOBLEND]);
 
 pub const MS_STATE_EMPTY: &br::PipelineMultisampleStateCreateInfo =
     &br::PipelineMultisampleStateCreateInfo::new();
@@ -59,8 +57,12 @@ impl Drop for VulkanDevice<'_> {
         self.writeback_pipeline_cache();
 
         unsafe {
-            br::vkfn::destroy_pipeline_cache(self.native, self.pipeline_cache, core::ptr::null());
-            br::vkfn::destroy_device(self.native, core::ptr::null());
+            br::vkfn_wrapper::destroy_pipeline_cache(
+                br::VkHandleRef::dangling(self.native),
+                br::VkHandleRefMut::dangling(self.pipeline_cache),
+                None,
+            );
+            br::vkfn_wrapper::destroy_device(br::VkHandleRefMut::dangling(self.native), None);
         }
     }
 }
@@ -94,6 +96,27 @@ impl br::DeviceExternalMemoryWin32Extension for VulkanDevice<'_> {
         self.fp_get_memory_win32_handle_properties
     }
 }
+impl br::DeviceCreateRenderPass2Extension for VulkanDevice<'_> {
+    #[inline(always)]
+    fn create_render_pass_2_khr_fn(&self) -> br::vk::PFN_vkCreateRenderPass2KHR {
+        self.fp_create_render_pass2
+    }
+
+    #[inline(always)]
+    fn cmd_begin_render_pass_2_khr_fn(&self) -> br::vk::PFN_vkCmdBeginRenderPass2KHR {
+        self.fp_cmd_begin_render_pass2
+    }
+
+    #[inline(always)]
+    fn cmd_end_render_pass_2_khr_fn(&self) -> br::vk::PFN_vkCmdEndRenderPass2KHR {
+        self.fp_cmd_end_render_pass2
+    }
+
+    #[inline(always)]
+    fn cmd_next_subpass_2_khr_fn(&self) -> br::vk::PFN_vkCmdNextSubpass2KHR {
+        unimplemented!("not planned to use")
+    }
+}
 impl<'fs> VulkanDevice<'fs> {
     pub fn new(fs: &'fs FileSystem) -> Self {
         let api_version = match br::instance_version() {
@@ -103,11 +126,11 @@ impl<'fs> VulkanDevice<'fs> {
             }
             Err(e) => {
                 tracing::error!(reason = ?e, "Failed to get vulkan version");
-                br::Version::new(0, 1, 0, 0)
+                br::Version::new(1, 0, 0)
             }
         };
 
-        for x in br::instance_extension_properties_cstr_alloc(None).unwrap_or_else(|e| {
+        for x in br::instance_extension_properties_alloc(None).unwrap_or_else(|e| {
             tracing::error!(reason = ?e, "Failed to enumerate vulkan instance extensions");
             Vec::new()
         }) {
@@ -119,7 +142,7 @@ impl<'fs> VulkanDevice<'fs> {
             );
         }
 
-        for x in br::enumerate_layer_properties_alloc().unwrap_or_else(|e| {
+        for x in br::instance_layer_properties_alloc().unwrap_or_else(|e| {
             tracing::error!(reason = ?e, "Failed to enumerate vulkan instance layers");
             Vec::new()
         }) {
@@ -132,15 +155,13 @@ impl<'fs> VulkanDevice<'fs> {
             );
 
             if let Some(ln) = x.layerName.as_cstr().ok() {
-                for y in
-                    br::instance_extension_properties_cstr_alloc(Some(ln)).unwrap_or_else(|e| {
-                        tracing::error!(
-                            reason = ?e,
-                            "Failed to enumerate vulkan instance extensions for layer"
-                        );
-                        Vec::new()
-                    })
-                {
+                for y in br::instance_extension_properties_alloc(Some(ln)).unwrap_or_else(|e| {
+                    tracing::error!(
+                        reason = ?e,
+                        "Failed to enumerate vulkan instance extensions for layer"
+                    );
+                    Vec::new()
+                }) {
                     tracing::info!(
                         target: "vk::diag::instance",
                         name = ?y.extensionName.as_cstr(),
@@ -163,9 +184,9 @@ impl<'fs> VulkanDevice<'fs> {
 
         let app_info = br::ApplicationInfo::new(
             c"Peridot Marble Editor",
-            br::Version::new(0, 0, 0, 1),
+            br::Version::new(0, 0, 1),
             c"InHouse",
-            br::Version::new(0, 0, 0, 1),
+            br::Version::new(0, 0, 1),
         )
         .api_version(api_version.clone());
         let inst_info = br::InstanceCreateInfo::new(&app_info, &[], &instance_extensions);
@@ -230,7 +251,7 @@ impl<'fs> VulkanDevice<'fs> {
         .unmanage();
 
         for x in vk_adapter
-            .enumerate_extension_properties_cstr_alloc(None)
+            .enumerate_extension_properties_alloc(None)
             .unwrap_or_else(|e| {
                 tracing::error!(reason = ?e, "Failed to enumerate vulkan device extensions");
                 Vec::new()
@@ -261,7 +282,7 @@ impl<'fs> VulkanDevice<'fs> {
 
             if let Some(ln) = x.layerName.as_cstr().ok() {
                 for y in vk_adapter
-                    .enumerate_extension_properties_cstr_alloc(Some(ln))
+                    .enumerate_extension_properties_alloc(Some(ln))
                     .unwrap_or_else(|e| {
                         tracing::error!(
                             reason = ?e,
@@ -299,7 +320,7 @@ impl<'fs> VulkanDevice<'fs> {
         let mut device_sync2_features = br::PhysicalDeviceSynchronization2Features::new(true);
         let mut device_timeline_semaphore_features =
             br::PhysicalDeviceTimelineSemaphoreFeatures::new(true);
-        let mut vk11_features = (api_version >= br::Version::new(0, 1, 2, 0)).then(|| {
+        let mut vk11_features = (api_version >= br::Version::new(1, 2, 0)).then(|| {
             br::PhysicalDeviceVulkan11Features {
                 shaderDrawParameters: true as _,
                 ..Default::default()
@@ -361,19 +382,19 @@ impl<'fs> VulkanDevice<'fs> {
         Self {
             fs,
             fp_create_render_pass2: unsafe {
-                vk_device.native_ptr().load_function_unconstrainted()
+                br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
             fp_cmd_begin_render_pass2: unsafe {
-                vk_device.native_ptr().load_function_unconstrainted()
+                br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
             fp_cmd_end_render_pass2: unsafe {
-                vk_device.native_ptr().load_function_unconstrainted()
+                br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
             fp_debug_utils_set_object_name: unsafe {
-                vk_device.native_ptr().load_function_unconstrainted()
+                br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
             fp_cmd_pipeline_barrier2: unsafe {
-                vk_device.native_ptr().load_function_unconstrainted()
+                br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
             #[cfg(windows)]
             fp_get_memory_win32_handle_properties: unsafe {
@@ -419,18 +440,7 @@ impl<'fs> VulkanDevice<'fs> {
         &self,
         info: &br::RenderPassCreateInfo2,
     ) -> br::Result<br::RenderPassObject<&Self>> {
-        let mut h = core::mem::MaybeUninit::uninit();
-        unsafe {
-            (self.fp_create_render_pass2.0)(
-                self.native,
-                info as *const _ as _,
-                core::ptr::null(),
-                h.as_mut_ptr(),
-            )
-            .into_result()?;
-        }
-
-        Ok(unsafe { br::RenderPassObject::manage(h.assume_init(), self) })
+        Ok(unsafe { br::RenderPassObject::manage(self.new_render_pass2_khr(info, None)?, self) })
     }
 
     #[tracing::instrument(skip(self), fields(path = ?path.as_ref(), resolved_path))]
@@ -583,31 +593,22 @@ impl<'fs> VulkanDevice<'fs> {
         cmd
     }
 
+    #[inline(always)]
     pub fn cmd_begin_render_pass<'r>(
         &self,
-        mut cmd: br::CmdRecord<'r>,
+        cmd: br::CmdRecord<'r>,
         info: &br::RenderPassBeginInfo,
     ) -> br::CmdRecord<'r> {
-        unsafe {
-            (self.fp_cmd_begin_render_pass2.0)(
-                cmd.raw_command_buffer_handle_mut().native_ptr(),
-                info.as_ref(),
-                &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
-            );
-        }
-
-        cmd
+        cmd.begin_render_pass2_khr(
+            self,
+            info,
+            &br::SubpassBeginInfo::new(br::SubpassContents::Inline),
+        )
     }
 
-    pub fn cmd_end_render_pass<'r>(&self, mut cmd: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
-        unsafe {
-            (self.fp_cmd_end_render_pass2.0)(
-                cmd.raw_command_buffer_handle_mut().native_ptr(),
-                &br::SubpassEndInfo::new(),
-            );
-        }
-
-        cmd
+    #[inline(always)]
+    pub fn cmd_end_render_pass<'r>(&self, cmd: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
+        cmd.end_render_pass2_khr(self, &br::SubpassEndInfo::new())
     }
 
     pub fn dbg_set_name<H: br::VkObject<Handle: br::VkRawHandle> + ?Sized>(
@@ -615,13 +616,12 @@ impl<'fs> VulkanDevice<'fs> {
         obj: &H,
         name: &core::ffi::CStr,
     ) {
-        let r = unsafe {
+        let r = br::error::translate_vk_result(unsafe {
             (self.fp_debug_utils_set_object_name.0)(
                 self.native,
                 core::mem::transmute(&br::DebugUtilsObjectNameInfo::new(obj, Some(name))),
             )
-            .into_result()
-        };
+        });
         if let Err(r) = r {
             tracing::warn!(
                 reason = ?r,
@@ -638,9 +638,12 @@ impl<'fs> VulkanDevice<'fs> {
         tracing::info!("writing back pipeline cache");
 
         let data_length = unsafe {
-            br::vkfn_wrapper::get_pipeline_cache_data_byte_length(self.native, self.pipeline_cache)
-                .inspect_err(|e| tracing::warn!(reason = %e, "pipeline_cache.get_data_byte_length"))
-                .ok()
+            br::vkfn_wrapper::get_pipeline_cache_data_byte_length(
+                br::VkHandleRef::dangling(self.native),
+                br::VkHandleRef::dangling(self.pipeline_cache),
+            )
+            .inspect_err(|e| tracing::warn!(reason = %e, "pipeline_cache.get_data_byte_length"))
+            .ok()
         };
         let Some(data_length) = data_length else {
             return;
@@ -649,8 +652,8 @@ impl<'fs> VulkanDevice<'fs> {
         let mut data = Vec::with_capacity(data_length);
         if let Err(e) = unsafe {
             br::vkfn_wrapper::get_pipeline_cache_data(
-                self.native,
-                self.pipeline_cache,
+                br::VkHandleRef::dangling(self.native),
+                br::VkHandleRef::dangling(self.pipeline_cache),
                 data.spare_capacity_mut(),
             )
         } {
@@ -699,9 +702,17 @@ impl Drop for VulkanSwapchain<'_, '_> {
     fn drop(&mut self) {
         unsafe {
             for x in self.image_views.drain(..) {
-                br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), x, None);
+                br::vkfn_wrapper::destroy_image_view(
+                    self.device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
-            br::vkfn_wrapper::destroy_swapchain(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_swapchain(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -710,6 +721,12 @@ impl br::VkHandle for VulkanSwapchain<'_, '_> {
 
     #[inline(always)]
     fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+impl br::VkHandleMut for VulkanSwapchain<'_, '_> {
+    #[inline(always)]
+    fn native_ptr_mut(&mut self) -> Self::Handle {
         self.handle
     }
 }
@@ -728,6 +745,7 @@ impl<'fs> br::DeviceChild for VulkanSwapchain<'_, 'fs> {
     }
 }
 impl br::Swapchain for VulkanSwapchain<'_, '_> {}
+impl br::SwapchainMut for VulkanSwapchain<'_, '_> {}
 impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
     const IMAGE_USAGE_FLAGS: br::ImageUsageFlags =
         br::ImageUsageFlags::COLOR_ATTACHMENT.merge(br::ImageUsageFlags::TRANSFER_SRC);
@@ -753,16 +771,18 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         .expect("swapchain create");
         let image_count = o.image_count().expect("swapchain.get_image_count");
         let mut images = Vec::with_capacity(image_count as _);
-        o.images(images.spare_capacity_mut())
+        let r = o
+            .images(images.spare_capacity_mut())
             .expect("swapchain.get_images");
+        assert!(!r.is_incomplete);
         unsafe {
-            images.set_len(images.capacity());
+            images.set_len(r.result as _);
         }
         let image_views = images
             .iter()
             .map(|b| unsafe {
                 br::vkfn_wrapper::create_image_view(
-                    surface.device.native_ptr(),
+                    surface.device.as_transparent_ref(),
                     &br::ImageViewCreateInfo::new(
                         br::VkHandleRef::from_raw_ref(b),
                         br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
@@ -793,7 +813,11 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         // release pre-created resources
         for x in self.image_views.drain(..) {
             unsafe {
-                br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), x, None);
+                br::vkfn_wrapper::destroy_image_view(
+                    self.device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
             }
         }
         self.images.clear();
@@ -816,18 +840,24 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         .create(self.device)
         .expect("swapchain create");
         unsafe {
-            br::vkfn_wrapper::destroy_swapchain(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_swapchain(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
         let image_count = o.image_count().expect("swapchain.recreate.get_image_count");
         let _ = self.images.try_reserve(image_count as _);
-        o.images(self.images.spare_capacity_mut())
+        let r = o
+            .images(self.images.spare_capacity_mut())
             .expect("swapchain.recreate.get_images");
+        assert!(!r.is_incomplete);
         unsafe {
-            self.images.set_len(image_count as _);
+            self.images.set_len(r.result as _);
         }
         self.image_views.extend(self.images.iter().map(|b| unsafe {
             br::vkfn_wrapper::create_image_view(
-                self.device.native_ptr(),
+                self.device.as_transparent_ref(),
                 &br::ImageViewCreateInfo::new(
                     br::VkHandleRef::from_raw_ref(b),
                     br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
@@ -881,7 +911,11 @@ impl UnboundVulkanSurface {
         instance: &(impl VkHandle<Handle = br::vk::VkInstance> + ?Sized),
     ) {
         unsafe {
-            br::vkfn_wrapper::destroy_surface(instance.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_surface(
+                instance.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 
@@ -902,8 +936,8 @@ impl UnboundVulkanSurface {
         let mut sink = core::mem::MaybeUninit::uninit();
         unsafe {
             br::vkfn_wrapper::get_physical_device_surface_capabilities(
-                adapter.native_ptr(),
-                self.handle,
+                adapter.as_transparent_ref(),
+                br::VkHandleRef::dangling(self.handle),
                 &mut sink,
             )
             .expect("vk.surface.refresh_caps");
@@ -927,15 +961,15 @@ impl UnboundVulkanSurface {
 
     #[inline(always)]
     fn image_count(&self) -> u32 {
-        self.caps.minImageCount.max(2)
+        self.caps.0.minImageCount.max(2)
     }
 
     fn compute_real_extent(
         &self,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) -> br::Extent2D {
-        let w_undefined = self.caps.currentExtent.width == 0xffff_ffff;
-        let h_undefined = self.caps.currentExtent.height == 0xffff_ffff;
+        let w_undefined = self.caps.0.currentExtent.width == 0xffff_ffff;
+        let h_undefined = self.caps.0.currentExtent.height == 0xffff_ffff;
 
         if w_undefined || h_undefined {
             let window_ext = query_window_extent();
@@ -944,16 +978,16 @@ impl UnboundVulkanSurface {
                 width: if w_undefined {
                     window_ext.width
                 } else {
-                    self.caps.currentExtent.width
+                    self.caps.0.currentExtent.width
                 },
                 height: if h_undefined {
                     window_ext.height
                 } else {
-                    self.caps.currentExtent.height
+                    self.caps.0.currentExtent.height
                 },
             }
         } else {
-            self.caps.currentExtent
+            self.caps.0.currentExtent
         }
     }
 }
@@ -993,9 +1027,9 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
     pub fn new(device: &'d VulkanDevice<'fs>, handle: br::vk::VkSurfaceKHR) -> Self {
         match unsafe {
             br::vkfn_wrapper::get_physical_device_surface_support(
-                device.primary_adapter_ref().native_ptr(),
+                device.primary_adapter_ref().as_transparent_ref(),
                 device.present_queue_family_index(),
-                handle,
+                br::VkHandleRef::dangling(handle),
             )
         } {
             Ok(true) => (),
@@ -1007,49 +1041,51 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
 
         let present_mode_count = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_mode_count(
-                device.primary_adapter_ref().native_ptr(),
-                handle,
+                device.primary_adapter_ref().as_transparent_ref(),
+                br::VkHandleRef::dangling(handle),
             )
             .expect("vk.surface.get_present_mode_count")
         };
         let mut present_modes = Vec::with_capacity(present_mode_count as _);
-        unsafe {
+        let r = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
-                device.primary_adapter_ref().native_ptr(),
-                handle,
+                device.primary_adapter_ref().as_transparent_ref(),
+                br::VkHandleRef::dangling(handle),
                 present_modes.spare_capacity_mut(),
             )
             .expect("vk.surface.get_present_modes")
         };
+        assert!(!r.is_incomplete);
         unsafe {
-            present_modes.set_len(present_modes.capacity());
+            present_modes.set_len(r.result as _);
         }
 
         let format_count = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_format_count(
-                device.primary_adapter_ref().native_ptr(),
-                handle,
+                device.primary_adapter_ref().as_transparent_ref(),
+                br::VkHandleRef::dangling(handle),
             )
             .expect("vk.surface.get_format_count")
         };
         let mut formats = Vec::with_capacity(format_count as _);
-        unsafe {
+        let r = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_formats(
-                device.primary_adapter_ref().native_ptr(),
-                handle,
+                device.primary_adapter_ref().as_transparent_ref(),
+                br::VkHandleRef::dangling(handle),
                 formats.spare_capacity_mut(),
             )
-            .expect("vk.surface.get_formats");
-        }
+            .expect("vk.surface.get_formats")
+        };
+        assert!(!r.is_incomplete);
         unsafe {
-            formats.set_len(formats.capacity());
+            formats.set_len(r.result as _);
         }
 
         let mut caps = core::mem::MaybeUninit::uninit();
         unsafe {
             br::vkfn_wrapper::get_physical_device_surface_capabilities(
-                device.primary_adapter_ref().native_ptr(),
-                handle,
+                device.primary_adapter_ref().as_transparent_ref(),
+                br::VkHandleRef::dangling(handle),
                 &mut caps,
             )
             .expect("vk.surface.get_capabilities");
