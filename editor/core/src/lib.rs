@@ -134,7 +134,7 @@ pub fn launch() {
     );
 
     let preview_state = Mutex::new(CommittedPreviewState {
-        viewport_size: Size::new_pixels(640, 480),
+        viewport_size: Size::new_logical(640.0, 480.0),
     });
 
     let global_time_base = std::time::Instant::now();
@@ -249,7 +249,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_queue: EventQueue { event_store },
             global_time_base,
             renderer_sync,
-            file_system: fs
+            file_system: fs,
+            committed_preview_state: preview_state
         },
         #[cfg(windows)]
         SystemLink {
@@ -2971,6 +2972,7 @@ struct LaunchArgs<'sys> {
     pub global_time_base: &'sys std::time::Instant,
     pub renderer_sync: &'sys Mutex<RendererSync>,
     pub file_system: &'sys FileSystem,
+    pub committed_preview_state: &'sys Mutex<CommittedPreviewState>,
 }
 
 crate::perf_section!(INITIALIZE = "LogicFiber.Initialize");
@@ -2983,6 +2985,7 @@ async fn run<'sys>(
         global_time_base,
         renderer_sync,
         file_system,
+        committed_preview_state,
     }: LaunchArgs<'sys>,
     mut system_link: SystemLink<'sys>,
 ) {
@@ -3247,7 +3250,10 @@ async fn run<'sys>(
                     ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
                     TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
                     AssetPreviewPanePresenter::ID => Box::new(AssetPreviewPanePresenter {}),
-                    PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(view_init_ctx)),
+                    PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
+                        view_init_ctx,
+                        committed_preview_state,
+                    )),
                     id => todo!("generic pane id handling: {id:?}"),
                 })
             },
@@ -3332,7 +3338,10 @@ async fn run<'sys>(
                                             Box::new(AssetPreviewPanePresenter {})
                                         }
                                         PreviewPanePresenter::ID => {
-                                            Box::new(PreviewPanePresenter::new(view_init_ctx))
+                                            Box::new(PreviewPanePresenter::new(
+                                                view_init_ctx,
+                                                committed_preview_state,
+                                            ))
                                         }
                                         id => todo!("generic pane id handling: {id:?}"),
                                     })
@@ -5892,11 +5901,12 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
 
 pub struct PreviewPanePresenter {
     ct_root: CompositeTreeRef,
+    committed_state: *const Mutex<CommittedPreviewState>,
 }
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
-    pub fn new(ctx: &mut ViewInitContext) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, committed_state: &Mutex<CommittedPreviewState>) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             // has_bitmap: true,
             custom_render_token: Some(rendering::PREVIEW_COMPOSITE),
@@ -5904,7 +5914,10 @@ impl PreviewPanePresenter {
             ..Default::default()
         });
 
-        Self { ct_root }
+        Self {
+            ct_root,
+            committed_state,
+        }
     }
 }
 impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
@@ -5918,6 +5931,18 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
 
     fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
         ctx.composite_tree.add_child(target.ct_root, self.ct_root);
+    }
+
+    fn resize(
+        &self,
+        new_size: &Size<LogicalUnit>,
+        _composite_tree: &mut CompositeTree<SyncEvent>,
+        _ht_manager: &mut HitTestTreeManager,
+    ) {
+        unsafe { &*self.committed_state }
+            .lock()
+            .expect("poisoned")
+            .viewport_size = new_size.clone();
     }
 
     fn unmount(&self, ctx: &mut MountContext) {

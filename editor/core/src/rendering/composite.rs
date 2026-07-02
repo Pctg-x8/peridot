@@ -4054,6 +4054,38 @@ impl CompositeRenderer {
         br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_final), 0)
     }
 
+    pub fn prepare_custom_render(
+        &self,
+        render_data: &CompositeRenderingData,
+        rt_size: br::Extent2D,
+        mut callback: impl FnMut(CustomRenderToken, CustomRenderContext),
+    ) {
+        let mut rpt_pointer = 0;
+
+        for x in render_data.instructions.iter() {
+            match x {
+                &CompositeRenderingInstruction::DrawInstanceRange { .. } => {}
+                &CompositeRenderingInstruction::InsertCustomRenderCommands(token, _, _) => {
+                    let active_pass = self.select_subpass(&render_data.render_passes[rpt_pointer]);
+                    callback(
+                        token,
+                        CustomRenderContext {
+                            rt_size,
+                            active_render_pass: active_pass.0.native_ptr(),
+                            active_subpass_index: active_pass.1,
+                        },
+                    );
+                }
+                &CompositeRenderingInstruction::SetClip { .. } => {}
+                &CompositeRenderingInstruction::ClearClip => {}
+                CompositeRenderingInstruction::GrabBackdrop => {
+                    rpt_pointer += 1;
+                }
+                &CompositeRenderingInstruction::GenerateBackdropBlur { .. } => {}
+            };
+        }
+    }
+
     pub fn populate_commands<'x>(
         &self,
         mut rec: br::CmdRecord<'x>,

@@ -30,7 +30,7 @@ use crate::{
         vg::VectorRasterizationState,
     },
     uikit::MountTarget,
-    utils::{PixelsUnit, SafeF32, Size},
+    utils::{LogicalUnit, PixelsUnit, SafeF32, Size},
 };
 
 pub mod atlas;
@@ -128,6 +128,7 @@ crate::perf_section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
 crate::perf_section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
 crate::perf_section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
 crate::perf_section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
+crate::perf_section!(VALIDATE_PREVIEW_RENDERING = "RenderLoop.ValidatePreviewRendering");
 crate::perf_section!(POST_QUEUE = "RenderLoop.PostQueue");
 crate::perf_section!(WAIT_QUEUE = "RenderLoop.WaitQueue");
 #[cfg(windows)]
@@ -136,7 +137,7 @@ crate::perf_section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 pub const PREVIEW_COMPOSITE: CustomRenderToken = CustomRenderToken(0);
 
 pub struct CommittedPreviewState {
-    pub viewport_size: Size<PixelsUnit>,
+    pub viewport_size: Size<LogicalUnit>,
 }
 
 pub struct RenderThread<'main> {
@@ -260,247 +261,21 @@ impl<'main> RenderThread<'main> {
         self.event_bus
             .push(SyncEvent::NewPresentID { id: present_id });
 
-        struct PreviewRenderTargetResource<'d> {
-            device: &'d VulkanDevice<'d>,
-            memory: br::vk::VkDeviceMemory,
-            image: br::vk::VkImage,
-            image_view: br::vk::VkImageView,
-        }
-        impl Drop for PreviewRenderTargetResource<'_> {
-            fn drop(&mut self) {
-                unsafe {
-                    br::vkfn_wrapper::destroy_image_view(
-                        self.device.as_transparent_ref(),
-                        br::VkHandleRefMut::dangling(self.image_view),
-                        None,
-                    );
-                    br::vkfn_wrapper::destroy_image(
-                        self.device.as_transparent_ref(),
-                        br::VkHandleRefMut::dangling(self.image),
-                        None,
-                    );
-                    br::vkfn_wrapper::free_memory(
-                        self.device.as_transparent_ref(),
-                        br::VkHandleRefMut::dangling(self.memory),
-                        None,
-                    );
-                }
-            }
-        }
-        let preview_init_state = self.preview_state.lock().expect("poisoned");
-        let mut preview_rt_image = br::ImageObject::new(
+        let mut preview_rt_buffer = PreviewRenderTargetBuffer::new(
             self.vk_device,
-            &br::ImageCreateInfo::new(
-                preview_init_state.viewport_size.to_vk(),
-                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-            )
-            .set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT),
-        )
-        .expect("preview_rt.image.create");
-        let preview_rt_image_memreq = preview_rt_image.requirements();
-        let preview_rt_memory = br::DeviceMemoryObject::new(
-            self.vk_device,
-            &br::MemoryAllocateInfo::new(
-                preview_rt_image_memreq.size,
-                self.vk_device
-                    .find_device_local_memory_index(preview_rt_image_memreq.memoryTypeBits)
-                    .expect("preview_rt.memory.index"),
-            ),
-        )
-        .expect("preview_rt.memory.alloc");
-        preview_rt_image
-            .bind(&preview_rt_memory, 0)
-            .expect("preview_rt.image.bind");
-        let preview_rt_image_view = br::ImageViewBuilder::new(
-            preview_rt_image,
-            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-        )
-        .create()
-        .expect("preview_rt.image_view.create");
-        let (preview_rt_image_view, preview_rt_image) = preview_rt_image_view.unmanage();
-        let (preview_rt_image, _, _, _, _) = preview_rt_image.unmanage();
-        let (preview_rt_memory, _) = preview_rt_memory.unmanage();
-        let mut preview_rt_resource = PreviewRenderTargetResource {
-            device: self.vk_device,
-            memory: preview_rt_memory,
-            image: preview_rt_image,
-            image_view: preview_rt_image_view,
-        };
-
-        #[repr(C)]
-        struct PreviewStreamingBufferContent {
-            current_sec: f32,
-        }
-        let mut preview_streaming_buffer = br::BufferObject::new(
-            self.vk_device,
-            &br::BufferCreateInfo::new_for_type::<PreviewStreamingBufferContent>(
-                br::BufferUsage::UNIFORM_BUFFER,
-            ),
-        )
-        .expect("preview.streaming_buffer.create");
-        let preview_streaming_buffer_memreq = preview_streaming_buffer.requirements();
-        let preview_streaming_memory_index = self
-            .vk_device
-            .find_direct_memory_index(preview_streaming_buffer_memreq.memoryTypeBits)
-            .expect("preview.streaming_memory.index");
-        let preview_streaming_memory_should_flush = !self
-            .vk_device
-            .is_coherent_memory(preview_streaming_memory_index);
-        let mut preview_streaming_memory = br::DeviceMemoryObject::new(
-            self.vk_device,
-            &br::MemoryAllocateInfo::new(
-                preview_streaming_buffer_memreq.size,
-                preview_streaming_memory_index,
-            ),
-        )
-        .expect("preview.streaming_memory.alloc");
-        preview_streaming_buffer
-            .bind(&preview_streaming_memory, 0)
-            .expect("preview_streaming_buffer.bind");
-
-        let preview_render_pass = br::RenderPassObject::new(
-            self.vk_device,
-            &br::RenderPassCreateInfo2::new(
-                &[
-                    br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
-                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
-                        .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined()),
-                ],
-                &[br::SubpassDescription2::new()
-                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
-                &[br::SubpassDependency2::new(
-                    br::SubpassIndex::Internal(0),
-                    br::SubpassIndex::External,
-                )
-                .by_region()
-                .of_memory(
-                    br::AccessFlags::COLOR_ATTACHMENT.write,
-                    br::AccessFlags::SHADER.read,
-                )
-                .of_execution(
-                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                    br::PipelineStageFlags::FRAGMENT_SHADER,
-                )],
-            ),
-        )
-        .expect("preview.render_pass.create");
-        let preview_framebuffer = br::FramebufferObject::new(
-            self.vk_device,
-            &br::FramebufferCreateInfo::new(
-                &preview_render_pass,
-                &[unsafe { br::VkHandleRef::dangling(preview_rt_resource.image_view) }],
-                preview_init_state.viewport_size.width,
-                preview_init_state.viewport_size.height,
-            ),
-        )
-        .expect("preview.framebuffer.create");
-
-        let preview_render_descriptor_set_layout = br::DescriptorSetLayoutObject::new(
-            self.vk_device,
-            &br::DescriptorSetLayoutCreateInfo::new(&[
-                br::DescriptorType::UniformBuffer.make_binding(0, 1)
-            ]),
-        )
-        .expect("preview.render.descriptor_set_layout.create");
-        let mut preview_render_descriptor_pool = br::DescriptorPoolObject::new(
-            self.vk_device,
-            &br::DescriptorPoolCreateInfo::new(
-                1,
-                &[br::DescriptorType::UniformBuffer.make_size(1)],
-            ),
-        )
-        .expect("preview.render.descriptor_pool.create");
-        let [mut preview_render_common_descriptor_set] = preview_render_descriptor_pool
-            .alloc_array(&[preview_render_descriptor_set_layout.as_transparent_ref()])
-            .expect("preview_render.descriptor.alloc");
-        self.vk_device.update_descriptor_sets(
-            &[preview_render_common_descriptor_set.binding_at(0).write(
-                br::DescriptorContents::uniform_buffer(
-                    &preview_streaming_buffer,
-                    0..size_of::<PreviewStreamingBufferContent>() as _,
-                ),
-            )],
-            &[],
+            self.preview_state
+                .lock()
+                .expect("poisoned")
+                .viewport_size
+                .to_pixels_ceil(1.0)
+                .to_vk(),
         );
-        let preview_render_pipeline_layout = br::PipelineLayoutObject::new(
+        let mut preview_renderer = PreviewRenderer::new(
             self.vk_device,
-            &br::PipelineLayoutCreateInfo::new(
-                &[preview_render_descriptor_set_layout.as_transparent_ref()],
-                &[],
-            ),
-        )
-        .expect("preview.render.pipeline_layout.create");
-        let preview_render_shader = self.vk_device.require_shader("preview/test.spv");
-        let [mut preview_render_pipeline] = self
-            .vk_device
-            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
-                &preview_render_pipeline_layout,
-                preview_render_pass.subpass(0),
-                &[
-                    preview_render_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                    preview_render_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                ],
-                VI_STATE_EMPTY,
-                IA_STATE_TRILIST,
-                &br::PipelineViewportStateCreateInfo::new(
-                    &[preview_init_state
-                        .viewport_size
-                        .to_vk()
-                        .into_rect(br::Offset2D::ZERO)
-                        .make_viewport(0.0..1.0)],
-                    &[preview_init_state
-                        .viewport_size
-                        .to_vk()
-                        .into_rect(br::Offset2D::ZERO)],
-                ),
-                RASTER_STATE_DEFAULT_FILL_NOCULL,
-                BLEND_STATE_SINGLE_PREMULTIPLIED,
-            )
-            .set_multisample_state(MS_STATE_EMPTY)])
-            .expect("preview.render.pipelines.create");
-
-        let mut preview_command_pool = br::CommandPoolObject::new(
-            self.vk_device,
-            &br::CommandPoolCreateInfo::new(self.vk_device.present_queue_family_index()),
-        )
-        .expect("preview.command_pool.create");
-        let [mut preview_command_buffer] = br::CommandBufferObject::alloc_array(
-            self.vk_device,
-            &br::CommandBufferFixedCountAllocateInfo::new(
-                &mut preview_command_pool,
-                br::CommandBufferLevel::Primary,
-            ),
-        )
-        .expect("preview.command_buffer.create");
-        unsafe {
-            preview_command_buffer
-                .begin(&br::CommandBufferBeginInfo::new())
-                .expect("preview.command_buffer.begin")
-        }
-        .begin_render_pass(
-            &br::RenderPassBeginInfo::new(
-                &preview_render_pass,
-                &preview_framebuffer,
-                preview_init_state
-                    .viewport_size
-                    .to_vk()
-                    .into_rect(br::Offset2D::ZERO),
-                &[br::ClearValue::color_f32([0.0, 0.1, 0.0, 1.0])],
-            ),
-            br::SubpassContents::Inline,
-        )
-        .bind_pipeline(br::PipelineBindPoint::Graphics, &preview_render_pipeline)
-        .bind_descriptor_sets(
-            br::PipelineBindPoint::Graphics,
-            &preview_render_pipeline_layout,
-            0,
-            &[preview_render_common_descriptor_set],
-            &[],
-        )
-        .draw(3, 1, 0, 0)
-        .end_render_pass()
-        .end()
-        .expect("preview.command_buffer.end");
+            preview_rt_buffer.size,
+            br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+            unsafe { br::VkHandleRef::dangling(preview_rt_buffer.image_view) },
+        );
 
         let dep_semaphore_preview =
             br::SemaphoreObject::new(self.vk_device, &br::SemaphoreCreateInfo::new())
@@ -509,9 +284,13 @@ impl<'main> RenderThread<'main> {
             .expect("linear_sampler.create");
         let mut preview_composite = PreviewComposite::new(
             self.vk_device,
-            br::VkHandleRef::from_raw_ref(&preview_rt_resource.image_view),
+            br::VkHandleRef::from_raw_ref(&preview_rt_buffer.image_view),
             &linear_sampler,
-            preview_render_pass.subpass(0),
+            // あとで正しいものが設定されるので一旦ダミーで作る
+            br::SubpassRef(
+                br::VkHandleRef::from_raw_ref(&preview_renderer.render_pass),
+                0,
+            ),
             br::Extent2D {
                 width: 640,
                 height: 480,
@@ -882,6 +661,7 @@ impl<'main> RenderThread<'main> {
                             .push((rect, e.clone()));
                     }
                 }
+                let render_scale = x.active_scale;
                 let needs_update_command = x.update(
                     current_t.as_secs_f32(),
                     &mut composite_tree,
@@ -892,6 +672,33 @@ impl<'main> RenderThread<'main> {
                     self.event_bus,
                     self.font_set,
                     &mut preview_composite,
+                    |preview_composite, ctx| {
+                        crate::perf_scope!(VALIDATE_PREVIEW_RENDERING);
+                        let resource_recreated = preview_rt_buffer.validate(
+                            self.vk_device,
+                            self.preview_state
+                                .lock()
+                                .expect("poisoned")
+                                .viewport_size
+                                .to_pixels_ceil(render_scale.value())
+                                .to_vk(),
+                        );
+                        preview_renderer.validate(self.vk_device, preview_rt_buffer.size, unsafe {
+                            br::VkHandleRef::dangling(preview_rt_buffer.image_view)
+                        });
+
+                        if resource_recreated {
+                            // 稀に同じポインタで別のオブジェクトが再生成される場合があるので強制的にキャッシュを吹き飛ばすことで必ず更新させる
+                            preview_composite.force_invalidate_descriptor_set_state();
+                        }
+                        preview_composite.update(
+                            self.vk_device,
+                            ctx.rt_size,
+                            br::VkHandleRef::from_raw_ref(&preview_rt_buffer.image_view),
+                            ctx.active_render_pass,
+                            ctx.active_subpass_index,
+                        );
+                    },
                 );
 
                 let mut render_wait_semaphores = Vec::with_capacity(3);
@@ -1141,39 +948,26 @@ impl<'main> RenderThread<'main> {
                 }
             }
 
-            crate::perf_begin!(perf = POST_QUEUE);
             if preview_composition_required {
-                let ptr = preview_streaming_memory
-                    .map(0..size_of::<PreviewStreamingBufferContent>() as _)
-                    .expect("preview.streaming_memory.map");
-                unsafe {
-                    let ptr = ptr.ptr().cast::<PreviewStreamingBufferContent>();
+                preview_renderer.write_streaming_buffer_content(self.vk_device, |ptr| unsafe {
                     core::ptr::write(
                         core::ptr::addr_of_mut!((*ptr).current_sec),
-                        self.global_time_base.elapsed().as_secs_f32(),
+                        current_t.as_secs_f32(),
                     );
-                }
-                if preview_streaming_memory_should_flush {
-                    unsafe {
-                        self.vk_device
-                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
-                                &preview_streaming_memory,
-                                0..size_of::<PreviewStreamingBufferContent>() as _,
-                            )])
-                            .expect("preview.streaming_memory.flush");
-                    }
-                }
-                unsafe {
-                    preview_streaming_memory.unmap();
-                }
+                });
+            }
 
-                // 別でsubmitしないといけないらしい？
+            crate::perf_begin!(perf = POST_QUEUE);
+            if preview_composition_required {
+                // 別でsubmitしないといけないらしい？(validation layerが対応するsemaphore waitを見つけられなくてエラーが出る)
                 render_queue
                     .submit(
                         &[br::SubmitInfo::new(
                             &[],
                             &[],
-                            &[preview_command_buffer.as_transparent_ref()],
+                            &[unsafe {
+                                br::VkHandleRef::dangling(preview_renderer.command_buffer)
+                            }],
                             &[dep_semaphore_preview.as_transparent_ref()],
                         )],
                         None,
@@ -2064,6 +1858,7 @@ impl<'d> WindowRenderer<'d> {
         events: &SyncEventBus,
         font_set: &FontSet,
         preview_composite: &mut PreviewComposite,
+        validate_preview: impl FnMut(&mut PreviewComposite, &CustomRenderContext),
     ) -> bool {
         let composite_render_data = self.composite_renderer.update(
             self.vk_device,
@@ -2104,7 +1899,7 @@ impl<'d> WindowRenderer<'d> {
         );
 
         // update_backdrop_resourcesでDescriptorSetの更新がはしるのでここでやる
-        self.validate_render_commands(preview_composite);
+        self.validate_render_commands(preview_composite, validate_preview);
 
         needs_update_commands
     }
@@ -2182,13 +1977,28 @@ impl<'d> WindowRenderer<'d> {
         self.render_cb_invalid = true;
     }
 
-    pub fn validate_render_commands(&mut self, preview_composite: &mut PreviewComposite) {
+    pub fn validate_render_commands(
+        &mut self,
+        preview_composite: &mut PreviewComposite,
+        mut validate_preview: impl FnMut(&mut PreviewComposite, &CustomRenderContext),
+    ) {
         if !self.render_cb_invalid {
             // already valid
             return;
         }
 
         self.render_requires_preview_composition = false;
+        self.composite_renderer.prepare_custom_render(
+            &self.last_composite_render_data,
+            self.swapchain.size(),
+            |t, ctx| match t {
+                PREVIEW_COMPOSITE => {
+                    self.render_requires_preview_composition = true;
+                    validate_preview(preview_composite, &ctx);
+                }
+                _ => (),
+            },
+        );
         for (n, cb) in self.render_cb.iter_mut().enumerate() {
             unsafe {
                 cb.begin(&br::CommandBufferBeginInfo::new())
@@ -2203,16 +2013,8 @@ impl<'d> WindowRenderer<'d> {
                     &self.swapchain.image_ref(n),
                     n,
                     &mut CustomRenderHandlerFn(|t, s, pm, ctx, r| match t {
-                        PREVIEW_COMPOSITE => {
-                            self.render_requires_preview_composition = true;
-                            preview_composite.update(
-                                self.vk_device,
-                                ctx.rt_size,
-                                ctx.active_render_pass,
-                                ctx.active_subpass_index,
-                            );
-
-                            r.bind_pipeline(
+                        PREVIEW_COMPOSITE => r
+                            .bind_pipeline(
                                 br::PipelineBindPoint::Graphics,
                                 br::VkHandleRef::from_raw_ref(&preview_composite.pipeline),
                             )
@@ -2242,8 +2044,7 @@ impl<'d> WindowRenderer<'d> {
                                 &[preview_composite.descriptor_set],
                                 &[],
                             )
-                            .draw(4, 1, 0, 0)
-                        }
+                            .draw(4, 1, 0, 0),
                         _ => r,
                     }),
                 )
@@ -3609,10 +3410,507 @@ impl<'d> ColorTextureAtlasManager<'d> {
     }
 }
 
+struct PreviewRenderTargetBuffer {
+    memory: br::vk::VkDeviceMemory,
+    image: br::vk::VkImage,
+    image_view: br::vk::VkImageView,
+    size: br::Extent2D,
+}
+impl PreviewRenderTargetBuffer {
+    pub unsafe fn drop(self, device: &VulkanDevice) {
+        drop(unsafe {
+            br::ImageViewObject::manage(
+                self.image_view,
+                br::ImageObject::manage(
+                    self.image,
+                    device,
+                    // dropでは使わない情報なので適当に埋める
+                    br::vk::VK_IMAGE_TYPE_2D,
+                    br::vk::VK_FORMAT_UNDEFINED,
+                    br::Extent3D::spread1(1),
+                ),
+            )
+        });
+        drop(unsafe { br::DeviceMemoryObject::manage(self.memory, device) });
+    }
+
+    pub fn new(device: &VulkanDevice, init_size: br::Extent2D) -> Self {
+        let mut image = br::ImageObject::new(
+            device,
+            &br::ImageCreateInfo::new(init_size, br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                .set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT),
+        )
+        .expect("preview_rt.image.create");
+        let memreq = image.requirements();
+        let memory = br::DeviceMemoryObject::new(
+            device,
+            &br::MemoryAllocateInfo::new(
+                memreq.size,
+                device
+                    .find_device_local_memory_index(memreq.memoryTypeBits)
+                    .expect("preview_rt.memory.index"),
+            ),
+        )
+        .expect("preview_rt.memory.alloc");
+        image.bind(&memory, 0).expect("preview_rt.image.bind");
+        let image_view = br::ImageViewBuilder::new(
+            image,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .expect("preview_rt.image_view.create");
+
+        let (image_view, image) = image_view.unmanage();
+        let (image, _, _, _, _) = image.unmanage();
+        let (memory, _) = memory.unmanage();
+        Self {
+            memory,
+            image,
+            image_view,
+            size: init_size,
+        }
+    }
+
+    pub fn validate(&mut self, device: &VulkanDevice, active_size: br::Extent2D) -> bool {
+        let mut resource_recreated = false;
+        if self.size != active_size {
+            drop(unsafe {
+                br::ImageViewObject::manage(
+                    self.image_view,
+                    br::ImageObject::manage(
+                        self.image,
+                        device,
+                        // dropでは使わない情報なので適当に埋める
+                        br::vk::VK_IMAGE_TYPE_2D,
+                        br::vk::VK_FORMAT_UNDEFINED,
+                        br::Extent3D::spread1(1),
+                    ),
+                )
+            });
+            drop(unsafe { br::DeviceMemoryObject::manage(self.memory, device) });
+
+            let mut image = br::ImageObject::new(
+                device,
+                &br::ImageCreateInfo::new(active_size, br::vk::VK_FORMAT_R8G8B8A8_UNORM).set_usage(
+                    br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT,
+                ),
+            )
+            .expect("preview_rt.validate.image.create");
+            let memreq = image.requirements();
+            let memory = br::DeviceMemoryObject::new(
+                device,
+                &br::MemoryAllocateInfo::new(
+                    memreq.size,
+                    device
+                        .find_device_local_memory_index(memreq.memoryTypeBits)
+                        .expect("preview_rt.memory.index"),
+                ),
+            )
+            .expect("preview_rt.validate.memory.alloc");
+            image
+                .bind(&memory, 0)
+                .expect("preview_rt.validate.image.bind");
+            let image_view = br::ImageViewBuilder::new(
+                image,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+            )
+            .create()
+            .expect("preview_rt.validate.image_view.create");
+
+            let (image_view, image) = image_view.unmanage();
+            let (image, _, _, _, _) = image.unmanage();
+            let (memory, _) = memory.unmanage();
+            self.image_view = image_view;
+            self.image = image;
+            self.memory = memory;
+            resource_recreated = true;
+        }
+
+        self.size = active_size;
+        resource_recreated
+    }
+}
+
+#[repr(C)]
+struct PreviewStreamingBufferContent {
+    current_sec: f32,
+}
+
+pub struct PreviewRenderer {
+    common_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
+    descriptor_pool: br::vk::VkDescriptorPool,
+    common_descriptor_set: br::DescriptorSet,
+    streaming_buffer: br::vk::VkBuffer,
+    streaming_memory: br::vk::VkDeviceMemory,
+    streaming_memory_should_flush: bool,
+    active_rt_size: br::Extent2D,
+    active_framebuffer_resource_handle: br::vk::VkImageView,
+    render_pass: br::vk::VkRenderPass,
+    framebuffer: br::vk::VkFramebuffer,
+    pipeline_layout: br::vk::VkPipelineLayout,
+    test_shader: br::vk::VkShaderModule,
+    test_pipeline: br::vk::VkPipeline,
+    command_pool: br::vk::VkCommandPool,
+    command_buffer: br::vk::VkCommandBuffer,
+}
+impl PreviewRenderer {
+    pub unsafe fn drop(self, device: &VulkanDevice) {
+        drop(unsafe { br::CommandPoolObject::manage(self.command_pool, device) });
+        drop(unsafe { br::PipelineObject::manage(self.test_pipeline, device) });
+        drop(unsafe { br::ShaderModuleObject::manage(self.test_shader, device) });
+        drop(unsafe { br::PipelineLayoutObject::manage(self.pipeline_layout, device) });
+        drop(unsafe { br::FramebufferObject::manage(self.framebuffer, device) });
+        drop(unsafe { br::RenderPassObject::manage(self.render_pass, device) });
+        drop(unsafe { br::DeviceMemoryObject::manage(self.streaming_memory, device) });
+        drop(unsafe { br::BufferObject::manage(self.streaming_buffer, device) });
+        drop(unsafe { br::DescriptorPoolObject::manage(self.descriptor_pool, device) });
+        drop(unsafe {
+            br::DescriptorSetLayoutObject::manage(self.common_descriptor_set_layout, device)
+        });
+    }
+
+    pub fn new(
+        device: &VulkanDevice,
+        init_rt_size: br::Extent2D,
+        init_rt_format: br::Format,
+        init_rt_resource: br::VkHandleRef<br::vk::VkImageView>,
+    ) -> Self {
+        let mut streaming_buffer = br::BufferObject::new(
+            device,
+            &br::BufferCreateInfo::new_for_type::<PreviewStreamingBufferContent>(
+                br::BufferUsage::UNIFORM_BUFFER,
+            ),
+        )
+        .expect("preview.streaming_buffer.create");
+        let memreq = streaming_buffer.requirements();
+        let memindex = device
+            .find_direct_memory_index(memreq.memoryTypeBits)
+            .expect("preview.streaming_memory.index");
+        let streaming_memory_should_flush = !device.is_coherent_memory(memindex);
+        let mut streaming_memory = br::DeviceMemoryObject::new(
+            device,
+            &br::MemoryAllocateInfo::new(memreq.size, memindex),
+        )
+        .expect("preview.streaming_memory.alloc");
+        streaming_buffer
+            .bind(&streaming_memory, 0)
+            .expect("preview_streaming_buffer.bind");
+
+        let render_pass = br::RenderPassObject::new(
+            device,
+            &br::RenderPassCreateInfo2::new(
+                &[br::AttachmentDescription2::new(init_rt_format)
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                    .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined())],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .by_region()
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::SHADER.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::FRAGMENT_SHADER,
+                )],
+            ),
+        )
+        .expect("preview.render_pass.create");
+        let framebuffer = br::FramebufferObject::new(
+            device,
+            &br::FramebufferCreateInfo::new(
+                &render_pass,
+                &[init_rt_resource],
+                init_rt_size.width,
+                init_rt_size.height,
+            ),
+        )
+        .expect("preview.framebuffer.create");
+
+        let common_descriptor_set_layout = br::DescriptorSetLayoutObject::new(
+            device,
+            &br::DescriptorSetLayoutCreateInfo::new(&[
+                br::DescriptorType::UniformBuffer.make_binding(0, 1)
+            ]),
+        )
+        .expect("preview.common_descriptor_set_layout.create");
+        let mut descriptor_pool = br::DescriptorPoolObject::new(
+            device,
+            &br::DescriptorPoolCreateInfo::new(
+                1,
+                &[br::DescriptorType::UniformBuffer.make_size(1)],
+            ),
+        )
+        .expect("preview.descriptor_pool.create");
+        let [common_descriptor_set] = descriptor_pool
+            .alloc_array(&[common_descriptor_set_layout.as_transparent_ref()])
+            .expect("preview.descriptor.alloc");
+        device.update_descriptor_sets(
+            &[common_descriptor_set
+                .binding_at(0)
+                .write(br::DescriptorContents::uniform_buffer(
+                    &streaming_buffer,
+                    0..size_of::<PreviewStreamingBufferContent>() as _,
+                ))],
+            &[],
+        );
+        let pipeline_layout = br::PipelineLayoutObject::new(
+            device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[common_descriptor_set_layout.as_transparent_ref()],
+                &[],
+            ),
+        )
+        .expect("preview.pipeline_layout.create");
+        let test_shader = device.require_shader("preview/test.spv");
+        let [test_pipeline] = device
+            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
+                &pipeline_layout,
+                render_pass.subpass(0),
+                &[
+                    test_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                    test_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                ],
+                VI_STATE_EMPTY,
+                IA_STATE_TRILIST,
+                &br::PipelineViewportStateCreateInfo::new(
+                    &[init_rt_size
+                        .into_rect(br::Offset2D::ZERO)
+                        .make_viewport(0.0..1.0)],
+                    &[init_rt_size.into_rect(br::Offset2D::ZERO)],
+                ),
+                RASTER_STATE_DEFAULT_FILL_NOCULL,
+                BLEND_STATE_SINGLE_PREMULTIPLIED,
+            )
+            .set_multisample_state(MS_STATE_EMPTY)])
+            .expect("preview.pipelines.create");
+
+        let mut command_pool = br::CommandPoolObject::new(
+            device,
+            &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
+        )
+        .expect("preview.command_pool.create");
+        let [mut command_buffer] = br::CommandBufferObject::alloc_array(
+            device,
+            &br::CommandBufferFixedCountAllocateInfo::new(
+                &mut command_pool,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("preview.command_buffer.create");
+        unsafe {
+            command_buffer
+                .begin(&br::CommandBufferBeginInfo::new())
+                .expect("preview.command_buffer.begin")
+        }
+        .begin_render_pass(
+            &br::RenderPassBeginInfo::new(
+                &render_pass,
+                &framebuffer,
+                init_rt_size.into_rect(br::Offset2D::ZERO),
+                &[br::ClearValue::color_f32([0.0, 0.1, 0.0, 1.0])],
+            ),
+            br::SubpassContents::Inline,
+        )
+        .bind_pipeline(br::PipelineBindPoint::Graphics, &test_pipeline)
+        .bind_descriptor_sets(
+            br::PipelineBindPoint::Graphics,
+            &pipeline_layout,
+            0,
+            &[common_descriptor_set],
+            &[],
+        )
+        .draw(3, 1, 0, 0)
+        .end_render_pass()
+        .end()
+        .expect("preview.command_buffer.end");
+
+        let (command_pool, _) = command_pool.unmanage();
+        let (test_pipeline, _) = test_pipeline.unmanage();
+        let (test_shader, _) = test_shader.unmanage();
+        let (pipeline_layout, _) = pipeline_layout.unmanage();
+        let (framebuffer, _) = framebuffer.unmanage();
+        let (render_pass, _) = render_pass.unmanage();
+        let (streaming_memory, _) = streaming_memory.unmanage();
+        let (streaming_buffer, _) = streaming_buffer.unmanage();
+        let (descriptor_pool, _) = descriptor_pool.unmanage();
+        let (common_descriptor_set_layout, _) = common_descriptor_set_layout.unmanage();
+        Self {
+            common_descriptor_set_layout,
+            descriptor_pool,
+            common_descriptor_set,
+            streaming_buffer,
+            streaming_memory,
+            streaming_memory_should_flush,
+            active_rt_size: init_rt_size,
+            active_framebuffer_resource_handle: init_rt_resource.native_ptr(),
+            render_pass,
+            framebuffer,
+            pipeline_layout,
+            test_shader,
+            test_pipeline,
+            command_pool,
+            command_buffer: command_buffer.native_ptr(),
+        }
+    }
+
+    pub fn validate(
+        &mut self,
+        device: &VulkanDevice,
+        active_rt_size: br::Extent2D,
+        active_rt_resource: br::VkHandleRef<br::vk::VkImageView>,
+    ) {
+        let mut framebuffer_changed = false;
+        if active_rt_size != self.active_rt_size
+            || active_rt_resource.native_ptr() != self.active_framebuffer_resource_handle
+        {
+            drop(unsafe { br::FramebufferObject::manage(self.framebuffer, device) });
+            self.framebuffer = br::FramebufferObject::new(
+                device,
+                &br::FramebufferCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.render_pass),
+                    &[active_rt_resource],
+                    active_rt_size.width,
+                    active_rt_size.height,
+                ),
+            )
+            .expect("preview.validate.framebuffer")
+            .unmanage()
+            .0;
+
+            framebuffer_changed = true;
+        }
+
+        let mut test_pipeline_changed = false;
+        if active_rt_size != self.active_rt_size {
+            drop(unsafe { br::PipelineObject::manage(self.test_pipeline, device) });
+            let [test_pipeline] = device
+                .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
+                    &[
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Vertex,
+                            br::VkHandleRef::from_raw_ref(&self.test_shader),
+                            c"vertMain",
+                        ),
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Fragment,
+                            br::VkHandleRef::from_raw_ref(&self.test_shader),
+                            c"fragMain",
+                        ),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRILIST,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[active_rt_size
+                            .into_rect(br::Offset2D::ZERO)
+                            .make_viewport(0.0..1.0)],
+                        &[active_rt_size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    BLEND_STATE_SINGLE_PREMULTIPLIED,
+                )
+                .set_multisample_state(MS_STATE_EMPTY)])
+                .expect("preview.validate.test_pipeline");
+            self.test_pipeline = test_pipeline.unmanage().0;
+
+            test_pipeline_changed = true;
+        }
+
+        if framebuffer_changed || test_pipeline_changed || active_rt_size != self.active_rt_size {
+            unsafe {
+                br::vkfn_wrapper::reset_command_pool(
+                    device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(self.command_pool),
+                    br::CommandPoolResetFlags::RELEASE_RESOURCES,
+                )
+                .expect("preview.validate.command_pool.reset");
+            }
+
+            unsafe {
+                br::vkfn_wrapper::begin_command_buffer(
+                    br::VkHandleRefMut::dangling(self.command_buffer),
+                    &br::CommandBufferBeginInfo::new(),
+                )
+                .expect("preview.validate.command_buffer.begin");
+            }
+            br::CmdRecord::new(unsafe { br::VkHandleRefMut::dangling(self.command_buffer) })
+                .begin_render_pass(
+                    &br::RenderPassBeginInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.render_pass),
+                        br::VkHandleRef::from_raw_ref(&self.framebuffer),
+                        active_rt_size.into_rect(br::Offset2D::ZERO),
+                        &[br::ClearValue::color_f32([0.0, 0.1, 0.0, 1.0])],
+                    ),
+                    br::SubpassContents::Inline,
+                )
+                .bind_pipeline(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.test_pipeline),
+                )
+                .bind_descriptor_sets(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    0,
+                    &[self.common_descriptor_set],
+                    &[],
+                )
+                .draw(3, 1, 0, 0)
+                .end_render_pass()
+                .end()
+                .expect("preview.validate.command_buffer.end");
+        }
+
+        self.active_rt_size = active_rt_size;
+        self.active_framebuffer_resource_handle = active_rt_resource.native_ptr();
+    }
+
+    pub fn write_streaming_buffer_content(
+        &mut self,
+        device: &VulkanDevice,
+        writer: impl FnOnce(*mut PreviewStreamingBufferContent),
+    ) {
+        let ptr = unsafe {
+            br::vkfn_wrapper::map_memory(
+                device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_memory),
+                0..size_of::<PreviewStreamingBufferContent>() as _,
+                0,
+            )
+            .expect("preview.write_streaming_buffer_content.map")
+        };
+        writer(ptr.cast::<PreviewStreamingBufferContent>());
+        if self.streaming_memory_should_flush {
+            unsafe {
+                br::vkfn_wrapper::flush_mapped_memory_ranges(
+                    device.as_transparent_ref(),
+                    &[br::MappedMemoryRange::new(
+                        br::VkHandleRef::from_raw_ref(&self.streaming_memory),
+                        0..size_of::<PreviewStreamingBufferContent>() as _,
+                    )],
+                )
+                .expect("preview.write_streaming_buffer_content.flush");
+            }
+        }
+        unsafe {
+            br::vkfn_wrapper::unmap_memory(
+                device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_memory),
+            );
+        }
+    }
+}
+
 struct PreviewComposite {
     descriptor_set_layout: br::vk::VkDescriptorSetLayout,
     descriptor_pool: br::vk::VkDescriptorPool,
     descriptor_set: br::DescriptorSet,
+    descriptor_bound_resource_handle: br::vk::VkImageView,
     pipeline_layout: br::vk::VkPipelineLayout,
     shader: br::vk::VkShaderModule,
     pipeline_target_rt_size: br::Extent2D,
@@ -3635,7 +3933,7 @@ impl PreviewComposite {
         vk_device: &VulkanDevice,
         init_render_tex: &(impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
         smp: &(impl br::VkHandle<Handle = br::vk::VkSampler> + ?Sized),
-        target_pass: br::SubpassRef<impl br::RenderPass + ?Sized>,
+        target_pass: br::SubpassRef<impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized>,
         init_screen_size: br::Extent2D,
     ) -> Self {
         let descriptor_set_layout = br::DescriptorSetLayoutObject::new(
@@ -3710,6 +4008,7 @@ impl PreviewComposite {
             descriptor_set_layout,
             descriptor_pool,
             descriptor_set,
+            descriptor_bound_resource_handle: init_render_tex.native_ptr(),
             pipeline_layout,
             shader,
             pipeline_target_rt_size: init_screen_size,
@@ -3719,10 +4018,18 @@ impl PreviewComposite {
         }
     }
 
+    pub fn force_invalidate_descriptor_set_state(&mut self) {
+        #[allow(invalid_value)]
+        {
+            self.descriptor_bound_resource_handle = unsafe { core::mem::transmute(0u64) };
+        }
+    }
+
     pub fn update(
         &mut self,
         device: &VulkanDevice,
         new_rt_size: br::Extent2D,
+        new_resource: &(impl VkHandle<Handle = br::vk::VkImageView> + ?Sized),
         new_target_render_pass_handle: br::vk::VkRenderPass,
         new_target_subpass: u32,
     ) {
@@ -3768,6 +4075,20 @@ impl PreviewComposite {
             self.pipeline_target_rt_size = new_rt_size;
             self.pipeline_target_render_pass_handle = new_target_render_pass_handle;
             self.pipeline_target_subpass = new_target_subpass;
+        }
+
+        if self.descriptor_bound_resource_handle != new_resource.native_ptr() {
+            device.update_descriptor_sets(
+                &[self.descriptor_set.binding_at(0).write(
+                    br::DescriptorContents::combined_image_sampler(
+                        new_resource,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    ),
+                )],
+                &[],
+            );
+
+            self.descriptor_bound_resource_handle = new_resource.native_ptr();
         }
     }
 }
