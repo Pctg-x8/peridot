@@ -948,17 +948,15 @@ impl<'main> RenderThread<'main> {
                 }
             }
 
-            if preview_composition_required {
-                preview_renderer.write_streaming_buffer_content(self.vk_device, |ptr| unsafe {
-                    core::ptr::write(
-                        core::ptr::addr_of_mut!((*ptr).current_sec),
-                        current_t.as_secs_f32(),
-                    );
-                });
-            }
-
             crate::perf_begin!(perf = POST_QUEUE);
             if preview_composition_required {
+                preview_renderer.write_streaming_buffer_content(
+                    self.vk_device,
+                    PreviewStreamingBufferContent {
+                        current_sec: current_t.as_secs_f32(),
+                    },
+                );
+
                 // 別でsubmitしないといけないらしい？(validation layerが対応するsemaphore waitを見つけられなくてエラーが出る)
                 render_queue
                     .submit(
@@ -1100,6 +1098,8 @@ impl<'main> RenderThread<'main> {
 
         unsafe {
             preview_composite.drop(self.vk_device);
+            preview_renderer.drop(self.vk_device);
+            preview_rt_buffer.drop(self.vk_device);
             composite_shared_buffers.drop(self.vk_device);
         }
 
@@ -1989,7 +1989,7 @@ impl<'d> WindowRenderer<'d> {
         self.render_cb_invalid = true;
     }
 
-    pub fn validate_render_commands(&mut self, preview_composite: &mut PreviewComposite) {
+    pub fn validate_render_commands(&mut self, preview_composite: &PreviewComposite) {
         if !self.render_cb_invalid {
             // already valid
             return;
@@ -2009,38 +2009,9 @@ impl<'d> WindowRenderer<'d> {
                     &self.swapchain.image_ref(n),
                     n,
                     &mut CustomRenderHandlerFn(|t, s, pm, ctx, r| match t {
-                        PREVIEW_COMPOSITE => r
-                            .bind_pipeline(
-                                br::PipelineBindPoint::Graphics,
-                                br::VkHandleRef::from_raw_ref(&preview_composite.pipeline),
-                            )
-                            .push_constant(
-                                br::VkHandleRef::from_raw_ref(&preview_composite.pipeline_layout),
-                                br::vk::VK_SHADER_STAGE_VERTEX_BIT
-                                    | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-                                0,
-                                &pm.clone().transpose(),
-                            )
-                            .push_constant_slice(
-                                br::VkHandleRef::from_raw_ref(&preview_composite.pipeline_layout),
-                                br::vk::VK_SHADER_STAGE_VERTEX_BIT
-                                    | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-                                size_of::<[f32; 16]>() as _,
-                                &[
-                                    s.width as f32,
-                                    s.height as f32,
-                                    ctx.rt_size.width as f32,
-                                    ctx.rt_size.height as f32,
-                                ],
-                            )
-                            .bind_descriptor_sets(
-                                br::PipelineBindPoint::Graphics,
-                                &br::VkHandleRef::from_raw_ref(&preview_composite.pipeline_layout),
-                                0,
-                                &[preview_composite.descriptor_set],
-                                &[],
-                            )
-                            .draw(4, 1, 0, 0),
+                        PREVIEW_COMPOSITE => {
+                            preview_composite.populate_commands(s, pm.clone(), &ctx, r)
+                        }
                         _ => r,
                     }),
                 )
@@ -3528,8 +3499,8 @@ impl PreviewRenderTargetBuffer {
 }
 
 #[repr(C)]
-struct PreviewStreamingBufferContent {
-    current_sec: f32,
+pub struct PreviewStreamingBufferContent {
+    pub current_sec: f32,
 }
 
 pub struct PreviewRenderer {
@@ -3583,7 +3554,7 @@ impl PreviewRenderer {
             .find_direct_memory_index(memreq.memoryTypeBits)
             .expect("preview.streaming_memory.index");
         let streaming_memory_should_flush = !device.is_coherent_memory(memindex);
-        let mut streaming_memory = br::DeviceMemoryObject::new(
+        let streaming_memory = br::DeviceMemoryObject::new(
             device,
             &br::MemoryAllocateInfo::new(memreq.size, memindex),
         )
@@ -3869,7 +3840,7 @@ impl PreviewRenderer {
     pub fn write_streaming_buffer_content(
         &mut self,
         device: &VulkanDevice,
-        writer: impl FnOnce(*mut PreviewStreamingBufferContent),
+        data: PreviewStreamingBufferContent,
     ) {
         let ptr = unsafe {
             br::vkfn_wrapper::map_memory(
@@ -3880,18 +3851,18 @@ impl PreviewRenderer {
             )
             .expect("preview.write_streaming_buffer_content.map")
         };
-        writer(ptr.cast::<PreviewStreamingBufferContent>());
+        unsafe {
+            ptr.cast::<PreviewStreamingBufferContent>().write(data);
+        }
         if self.streaming_memory_should_flush {
-            unsafe {
-                br::vkfn_wrapper::flush_mapped_memory_ranges(
-                    device.as_transparent_ref(),
-                    &[br::MappedMemoryRange::new(
-                        br::VkHandleRef::from_raw_ref(&self.streaming_memory),
-                        0..size_of::<PreviewStreamingBufferContent>() as _,
-                    )],
-                )
-                .expect("preview.write_streaming_buffer_content.flush");
-            }
+            br::vkfn_wrapper::flush_mapped_memory_ranges(
+                device.as_transparent_ref(),
+                &[br::MappedMemoryRange::new(
+                    br::VkHandleRef::from_raw_ref(&self.streaming_memory),
+                    0..size_of::<PreviewStreamingBufferContent>() as _,
+                )],
+            )
+            .expect("preview.write_streaming_buffer_content.flush");
         }
         unsafe {
             br::vkfn_wrapper::unmap_memory(
@@ -3900,6 +3871,13 @@ impl PreviewRenderer {
             );
         }
     }
+}
+
+#[repr(C)]
+struct PreviewCompositePushConstants {
+    pub position_modifier_matrix: Matrix4<SafeF32>,
+    pub element_size: [f32; 2],
+    pub screen_size: [f32; 2],
 }
 
 struct PreviewComposite {
@@ -3943,7 +3921,9 @@ impl PreviewComposite {
             vk_device,
             &br::PipelineLayoutCreateInfo::new(
                 &[descriptor_set_layout.as_transparent_ref()],
-                &[br::PushConstantRange::for_type::<[f32; 16 + 4]>(
+                &[br::PushConstantRange::for_type::<
+                    PreviewCompositePushConstants,
+                >(
                     br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
                     0,
                 )],
@@ -4086,5 +4066,36 @@ impl PreviewComposite {
 
             self.descriptor_bound_resource_handle = new_resource.native_ptr();
         }
+    }
+
+    pub fn populate_commands<'r>(
+        &self,
+        size: Size<PixelsUnit>,
+        position_modifier_matrix: Matrix4<SafeF32>,
+        ctx: &CustomRenderContext,
+        rec: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
+        rec.bind_pipeline(
+            br::PipelineBindPoint::Graphics,
+            br::VkHandleRef::from_raw_ref(&self.pipeline),
+        )
+        .push_constant(
+            br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+            br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+            0,
+            &PreviewCompositePushConstants {
+                position_modifier_matrix: position_modifier_matrix.transpose(),
+                element_size: [size.width as _, size.height as _],
+                screen_size: [ctx.rt_size.width as _, ctx.rt_size.height as _],
+            },
+        )
+        .bind_descriptor_sets(
+            br::PipelineBindPoint::Graphics,
+            &br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+            0,
+            &[self.descriptor_set],
+            &[],
+        )
+        .draw(4, 1, 0, 0)
     }
 }
