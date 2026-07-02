@@ -2206,10 +2206,15 @@ impl<Event> CompositeTreeRender<Event> {
 
             r.perform_complete_event(current_sec, &mut on_event);
 
-            if let Some((clip_rect_px, clip_config)) = p.active_clip {
-                inst_builder.set_clip(&clip_rect_px, &clip_config);
-            } else {
+            if r.custom_render_token.is_some() {
+                // Custom Renderではclipは強制無効化する（clipが必要ならCustomRenderのinject側でやる）
                 inst_builder.clear_clip();
+            } else {
+                if let Some((clip_rect_px, clip_config)) = p.active_clip {
+                    inst_builder.set_clip(&clip_rect_px, &clip_config);
+                } else {
+                    inst_builder.clear_clip();
+                }
             }
 
             if let Some(t) = r.custom_render_token {

@@ -1325,15 +1325,20 @@ struct CompositionSwapchainBuffer<'d> {
 #[cfg(windows)]
 impl<'d> Drop for CompositionSwapchainBuffer<'d> {
     fn drop(&mut self) {
-        unsafe {
-            br::vkfn_wrapper::destroy_image_view(
-                self.vk_device.native_ptr(),
+        drop(unsafe {
+            br::ImageViewObject::manage(
                 self.vk_image_view,
-                None,
-            );
-            br::vkfn_wrapper::destroy_image(self.vk_device.native_ptr(), self.vk_image, None);
-            br::vkfn_wrapper::free_memory(self.vk_device.native_ptr(), self.vk_device_memory, None);
-        }
+                br::ImageObject::manage(
+                    self.vk_image,
+                    self.vk_device,
+                    // 以下のデータはdropでは使われないので適当に埋める
+                    br::vk::VK_IMAGE_TYPE_2D,
+                    br::vk::VK_FORMAT_UNDEFINED,
+                    br::Extent3D::spread1(1),
+                ),
+            )
+        });
+        drop(unsafe { br::DeviceMemoryObject::manage(self.vk_device_memory, self.vk_device) });
     }
 }
 

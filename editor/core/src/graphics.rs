@@ -402,7 +402,7 @@ impl<'fs> VulkanDevice<'fs> {
             },
             #[cfg(windows)]
             fp_get_memory_win32_handle_properties: unsafe {
-                vk_device.native_ptr().load_function_unconstrainted()
+                br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
             pipeline_cache: pipeline_cache.unmanage().0,
             pipeline_cache_path,

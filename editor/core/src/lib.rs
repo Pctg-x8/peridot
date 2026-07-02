@@ -3330,6 +3330,7 @@ async fn run<'sys>(
                                         }
                                         AssetPreviewPanePresenter::ID => {
                                             Box::new(AssetPreviewPanePresenter {})
+                                        }
                                         PreviewPanePresenter::ID => {
                                             Box::new(PreviewPanePresenter::new(view_init_ctx))
                                         }
