@@ -1100,7 +1100,7 @@ impl Keyboard {
                     keymap(format: KeyboardKeymapFormat => format, fd: i32 => fd, size: u32 => size),
                     enter(
                         serial: u32 => serial,
-                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) },
+                        surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() },
                         keys: *mut ffi::Array => unsafe { (*keys).as_slice::<u32>() }
                     ),
                     leave(serial: u32 => serial, surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() }),
@@ -1134,7 +1134,13 @@ impl Keyboard {
 
 pub trait KeyboardEventListener {
     fn keymap(&mut self, sender: &mut Keyboard, format: KeyboardKeymapFormat, fd: i32, size: u32);
-    fn enter(&mut self, sender: &mut Keyboard, serial: u32, surface: &mut Surface, keys: &[u32]);
+    fn enter(
+        &mut self,
+        sender: &mut Keyboard,
+        serial: u32,
+        surface: Option<&mut Surface>,
+        keys: &[u32],
+    );
     fn leave(&mut self, sender: &mut Keyboard, serial: u32, surface: Option<&mut Surface>);
     fn key(
         &mut self,
