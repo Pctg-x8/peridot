@@ -1858,7 +1858,7 @@ impl<'d> WindowRenderer<'d> {
         events: &SyncEventBus,
         font_set: &FontSet,
         preview_composite: &mut PreviewComposite,
-        validate_preview: impl FnMut(&mut PreviewComposite, &CustomRenderContext),
+        mut validate_preview: impl FnMut(&mut PreviewComposite, &CustomRenderContext),
     ) -> bool {
         let composite_render_data = self.composite_renderer.update(
             self.vk_device,
@@ -1883,6 +1883,18 @@ impl<'d> WindowRenderer<'d> {
                     self.vk_device,
                     composite_render_data.required_backdrop_buffer_count,
                 );
+            self.render_requires_preview_composition = false;
+            self.composite_renderer.prepare_custom_render(
+                &composite_render_data,
+                self.swapchain.size(),
+                |t, ctx| match t {
+                    PREVIEW_COMPOSITE => {
+                        self.render_requires_preview_composition = true;
+                        validate_preview(preview_composite, &ctx);
+                    }
+                    _ => (),
+                },
+            );
 
             self.last_composite_render_data = composite_render_data;
         }
@@ -1899,7 +1911,7 @@ impl<'d> WindowRenderer<'d> {
         );
 
         // update_backdrop_resourcesでDescriptorSetの更新がはしるのでここでやる
-        self.validate_render_commands(preview_composite, validate_preview);
+        self.validate_render_commands(preview_composite);
 
         needs_update_commands
     }
@@ -1977,28 +1989,12 @@ impl<'d> WindowRenderer<'d> {
         self.render_cb_invalid = true;
     }
 
-    pub fn validate_render_commands(
-        &mut self,
-        preview_composite: &mut PreviewComposite,
-        mut validate_preview: impl FnMut(&mut PreviewComposite, &CustomRenderContext),
-    ) {
+    pub fn validate_render_commands(&mut self, preview_composite: &mut PreviewComposite) {
         if !self.render_cb_invalid {
             // already valid
             return;
         }
 
-        self.render_requires_preview_composition = false;
-        self.composite_renderer.prepare_custom_render(
-            &self.last_composite_render_data,
-            self.swapchain.size(),
-            |t, ctx| match t {
-                PREVIEW_COMPOSITE => {
-                    self.render_requires_preview_composition = true;
-                    validate_preview(preview_composite, &ctx);
-                }
-                _ => (),
-            },
-        );
         for (n, cb) in self.render_cb.iter_mut().enumerate() {
             unsafe {
                 cb.begin(&br::CommandBufferBeginInfo::new())
