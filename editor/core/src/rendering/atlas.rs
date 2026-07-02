@@ -57,9 +57,21 @@ impl TextureAtlas {
 
     pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(gfx.native_ptr(), self.view, None);
-            br::vkfn_wrapper::destroy_image(gfx.native_ptr(), self.res, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.mem, None);
+            br::vkfn_wrapper::destroy_image_view(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.view),
+                None,
+            );
+            br::vkfn_wrapper::destroy_image(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.res),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.mem),
+                None,
+            );
         }
     }
 
@@ -187,9 +199,21 @@ impl ColorTextureAtlas {
 
     pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(gfx.native_ptr(), self.view, None);
-            br::vkfn_wrapper::destroy_image(gfx.native_ptr(), self.res, None);
-            br::vkfn_wrapper::free_memory(gfx.native_ptr(), self.mem, None);
+            br::vkfn_wrapper::destroy_image_view(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.view),
+                None,
+            );
+            br::vkfn_wrapper::destroy_image(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.res),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.mem),
+                None,
+            );
         }
     }
 

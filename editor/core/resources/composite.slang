@@ -109,8 +109,8 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
               uint iindexBase: SV_StartInstanceLocation)
     ->VertexOutput {
   let iindex = iindexBase + iindexOffset;
-  let p = float2((vindex & 0x01) == 0 ? 0.0 : 1.0,
-                 (vindex & 0x02) == 0.0 ? 0.0 : 1.0);
+  let p = float2(select((vindex & 0x01) == 0, 0.0, 1.0),
+                 select((vindex & 0x02) == 0, 0.0, 1.0));
   let posST = instanceDataArray[iindex].posSTStatic;
   let pos4 = mul(instanceDataArray[iindex].positionModifierMatrix,
                  float4(p * posST.xy + posST.zw, 0.0, 1.0));

@@ -5,29 +5,32 @@ use std::{
 };
 
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, Device, DeviceMemoryMut, Fence, FenceMut,
-    ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, SpecializationConstants,
-    Swapchain, VkHandle, VkHandleMut,
+    self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, DeviceMemoryMut,
+    Fence, FenceMut, ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule,
+    SpecializationConstants, SwapchainMut, VkHandle, VkHandleMut,
 };
+use peridot_math::Matrix4;
 
 use crate::{
     FlyoutSurfaceHandle, SyncEvent, SyncEventBus, WindowHandle,
     graphics::{
-        BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP, MS_STATE_EMPTY,
-        RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
-        VulkanSurface, VulkanSwapchain,
+        BLEND_STATE_SINGLE_NONE, BLEND_STATE_SINGLE_PREMULTIPLIED, IA_STATE_TRILIST,
+        IA_STATE_TRISTRIP, MS_STATE_EMPTY, RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface,
+        VI_STATE_EMPTY, VulkanDevice, VulkanSurface, VulkanSwapchain,
     },
     rendering::{
         atlas::{AtlasRect, ColorTextureAtlas, TextureAtlas},
         composite::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
             CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
+            CustomRenderContext, CustomRenderHandler, CustomRenderHandlerFn, CustomRenderToken,
+            EmptyCustomRenderHandler,
         },
         text::FontSet,
         vg::VectorRasterizationState,
     },
     uikit::MountTarget,
-    utils::SafeF32,
+    utils::{PixelsUnit, SafeF32, Size},
 };
 
 pub mod atlas;
@@ -130,6 +133,12 @@ crate::perf_section!(WAIT_QUEUE = "RenderLoop.WaitQueue");
 #[cfg(windows)]
 crate::perf_section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 
+pub const PREVIEW_COMPOSITE: CustomRenderToken = CustomRenderToken(0);
+
+pub struct CommittedPreviewState {
+    pub viewport_size: Size<PixelsUnit>,
+}
+
 pub struct RenderThread<'main> {
     pub vk_device: &'main VulkanDevice<'main>,
     pub shutdown_signal: &'main AtomicBool,
@@ -138,6 +147,7 @@ pub struct RenderThread<'main> {
     pub event_bus: &'main SyncEventBus,
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     pub font_set: &'main FontSet,
+    pub preview_state: &'main Mutex<CommittedPreviewState>,
     #[cfg(windows)]
     pub dx_context: &'main crate::platform::windows::DxContext,
     #[cfg(windows)]
@@ -246,6 +256,268 @@ impl<'main> RenderThread<'main> {
                 .expect("shared_update_commands.end");
         }
 
+        let mut present_id = 0;
+        self.event_bus
+            .push(SyncEvent::NewPresentID { id: present_id });
+
+        struct PreviewRenderTargetResource<'d> {
+            device: &'d VulkanDevice<'d>,
+            memory: br::vk::VkDeviceMemory,
+            image: br::vk::VkImage,
+            image_view: br::vk::VkImageView,
+        }
+        impl Drop for PreviewRenderTargetResource<'_> {
+            fn drop(&mut self) {
+                unsafe {
+                    br::vkfn_wrapper::destroy_image_view(
+                        self.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(self.image_view),
+                        None,
+                    );
+                    br::vkfn_wrapper::destroy_image(
+                        self.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(self.image),
+                        None,
+                    );
+                    br::vkfn_wrapper::free_memory(
+                        self.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(self.memory),
+                        None,
+                    );
+                }
+            }
+        }
+        let preview_init_state = self.preview_state.lock().expect("poisoned");
+        let mut preview_rt_image = br::ImageObject::new(
+            self.vk_device,
+            &br::ImageCreateInfo::new(
+                preview_init_state.viewport_size.to_vk(),
+                br::vk::VK_FORMAT_R8G8B8A8_UNORM,
+            )
+            .set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT),
+        )
+        .expect("preview_rt.image.create");
+        let preview_rt_image_memreq = preview_rt_image.requirements();
+        let preview_rt_memory = br::DeviceMemoryObject::new(
+            self.vk_device,
+            &br::MemoryAllocateInfo::new(
+                preview_rt_image_memreq.size,
+                self.vk_device
+                    .find_device_local_memory_index(preview_rt_image_memreq.memoryTypeBits)
+                    .expect("preview_rt.memory.index"),
+            ),
+        )
+        .expect("preview_rt.memory.alloc");
+        preview_rt_image
+            .bind(&preview_rt_memory, 0)
+            .expect("preview_rt.image.bind");
+        let preview_rt_image_view = br::ImageViewBuilder::new(
+            preview_rt_image,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .expect("preview_rt.image_view.create");
+        let (preview_rt_image_view, preview_rt_image) = preview_rt_image_view.unmanage();
+        let (preview_rt_image, _, _, _, _) = preview_rt_image.unmanage();
+        let (preview_rt_memory, _) = preview_rt_memory.unmanage();
+        let mut preview_rt_resource = PreviewRenderTargetResource {
+            device: self.vk_device,
+            memory: preview_rt_memory,
+            image: preview_rt_image,
+            image_view: preview_rt_image_view,
+        };
+
+        #[repr(C)]
+        struct PreviewStreamingBufferContent {
+            current_sec: f32,
+        }
+        let mut preview_streaming_buffer = br::BufferObject::new(
+            self.vk_device,
+            &br::BufferCreateInfo::new_for_type::<PreviewStreamingBufferContent>(
+                br::BufferUsage::UNIFORM_BUFFER,
+            ),
+        )
+        .expect("preview.streaming_buffer.create");
+        let preview_streaming_buffer_memreq = preview_streaming_buffer.requirements();
+        let preview_streaming_memory_index = self
+            .vk_device
+            .find_direct_memory_index(preview_streaming_buffer_memreq.memoryTypeBits)
+            .expect("preview.streaming_memory.index");
+        let preview_streaming_memory_should_flush = !self
+            .vk_device
+            .is_coherent_memory(preview_streaming_memory_index);
+        let mut preview_streaming_memory = br::DeviceMemoryObject::new(
+            self.vk_device,
+            &br::MemoryAllocateInfo::new(
+                preview_streaming_buffer_memreq.size,
+                preview_streaming_memory_index,
+            ),
+        )
+        .expect("preview.streaming_memory.alloc");
+        preview_streaming_buffer
+            .bind(&preview_streaming_memory, 0)
+            .expect("preview_streaming_buffer.bind");
+
+        let preview_render_pass = br::RenderPassObject::new(
+            self.vk_device,
+            &br::RenderPassCreateInfo2::new(
+                &[
+                    br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                        .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined()),
+                ],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .by_region()
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::SHADER.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::FRAGMENT_SHADER,
+                )],
+            ),
+        )
+        .expect("preview.render_pass.create");
+        let preview_framebuffer = br::FramebufferObject::new(
+            self.vk_device,
+            &br::FramebufferCreateInfo::new(
+                &preview_render_pass,
+                &[unsafe { br::VkHandleRef::dangling(preview_rt_resource.image_view) }],
+                preview_init_state.viewport_size.width,
+                preview_init_state.viewport_size.height,
+            ),
+        )
+        .expect("preview.framebuffer.create");
+
+        let preview_render_descriptor_set_layout = br::DescriptorSetLayoutObject::new(
+            self.vk_device,
+            &br::DescriptorSetLayoutCreateInfo::new(&[
+                br::DescriptorType::UniformBuffer.make_binding(0, 1)
+            ]),
+        )
+        .expect("preview.render.descriptor_set_layout.create");
+        let mut preview_render_descriptor_pool = br::DescriptorPoolObject::new(
+            self.vk_device,
+            &br::DescriptorPoolCreateInfo::new(
+                1,
+                &[br::DescriptorType::UniformBuffer.make_size(1)],
+            ),
+        )
+        .expect("preview.render.descriptor_pool.create");
+        let [mut preview_render_common_descriptor_set] = preview_render_descriptor_pool
+            .alloc_array(&[preview_render_descriptor_set_layout.as_transparent_ref()])
+            .expect("preview_render.descriptor.alloc");
+        self.vk_device.update_descriptor_sets(
+            &[preview_render_common_descriptor_set.binding_at(0).write(
+                br::DescriptorContents::uniform_buffer(
+                    &preview_streaming_buffer,
+                    0..size_of::<PreviewStreamingBufferContent>() as _,
+                ),
+            )],
+            &[],
+        );
+        let preview_render_pipeline_layout = br::PipelineLayoutObject::new(
+            self.vk_device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[preview_render_descriptor_set_layout.as_transparent_ref()],
+                &[],
+            ),
+        )
+        .expect("preview.render.pipeline_layout.create");
+        let preview_render_shader = self.vk_device.require_shader("preview/test.spv");
+        let [mut preview_render_pipeline] = self
+            .vk_device
+            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
+                &preview_render_pipeline_layout,
+                preview_render_pass.subpass(0),
+                &[
+                    preview_render_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                    preview_render_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                ],
+                VI_STATE_EMPTY,
+                IA_STATE_TRILIST,
+                &br::PipelineViewportStateCreateInfo::new(
+                    &[preview_init_state
+                        .viewport_size
+                        .to_vk()
+                        .into_rect(br::Offset2D::ZERO)
+                        .make_viewport(0.0..1.0)],
+                    &[preview_init_state
+                        .viewport_size
+                        .to_vk()
+                        .into_rect(br::Offset2D::ZERO)],
+                ),
+                RASTER_STATE_DEFAULT_FILL_NOCULL,
+                BLEND_STATE_SINGLE_PREMULTIPLIED,
+            )
+            .set_multisample_state(MS_STATE_EMPTY)])
+            .expect("preview.render.pipelines.create");
+
+        let mut preview_command_pool = br::CommandPoolObject::new(
+            self.vk_device,
+            &br::CommandPoolCreateInfo::new(self.vk_device.present_queue_family_index()),
+        )
+        .expect("preview.command_pool.create");
+        let [mut preview_command_buffer] = br::CommandBufferObject::alloc_array(
+            self.vk_device,
+            &br::CommandBufferFixedCountAllocateInfo::new(
+                &mut preview_command_pool,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("preview.command_buffer.create");
+        unsafe {
+            preview_command_buffer
+                .begin(&br::CommandBufferBeginInfo::new())
+                .expect("preview.command_buffer.begin")
+        }
+        .begin_render_pass(
+            &br::RenderPassBeginInfo::new(
+                &preview_render_pass,
+                &preview_framebuffer,
+                preview_init_state
+                    .viewport_size
+                    .to_vk()
+                    .into_rect(br::Offset2D::ZERO),
+                &[br::ClearValue::color_f32([0.0, 0.1, 0.0, 1.0])],
+            ),
+            br::SubpassContents::Inline,
+        )
+        .bind_pipeline(br::PipelineBindPoint::Graphics, &preview_render_pipeline)
+        .bind_descriptor_sets(
+            br::PipelineBindPoint::Graphics,
+            &preview_render_pipeline_layout,
+            0,
+            &[preview_render_common_descriptor_set],
+            &[],
+        )
+        .draw(3, 1, 0, 0)
+        .end_render_pass()
+        .end()
+        .expect("preview.command_buffer.end");
+
+        let dep_semaphore_preview =
+            br::SemaphoreObject::new(self.vk_device, &br::SemaphoreCreateInfo::new())
+                .expect("dep_semaphore_preview.create");
+        let linear_sampler = br::SamplerObject::new(self.vk_device, &br::SamplerCreateInfo::new())
+            .expect("linear_sampler.create");
+        let mut preview_composite = PreviewComposite::new(
+            self.vk_device,
+            br::VkHandleRef::from_raw_ref(&preview_rt_resource.image_view),
+            &linear_sampler,
+            preview_render_pass.subpass(0),
+            br::Extent2D {
+                width: 640,
+                height: 480,
+            },
+        );
+
         crate::perf_end!(perf);
 
         let mut any_swapchain_invalidated = false;
@@ -331,7 +603,6 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 window_glyph_atlas.color_manager.atlas(),
-                                self.font_set,
                                 self.event_bus,
                                 #[cfg(windows)]
                                 self.dx_context,
@@ -386,19 +657,17 @@ impl<'main> RenderThread<'main> {
             .inject(|r| composite_shared_buffers.sync_buffer(r))
             .end()
             .expect("shared_update_commands.end");
-            unsafe {
-                render_queue
-                    .submit_raw(
-                        &[br::SubmitInfo::new_array(
-                            &[],
-                            &[],
-                            &[shared_update_commands.as_transparent_ref()],
-                            &[],
-                        )],
-                        None,
-                    )
-                    .expect("shared_update.submit");
-            }
+            render_queue
+                .submit(
+                    &[br::SubmitInfo::new_array(
+                        &[],
+                        &[],
+                        &[shared_update_commands.as_transparent_ref()],
+                        &[],
+                    )],
+                    None,
+                )
+                .expect("shared_update.submit");
             render_queue.wait().expect("shared_update.wait");
             crate::perf_end!(perf);
 
@@ -478,12 +747,13 @@ impl<'main> RenderThread<'main> {
             let mut present_parameters = Vec::with_capacity(windows.len() + context_menus.len());
             #[cfg(windows)]
             let mut present_swapchains = Vec::with_capacity(context_menus.len());
+            let mut preview_composition_required = false;
             for (k, x) in windows.iter_mut() {
                 crate::perf_scope!(UPDATE_WINDOW);
 
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
-                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                    Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                         x.invalidate_swapchain();
                         any_swapchain_invalidated = true;
                         continue;
@@ -621,10 +891,11 @@ impl<'main> RenderThread<'main> {
                     &mut glyph_atlas_mgr.vector_raster_state,
                     self.event_bus,
                     self.font_set,
+                    &mut preview_composite,
                 );
 
-                let mut render_wait_semaphores = Vec::with_capacity(1);
-                let mut render_wait_stages = Vec::with_capacity(1);
+                let mut render_wait_semaphores = Vec::with_capacity(3);
+                let mut render_wait_stages = Vec::with_capacity(3);
 
                 // TODO: いったんめんどうなので毎回更新
                 if true || needs_update_command {
@@ -632,6 +903,12 @@ impl<'main> RenderThread<'main> {
 
                     render_wait_semaphores.push(x.update_completion_semaphore_ref());
                     render_wait_stages.push(br::PipelineStageFlags::VERTEX_INPUT);
+                }
+
+                if x.render_requires_preview_composition {
+                    render_wait_semaphores.push(dep_semaphore_preview.as_transparent_ref());
+                    render_wait_stages.push(br::PipelineStageFlags::FRAGMENT_SHADER);
+                    preview_composition_required = true;
                 }
 
                 render_wait_semaphores.push(x.backbuffer_ready_semaphore.as_transparent_ref());
@@ -655,7 +932,7 @@ impl<'main> RenderThread<'main> {
 
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
-                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
+                    Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => {
                         x.invalidate_swapchain();
                         any_swapchain_invalidated = true;
                         continue;
@@ -865,25 +1142,61 @@ impl<'main> RenderThread<'main> {
             }
 
             crate::perf_begin!(perf = POST_QUEUE);
-            if !submit_parameters.is_empty() {
+            if preview_composition_required {
+                let ptr = preview_streaming_memory
+                    .map(0..size_of::<PreviewStreamingBufferContent>() as _)
+                    .expect("preview.streaming_memory.map");
                 unsafe {
-                    render_queue
-                        .submit_raw(
-                            &submit_parameters
-                                .iter()
-                                .map(|x| {
-                                    br::SubmitInfo::new(
-                                        &x.render_wait_semaphores,
-                                        &x.render_wait_stages,
-                                        &x.render_commands,
-                                        &x.render_signal_semaphores,
-                                    )
-                                })
-                                .collect::<Vec<_>>(),
-                            None,
-                        )
-                        .expect("queue submit")
-                };
+                    let ptr = ptr.ptr().cast::<PreviewStreamingBufferContent>();
+                    core::ptr::write(
+                        core::ptr::addr_of_mut!((*ptr).current_sec),
+                        self.global_time_base.elapsed().as_secs_f32(),
+                    );
+                }
+                if preview_streaming_memory_should_flush {
+                    unsafe {
+                        self.vk_device
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                &preview_streaming_memory,
+                                0..size_of::<PreviewStreamingBufferContent>() as _,
+                            )])
+                            .expect("preview.streaming_memory.flush");
+                    }
+                }
+                unsafe {
+                    preview_streaming_memory.unmap();
+                }
+
+                // 別でsubmitしないといけないらしい？
+                render_queue
+                    .submit(
+                        &[br::SubmitInfo::new(
+                            &[],
+                            &[],
+                            &[preview_command_buffer.as_transparent_ref()],
+                            &[dep_semaphore_preview.as_transparent_ref()],
+                        )],
+                        None,
+                    )
+                    .expect("queue submit");
+            }
+            if !submit_parameters.is_empty() {
+                render_queue
+                    .submit(
+                        &submit_parameters
+                            .iter()
+                            .map(|x| {
+                                br::SubmitInfo::new(
+                                    &x.render_wait_semaphores,
+                                    &x.render_wait_stages,
+                                    &x.render_commands,
+                                    &x.render_signal_semaphores,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                        None,
+                    )
+                    .expect("queue submit");
             }
 
             if !present_parameters.is_empty() {
@@ -907,7 +1220,7 @@ impl<'main> RenderThread<'main> {
                     &mut results,
                 )) {
                     Ok(_) => (),
-                    Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
+                    Err(e) if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR => (/* handled later */),
                     Err(e) => Err::<(), _>(e).expect("queue present"),
                 }
 
@@ -936,6 +1249,10 @@ impl<'main> RenderThread<'main> {
             crate::perf_begin!(perf = WAIT_QUEUE);
             render_queue.wait().expect("render_queue.wait");
             crate::perf_end!(perf);
+
+            present_id += 1;
+            self.event_bus
+                .push(SyncEvent::NewPresentID { id: present_id });
 
             #[cfg(windows)]
             crate::perf_begin!(perf = WIN32_DX_PRESENT);
@@ -974,7 +1291,11 @@ impl<'main> RenderThread<'main> {
         }
 
         unsafe {
-            self.vk_device.wait().expect("device wait");
+            // TODO: これdanglingつかわない方法にしたい スレッド専用のDeviceをつくるか......？
+            br::vkfn_wrapper::device_wait_idle(br::VkHandleRefMut::dangling(
+                self.vk_device.native_ptr(),
+            ))
+            .expect("device wait");
         }
         #[cfg(windows)]
         if let Err(e) =
@@ -982,6 +1303,12 @@ impl<'main> RenderThread<'main> {
         {
             tracing::error!(reason = %e, "CloseHandle");
         }
+
+        unsafe {
+            preview_composite.drop(self.vk_device);
+            composite_shared_buffers.drop(self.vk_device);
+        }
+
         tracing::info!("RenderThread terminated");
     }
 }
@@ -1047,7 +1374,6 @@ impl<'d> ContextMenuRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         color_atlas: &ColorTextureAtlas,
-        root_font_set: &'d FontSet,
         event_bus: &SyncEventBus,
         #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
     ) -> Self {
@@ -1487,7 +1813,7 @@ impl<'d> ContextMenuRenderer<'d> {
                     #[cfg(not(windows))]
                     &self.swapchain.image_ref(n),
                     n,
-                    |_, r| r,
+                    &mut EmptyCustomRenderHandler,
                 )
             })
             .inject(|r| self.vk_device.cmd_end_render_pass(r))
@@ -1533,19 +1859,17 @@ impl<'d> ContextMenuRenderer<'d> {
         self.wait_for_last_update_completion();
         self.repopulate_update_commands();
 
-        unsafe {
-            device_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[self.update_cb.as_transparent_ref()],
-                        &[self.update_completion_semaphore.as_transparent_ref()],
-                    )],
-                    Some(self.update_completion_fence.as_transparent_ref_mut()),
-                )
-                .expect("gfx.update.submit");
-        }
+        device_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[self.update_cb.as_transparent_ref()],
+                    &[self.update_completion_semaphore.as_transparent_ref()],
+                )],
+                Some(self.update_completion_fence.as_transparent_ref_mut()),
+            )
+            .expect("gfx.update.submit");
         self.updating = true;
     }
 
@@ -1592,6 +1916,7 @@ struct WindowRenderer<'d> {
     render_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
     render_cb: Vec<br::CommandBufferObject<&'d VulkanDevice<'d>>>,
     render_cb_invalid: bool,
+    render_requires_preview_composition: bool,
     present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
     backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
     swapchain: VulkanSwapchain<'d, 'd>,
@@ -1698,6 +2023,7 @@ impl<'d> WindowRenderer<'d> {
             render_cp,
             render_cb,
             render_cb_invalid: true,
+            render_requires_preview_composition: false,
             present_ready_semaphores: (0..vk_swapchain.image_count())
                 .map(|_| {
                     br::SemaphoreObject::new(device, &br::SemaphoreCreateInfo::new())
@@ -1732,6 +2058,7 @@ impl<'d> WindowRenderer<'d> {
         vector_raster_state: &mut VectorRasterizationState,
         events: &SyncEventBus,
         font_set: &FontSet,
+        preview_composite: &mut PreviewComposite,
     ) -> bool {
         let composite_render_data = self.composite_renderer.update(
             self.vk_device,
@@ -1772,7 +2099,7 @@ impl<'d> WindowRenderer<'d> {
         );
 
         // update_backdrop_resourcesでDescriptorSetの更新がはしるのでここでやる
-        self.validate_render_commands();
+        self.validate_render_commands(preview_composite);
 
         needs_update_commands
     }
@@ -1850,12 +2177,13 @@ impl<'d> WindowRenderer<'d> {
         self.render_cb_invalid = true;
     }
 
-    pub fn validate_render_commands(&mut self) {
+    pub fn validate_render_commands(&mut self, preview_composite: &mut PreviewComposite) {
         if !self.render_cb_invalid {
             // already valid
             return;
         }
 
+        self.render_requires_preview_composition = false;
         for (n, cb) in self.render_cb.iter_mut().enumerate() {
             unsafe {
                 cb.begin(&br::CommandBufferBeginInfo::new())
@@ -1869,7 +2197,50 @@ impl<'d> WindowRenderer<'d> {
                     self.swapchain.size(),
                     &self.swapchain.image_ref(n),
                     n,
-                    |_, r| r,
+                    &mut CustomRenderHandlerFn(|t, s, pm, ctx, r| match t {
+                        PREVIEW_COMPOSITE => {
+                            self.render_requires_preview_composition = true;
+                            preview_composite.update(
+                                self.vk_device,
+                                ctx.rt_size,
+                                ctx.active_render_pass,
+                                ctx.active_subpass_index,
+                            );
+
+                            r.bind_pipeline(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(&preview_composite.pipeline),
+                            )
+                            .push_constant(
+                                br::VkHandleRef::from_raw_ref(&preview_composite.pipeline_layout),
+                                br::vk::VK_SHADER_STAGE_VERTEX_BIT
+                                    | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                                0,
+                                &pm.clone().transpose(),
+                            )
+                            .push_constant_slice(
+                                br::VkHandleRef::from_raw_ref(&preview_composite.pipeline_layout),
+                                br::vk::VK_SHADER_STAGE_VERTEX_BIT
+                                    | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                                size_of::<[f32; 16]>() as _,
+                                &[
+                                    s.width as f32,
+                                    s.height as f32,
+                                    ctx.rt_size.width as f32,
+                                    ctx.rt_size.height as f32,
+                                ],
+                            )
+                            .bind_descriptor_sets(
+                                br::PipelineBindPoint::Graphics,
+                                &br::VkHandleRef::from_raw_ref(&preview_composite.pipeline_layout),
+                                0,
+                                &[preview_composite.descriptor_set],
+                                &[],
+                            )
+                            .draw(4, 1, 0, 0)
+                        }
+                        _ => r,
+                    }),
                 )
             })
             .inject(|r| {
@@ -1971,19 +2342,17 @@ impl<'d> WindowRenderer<'d> {
         self.wait_for_last_update_completion();
         self.repopulate_update_commands();
 
-        unsafe {
-            device_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[self.update_cb.as_transparent_ref()],
-                        &[self.update_completion_semaphore.as_transparent_ref()],
-                    )],
-                    Some(self.update_completion_fence.as_transparent_ref_mut()),
-                )
-                .expect("gfx.update.submit");
-        }
+        device_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[self.update_cb.as_transparent_ref()],
+                    &[self.update_completion_semaphore.as_transparent_ref()],
+                )],
+                Some(self.update_completion_fence.as_transparent_ref_mut()),
+            )
+            .expect("gfx.update.submit");
         self.updating = true;
     }
 
@@ -2162,7 +2531,7 @@ impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
         )
         .expect("pipeline_layout.create");
         let blending = br::PipelineColorBlendStateCreateInfo::new(&[
-            br::vk::VkPipelineColorBlendAttachmentState {
+            br::PipelineColorBlendAttachmentState(br::vk::VkPipelineColorBlendAttachmentState {
                 blendEnable: true as _,
                 srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ZERO,
                 dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
@@ -2174,7 +2543,7 @@ impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
                     | br::vk::VK_COLOR_COMPONENT_G_BIT
                     | br::vk::VK_COLOR_COMPONENT_B_BIT
                     | br::vk::VK_COLOR_COMPONENT_A_BIT,
-            },
+            }),
             // br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED,
         ]);
         let [pipeline, pipeline_cont] = device
@@ -2250,12 +2619,14 @@ impl<'d> MaskTextureAtlasManager<'d> {
             &[br::VertexInputBindingDescription::per_vertex_typed::<
                 [f32; 2],
             >(0)],
-            &[br::VertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                offset: 0,
-                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-            }],
+            &[br::VertexInputAttributeDescription(
+                br::vk::VkVertexInputAttributeDescription {
+                    location: 0,
+                    binding: 0,
+                    offset: 0,
+                    format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                },
+            )],
         );
     const VI_STATE_FOR_CURVE: &'static br::PipelineVertexInputStateCreateInfo<'static> =
         &br::PipelineVertexInputStateCreateInfo::new(
@@ -2263,18 +2634,18 @@ impl<'d> MaskTextureAtlasManager<'d> {
                 [f32; 4],
             >(0)],
             &[
-                br::VertexInputAttributeDescription {
+                br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                     location: 0,
                     binding: 0,
                     offset: 0,
                     format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                },
-                br::VertexInputAttributeDescription {
+                }),
+                br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                     location: 1,
                     binding: 0,
                     offset: core::mem::size_of::<[f32; 2]>() as _,
                     format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                },
+                }),
             ],
         );
     const STENCIL_MASK: u32 = 0x01;
@@ -2282,11 +2653,11 @@ impl<'d> MaskTextureAtlasManager<'d> {
         &br::PipelineDepthStencilStateCreateInfo::new()
             .stencil_test(true)
             .stencil_state_front(
-                br::vk::VkStencilOpState::always_forall(br::StencilOp::Invert)
+                br::StencilOpState::always_forall(br::StencilOp::Invert)
                     .write_mask(Self::STENCIL_MASK),
             )
             .stencil_state_back(
-                br::vk::VkStencilOpState::always_forall(br::StencilOp::Invert)
+                br::StencilOpState::always_forall(br::StencilOp::Invert)
                     .write_mask(Self::STENCIL_MASK),
             );
     const STENCIL_STATE_FILTER_EQ_ONLY: &'static br::PipelineDepthStencilStateCreateInfo =
@@ -2483,20 +2854,18 @@ impl<'d> MaskTextureAtlasManager<'d> {
         })
         .end()
         .expect("init_cb.end");
-        unsafe {
-            init_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[init_cb.as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("init_cb.submit");
-            init_worker_queue.wait().expect("init_cb.wait");
-        }
+        init_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[init_cb.as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("init_cb.submit");
+        init_worker_queue.wait().expect("init_cb.wait");
 
         Self {
             device: common_res.device,
@@ -2899,9 +3268,11 @@ impl<'d> MaskTextureAtlasManager<'d> {
                 .updated_rects
                 .iter()
                 .map(|r| br::vk::VkImageResolve {
-                    srcSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1),
+                    srcSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1)
+                        .0,
                     srcOffset: r.offset.with_z(0),
-                    dstSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1),
+                    dstSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1)
+                        .0,
                     dstOffset: r.offset.with_z(0),
                     extent: r.extent.with_depth(1),
                 })
@@ -2934,19 +3305,18 @@ impl<'d> MaskTextureAtlasManager<'d> {
         })
         .end()
         .expect("cb end");
-        unsafe {
-            render_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[cb[0].as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("vector render submit");
-        }
+
+        render_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[cb[0].as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("vector render submit");
         render_worker_queue.wait().expect("vector render wait");
     }
 
@@ -2986,14 +3356,14 @@ impl<'d> ColorTextureAtlasManager<'d> {
         let init_rp = br::RenderPassObject::new(
             common_res.device,
             &br::RenderPassCreateInfo::new(
-                &[br::vk::VkAttachmentDescription::new(
+                &[br::AttachmentDescription::new(
                     atlas.format(),
                     br::ImageLayout::Undefined,
                     br::ImageLayout::ShaderReadOnlyOpt,
                 )
                 .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
                 &[br::SubpassDescription::new().color_attachments(
-                    &[br::vk::VkAttachmentReference::new(
+                    &[br::AttachmentReference::new(
                         0,
                         br::ImageLayout::ColorAttachmentOpt,
                     )],
@@ -3052,20 +3422,18 @@ impl<'d> ColorTextureAtlasManager<'d> {
         .end_render_pass()
         .end()
         .expect("init_cb.end");
-        unsafe {
-            init_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[init_cb.as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("init_cb.submit");
-            init_worker_queue.wait().expect("init_cb.wait");
-        }
+        init_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[init_cb.as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("init_cb.submit");
+        init_worker_queue.wait().expect("init_cb.wait");
 
         Self {
             device: common_res.device,
@@ -3209,19 +3577,17 @@ impl<'d> ColorTextureAtlasManager<'d> {
         .end()
         .expect("cb.end");
 
-        unsafe {
-            render_worker_queue
-                .submit_raw(
-                    &[br::SubmitInfo::new(
-                        &[],
-                        &[],
-                        &[cb.as_transparent_ref()],
-                        &[],
-                    )],
-                    None,
-                )
-                .expect("vector render submit");
-        }
+        render_worker_queue
+            .submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[cb.as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("vector render submit");
         render_worker_queue.wait().expect("vector render wait");
     }
 
@@ -3235,5 +3601,168 @@ impl<'d> ColorTextureAtlasManager<'d> {
 
     pub fn clear(&mut self) {
         self.atlas.clear();
+    }
+}
+
+struct PreviewComposite {
+    descriptor_set_layout: br::vk::VkDescriptorSetLayout,
+    descriptor_pool: br::vk::VkDescriptorPool,
+    descriptor_set: br::DescriptorSet,
+    pipeline_layout: br::vk::VkPipelineLayout,
+    shader: br::vk::VkShaderModule,
+    pipeline_target_rt_size: br::Extent2D,
+    pipeline_target_render_pass_handle: br::vk::VkRenderPass,
+    pipeline_target_subpass: u32,
+    pipeline: br::vk::VkPipeline,
+}
+impl PreviewComposite {
+    unsafe fn drop(self, vk_device: &VulkanDevice) {
+        drop(unsafe { br::PipelineObject::manage(self.pipeline, vk_device) });
+        drop(unsafe { br::DescriptorPoolObject::manage(self.descriptor_pool, vk_device) });
+        drop(unsafe { br::ShaderModuleObject::manage(self.shader, vk_device) });
+        drop(unsafe { br::PipelineLayoutObject::manage(self.pipeline_layout, vk_device) });
+        drop(unsafe {
+            br::DescriptorSetLayoutObject::manage(self.descriptor_set_layout, vk_device)
+        });
+    }
+
+    fn new(
+        vk_device: &VulkanDevice,
+        init_render_tex: &(impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        smp: &(impl br::VkHandle<Handle = br::vk::VkSampler> + ?Sized),
+        target_pass: br::SubpassRef<impl br::RenderPass + ?Sized>,
+        init_screen_size: br::Extent2D,
+    ) -> Self {
+        let descriptor_set_layout = br::DescriptorSetLayoutObject::new(
+            vk_device,
+            &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::CombinedImageSampler
+                .make_binding(0, 1)
+                .with_immutable_samplers(&[smp.as_transparent_ref()])]),
+        )
+        .expect("preview_composite.descriptor_set_layout.create");
+        let pipeline_layout = br::PipelineLayoutObject::new(
+            vk_device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[descriptor_set_layout.as_transparent_ref()],
+                &[br::PushConstantRange::for_type::<[f32; 16 + 4]>(
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                )],
+            ),
+        )
+        .expect("preview_composite.pipeline_layout.create");
+        let shader = vk_device.require_shader("simple_blit.spv");
+
+        let mut descriptor_pool = br::DescriptorPoolObject::new(
+            vk_device,
+            &br::DescriptorPoolCreateInfo::new(
+                1,
+                &[br::DescriptorType::CombinedImageSampler.make_size(1)],
+            ),
+        )
+        .expect("preview_composite.descriptor_pool.create");
+        let [descriptor_set] = descriptor_pool
+            .alloc_array(&[descriptor_set_layout.as_transparent_ref()])
+            .expect("preview_composite.descriptor_set.alloc");
+        vk_device.update_descriptor_sets(
+            &[descriptor_set
+                .binding_at(0)
+                .write(br::DescriptorContents::combined_image_sampler(
+                    init_render_tex,
+                    br::ImageLayout::ShaderReadOnlyOpt,
+                ))],
+            &[],
+        );
+
+        let [pipeline] = vk_device
+            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
+                &pipeline_layout,
+                target_pass,
+                &[
+                    shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                    shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                ],
+                VI_STATE_EMPTY,
+                IA_STATE_TRISTRIP,
+                &br::PipelineViewportStateCreateInfo::new(
+                    &[init_screen_size
+                        .into_rect(br::Offset2D::ZERO)
+                        .make_viewport(0.0..1.0)],
+                    &[init_screen_size.into_rect(br::Offset2D::ZERO)],
+                ),
+                RASTER_STATE_DEFAULT_FILL_NOCULL,
+                BLEND_STATE_SINGLE_NONE,
+            )
+            .set_multisample_state(MS_STATE_EMPTY)])
+            .expect("preview_composite.pipeline.create");
+
+        let (pipeline, _) = pipeline.unmanage();
+        let (descriptor_pool, _) = descriptor_pool.unmanage();
+        let (shader, _) = shader.unmanage();
+        let (pipeline_layout, _) = pipeline_layout.unmanage();
+        let (descriptor_set_layout, _) = descriptor_set_layout.unmanage();
+        Self {
+            descriptor_set_layout,
+            descriptor_pool,
+            descriptor_set,
+            pipeline_layout,
+            shader,
+            pipeline_target_rt_size: init_screen_size,
+            pipeline_target_render_pass_handle: target_pass.0.native_ptr(),
+            pipeline_target_subpass: target_pass.1,
+            pipeline,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        device: &VulkanDevice,
+        new_rt_size: br::Extent2D,
+        new_target_render_pass_handle: br::vk::VkRenderPass,
+        new_target_subpass: u32,
+    ) {
+        if self.pipeline_target_rt_size != new_rt_size
+            || self.pipeline_target_render_pass_handle != new_target_render_pass_handle
+            || self.pipeline_target_subpass != new_target_subpass
+        {
+            drop(unsafe { br::PipelineObject::manage(self.pipeline, device) });
+            let [pipeline] = device
+                .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    br::SubpassRef(
+                        br::VkHandleRef::from_raw_ref(&new_target_render_pass_handle),
+                        new_target_subpass,
+                    ),
+                    &[
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Vertex,
+                            br::VkHandleRef::from_raw_ref(&self.shader),
+                            c"vertMain",
+                        ),
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Fragment,
+                            br::VkHandleRef::from_raw_ref(&self.shader),
+                            c"fragMain",
+                        ),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRISTRIP,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[new_rt_size
+                            .into_rect(br::Offset2D::ZERO)
+                            .make_viewport(0.0..1.0)],
+                        &[new_rt_size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY)])
+                .expect("preview_composite.pipeline.create");
+
+            self.pipeline = pipeline.unmanage().0;
+            self.pipeline_target_rt_size = new_rt_size;
+            self.pipeline_target_render_pass_handle = new_target_render_pass_handle;
+            self.pipeline_target_subpass = new_target_subpass;
+        }
     }
 }
