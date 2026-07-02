@@ -23,7 +23,7 @@ use crate::{
         vg::VectorRasterizationState,
     },
     utils::{
-        SafeF32,
+        PixelsUnit, Rect, SafeF32, Size,
         range_helper::{is_beyond, range_from_len, rate_of},
     },
 };
@@ -530,7 +530,7 @@ impl ClipConfig {
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CustomRenderToken(usize);
+pub struct CustomRenderToken(pub usize);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CompositeRectTextHorizontalAlignment {
@@ -1148,7 +1148,7 @@ pub struct CompositeSharedBuffers {
     count_gradient: usize,
 }
 impl CompositeSharedBuffers {
-    unsafe fn drop(&mut self, gfx: &VulkanDevice) {
+    pub unsafe fn drop(self, gfx: &VulkanDevice) {
         unsafe {
             br::vkfn_wrapper::destroy_buffer(
                 gfx.as_transparent_ref(),
@@ -1688,7 +1688,7 @@ pub enum CompositeRenderingInstruction {
         index_range: core::ops::Range<usize>,
         backdrop_buffer: usize,
     },
-    InsertCustomRenderCommands(CustomRenderToken),
+    InsertCustomRenderCommands(CustomRenderToken, Size<PixelsUnit>, Matrix4<SafeF32>),
     SetClip {
         shader_parameters: [SafeF32; 8],
     },
@@ -1788,11 +1788,18 @@ impl CompositeRenderingInstructionBuilder {
             });
     }
 
-    fn insert_custom_render_commands(&mut self, token: CustomRenderToken) {
+    fn insert_custom_render_commands(
+        &mut self,
+        token: CustomRenderToken,
+        size: Size<PixelsUnit>,
+        position_modifier_matrix: Matrix4<SafeF32>,
+    ) {
         // no dependency check
         self.insts
             .push(CompositeRenderingInstruction::InsertCustomRenderCommands(
                 token,
+                size,
+                position_modifier_matrix,
             ));
     }
 
@@ -2207,7 +2214,11 @@ impl<Event> CompositeTreeRender<Event> {
 
             if let Some(t) = r.custom_render_token {
                 // Custom Renderがある場合はそっちのみ
-                inst_builder.insert_custom_render_commands(t);
+                inst_builder.insert_custom_render_commands(
+                    t,
+                    Size::new_pixels(w.ceil() as _, h.ceil() as _),
+                    unsafe { core::mem::transmute(matrix.clone()) },
+                );
             } else if r.has_bitmap {
                 let (texatlas_rect, tex_type, tex_mapping_mode, slice_borders) =
                     match r.composite_mode.texture() {
@@ -2538,8 +2549,6 @@ pub struct CompositeTree<Event> {
     unused_gradients: BTreeSet<u32>,
     dirty: bool,
     parameter_store: CompositeTreeParameterStore<Event>,
-    custom_render_unused: BTreeSet<usize>,
-    custom_render_last_id: usize,
 }
 impl<Event> CompositeTree<Event> {
     pub fn new() -> Self {
@@ -2560,8 +2569,6 @@ impl<Event> CompositeTree<Event> {
                 unused_float_parameters: BTreeSet::new(),
                 float_parameter_store_size: 0,
             },
-            custom_render_unused: BTreeSet::new(),
-            custom_render_last_id: 0,
         }
     }
 
@@ -2613,20 +2620,6 @@ impl<Event> CompositeTree<Event> {
             stack.extend(self.rects[c].children.drain(..));
             self.free(CompositeTreeRef(c));
         }
-    }
-
-    pub fn acquire_custom_render_token(&mut self) -> CustomRenderToken {
-        if let Some(x) = self.custom_render_unused.pop_first() {
-            return CustomRenderToken(x);
-        }
-
-        let t = CustomRenderToken(self.custom_render_last_id);
-        self.custom_render_last_id += 1;
-        t
-    }
-
-    pub fn release_custom_render_token(&mut self, token: CustomRenderToken) {
-        self.custom_render_unused.insert(token.0);
     }
 
     #[inline(always)]
@@ -4064,7 +4057,7 @@ impl CompositeRenderer {
         rt_size: br::Extent2D,
         rt_image: &(impl br::VkHandle<Handle = br::vk::VkImage> + ?Sized),
         backbuffer_index: usize,
-        mut custom_render: impl FnMut(CustomRenderToken, br::CmdRecord<'x>) -> br::CmdRecord<'x>,
+        custom_render: &mut (impl CustomRenderHandler + ?Sized),
     ) -> br::CmdRecord<'x> {
         let render_region = rt_size.into_rect(br::Offset2D::ZERO);
 
@@ -4220,7 +4213,11 @@ impl CompositeRenderer {
                     )
                     .draw(4, index_range.len() as _, 0, index_range.start as _)
                 }
-                &CompositeRenderingInstruction::InsertCustomRenderCommands(token) => {
+                &CompositeRenderingInstruction::InsertCustomRenderCommands(
+                    token,
+                    size,
+                    ref position_modifier_matrix,
+                ) => {
                     rec = ensure_in_render_pass(
                         self,
                         gfx,
@@ -4232,7 +4229,18 @@ impl CompositeRenderer {
                         rec,
                     );
 
-                    rec = custom_render(token, rec);
+                    let active_pass = self.select_subpass(&render_data.render_passes[rpt_pointer]);
+                    rec = custom_render.inject(
+                        token,
+                        size,
+                        position_modifier_matrix,
+                        CustomRenderContext {
+                            rt_size,
+                            active_render_pass: active_pass.0.native_ptr(),
+                            active_subpass_index: active_pass.1,
+                        },
+                        rec,
+                    );
 
                     // 別のパイプラインをつかっている可能性があるのでいったん紐づいているのを無効化する
                     pipeline_bound = false;
@@ -5100,5 +5108,67 @@ impl BackdropEffectBlurProcessor {
                 let (v, r) = x.unmanage();
                 (r.unmanage().0, v)
             }));
+    }
+}
+
+pub struct CustomRenderContext {
+    pub rt_size: br::Extent2D,
+    pub active_render_pass: br::vk::VkRenderPass,
+    pub active_subpass_index: u32,
+}
+pub trait CustomRenderHandler {
+    fn inject<'r>(
+        &mut self,
+        token: CustomRenderToken,
+        size: Size<PixelsUnit>,
+        position_modifier_matrix: &Matrix4<SafeF32>,
+        ctx: CustomRenderContext,
+        rec: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r>;
+}
+#[repr(transparent)]
+pub struct CustomRenderHandlerFn<F>(pub F)
+where
+    F: for<'x> FnMut(
+        CustomRenderToken,
+        Size<PixelsUnit>,
+        &Matrix4<SafeF32>,
+        CustomRenderContext,
+        br::CmdRecord<'x>,
+    ) -> br::CmdRecord<'x>;
+impl<F> CustomRenderHandler for CustomRenderHandlerFn<F>
+where
+    F: for<'x> FnMut(
+        CustomRenderToken,
+        Size<PixelsUnit>,
+        &Matrix4<SafeF32>,
+        CustomRenderContext,
+        br::CmdRecord<'x>,
+    ) -> br::CmdRecord<'x>,
+{
+    #[inline(always)]
+    fn inject<'r>(
+        &mut self,
+        token: CustomRenderToken,
+        size: Size<PixelsUnit>,
+        position_modifier_matrix: &Matrix4<SafeF32>,
+        ctx: CustomRenderContext,
+        rec: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
+        self.0(token, size, position_modifier_matrix, ctx, rec)
+    }
+}
+pub struct EmptyCustomRenderHandler;
+impl CustomRenderHandler for EmptyCustomRenderHandler {
+    #[inline(always)]
+    fn inject<'r>(
+        &mut self,
+        _token: CustomRenderToken,
+        _size: Size<PixelsUnit>,
+        _position_modifier_matrix: &Matrix4<SafeF32>,
+        _ctx: CustomRenderContext,
+        rec: bedrock::CmdRecord<'r>,
+    ) -> bedrock::CmdRecord<'r> {
+        rec
     }
 }

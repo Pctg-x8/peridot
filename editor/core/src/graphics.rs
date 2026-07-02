@@ -27,6 +27,10 @@ pub const RASTER_STATE_DEFAULT_FILL_NOCULL: &br::PipelineRasterizationStateCreat
 
 pub const BLEND_STATE_SINGLE_NONE: &br::PipelineColorBlendStateCreateInfo =
     &br::PipelineColorBlendStateCreateInfo::new(&[br::PipelineColorBlendAttachmentState::NOBLEND]);
+pub const BLEND_STATE_SINGLE_PREMULTIPLIED: &br::PipelineColorBlendStateCreateInfo =
+    &br::PipelineColorBlendStateCreateInfo::new(&[
+        br::PipelineColorBlendAttachmentState::PREMULTIPLIED,
+    ]);
 
 pub const MS_STATE_EMPTY: &br::PipelineMultisampleStateCreateInfo =
     &br::PipelineMultisampleStateCreateInfo::new();

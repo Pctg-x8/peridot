@@ -160,7 +160,7 @@ where
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 pub struct Size<U: Unit> {
     pub width: U::UnsignedValueType,
     pub height: U::UnsignedValueType,
@@ -174,6 +174,13 @@ impl<U: Unit<UnsignedValueType: core::fmt::Debug>> core::fmt::Debug for Size<U> 
             .finish()
     }
 }
+impl<U: Unit<UnsignedValueType: core::cmp::PartialEq>> core::cmp::PartialEq for Size<U> {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.width.eq(&other.width) && self.height.eq(&other.height)
+    }
+}
+impl<U: Unit<UnsignedValueType: core::cmp::Eq>> core::cmp::Eq for Size<U> {}
 impl Size<LogicalUnit> {
     #[inline(always)]
     pub const fn new_logical(width: f32, height: f32) -> Self {
@@ -261,6 +268,21 @@ impl<U: Unit<UnsignedValueType: core::fmt::Debug, SignedValueType: core::fmt::De
             .field("height", &self.height)
             .finish()
     }
+}
+impl<U: Unit<UnsignedValueType: core::cmp::PartialEq, SignedValueType: core::cmp::PartialEq>>
+    core::cmp::PartialEq for Rect<U>
+{
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.left.eq(&other.left)
+            && self.top.eq(&other.top)
+            && self.width.eq(&other.width)
+            && self.height.eq(&other.height)
+    }
+}
+impl<U: Unit<UnsignedValueType: core::cmp::Eq, SignedValueType: core::cmp::Eq>> core::cmp::Eq
+    for Rect<U>
+{
 }
 impl<U: Unit> Rect<U> {
     #[inline(always)]

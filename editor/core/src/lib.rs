@@ -35,8 +35,8 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
-        ShaderTexture, TextureID,
+        CommittedPreviewState, MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
+        RenderThread, RendererSync, ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -133,6 +133,10 @@ pub fn launch() {
         "wayland presentation not supported on graphics queue"
     );
 
+    let preview_state = Mutex::new(CommittedPreviewState {
+        viewport_size: Size::new_pixels(640, 480),
+    });
+
     let global_time_base = std::time::Instant::now();
     main_wrapper(
         move |args, system_link| run(args, system_link),
@@ -146,6 +150,7 @@ pub fn launch() {
         rt_sender,
         rt_receiver,
         root_font_set,
+        &preview_state,
         #[cfg(windows)]
         &mut app_context,
         #[cfg(windows)]
@@ -171,6 +176,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     rt_sender: RenderMessageSender,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     root_font_set: FontSet,
+    preview_state: &'sys Mutex<CommittedPreviewState>,
     #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
     #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
@@ -318,6 +324,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             event_bus: &sync_event_bus,
             message_receiver: rt_receiver,
             font_set: &root_font_set,
+            preview_state,
             #[cfg(windows)]
             dx_context,
             #[cfg(windows)]
@@ -686,6 +693,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
 #[derive(Clone, Debug)]
 pub enum SyncEvent {
+    NewPresentID { id: u64 },
     WindowPostCreateRenderBuffer { window: WindowHandle },
     FlyoutSurfacePostCreateRenderBuffer { target: FlyoutSurfaceHandle },
     PopupUnmount { id: PopupID },
@@ -693,6 +701,7 @@ pub enum SyncEvent {
 impl SyncEvent {
     pub const fn p_name(&self) -> &'static str {
         match self {
+            Self::NewPresentID { .. } => "Sync(NewPresentID)",
             Self::WindowPostCreateRenderBuffer { .. } => "Sync(WindowPostResizeRenderBuffer)",
             Self::FlyoutSurfacePostCreateRenderBuffer { .. } => {
                 "Sync(ContextMenuPostResizeRenderBuffer)"
@@ -3361,7 +3370,7 @@ async fn run<'sys>(
                     AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
                     ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
                     TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
-                    PreviewPanePresenter::ID => Box::new(PreviewPanePresenter {}),
+                    PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(view_init_ctx)),
                     id => todo!("generic pane id handling: {id:?}"),
                 })
             },
@@ -3443,7 +3452,7 @@ async fn run<'sys>(
                                             Box::new(TimelinePanePresenter {})
                                         }
                                         PreviewPanePresenter::ID => {
-                                            Box::new(PreviewPanePresenter {})
+                                            Box::new(PreviewPanePresenter::new(view_init_ctx))
                                         }
                                         id => todo!("generic pane id handling: {id:?}"),
                                     })
@@ -4546,6 +4555,9 @@ async fn run<'sys>(
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
+            }
+            Event::Sync(SyncEvent::NewPresentID { id }) => {
+                // tracing::debug!(id, "NewPresentID");
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
@@ -6000,9 +6012,22 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
     }
 }
 
-pub struct PreviewPanePresenter {}
+pub struct PreviewPanePresenter {
+    ct_root: CompositeTreeRef,
+}
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
+
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            // has_bitmap: true,
+            custom_render_token: Some(rendering::PREVIEW_COMPOSITE),
+            relative_size_adjustment: [1.0, 1.0],
+            ..Default::default()
+        });
+
+        Self { ct_root }
+    }
 }
 impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
     fn id(&self) -> String {
@@ -6013,9 +6038,15 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
         "Preview".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+        ctx.composite_tree.add_child(target.ct_root, self.ct_root);
+    }
 
-    fn unmount(&self, ctx: &mut MountContext) {}
+    fn unmount(&self, ctx: &mut MountContext) {
+        ctx.composite_tree.remove_child(self.ct_root);
+    }
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        ctx.mount_context.composite_tree.free(self.ct_root);
+    }
 }
