@@ -3295,7 +3295,10 @@ async fn run<'sys>(
         rest: Box::new(DockState::Splitted {
             direction: DockDirection::Right(256.0),
             content: Box::new(DockState::Filled {
-                content_ids: vec![InspectorPanePresenter::ID.into()],
+                content_ids: vec![
+                    InspectorPanePresenter::ID.into(),
+                    UIKitPreviewPanePresenter::ID.into(),
+                ],
                 active_index: 0,
             }),
             rest: Box::new(DockState::Splitted {
@@ -3312,7 +3315,7 @@ async fn run<'sys>(
                     }),
                     rest: Box::new(DockState::Filled {
                         content_ids: vec![
-                            UIKitPreviewPanePresenter::ID.into(),
+                            PreviewPanePresenter::ID.into(),
                             ProjectSettingsPanePresenter::ID.into(),
                         ],
                         active_index: 0,
@@ -3358,6 +3361,7 @@ async fn run<'sys>(
                     AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
                     ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
                     TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
+                    PreviewPanePresenter::ID => Box::new(PreviewPanePresenter {}),
                     id => todo!("generic pane id handling: {id:?}"),
                 })
             },
@@ -3437,6 +3441,9 @@ async fn run<'sys>(
                                         }
                                         TimelinePanePresenter::ID => {
                                             Box::new(TimelinePanePresenter {})
+                                        }
+                                        PreviewPanePresenter::ID => {
+                                            Box::new(PreviewPanePresenter {})
                                         }
                                         id => todo!("generic pane id handling: {id:?}"),
                                     })
@@ -5991,4 +5998,24 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
             self.remove(watch);
         }
     }
+}
+
+pub struct PreviewPanePresenter {}
+impl PreviewPanePresenter {
+    const ID: &str = internal_pane_identifier!("Preview");
+}
+impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
+    fn id(&self) -> String {
+        Self::ID.into()
+    }
+
+    fn name(&self) -> String {
+        "Preview".into()
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+
+    fn unmount(&self, ctx: &mut MountContext) {}
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
