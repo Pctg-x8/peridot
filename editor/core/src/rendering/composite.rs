@@ -1180,7 +1180,7 @@ impl CompositeSharedBuffers {
         let mut gradient_data_buffer = br::BufferObject::new(
             gfx,
             &br::BufferCreateInfo::new(
-                core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT,
+                (core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT) as _,
                 br::BufferUsage::STORAGE_BUFFER | br::BufferUsage::TRANSFER_DEST,
             ),
         )
@@ -1200,7 +1200,7 @@ impl CompositeSharedBuffers {
         let mut gradient_data_buffer_stg = br::BufferObject::new(
             gfx,
             &br::BufferCreateInfo::new(
-                core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT,
+                (core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT) as _,
                 br::BufferUsage::TRANSFER_SRC,
             ),
         )
@@ -1320,7 +1320,7 @@ impl CompositeInstanceManager {
         let mut buffer = br::BufferObject::new(
             gfx,
             &br::BufferCreateInfo::new(
-                core::mem::size_of::<CompositeInstanceData>() * Self::INIT_CAP,
+                (core::mem::size_of::<CompositeInstanceData>() * Self::INIT_CAP) as _,
                 br::BufferUsage::STORAGE_BUFFER | br::BufferUsage::TRANSFER_DEST,
             ),
         )
@@ -1363,7 +1363,7 @@ impl CompositeInstanceManager {
         let mut buffer_stg = br::BufferObject::new(
             gfx,
             &br::BufferCreateInfo::new(
-                core::mem::size_of::<CompositeInstanceData>() * Self::INIT_CAP,
+                (core::mem::size_of::<CompositeInstanceData>() * Self::INIT_CAP) as _,
                 br::BufferUsage::TRANSFER_SRC,
             ),
         )

@@ -9,7 +9,7 @@ use bedrock::{
     Fence, FenceMut, ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule,
     SpecializationConstants, SwapchainMut, VkHandle, VkHandleMut,
 };
-use peridot_math::Matrix4;
+use peridot_math::{Matrix4, Matrix4F32, One, Zero};
 
 use crate::{
     FlyoutSurfaceHandle, SyncEvent, SyncEventBus, WindowHandle,
@@ -23,14 +23,14 @@ use crate::{
         composite::{
             BoundCompositeRenderer, CompositeRenderingData, CompositeSharedBuffers,
             CompositeStreamingData, CompositeTreeRef, CompositeTreeRender, CompositeTreeSyncBuffer,
-            CustomRenderContext, CustomRenderHandler, CustomRenderHandlerFn, CustomRenderToken,
+            CustomRenderContext, CustomRenderHandlerFn, CustomRenderToken,
             EmptyCustomRenderHandler,
         },
         text::FontSet,
         vg::VectorRasterizationState,
     },
     uikit::MountTarget,
-    utils::{LogicalUnit, PixelsUnit, SafeF32, Size},
+    utils::{LogicalUnit, PixelsUnit, SafeF32, Size, rup2_u64},
 };
 
 pub mod atlas;
@@ -272,11 +272,14 @@ impl<'main> RenderThread<'main> {
         );
         let mut preview_renderer = PreviewRenderer::new(
             self.vk_device,
-            preview_rt_buffer.size,
-            br::vk::VK_FORMAT_R8G8B8A8_UNORM,
-            unsafe { br::VkHandleRef::dangling(preview_rt_buffer.image_view) },
+            &preview_rt_buffer,
+            self.vk_device.present_queue_family_index(),
+            &mut render_queue,
         );
 
+        let dep_semaphore_preview_update =
+            br::SemaphoreObject::new(self.vk_device, &br::SemaphoreCreateInfo::new())
+                .expect("dep_semaphore_preview_update.create");
         let dep_semaphore_preview =
             br::SemaphoreObject::new(self.vk_device, &br::SemaphoreCreateInfo::new())
                 .expect("dep_semaphore_preview.create");
@@ -683,9 +686,9 @@ impl<'main> RenderThread<'main> {
                                 .to_pixels_ceil(render_scale.value())
                                 .to_vk(),
                         );
-                        preview_renderer.validate(self.vk_device, preview_rt_buffer.size, unsafe {
-                            br::VkHandleRef::dangling(preview_rt_buffer.image_view)
-                        });
+
+                        preview_renderer.update();
+                        preview_renderer.validate(self.vk_device, &preview_rt_buffer);
 
                         if resource_recreated {
                             // 稀に同じポインタで別のオブジェクトが再生成される場合があるので強制的にキャッシュを吹き飛ばすことで必ず更新させる
@@ -693,8 +696,8 @@ impl<'main> RenderThread<'main> {
                         }
                         preview_composite.update(
                             self.vk_device,
+                            &preview_rt_buffer,
                             ctx.rt_size,
-                            br::VkHandleRef::from_raw_ref(&preview_rt_buffer.image_view),
                             ctx.active_render_pass,
                             ctx.active_subpass_index,
                         );
@@ -950,19 +953,43 @@ impl<'main> RenderThread<'main> {
 
             crate::perf_begin!(perf = POST_QUEUE);
             if preview_composition_required {
-                preview_renderer.write_streaming_buffer_content(
-                    self.vk_device,
-                    PreviewStreamingBufferContent {
-                        current_sec: current_t.as_secs_f32(),
-                    },
-                );
+                let mut render_waits = Vec::with_capacity(2);
+                let mut render_wait_stages = Vec::with_capacity(2);
+
+                if core::mem::replace(&mut preview_renderer.update_command_pending, false) {
+                    render_waits.push(dep_semaphore_preview_update.as_transparent_ref());
+                    render_wait_stages.push(br::PipelineStageFlags::VERTEX_SHADER);
+
+                    render_queue
+                        .submit(
+                            &[br::SubmitInfo::new(
+                                &[],
+                                &[],
+                                &[unsafe {
+                                    br::VkHandleRef::dangling(
+                                        preview_renderer.update_command_buffer,
+                                    )
+                                }],
+                                &[dep_semaphore_preview_update.as_transparent_ref()],
+                            )],
+                            None,
+                        )
+                        .expect("update queue submit");
+                }
+
+                // preview_renderer.write_streaming_buffer_content(
+                //     self.vk_device,
+                //     PreviewStreamingBufferContent {
+                //         current_sec: current_t.as_secs_f32(),
+                //     },
+                // );
 
                 // 別でsubmitしないといけないらしい？(validation layerが対応するsemaphore waitを見つけられなくてエラーが出る)
                 render_queue
                     .submit(
                         &[br::SubmitInfo::new(
-                            &[],
-                            &[],
+                            &render_waits,
+                            &render_wait_stages,
                             &[unsafe {
                                 br::VkHandleRef::dangling(preview_renderer.command_buffer)
                             }],
@@ -2729,7 +2756,7 @@ impl<'d> MaskTextureAtlasManager<'d> {
         let mut vector_draw_buffer = br::BufferObject::new(
             self.device,
             &br::BufferCreateInfo::new(
-                vector_draw_buffer_total_size,
+                vector_draw_buffer_total_size as _,
                 br::BufferUsage::VERTEX_BUFFER
                     | br::BufferUsage::INDEX_BUFFER
                     | br::BufferUsage::TRANSFER_DEST,
@@ -2754,7 +2781,7 @@ impl<'d> MaskTextureAtlasManager<'d> {
         let mut vector_draw_init_buffer = br::BufferObject::new(
             self.device,
             &br::BufferCreateInfo::new(
-                vector_draw_buffer_total_size,
+                vector_draw_buffer_total_size as _,
                 br::BufferUsage::TRANSFER_SRC,
             ),
         )
@@ -3377,14 +3404,29 @@ impl<'d> ColorTextureAtlasManager<'d> {
     }
 }
 
-struct PreviewRenderTargetBuffer {
+pub struct PreviewRenderTargetBuffer {
     memory: br::vk::VkDeviceMemory,
     image: br::vk::VkImage,
     image_view: br::vk::VkImageView,
+    depth_image: br::vk::VkImage,
+    depth_view: br::vk::VkImageView,
     size: br::Extent2D,
 }
 impl PreviewRenderTargetBuffer {
     pub unsafe fn drop(self, device: &VulkanDevice) {
+        drop(unsafe {
+            br::ImageViewObject::manage(
+                self.depth_view,
+                br::ImageObject::manage(
+                    self.depth_image,
+                    device,
+                    // dropでは使わない情報なので適当に埋める
+                    br::vk::VK_IMAGE_TYPE_2D,
+                    br::vk::VK_FORMAT_UNDEFINED,
+                    br::Extent3D::spread1(1),
+                ),
+            )
+        });
         drop(unsafe {
             br::ImageViewObject::manage(
                 self.image_view,
@@ -3401,39 +3443,84 @@ impl PreviewRenderTargetBuffer {
         drop(unsafe { br::DeviceMemoryObject::manage(self.memory, device) });
     }
 
+    // TODO: おそらく本当はDeviceCaps見て選定したほうがいい
+    pub const COLOR_FORMAT: br::Format = br::vk::VK_FORMAT_R8G8B8A8_UNORM;
+    pub const DEPTH_FORMAT: br::Format = br::vk::VK_FORMAT_D24_UNORM_S8_UINT;
+
     pub fn new(device: &VulkanDevice, init_size: br::Extent2D) -> Self {
         let mut image = br::ImageObject::new(
             device,
-            &br::ImageCreateInfo::new(init_size, br::vk::VK_FORMAT_R8G8B8A8_UNORM)
+            &br::ImageCreateInfo::new(init_size, Self::COLOR_FORMAT)
                 .set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT),
         )
         .expect("preview_rt.image.create");
+        let mut depth_image = br::ImageObject::new(
+            device,
+            &br::ImageCreateInfo::new(init_size, Self::DEPTH_FORMAT)
+                .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
+        )
+        .expect("preview_rt.depth_image.create");
+
         let memreq = image.requirements();
+        let depth_memreq = depth_image.requirements();
+        // できるだけAlignmentによるPaddingが少なくなるように配置する
+        let (image_offset, depth_offset, memory_size);
+        if memreq.alignment < depth_memreq.alignment {
+            depth_offset = 0;
+            image_offset = rup2_u64(depth_memreq.size, memreq.alignment);
+            memory_size = image_offset + memreq.size;
+        } else {
+            image_offset = 0;
+            depth_offset = rup2_u64(memreq.size, depth_memreq.alignment);
+            memory_size = depth_offset + depth_memreq.size;
+        }
         let memory = br::DeviceMemoryObject::new(
             device,
             &br::MemoryAllocateInfo::new(
-                memreq.size,
+                memory_size,
                 device
-                    .find_device_local_memory_index(memreq.memoryTypeBits)
+                    .find_device_local_memory_index(
+                        memreq.memoryTypeBits & depth_memreq.memoryTypeBits,
+                    )
                     .expect("preview_rt.memory.index"),
             ),
         )
         .expect("preview_rt.memory.alloc");
-        image.bind(&memory, 0).expect("preview_rt.image.bind");
+        image
+            .bind(&memory, image_offset)
+            .expect("preview_rt.image.bind");
+        depth_image
+            .bind(&memory, depth_offset)
+            .expect("preview_rt.depth_image.bind");
+
         let image_view = br::ImageViewBuilder::new(
             image,
             br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
         )
         .create()
         .expect("preview_rt.image_view.create");
+        let depth_view = br::ImageViewBuilder::new(
+            depth_image,
+            br::ImageSubresourceRange::new(
+                br::AspectMask::DEPTH | br::AspectMask::STENCIL,
+                0..1,
+                0..1,
+            ),
+        )
+        .create()
+        .expect("preview_rt.depth_view.create");
 
         let (image_view, image) = image_view.unmanage();
         let (image, _, _, _, _) = image.unmanage();
+        let (depth_view, depth_image) = depth_view.unmanage();
+        let (depth_image, _, _, _, _) = depth_image.unmanage();
         let (memory, _) = memory.unmanage();
         Self {
             memory,
             image,
             image_view,
+            depth_image,
+            depth_view,
             size: init_size,
         }
     }
@@ -3441,6 +3528,19 @@ impl PreviewRenderTargetBuffer {
     pub fn validate(&mut self, device: &VulkanDevice, active_size: br::Extent2D) -> bool {
         let mut resource_recreated = false;
         if self.size != active_size {
+            drop(unsafe {
+                br::ImageViewObject::manage(
+                    self.depth_view,
+                    br::ImageObject::manage(
+                        self.depth_image,
+                        device,
+                        // dropでは使わない情報なので適当に埋める
+                        br::vk::VK_IMAGE_TYPE_2D,
+                        br::vk::VK_FORMAT_UNDEFINED,
+                        br::Extent3D::spread1(1),
+                    ),
+                )
+            });
             drop(unsafe {
                 br::ImageViewObject::manage(
                     self.image_view,
@@ -3458,37 +3558,76 @@ impl PreviewRenderTargetBuffer {
 
             let mut image = br::ImageObject::new(
                 device,
-                &br::ImageCreateInfo::new(active_size, br::vk::VK_FORMAT_R8G8B8A8_UNORM).set_usage(
+                &br::ImageCreateInfo::new(active_size, Self::COLOR_FORMAT).set_usage(
                     br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT,
                 ),
             )
             .expect("preview_rt.validate.image.create");
+            let mut depth_image = br::ImageObject::new(
+                device,
+                &br::ImageCreateInfo::new(active_size, Self::DEPTH_FORMAT)
+                    .set_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
+            )
+            .expect("preview_rt.validate.depth_image.create");
+
             let memreq = image.requirements();
+            let depth_memreq = depth_image.requirements();
+            // できるだけAlignmentによるPaddingが少なくなるように配置する
+            let (image_offset, depth_offset, memory_size);
+            if memreq.alignment < depth_memreq.alignment {
+                depth_offset = 0;
+                image_offset = rup2_u64(depth_memreq.size, memreq.alignment);
+                memory_size = image_offset + memreq.size;
+            } else {
+                image_offset = 0;
+                depth_offset = rup2_u64(memreq.size, depth_memreq.alignment);
+                memory_size = depth_offset + depth_memreq.size;
+            }
             let memory = br::DeviceMemoryObject::new(
                 device,
                 &br::MemoryAllocateInfo::new(
-                    memreq.size,
+                    memory_size,
                     device
-                        .find_device_local_memory_index(memreq.memoryTypeBits)
+                        .find_device_local_memory_index(
+                            memreq.memoryTypeBits & depth_memreq.memoryTypeBits,
+                        )
                         .expect("preview_rt.memory.index"),
                 ),
             )
             .expect("preview_rt.validate.memory.alloc");
             image
-                .bind(&memory, 0)
+                .bind(&memory, image_offset)
                 .expect("preview_rt.validate.image.bind");
+            depth_image
+                .bind(&memory, depth_offset)
+                .expect("preview_rt.validate.depth_image.bind");
+
             let image_view = br::ImageViewBuilder::new(
                 image,
                 br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
             )
             .create()
             .expect("preview_rt.validate.image_view.create");
+            let depth_view = br::ImageViewBuilder::new(
+                depth_image,
+                br::ImageSubresourceRange::new(
+                    br::AspectMask::DEPTH | br::AspectMask::STENCIL,
+                    0..1,
+                    0..1,
+                ),
+            )
+            .create()
+            .expect("preview_rt.validate.depth_view.create");
 
             let (image_view, image) = image_view.unmanage();
             let (image, _, _, _, _) = image.unmanage();
+            let (depth_view, depth_image) = depth_view.unmanage();
+            let (depth_image, _, _, _, _) = depth_image.unmanage();
             let (memory, _) = memory.unmanage();
             self.image_view = image_view;
             self.image = image;
+            self.depth_view = depth_view;
+            self.depth_image = depth_image;
             self.memory = memory;
             resource_recreated = true;
         }
@@ -3496,13 +3635,149 @@ impl PreviewRenderTargetBuffer {
         self.size = active_size;
         resource_recreated
     }
+
+    pub const fn image_view_tref<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkImageView> {
+        unsafe { br::VkHandleRef::dangling(self.image_view) }
+    }
+
+    pub const fn depth_view_tref<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkImageView> {
+        unsafe { br::VkHandleRef::dangling(self.depth_view) }
+    }
 }
 
+// std140 layout
 #[repr(C)]
 pub struct PreviewStreamingBufferContent {
     pub current_sec: f32,
 }
 
+pub struct PreviewOriginAxesVertex {
+    dir: [f32; 4],
+    offset: [f32; 4],
+}
+
+// std140 layout
+#[repr(C)]
+pub struct PreviewCameraData {
+    world_to_clip_space: Matrix4F32,
+    camera_pos: [f32; 4],
+}
+
+const PREVIEW_VS_ORIGIN_AXES: &[PreviewOriginAxesVertex] = &[
+    PreviewOriginAxesVertex {
+        dir: [1.0, 0.0, 0.0, 1.0],
+        offset: [1000.0, 0.0, 0.0, 0.0],
+    },
+    PreviewOriginAxesVertex {
+        dir: [1.0, 0.0, 0.0, 1.0],
+        offset: [-1000.0, 0.0, 0.0, 0.0],
+    },
+    PreviewOriginAxesVertex {
+        dir: [0.0, 1.0, 0.0, 1.0],
+        offset: [0.0, 1000.0, 0.0, 0.0],
+    },
+    PreviewOriginAxesVertex {
+        dir: [0.0, 1.0, 0.0, 1.0],
+        offset: [0.0, -1000.0, 0.0, 0.0],
+    },
+    PreviewOriginAxesVertex {
+        dir: [0.0, 0.0, 1.0, 1.0],
+        offset: [0.0, 0.0, 1000.0, 0.0],
+    },
+    PreviewOriginAxesVertex {
+        dir: [0.0, 0.0, 1.0, 1.0],
+        offset: [0.0, 0.0, -1000.0, 0.0],
+    },
+];
+
+struct PreviewScratchStagingBuffer {
+    buffer: br::vk::VkBuffer,
+    memory: br::vk::VkDeviceMemory,
+    should_flush: bool,
+    mapped_ptr: *mut core::ffi::c_void,
+    unused_top: usize,
+}
+impl PreviewScratchStagingBuffer {
+    unsafe fn drop(self, device: &VulkanDevice) {
+        unsafe {
+            br::vkfn_wrapper::unmap_memory(
+                device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.memory),
+            );
+        }
+
+        drop(unsafe { br::BufferObject::manage(self.buffer, device) });
+        drop(unsafe { br::DeviceMemoryObject::manage(self.memory, device) });
+    }
+
+    const INIT_SIZE: br::DeviceSize = 1024 * 1024;
+
+    fn new(device: &VulkanDevice) -> Self {
+        let mut buffer = br::BufferObject::new(
+            device,
+            &br::BufferCreateInfo::new(Self::INIT_SIZE, br::BufferUsage::TRANSFER_SRC),
+        )
+        .expect("preview_scratch_staging.buffer.create");
+        let memreq = buffer.requirements();
+        let memindex = device
+            .find_host_visible_memory_index(memreq.memoryTypeBits)
+            .expect("preview_scratch_staging.memory.index");
+        let should_flush = !device.is_coherent_memory(memindex);
+        let memory = br::DeviceMemoryObject::new(
+            device,
+            &br::MemoryAllocateInfo::new(memreq.size, memindex),
+        )
+        .expect("preview_scratch_staging.memory.alloc");
+        buffer
+            .bind(&memory, 0)
+            .expect("preview_scratch_staging.buffer.bind");
+
+        let (buffer, _) = buffer.unmanage();
+        let (memory, _) = memory.unmanage();
+        let mapped_ptr = unsafe {
+            br::vkfn_wrapper::map_memory(
+                device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(memory),
+                0..Self::INIT_SIZE,
+                0,
+            )
+            .expect("preview_scratch_staging.map")
+        };
+        Self {
+            buffer,
+            memory,
+            should_flush,
+            mapped_ptr,
+            unused_top: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.unused_top = 0;
+    }
+
+    fn reserve(&mut self, size: usize) -> usize {
+        let r = self.unused_top;
+        self.unused_top += size;
+        if self.unused_top >= Self::INIT_SIZE as usize {
+            todo!("resizing scratch staging buffer");
+        }
+
+        r
+    }
+}
+
+// TODO: モダンなGridを描画する
+//
+// * 距離によって自動的に細かさが変わる（LOD）
+//   * XZ平面とカメラの距離（=カメラのY座標）による
+//   * 数段階用意するかPushConstantとかでスケールかけた同じグリッドメッシュを複数描画するか
+// * XZ方向に無限に見えるように表示する
+//   * 一定の遠距離の描画はフェードアウトさせる
+//   * カメラの中心点とかからグリッドのオフセットを計算する 完全追従ではなくグリッドの目盛り単位で動かす（移動してる様子をわからなくする）
+// * 描画データの持ち方を考える
+//   * 全部頂点バッファで持つ or 2点だけもってInstancingで複製するか
+//     * Instancing複製ならちょっと計算が面倒かもだけど完全にフェードアウト仕切るまででDrawCallを打ち切れる
 pub struct PreviewRenderer {
     common_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
     descriptor_pool: br::vk::VkDescriptorPool,
@@ -3514,18 +3789,34 @@ pub struct PreviewRenderer {
     active_framebuffer_resource_handle: br::vk::VkImageView,
     render_pass: br::vk::VkRenderPass,
     framebuffer: br::vk::VkFramebuffer,
-    pipeline_layout: br::vk::VkPipelineLayout,
-    test_shader: br::vk::VkShaderModule,
-    test_pipeline: br::vk::VkPipeline,
+    origin_axes_pipeline_layout: br::vk::VkPipelineLayout,
+    origin_axes_shader: br::vk::VkShaderModule,
+    origin_axes_pipeline: br::vk::VkPipeline,
     command_pool: br::vk::VkCommandPool,
     command_buffer: br::vk::VkCommandBuffer,
+    update_command_pool: br::vk::VkCommandPool,
+    update_command_buffer: br::vk::VkCommandBuffer,
+    update_command_pending: bool,
+    scratch_staging: PreviewScratchStagingBuffer,
+    pending_camera_data_updates: Option<usize>,
+    internal_mesh_buffer: br::vk::VkBuffer,
+    origin_axes_vbuf_range: core::ops::Range<br::DeviceSize>,
+    internal_uniform_buffer: br::vk::VkBuffer,
+    camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
+    internal_data_memory: br::vk::VkDeviceMemory,
+    main_camera: peridot_math::Camera,
 }
 impl PreviewRenderer {
     pub unsafe fn drop(self, device: &VulkanDevice) {
+        unsafe {
+            self.scratch_staging.drop(device);
+        }
+
+        drop(unsafe { br::CommandPoolObject::manage(self.update_command_pool, device) });
         drop(unsafe { br::CommandPoolObject::manage(self.command_pool, device) });
-        drop(unsafe { br::PipelineObject::manage(self.test_pipeline, device) });
-        drop(unsafe { br::ShaderModuleObject::manage(self.test_shader, device) });
-        drop(unsafe { br::PipelineLayoutObject::manage(self.pipeline_layout, device) });
+        drop(unsafe { br::PipelineObject::manage(self.origin_axes_pipeline, device) });
+        drop(unsafe { br::ShaderModuleObject::manage(self.origin_axes_shader, device) });
+        drop(unsafe { br::PipelineLayoutObject::manage(self.origin_axes_pipeline_layout, device) });
         drop(unsafe { br::FramebufferObject::manage(self.framebuffer, device) });
         drop(unsafe { br::RenderPassObject::manage(self.render_pass, device) });
         drop(unsafe { br::DeviceMemoryObject::manage(self.streaming_memory, device) });
@@ -3534,13 +3825,16 @@ impl PreviewRenderer {
         drop(unsafe {
             br::DescriptorSetLayoutObject::manage(self.common_descriptor_set_layout, device)
         });
+        drop(unsafe { br::BufferObject::manage(self.internal_mesh_buffer, device) });
+        drop(unsafe { br::BufferObject::manage(self.internal_uniform_buffer, device) });
+        drop(unsafe { br::DeviceMemoryObject::manage(self.internal_data_memory, device) });
     }
 
     pub fn new(
         device: &VulkanDevice,
-        init_rt_size: br::Extent2D,
-        init_rt_format: br::Format,
-        init_rt_resource: br::VkHandleRef<br::vk::VkImageView>,
+        init_rt: &PreviewRenderTargetBuffer,
+        work_queue_family_index: u32,
+        work_queue: &mut (impl br::QueueMut + ?Sized),
     ) -> Self {
         let mut streaming_buffer = br::BufferObject::new(
             device,
@@ -3566,11 +3860,20 @@ impl PreviewRenderer {
         let render_pass = br::RenderPassObject::new(
             device,
             &br::RenderPassCreateInfo2::new(
-                &[br::AttachmentDescription2::new(init_rt_format)
-                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
-                    .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined())],
+                &[
+                    br::AttachmentDescription2::new(PreviewRenderTargetBuffer::COLOR_FORMAT)
+                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                        .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined()),
+                    br::AttachmentDescription2::new(PreviewRenderTargetBuffer::DEPTH_FORMAT)
+                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
+                        .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
+                        .with_layout_to(
+                            br::ImageLayout::DepthStencilAttachmentOpt.from_undefined(),
+                        ),
+                ],
                 &[br::SubpassDescription2::new()
-                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])
+                    .depth_stencil(&br::AttachmentReference2::depth_stencil_attachment_opt(1))],
                 &[br::SubpassDependency2::new(
                     br::SubpassIndex::Internal(0),
                     br::SubpassIndex::External,
@@ -3591,9 +3894,9 @@ impl PreviewRenderer {
             device,
             &br::FramebufferCreateInfo::new(
                 &render_pass,
-                &[init_rt_resource],
-                init_rt_size.width,
-                init_rt_size.height,
+                &[init_rt.image_view_tref(), init_rt.depth_view_tref()],
+                init_rt.size.width,
+                init_rt.size.height,
             ),
         )
         .expect("preview.framebuffer.create");
@@ -3605,6 +3908,259 @@ impl PreviewRenderer {
             ]),
         )
         .expect("preview.common_descriptor_set_layout.create");
+
+        let origin_axes_pipeline_layout = br::PipelineLayoutObject::new(
+            device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[common_descriptor_set_layout.as_transparent_ref()],
+                &[],
+            ),
+        )
+        .expect("preview.origin_axes.pipeline_layout.create");
+        let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
+        let [origin_axes_pipeline] = device
+            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
+                &origin_axes_pipeline_layout,
+                render_pass.subpass(0),
+                &[
+                    origin_axes_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                    origin_axes_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                ],
+                &br::PipelineVertexInputStateCreateInfo::new(
+                    &[br::VertexInputBindingDescription(
+                        br::vk::VkVertexInputBindingDescription {
+                            binding: 0,
+                            stride: size_of::<PreviewOriginAxesVertex>() as _,
+                            inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
+                        },
+                    )],
+                    &[
+                        br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: 0,
+                                binding: 0,
+                                offset: core::mem::offset_of!(PreviewOriginAxesVertex, dir) as _,
+                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                            },
+                        ),
+                        br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: 1,
+                                binding: 0,
+                                offset: core::mem::offset_of!(PreviewOriginAxesVertex, offset) as _,
+                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                            },
+                        ),
+                    ],
+                ),
+                &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
+                &br::PipelineViewportStateCreateInfo::new(
+                    &[init_rt
+                        .size
+                        .into_rect(br::Offset2D::ZERO)
+                        .make_viewport(0.0..1.0)],
+                    &[init_rt.size.into_rect(br::Offset2D::ZERO)],
+                ),
+                &br::PipelineRasterizationStateCreateInfo::new(
+                    br::PolygonMode::Fill,
+                    br::CullModeFlags::NONE,
+                    br::FrontFace::CounterClockwise,
+                ),
+                BLEND_STATE_SINGLE_PREMULTIPLIED,
+            )
+            .set_multisample_state(MS_STATE_EMPTY)
+            .set_depth_stencil_state(
+                &br::PipelineDepthStencilStateCreateInfo::new()
+                    .config_depth(Some(br::CompareOp::Less), false),
+            )])
+            .expect("preview.origin_axes.pipelines.create");
+
+        let origin_axes_vbuf_range = 0..size_of_val(PREVIEW_VS_ORIGIN_AXES) as br::DeviceSize;
+        let mut internal_mesh_buffer = br::BufferObject::new(
+            device,
+            &br::BufferCreateInfo::new(
+                origin_axes_vbuf_range.end,
+                br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::TRANSFER_DEST,
+            ),
+        )
+        .expect("preview.internal_mesh_buffer.create");
+        let camera_data_ubuf_range = 0..size_of::<PreviewCameraData>() as br::DeviceSize;
+        let mut internal_uniform_buffer = br::BufferObject::new(
+            device,
+            &br::BufferCreateInfo::new(
+                camera_data_ubuf_range.end,
+                br::BufferUsage::UNIFORM_BUFFER | br::BufferUsage::TRANSFER_DEST,
+            ),
+        )
+        .expect("preview.internal_uniform_buffer.create");
+        let internal_mesh_buffer_memreq = internal_mesh_buffer.requirements();
+        let internal_uniform_buffer_memreq = internal_uniform_buffer.requirements();
+        let internal_mesh_buffer_offset = rup2_u64(
+            internal_uniform_buffer_memreq.size,
+            internal_mesh_buffer_memreq.alignment,
+        );
+        let internal_data_memory = device.alloc_device_local_memory(
+            internal_mesh_buffer_offset + internal_mesh_buffer_memreq.size,
+            internal_mesh_buffer_memreq.memoryTypeBits
+                & internal_uniform_buffer_memreq.memoryTypeBits,
+        );
+        internal_mesh_buffer
+            .bind(&internal_data_memory, internal_mesh_buffer_offset)
+            .expect("preview.internal_mesh_buffer.bind");
+        internal_uniform_buffer
+            .bind(&internal_data_memory, 0)
+            .expect("preview.internal_uniform_buffer.bind");
+
+        let mut init_camera = peridot_math::Camera {
+            position: peridot_math::Vector3(1.0, 1.0, -5.0),
+            rotation: peridot_math::Quaternion::ONE,
+            projection: Some(peridot_math::ProjectionMethod::Physical {
+                focal_length: 30.0,
+                sensor_size: peridot_math::Vector2(35.0, 24.0),
+                screen_fitting: peridot_math::PhysicalScreenFitting::Shrink,
+                lens_shift: peridot_math::Vector2(0.0, 0.0),
+            }),
+            depth_range: 0.1..1000.0,
+        };
+        init_camera.look_at(
+            peridot_math::Vector3::ZERO,
+            Some(peridot_math::Vector3::up()),
+        );
+
+        struct UploadBufferData {
+            origin_axes_vbuf: [PreviewOriginAxesVertex; PREVIEW_VS_ORIGIN_AXES.len()],
+            camera_data_ubuf: PreviewCameraData,
+        }
+        let mut upload_buffer = br::BufferObject::new(
+            device,
+            &br::BufferCreateInfo::new_for_type::<UploadBufferData>(br::BufferUsage::TRANSFER_SRC),
+        )
+        .expect("preview.upload_buffer.create");
+        let memreq = upload_buffer.requirements();
+        let memindex = device
+            .find_host_visible_memory_index(memreq.memoryTypeBits)
+            .expect("preview.upload_memory.index");
+        let should_flush = !device.is_coherent_memory(memindex);
+        let mut mem = br::DeviceMemoryObject::new(
+            device,
+            &br::MemoryAllocateInfo::new(memreq.size, memindex),
+        )
+        .expect("preview.upload_memory.alloc");
+        upload_buffer
+            .bind(&mem, 0)
+            .expect("preview.upload_buffer.bind");
+        let memhandle = mem.native_ptr();
+        let ptr = mem
+            .map(0..size_of::<UploadBufferData>())
+            .expect("preview.upload_memory.map");
+        unsafe {
+            let p = ptr.ptr().cast::<UploadBufferData>();
+            core::ptr::copy_nonoverlapping(
+                PREVIEW_VS_ORIGIN_AXES.as_ptr(),
+                (*p).origin_axes_vbuf.as_mut_ptr(),
+                PREVIEW_VS_ORIGIN_AXES.len(),
+            );
+            core::ptr::write(
+                &raw mut (*p).camera_data_ubuf,
+                PreviewCameraData {
+                    world_to_clip_space: init_camera
+                        .view_projection_matrix(
+                            init_rt.size.width as f32 / init_rt.size.height as f32,
+                        )
+                        .transpose(),
+                    camera_pos: [
+                        init_camera.position.0,
+                        init_camera.position.1,
+                        init_camera.position.2,
+                        1.0,
+                    ],
+                },
+            );
+        }
+        if should_flush {
+            unsafe {
+                device
+                    .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
+                        memhandle,
+                        0,
+                        size_of::<UploadBufferData>() as _,
+                    )])
+                    .expect("preview.upload_memory.flush");
+            }
+        }
+        drop(ptr);
+
+        let mut init_cp = br::CommandPoolObject::new(
+            device,
+            &br::CommandPoolCreateInfo::new(work_queue_family_index).transient(),
+        )
+        .expect("preview.init_cp.create");
+        let [mut init_cb] = br::CommandBufferObject::alloc_array(
+            device,
+            &br::CommandBufferFixedCountAllocateInfo::new(
+                &mut init_cp,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("preview.init_cb.alloc");
+        unsafe {
+            init_cb
+                .begin(&br::CommandBufferBeginInfo::new().onetime_submit())
+                .expect("preview.init_cb.begin")
+        }
+        .copy_buffer(
+            &upload_buffer,
+            &internal_mesh_buffer,
+            &[br::BufferCopy(br::vk::VkBufferCopy {
+                srcOffset: core::mem::offset_of!(UploadBufferData, origin_axes_vbuf) as _,
+                dstOffset: 0,
+                size: size_of_val(PREVIEW_VS_ORIGIN_AXES) as _,
+            })],
+        )
+        .copy_buffer(
+            &upload_buffer,
+            &internal_uniform_buffer,
+            &[br::BufferCopy::copy_data::<PreviewCameraData>(
+                core::mem::offset_of!(UploadBufferData, camera_data_ubuf) as _,
+                0,
+            )],
+        )
+        .inject(|r| {
+            device.cmd_pipeline_barrier(
+                r,
+                &br::DependencyInfo::new(
+                    &[br::MemoryBarrier2::new()
+                        .from(
+                            br::PipelineStageFlags2::COPY,
+                            br::AccessFlags2::TRANSFER.write,
+                        )
+                        .to(
+                            br::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT
+                                | br::PipelineStageFlags2::VERTEX_SHADER,
+                            br::AccessFlags2::VERTEX_ATTRIBUTE_READ
+                                | br::AccessFlags2::UNIFORM_READ,
+                        )],
+                    &[],
+                    &[],
+                ),
+            )
+        })
+        .end()
+        .expect("preview.init_cb.end");
+        work_queue
+            .submit(
+                &[br::SubmitInfo::new_array(
+                    &[],
+                    &[],
+                    &[init_cb.as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("preview.init_cb.submit");
+
+        let scratch_staging = PreviewScratchStagingBuffer::new(device);
+
         let mut descriptor_pool = br::DescriptorPoolObject::new(
             device,
             &br::DescriptorPoolCreateInfo::new(
@@ -3620,41 +4176,11 @@ impl PreviewRenderer {
             &[common_descriptor_set
                 .binding_at(0)
                 .write(br::DescriptorContents::uniform_buffer(
-                    &streaming_buffer,
-                    0..size_of::<PreviewStreamingBufferContent>() as _,
+                    &internal_uniform_buffer,
+                    camera_data_ubuf_range.clone(),
                 ))],
             &[],
         );
-        let pipeline_layout = br::PipelineLayoutObject::new(
-            device,
-            &br::PipelineLayoutCreateInfo::new(
-                &[common_descriptor_set_layout.as_transparent_ref()],
-                &[],
-            ),
-        )
-        .expect("preview.pipeline_layout.create");
-        let test_shader = device.require_shader("preview/test.spv");
-        let [test_pipeline] = device
-            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
-                &pipeline_layout,
-                render_pass.subpass(0),
-                &[
-                    test_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                    test_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                ],
-                VI_STATE_EMPTY,
-                IA_STATE_TRILIST,
-                &br::PipelineViewportStateCreateInfo::new(
-                    &[init_rt_size
-                        .into_rect(br::Offset2D::ZERO)
-                        .make_viewport(0.0..1.0)],
-                    &[init_rt_size.into_rect(br::Offset2D::ZERO)],
-                ),
-                RASTER_STATE_DEFAULT_FILL_NOCULL,
-                BLEND_STATE_SINGLE_PREMULTIPLIED,
-            )
-            .set_multisample_state(MS_STATE_EMPTY)])
-            .expect("preview.pipelines.create");
 
         let mut command_pool = br::CommandPoolObject::new(
             device,
@@ -3678,28 +4204,59 @@ impl PreviewRenderer {
             &br::RenderPassBeginInfo::new(
                 &render_pass,
                 &framebuffer,
-                init_rt_size.into_rect(br::Offset2D::ZERO),
-                &[br::ClearValue::color_f32([0.0, 0.1, 0.0, 1.0])],
+                init_rt.size.into_rect(br::Offset2D::ZERO),
+                &[
+                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                    br::ClearValue::depth_stencil(1.0, 0),
+                ],
             ),
             br::SubpassContents::Inline,
         )
-        .bind_pipeline(br::PipelineBindPoint::Graphics, &test_pipeline)
+        .bind_pipeline(br::PipelineBindPoint::Graphics, &origin_axes_pipeline)
         .bind_descriptor_sets(
             br::PipelineBindPoint::Graphics,
-            &pipeline_layout,
+            &origin_axes_pipeline_layout,
             0,
             &[common_descriptor_set],
             &[],
         )
-        .draw(3, 1, 0, 0)
+        .bind_vertex_buffer_array(
+            0,
+            &[internal_mesh_buffer.as_transparent_ref()],
+            &[origin_axes_vbuf_range.start],
+        )
+        .draw(PREVIEW_VS_ORIGIN_AXES.len() as _, 1, 0, 0)
         .end_render_pass()
         .end()
         .expect("preview.command_buffer.end");
 
+        let mut update_command_pool = br::CommandPoolObject::new(
+            device,
+            &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
+        )
+        .expect("preview.update_command_pool.create");
+        let [update_command_buffer] = br::CommandBufferObject::alloc_array(
+            device,
+            &br::CommandBufferFixedCountAllocateInfo::new(
+                &mut update_command_pool,
+                br::CommandBufferLevel::Primary,
+            ),
+        )
+        .expect("preview.update_command_buffer.alloc");
+
+        work_queue.wait().expect("preview.init_cb.wait");
+        // keep alive
+        drop(mem);
+        drop(upload_buffer);
+
+        let (update_command_pool, _) = update_command_pool.unmanage();
         let (command_pool, _) = command_pool.unmanage();
-        let (test_pipeline, _) = test_pipeline.unmanage();
-        let (test_shader, _) = test_shader.unmanage();
-        let (pipeline_layout, _) = pipeline_layout.unmanage();
+        let (internal_data_memory, _) = internal_data_memory.unmanage();
+        let (internal_uniform_buffer, _) = internal_uniform_buffer.unmanage();
+        let (internal_mesh_buffer, _) = internal_mesh_buffer.unmanage();
+        let (origin_axes_pipeline, _) = origin_axes_pipeline.unmanage();
+        let (origin_axes_shader, _) = origin_axes_shader.unmanage();
+        let (origin_axes_pipeline_layout, _) = origin_axes_pipeline_layout.unmanage();
         let (framebuffer, _) = framebuffer.unmanage();
         let (render_pass, _) = render_pass.unmanage();
         let (streaming_memory, _) = streaming_memory.unmanage();
@@ -3713,36 +4270,47 @@ impl PreviewRenderer {
             streaming_buffer,
             streaming_memory,
             streaming_memory_should_flush,
-            active_rt_size: init_rt_size,
-            active_framebuffer_resource_handle: init_rt_resource.native_ptr(),
+            active_rt_size: init_rt.size,
+            active_framebuffer_resource_handle: init_rt.image_view,
             render_pass,
             framebuffer,
-            pipeline_layout,
-            test_shader,
-            test_pipeline,
+            origin_axes_pipeline_layout,
+            origin_axes_shader,
+            origin_axes_pipeline,
+            internal_mesh_buffer,
+            origin_axes_vbuf_range,
+            internal_uniform_buffer,
+            camera_data_ubuf_range,
+            internal_data_memory,
+            scratch_staging,
+            pending_camera_data_updates: None,
             command_pool,
             command_buffer: command_buffer.native_ptr(),
+            update_command_pool,
+            update_command_buffer: update_command_buffer.native_ptr(),
+            update_command_pending: false,
+            main_camera: init_camera,
         }
     }
 
-    pub fn validate(
-        &mut self,
-        device: &VulkanDevice,
-        active_rt_size: br::Extent2D,
-        active_rt_resource: br::VkHandleRef<br::vk::VkImageView>,
-    ) {
+    pub fn update(&mut self) {
+        self.scratch_staging.reset();
+    }
+
+    pub fn validate(&mut self, device: &VulkanDevice, active_rt: &PreviewRenderTargetBuffer) {
         let mut framebuffer_changed = false;
-        if active_rt_size != self.active_rt_size
-            || active_rt_resource.native_ptr() != self.active_framebuffer_resource_handle
+        if active_rt.size != self.active_rt_size
+            || active_rt.image_view != self.active_framebuffer_resource_handle
         {
+            // Note: color bufferとdepth bufferは同時に変わるのでどっちかだけ見ればいい
             drop(unsafe { br::FramebufferObject::manage(self.framebuffer, device) });
             self.framebuffer = br::FramebufferObject::new(
                 device,
                 &br::FramebufferCreateInfo::new(
                     br::VkHandleRef::from_raw_ref(&self.render_pass),
-                    &[active_rt_resource],
-                    active_rt_size.width,
-                    active_rt_size.height,
+                    &[active_rt.image_view_tref(), active_rt.depth_view_tref()],
+                    active_rt.size.width,
+                    active_rt.size.height,
                 ),
             )
             .expect("preview.validate.framebuffer")
@@ -3752,44 +4320,162 @@ impl PreviewRenderer {
             framebuffer_changed = true;
         }
 
-        let mut test_pipeline_changed = false;
-        if active_rt_size != self.active_rt_size {
-            drop(unsafe { br::PipelineObject::manage(self.test_pipeline, device) });
-            let [test_pipeline] = device
+        let mut origin_axes_pipeline_changed = false;
+        if active_rt.size != self.active_rt_size {
+            drop(unsafe { br::PipelineObject::manage(self.origin_axes_pipeline, device) });
+            let [origin_axes_pipeline] = device
                 .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
-                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline_layout),
                     br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
                     &[
                         br::PipelineShaderStage::new(
                             br::ShaderStage::Vertex,
-                            br::VkHandleRef::from_raw_ref(&self.test_shader),
+                            br::VkHandleRef::from_raw_ref(&self.origin_axes_shader),
                             c"vertMain",
                         ),
                         br::PipelineShaderStage::new(
                             br::ShaderStage::Fragment,
-                            br::VkHandleRef::from_raw_ref(&self.test_shader),
+                            br::VkHandleRef::from_raw_ref(&self.origin_axes_shader),
                             c"fragMain",
                         ),
                     ],
-                    VI_STATE_EMPTY,
-                    IA_STATE_TRILIST,
+                    &br::PipelineVertexInputStateCreateInfo::new(
+                        &[br::VertexInputBindingDescription(
+                            br::vk::VkVertexInputBindingDescription {
+                                binding: 0,
+                                stride: size_of::<PreviewOriginAxesVertex>() as _,
+                                inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
+                            },
+                        )],
+                        &[
+                            br::VertexInputAttributeDescription(
+                                br::vk::VkVertexInputAttributeDescription {
+                                    location: 0,
+                                    binding: 0,
+                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, dir)
+                                        as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                },
+                            ),
+                            br::VertexInputAttributeDescription(
+                                br::vk::VkVertexInputAttributeDescription {
+                                    location: 1,
+                                    binding: 0,
+                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, offset)
+                                        as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                },
+                            ),
+                        ],
+                    ),
+                    &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
                     &br::PipelineViewportStateCreateInfo::new(
-                        &[active_rt_size
+                        &[active_rt
+                            .size
                             .into_rect(br::Offset2D::ZERO)
                             .make_viewport(0.0..1.0)],
-                        &[active_rt_size.into_rect(br::Offset2D::ZERO)],
+                        &[active_rt.size.into_rect(br::Offset2D::ZERO)],
                     ),
-                    RASTER_STATE_DEFAULT_FILL_NOCULL,
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::NONE,
+                        br::FrontFace::CounterClockwise,
+                    ),
                     BLEND_STATE_SINGLE_PREMULTIPLIED,
                 )
-                .set_multisample_state(MS_STATE_EMPTY)])
-                .expect("preview.validate.test_pipeline");
-            self.test_pipeline = test_pipeline.unmanage().0;
+                .set_multisample_state(MS_STATE_EMPTY)
+                .set_depth_stencil_state(
+                    &br::PipelineDepthStencilStateCreateInfo::new()
+                        .config_depth(Some(br::CompareOp::Less), false),
+                )])
+                .expect("preview.validate.origin_axes.pipelines.create");
+            self.origin_axes_pipeline = origin_axes_pipeline.unmanage().0;
 
-            test_pipeline_changed = true;
+            origin_axes_pipeline_changed = true;
         }
 
-        if framebuffer_changed || test_pipeline_changed || active_rt_size != self.active_rt_size {
+        if active_rt.size != self.active_rt_size {
+            let buffer_offset = *self.pending_camera_data_updates.get_or_insert_with(|| {
+                self.scratch_staging.reserve(size_of::<PreviewCameraData>())
+            });
+            unsafe {
+                core::ptr::write(
+                    self.scratch_staging
+                        .mapped_ptr
+                        .byte_add(buffer_offset)
+                        .cast::<PreviewCameraData>(),
+                    PreviewCameraData {
+                        world_to_clip_space: self
+                            .main_camera
+                            .view_projection_matrix(
+                                active_rt.size.width as f32 / active_rt.size.height as f32,
+                            )
+                            .transpose(),
+                        camera_pos: [
+                            self.main_camera.position.0,
+                            self.main_camera.position.1,
+                            self.main_camera.position.2,
+                            1.0,
+                        ],
+                    },
+                );
+            }
+        }
+
+        self.update_command_pending = false;
+        if self.pending_camera_data_updates.is_some() {
+            // needs update device data
+            unsafe {
+                br::vkfn_wrapper::reset_command_pool(
+                    device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(self.update_command_pool),
+                    br::CommandPoolResetFlags::EMPTY,
+                )
+                .expect("preview.validate.update_command_pool.reset");
+            }
+            unsafe {
+                br::vkfn_wrapper::begin_command_buffer(
+                    br::VkHandleRefMut::dangling(self.update_command_buffer),
+                    &br::CommandBufferBeginInfo::new(),
+                )
+                .expect("preview.validate.update_command_buffer.begin");
+            }
+            br::CmdRecord::new(unsafe { br::VkHandleRefMut::dangling(self.update_command_buffer) })
+                .inject(|r| match self.pending_camera_data_updates.take() {
+                    None => r,
+                    Some(bo) => r.copy_buffer(
+                        br::VkHandleRef::from_raw_ref(&self.scratch_staging.buffer),
+                        br::VkHandleRef::from_raw_ref(&self.internal_uniform_buffer),
+                        &[br::BufferCopy::copy_data::<PreviewCameraData>(bo as _, 0)],
+                    ),
+                })
+                .inject(|r| {
+                    device.cmd_pipeline_barrier(
+                        r,
+                        &br::DependencyInfo::new(
+                            &[br::MemoryBarrier2::new()
+                                .from(
+                                    br::PipelineStageFlags2::COPY,
+                                    br::AccessFlags2::TRANSFER.write,
+                                )
+                                .to(
+                                    br::PipelineStageFlags2::VERTEX_SHADER,
+                                    br::AccessFlags2::UNIFORM_READ,
+                                )],
+                            &[],
+                            &[],
+                        ),
+                    )
+                })
+                .end()
+                .expect("preview.validate.update_command_buffer.end");
+            self.update_command_pending = true;
+        }
+
+        if framebuffer_changed
+            || origin_axes_pipeline_changed
+            || active_rt.size != self.active_rt_size
+        {
             unsafe {
                 br::vkfn_wrapper::reset_command_pool(
                     device.as_transparent_ref(),
@@ -3811,66 +4497,74 @@ impl PreviewRenderer {
                     &br::RenderPassBeginInfo::new(
                         br::VkHandleRef::from_raw_ref(&self.render_pass),
                         br::VkHandleRef::from_raw_ref(&self.framebuffer),
-                        active_rt_size.into_rect(br::Offset2D::ZERO),
-                        &[br::ClearValue::color_f32([0.0, 0.1, 0.0, 1.0])],
+                        active_rt.size.into_rect(br::Offset2D::ZERO),
+                        &[
+                            br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
+                            br::ClearValue::depth_stencil(1.0, 0),
+                        ],
                     ),
                     br::SubpassContents::Inline,
                 )
                 .bind_pipeline(
                     br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(&self.test_pipeline),
+                    br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline),
                 )
                 .bind_descriptor_sets(
                     br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline_layout),
                     0,
                     &[self.common_descriptor_set],
                     &[],
                 )
-                .draw(3, 1, 0, 0)
+                .bind_vertex_buffer_array(
+                    0,
+                    &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                    &[self.origin_axes_vbuf_range.start],
+                )
+                .draw(PREVIEW_VS_ORIGIN_AXES.len() as _, 1, 0, 0)
                 .end_render_pass()
                 .end()
                 .expect("preview.validate.command_buffer.end");
         }
 
-        self.active_rt_size = active_rt_size;
-        self.active_framebuffer_resource_handle = active_rt_resource.native_ptr();
+        self.active_rt_size = active_rt.size;
+        self.active_framebuffer_resource_handle = active_rt.image_view;
     }
 
-    pub fn write_streaming_buffer_content(
-        &mut self,
-        device: &VulkanDevice,
-        data: PreviewStreamingBufferContent,
-    ) {
-        let ptr = unsafe {
-            br::vkfn_wrapper::map_memory(
-                device.as_transparent_ref(),
-                br::VkHandleRefMut::dangling(self.streaming_memory),
-                0..size_of::<PreviewStreamingBufferContent>() as _,
-                0,
-            )
-            .expect("preview.write_streaming_buffer_content.map")
-        };
-        unsafe {
-            ptr.cast::<PreviewStreamingBufferContent>().write(data);
-        }
-        if self.streaming_memory_should_flush {
-            br::vkfn_wrapper::flush_mapped_memory_ranges(
-                device.as_transparent_ref(),
-                &[br::MappedMemoryRange::new(
-                    br::VkHandleRef::from_raw_ref(&self.streaming_memory),
-                    0..size_of::<PreviewStreamingBufferContent>() as _,
-                )],
-            )
-            .expect("preview.write_streaming_buffer_content.flush");
-        }
-        unsafe {
-            br::vkfn_wrapper::unmap_memory(
-                device.as_transparent_ref(),
-                br::VkHandleRefMut::dangling(self.streaming_memory),
-            );
-        }
-    }
+    // pub fn write_streaming_buffer_content(
+    //     &mut self,
+    //     device: &VulkanDevice,
+    //     data: PreviewStreamingBufferContent,
+    // ) {
+    //     let ptr = unsafe {
+    //         br::vkfn_wrapper::map_memory(
+    //             device.as_transparent_ref(),
+    //             br::VkHandleRefMut::dangling(self.streaming_memory),
+    //             0..size_of::<PreviewStreamingBufferContent>() as _,
+    //             0,
+    //         )
+    //         .expect("preview.write_streaming_buffer_content.map")
+    //     };
+    //     unsafe {
+    //         ptr.cast::<PreviewStreamingBufferContent>().write(data);
+    //     }
+    //     if self.streaming_memory_should_flush {
+    //         br::vkfn_wrapper::flush_mapped_memory_ranges(
+    //             device.as_transparent_ref(),
+    //             &[br::MappedMemoryRange::new(
+    //                 br::VkHandleRef::from_raw_ref(&self.streaming_memory),
+    //                 0..size_of::<PreviewStreamingBufferContent>() as _,
+    //             )],
+    //         )
+    //         .expect("preview.write_streaming_buffer_content.flush");
+    //     }
+    //     unsafe {
+    //         br::vkfn_wrapper::unmap_memory(
+    //             device.as_transparent_ref(),
+    //             br::VkHandleRefMut::dangling(self.streaming_memory),
+    //         );
+    //     }
+    // }
 }
 
 #[repr(C)]
@@ -4004,8 +4698,8 @@ impl PreviewComposite {
     pub fn update(
         &mut self,
         device: &VulkanDevice,
+        content_rt: &PreviewRenderTargetBuffer,
         new_rt_size: br::Extent2D,
-        new_resource: &(impl VkHandle<Handle = br::vk::VkImageView> + ?Sized),
         new_target_render_pass_handle: br::vk::VkRenderPass,
         new_target_subpass: u32,
     ) {
@@ -4053,18 +4747,18 @@ impl PreviewComposite {
             self.pipeline_target_subpass = new_target_subpass;
         }
 
-        if self.descriptor_bound_resource_handle != new_resource.native_ptr() {
+        if self.descriptor_bound_resource_handle != content_rt.image_view {
             device.update_descriptor_sets(
                 &[self.descriptor_set.binding_at(0).write(
                     br::DescriptorContents::combined_image_sampler(
-                        new_resource,
+                        br::VkHandleRef::from_raw_ref(&content_rt.image_view),
                         br::ImageLayout::ShaderReadOnlyOpt,
                     ),
                 )],
                 &[],
             );
 
-            self.descriptor_bound_resource_handle = new_resource.native_ptr();
+            self.descriptor_bound_resource_handle = content_rt.image_view;
         }
     }
 

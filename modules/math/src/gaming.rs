@@ -204,18 +204,70 @@ impl Camera {
     }
 
     /// Sets rotation of the camera to look at a point
-    pub fn look_at(&mut self, target: Vector3F32) {
-        let eyedir = (target - self.position).normalize();
-        let basedir = Vector3(0.0f32, 0.0, 1.0);
+    pub fn look_at(&mut self, target: Vector3F32, upvec: Option<Vector3F32>) {
+        self.rotation = match upvec {
+            None => {
+                // upfree rotation
+                let eyedir = (target - self.position).normalize();
+                let basedir = Vector3(0.0f32, 0.0, 1.0);
 
-        let axis = basedir.cross(&eyedir);
-        if axis.len2() == 0.0 {
-            // same direction as basedir
-            self.rotation = Quaternion::<f32>::ONE;
-            return;
-        }
-        let angle = basedir.dot(eyedir).acos();
-        self.rotation = Quaternion::<f32>::new(-angle, axis.normalize());
+                let axis = basedir.cross(&eyedir);
+                if axis.len2() == 0.0 {
+                    // same direction as basedir
+                    self.rotation = Quaternion::<f32>::ONE;
+                    return;
+                }
+                let angle = basedir.dot(eyedir).acos();
+                Quaternion::<f32>::new(-angle, axis.normalize())
+            }
+            Some(up) => {
+                // upfixed rotation(traditional)
+                let forward = (target - self.position).normalize();
+                let right = up.cross(&forward);
+                let up = forward.cross(&right);
+                let m = Matrix3(
+                    [right.0, right.1, right.2],
+                    [up.0, up.1, up.2],
+                    [forward.0, forward.1, forward.2],
+                );
+
+                // mat -> quat: https://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/
+                let trace = m.0[0] + m.1[1] + m.2[2];
+                if trace > 0.0 {
+                    let s = (trace + 1.0).sqrt() * 2.0;
+                    Quaternion(
+                        (m.2[1] - m.1[2]) / s,
+                        (m.0[2] - m.2[0]) / s,
+                        (m.1[0] - m.0[1]) / s,
+                        0.25 * s,
+                    )
+                } else if m.0[0] > m.1[1] && m.0[0] > m.2[2] {
+                    let s = (1.0f32 + m.0[0] - m.1[1] - m.2[2]).sqrt() * 2.0;
+                    Quaternion(
+                        0.25 * s,
+                        (m.0[1] + m.1[0]) / s,
+                        (m.0[2] + m.2[0]) / s,
+                        (m.2[1] - m.1[2]) / s,
+                    )
+                } else if m.1[1] > m.2[2] {
+                    let s = (1.0f32 + m.1[1] - m.0[0] - m.2[2]).sqrt() * 2.0;
+                    Quaternion(
+                        (m.0[1] + m.1[0]) / s,
+                        0.25 * s,
+                        (m.1[2] + m.2[1]) / s,
+                        (m.0[2] - m.2[0]) / s,
+                    )
+                } else {
+                    let s = (1.0f32 + m.2[2] - m.0[0] - m.1[1]).sqrt() * 2.0;
+                    Quaternion(
+                        (m.0[2] + m.2[0]) / s,
+                        (m.1[2] + m.2[1]) / s,
+                        0.25 * s,
+                        (m.1[0] - m.0[1]) / s,
+                    )
+                }
+            }
+        };
     }
 }
 impl Default for Camera {

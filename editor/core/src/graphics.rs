@@ -320,7 +320,11 @@ impl<'fs> VulkanDevice<'fs> {
             .find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("no graphics queue");
 
-        let mut device_features = br::PhysicalDeviceFeatures2::new(Default::default());
+        let mut device_features =
+            br::PhysicalDeviceFeatures2::new(br::vk::VkPhysicalDeviceFeatures {
+                fillModeNonSolid: br::vk::VK_TRUE,
+                ..Default::default()
+            });
         let mut device_sync2_features = br::PhysicalDeviceSynchronization2Features::new(true);
         let mut device_timeline_semaphore_features =
             br::PhysicalDeviceTimelineSemaphoreFeatures::new(true);
