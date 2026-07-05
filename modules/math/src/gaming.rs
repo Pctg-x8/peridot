@@ -203,6 +203,24 @@ impl Camera {
         (self.view_matrix(), self.projection_matrix(aspect_wh))
     }
 
+    #[inline(always)]
+    /// Right direction of the camera
+    pub fn right(&self) -> Vector3F32 {
+        Matrix3::from(self.rotation) * Vector3F32::right()
+    }
+
+    #[inline(always)]
+    /// Up direction of the camera
+    pub fn up(&self) -> Vector3F32 {
+        Matrix3::from(self.rotation) * Vector3F32::up()
+    }
+
+    #[inline(always)]
+    /// Forward direction of the camera
+    pub fn forward(&self) -> Vector3F32 {
+        Matrix3::from(self.rotation) * Vector3F32::forward()
+    }
+
     /// Sets rotation of the camera to look at a point
     pub fn look_at(&mut self, target: Vector3F32, upvec: Option<Vector3F32>) {
         self.rotation = match upvec {

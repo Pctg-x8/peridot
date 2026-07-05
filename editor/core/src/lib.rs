@@ -6001,12 +6001,8 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         } else {
             st.main_camera.position.1.abs().log10().floor()
         });
-        st.main_camera.position = st.main_camera.position
-            + peridot_math::Matrix3::from(st.main_camera.rotation)
-                * peridot_math::Vector3F32::forward()
-                * 0.25
-                * amplifier
-                * args.amount;
+        st.main_camera.position =
+            st.main_camera.position + st.main_camera.forward() * 0.25 * amplifier * args.amount;
         tracing::debug!(p = ?st.main_camera.position, "move cam");
         st.main_camera_dirtified = true;
 

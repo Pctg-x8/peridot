@@ -9,7 +9,7 @@ use bedrock::{
     Fence, FenceMut, ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule,
     SpecializationConstants, SwapchainMut, VkHandle, VkHandleMut,
 };
-use peridot_math::{Matrix4, Matrix4F32, One, Zero};
+use peridot_math::{Matrix4, Matrix4F32};
 
 use crate::{
     FlyoutSurfaceHandle, SyncEvent, SyncEventBus, WindowHandle,
