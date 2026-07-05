@@ -10,7 +10,7 @@ struct PushConstants {
 [vk::push_constant]
 PushConstants pushConstants;
 
-static const float4 COLOR = float4(0.25, 0.25, 0.25, 0.5);
+static const float4 COLOR = float4(0.25, 0.25, 0.25, 0.25);
 
 struct VshInput {
   uint vindex : SV_VertexID;
@@ -31,6 +31,7 @@ func vertMain(data: VshInput)->VshOutput {
   let basePos = floor(cameraData.cameraPos / actualScale) * actualScale;
   let p =
       basePos * pushConstants.altdir +
+      cameraData.cameraPos * pushConstants.dir +
       (pushConstants.start + pushConstants.altdir * data.iindex) * actualScale +
       select(data.vindex == 0, -250.0, 250.0) * pushConstants.dir * actualScale;
 

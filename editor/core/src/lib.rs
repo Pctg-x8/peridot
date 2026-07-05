@@ -6014,18 +6014,18 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
 
     fn on_pointer_down(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
     }
 
     fn on_pointer_up(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
