@@ -693,7 +693,7 @@ impl<'main> RenderThread<'main> {
                             // 稀に同じポインタで別のオブジェクトが再生成される場合があるので強制的にキャッシュを吹き飛ばすことで必ず更新させる
                             preview_composite.force_invalidate_descriptor_set_state();
                         }
-                        preview_composite.update(
+                        preview_composite.validate(
                             self.vk_device,
                             &preview_rt_buffer,
                             ctx.rt_size,
@@ -3786,19 +3786,22 @@ impl PreviewScratchStagingBuffer {
 
         r
     }
+
+    fn ops_before_copy(&self, device: &VulkanDevice) {
+        if self.should_flush {
+            unsafe {
+                device
+                    .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
+                        self.memory,
+                        0,
+                        Self::INIT_SIZE,
+                    )])
+                    .expect("preview.scratch_staging.flush");
+            }
+        }
+    }
 }
 
-// TODO: モダンなGridを描画する
-//
-// * 距離によって自動的に細かさが変わる（LOD）
-//   * XZ平面とカメラの距離（=カメラのY座標）による
-//   * 数段階用意するかPushConstantとかでスケールかけた同じグリッドメッシュを複数描画するか
-// * XZ方向に無限に見えるように表示する
-//   * 一定の遠距離の描画はフェードアウトさせる
-//   * カメラの中心点とかからグリッドのオフセットを計算する 完全追従ではなくグリッドの目盛り単位で動かす（移動してる様子をわからなくする）
-// * 描画データの持ち方を考える
-//   * 全部頂点バッファで持つ or 2点だけもってInstancingで複製するか
-//     * Instancing複製ならちょっと計算が面倒かもだけど完全にフェードアウト仕切るまででDrawCallを打ち切れる
 pub struct PreviewRenderer {
     common_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
     descriptor_pool: br::vk::VkDescriptorPool,
@@ -3809,13 +3812,13 @@ pub struct PreviewRenderer {
     active_rt_size: br::Extent2D,
     active_framebuffer_resource_handle: br::vk::VkImageView,
     render_pass: br::vk::VkRenderPass,
-    framebuffer: br::vk::VkFramebuffer,
+    framebuffer: core::mem::MaybeUninit<br::vk::VkFramebuffer>,
     origin_axes_pipeline_layout: br::vk::VkPipelineLayout,
     origin_axes_shader: br::vk::VkShaderModule,
-    origin_axes_pipeline: br::vk::VkPipeline,
+    origin_axes_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     grid_pipeline_layout: br::vk::VkPipelineLayout,
     grid_shader: br::vk::VkShaderModule,
-    grid_pipeline: br::vk::VkPipeline,
+    grid_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     command_pool: br::vk::VkCommandPool,
     command_buffer: br::vk::VkCommandBuffer,
     update_command_pool: br::vk::VkCommandPool,
@@ -3828,22 +3831,29 @@ pub struct PreviewRenderer {
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
+    valid: bool,
 }
 impl PreviewRenderer {
     pub unsafe fn drop(self, device: &VulkanDevice) {
+        drop(unsafe { br::CommandPoolObject::manage(self.update_command_pool, device) });
+        drop(unsafe { br::CommandPoolObject::manage(self.command_pool, device) });
+
         unsafe {
             self.scratch_staging.drop(device);
         }
 
-        drop(unsafe { br::CommandPoolObject::manage(self.update_command_pool, device) });
-        drop(unsafe { br::CommandPoolObject::manage(self.command_pool, device) });
-        drop(unsafe { br::PipelineObject::manage(self.grid_pipeline, device) });
+        if self.valid {
+            drop(unsafe { br::PipelineObject::manage(self.grid_pipeline.assume_init(), device) });
+            drop(unsafe {
+                br::PipelineObject::manage(self.origin_axes_pipeline.assume_init(), device)
+            });
+            drop(unsafe { br::FramebufferObject::manage(self.framebuffer.assume_init(), device) });
+        }
+
         drop(unsafe { br::ShaderModuleObject::manage(self.grid_shader, device) });
         drop(unsafe { br::PipelineLayoutObject::manage(self.grid_pipeline_layout, device) });
-        drop(unsafe { br::PipelineObject::manage(self.origin_axes_pipeline, device) });
         drop(unsafe { br::ShaderModuleObject::manage(self.origin_axes_shader, device) });
         drop(unsafe { br::PipelineLayoutObject::manage(self.origin_axes_pipeline_layout, device) });
-        drop(unsafe { br::FramebufferObject::manage(self.framebuffer, device) });
         drop(unsafe { br::RenderPassObject::manage(self.render_pass, device) });
         drop(unsafe { br::DeviceMemoryObject::manage(self.streaming_memory, device) });
         drop(unsafe { br::BufferObject::manage(self.streaming_buffer, device) });
@@ -3917,16 +3927,6 @@ impl PreviewRenderer {
             ),
         )
         .expect("preview.render_pass.create");
-        let framebuffer = br::FramebufferObject::new(
-            device,
-            &br::FramebufferCreateInfo::new(
-                &render_pass,
-                &[init_rt.image_view_tref(), init_rt.depth_view_tref()],
-                init_rt.size.width,
-                init_rt.size.height,
-            ),
-        )
-        .expect("preview.framebuffer.create");
 
         let common_descriptor_set_layout = br::DescriptorSetLayoutObject::new(
             device,
@@ -3959,94 +3959,6 @@ impl PreviewRenderer {
         .expect("preview.grid.pipeline_layout.create");
         let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
         let grid_shader = device.require_shader("preview/grid.spv");
-        let [origin_axes_pipeline, grid_pipeline] = device
-            .create_graphics_pipelines_array(&[
-                br::GraphicsPipelineCreateInfo::new(
-                    &origin_axes_pipeline_layout,
-                    render_pass.subpass(0),
-                    &[
-                        origin_axes_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                        origin_axes_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                    ],
-                    &br::PipelineVertexInputStateCreateInfo::new(
-                        &[br::VertexInputBindingDescription(
-                            br::vk::VkVertexInputBindingDescription {
-                                binding: 0,
-                                stride: size_of::<PreviewOriginAxesVertex>() as _,
-                                inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
-                            },
-                        )],
-                        &[
-                            br::VertexInputAttributeDescription(
-                                br::vk::VkVertexInputAttributeDescription {
-                                    location: 0,
-                                    binding: 0,
-                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, dir)
-                                        as _,
-                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                },
-                            ),
-                            br::VertexInputAttributeDescription(
-                                br::vk::VkVertexInputAttributeDescription {
-                                    location: 1,
-                                    binding: 0,
-                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, offset)
-                                        as _,
-                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                },
-                            ),
-                        ],
-                    ),
-                    &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
-                    &br::PipelineViewportStateCreateInfo::new(
-                        &[init_rt
-                            .size
-                            .into_rect(br::Offset2D::ZERO)
-                            .make_viewport(0.0..1.0)],
-                        &[init_rt.size.into_rect(br::Offset2D::ZERO)],
-                    ),
-                    &br::PipelineRasterizationStateCreateInfo::new(
-                        br::PolygonMode::Fill,
-                        br::CullModeFlags::NONE,
-                        br::FrontFace::CounterClockwise,
-                    ),
-                    BLEND_STATE_SINGLE_PREMULTIPLIED,
-                )
-                .set_multisample_state(MS_STATE_EMPTY)
-                .set_depth_stencil_state(
-                    &br::PipelineDepthStencilStateCreateInfo::new()
-                        .config_depth(Some(br::CompareOp::LessOrEqual), false),
-                ),
-                br::GraphicsPipelineCreateInfo::new(
-                    &grid_pipeline_layout,
-                    render_pass.subpass(0),
-                    &[
-                        grid_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                        grid_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                    ],
-                    VI_STATE_EMPTY,
-                    &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
-                    &br::PipelineViewportStateCreateInfo::new(
-                        &[init_rt
-                            .size
-                            .into_rect(br::Offset2D::ZERO)
-                            .make_viewport(0.0..1.0)],
-                        &[init_rt.size.into_rect(br::Offset2D::ZERO)],
-                    ),
-                    &br::PipelineRasterizationStateCreateInfo::new(
-                        br::PolygonMode::Fill,
-                        br::CullModeFlags::NONE,
-                        br::FrontFace::CounterClockwise,
-                    ),
-                    BLEND_STATE_SINGLE_PREMULTIPLIED,
-                )
-                .set_multisample_state(MS_STATE_EMPTY)
-                .set_depth_stencil_state(
-                    &br::PipelineDepthStencilStateCreateInfo::new()
-                        .config_depth(Some(br::CompareOp::Less), false),
-                ),
-            ])
-            .expect("preview.origin_axes.pipelines.create");
 
         let origin_axes_vbuf_range = 0..size_of_val(PREVIEW_VS_ORIGIN_AXES) as br::DeviceSize;
         let mut internal_mesh_buffer = br::BufferObject::new(
@@ -4242,7 +4154,7 @@ impl PreviewRenderer {
             &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
         )
         .expect("preview.command_pool.create");
-        let [mut command_buffer] = br::CommandBufferObject::alloc_array(
+        let [command_buffer] = br::CommandBufferObject::alloc_array(
             device,
             &br::CommandBufferFixedCountAllocateInfo::new(
                 &mut command_pool,
@@ -4250,72 +4162,6 @@ impl PreviewRenderer {
             ),
         )
         .expect("preview.command_buffer.create");
-        unsafe {
-            command_buffer
-                .begin(&br::CommandBufferBeginInfo::new())
-                .expect("preview.command_buffer.begin")
-        }
-        .begin_render_pass(
-            &br::RenderPassBeginInfo::new(
-                &render_pass,
-                &framebuffer,
-                init_rt.size.into_rect(br::Offset2D::ZERO),
-                &[
-                    br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
-                    br::ClearValue::depth_stencil(1.0, 0),
-                ],
-            ),
-            br::SubpassContents::Inline,
-        )
-        .bind_pipeline(br::PipelineBindPoint::Graphics, &grid_pipeline)
-        .bind_descriptor_sets(
-            br::PipelineBindPoint::Graphics,
-            &grid_pipeline_layout,
-            0,
-            &[common_descriptor_set],
-            &[],
-        )
-        .push_constant(
-            &grid_pipeline_layout,
-            br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-            0,
-            &PreviewGridPushConstantData {
-                dir: [1.0, 0.0, 0.0, 0.0],
-                start: [0.0, 0.0, -50.0, 1.0],
-                altdir: [0.0, 0.0, 1.0, 0.0],
-                scale: 1.0,
-            },
-        )
-        .draw(2, 100, 0, 0)
-        .push_constant(
-            &grid_pipeline_layout,
-            br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
-            0,
-            &PreviewGridPushConstantData {
-                dir: [0.0, 0.0, 1.0, 0.0],
-                start: [-50.0, 0.0, 0.0, 1.0],
-                altdir: [1.0, 0.0, 0.0, 0.0],
-                scale: 1.0,
-            },
-        )
-        .draw(2, 100, 0, 0)
-        .bind_pipeline(br::PipelineBindPoint::Graphics, &origin_axes_pipeline)
-        .bind_descriptor_sets(
-            br::PipelineBindPoint::Graphics,
-            &origin_axes_pipeline_layout,
-            0,
-            &[common_descriptor_set],
-            &[],
-        )
-        .bind_vertex_buffer_array(
-            0,
-            &[internal_mesh_buffer.as_transparent_ref()],
-            &[origin_axes_vbuf_range.start],
-        )
-        .draw(PREVIEW_VS_ORIGIN_AXES.len() as _, 1, 0, 0)
-        .end_render_pass()
-        .end()
-        .expect("preview.command_buffer.end");
 
         let mut update_command_pool = br::CommandPoolObject::new(
             device,
@@ -4341,13 +4187,10 @@ impl PreviewRenderer {
         let (internal_data_memory, _) = internal_data_memory.unmanage();
         let (internal_uniform_buffer, _) = internal_uniform_buffer.unmanage();
         let (internal_mesh_buffer, _) = internal_mesh_buffer.unmanage();
-        let (grid_pipeline, _) = grid_pipeline.unmanage();
         let (grid_shader, _) = grid_shader.unmanage();
         let (grid_pipeline_layout, _) = grid_pipeline_layout.unmanage();
-        let (origin_axes_pipeline, _) = origin_axes_pipeline.unmanage();
         let (origin_axes_shader, _) = origin_axes_shader.unmanage();
         let (origin_axes_pipeline_layout, _) = origin_axes_pipeline_layout.unmanage();
-        let (framebuffer, _) = framebuffer.unmanage();
         let (render_pass, _) = render_pass.unmanage();
         let (streaming_memory, _) = streaming_memory.unmanage();
         let (streaming_buffer, _) = streaming_buffer.unmanage();
@@ -4363,13 +4206,13 @@ impl PreviewRenderer {
             active_rt_size: init_rt.size,
             active_framebuffer_resource_handle: init_rt.image_view,
             render_pass,
-            framebuffer,
+            framebuffer: core::mem::MaybeUninit::uninit(),
             origin_axes_pipeline_layout,
             origin_axes_shader,
-            origin_axes_pipeline,
+            origin_axes_pipeline: core::mem::MaybeUninit::uninit(),
             grid_pipeline_layout,
             grid_shader,
-            grid_pipeline,
+            grid_pipeline: core::mem::MaybeUninit::uninit(),
             internal_mesh_buffer,
             origin_axes_vbuf_range,
             internal_uniform_buffer,
@@ -4382,6 +4225,7 @@ impl PreviewRenderer {
             update_command_pool,
             update_command_buffer: update_command_buffer.native_ptr(),
             update_command_pending: false,
+            valid: false,
         }
     }
 
@@ -4396,31 +4240,46 @@ impl PreviewRenderer {
         committed_state: &mut CommittedPreviewState,
     ) {
         let mut framebuffer_changed = false;
-        if active_rt.size != self.active_rt_size
+        if !self.valid
+            || active_rt.size != self.active_rt_size
             || active_rt.image_view != self.active_framebuffer_resource_handle
         {
             // Note: color bufferとdepth bufferは同時に変わるのでどっちかだけ見ればいい
-            drop(unsafe { br::FramebufferObject::manage(self.framebuffer, device) });
-            self.framebuffer = br::FramebufferObject::new(
-                device,
-                &br::FramebufferCreateInfo::new(
-                    br::VkHandleRef::from_raw_ref(&self.render_pass),
-                    &[active_rt.image_view_tref(), active_rt.depth_view_tref()],
-                    active_rt.size.width,
-                    active_rt.size.height,
-                ),
-            )
-            .expect("preview.validate.framebuffer")
-            .unmanage()
-            .0;
+            if self.valid {
+                drop(unsafe {
+                    br::FramebufferObject::manage(self.framebuffer.assume_init(), device)
+                });
+            }
+
+            self.framebuffer.write(
+                br::FramebufferObject::new(
+                    device,
+                    &br::FramebufferCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.render_pass),
+                        &[active_rt.image_view_tref(), active_rt.depth_view_tref()],
+                        active_rt.size.width,
+                        active_rt.size.height,
+                    ),
+                )
+                .expect("preview.validate.framebuffer")
+                .unmanage()
+                .0,
+            );
 
             framebuffer_changed = true;
         }
 
         let mut origin_axes_pipeline_changed = false;
-        if active_rt.size != self.active_rt_size {
-            drop(unsafe { br::PipelineObject::manage(self.origin_axes_pipeline, device) });
-            drop(unsafe { br::PipelineObject::manage(self.grid_pipeline, device) });
+        if !self.valid || active_rt.size != self.active_rt_size {
+            if self.valid {
+                drop(unsafe {
+                    br::PipelineObject::manage(self.origin_axes_pipeline.assume_init(), device)
+                });
+                drop(unsafe {
+                    br::PipelineObject::manage(self.grid_pipeline.assume_init(), device)
+                });
+            }
+
             let [origin_axes_pipeline, grid_pipeline] = device
                 .create_graphics_pipelines_array(&[
                     br::GraphicsPipelineCreateInfo::new(
@@ -4531,8 +4390,9 @@ impl PreviewRenderer {
                     ),
                 ])
                 .expect("preview.validate.origin_axes.pipelines.create");
-            self.origin_axes_pipeline = origin_axes_pipeline.unmanage().0;
-            self.grid_pipeline = grid_pipeline.unmanage().0;
+            self.origin_axes_pipeline
+                .write(origin_axes_pipeline.unmanage().0);
+            self.grid_pipeline.write(grid_pipeline.unmanage().0);
 
             origin_axes_pipeline_changed = true;
         }
@@ -4568,6 +4428,8 @@ impl PreviewRenderer {
         self.update_command_pending = false;
         if self.pending_camera_data_updates.is_some() {
             // needs update device data
+            self.scratch_staging.ops_before_copy(device);
+
             unsafe {
                 br::vkfn_wrapper::reset_command_pool(
                     device.as_transparent_ref(),
@@ -4589,7 +4451,10 @@ impl PreviewRenderer {
                     Some(bo) => r.copy_buffer(
                         br::VkHandleRef::from_raw_ref(&self.scratch_staging.buffer),
                         br::VkHandleRef::from_raw_ref(&self.internal_uniform_buffer),
-                        &[br::BufferCopy::copy_data::<PreviewCameraData>(bo as _, 0)],
+                        &[br::BufferCopy::copy_data::<PreviewCameraData>(
+                            bo as _,
+                            self.camera_data_ubuf_range.start,
+                        )],
                     ),
                 })
                 .inject(|r| {
@@ -4639,7 +4504,9 @@ impl PreviewRenderer {
                 .begin_render_pass(
                     &br::RenderPassBeginInfo::new(
                         br::VkHandleRef::from_raw_ref(&self.render_pass),
-                        br::VkHandleRef::from_raw_ref(&self.framebuffer),
+                        br::VkHandleRef::from_raw_ref(unsafe {
+                            self.framebuffer.assume_init_ref()
+                        }),
                         active_rt.size.into_rect(br::Offset2D::ZERO),
                         &[
                             br::ClearValue::color_f32([0.0, 0.0, 0.0, 1.0]),
@@ -4650,7 +4517,7 @@ impl PreviewRenderer {
                 )
                 .bind_pipeline(
                     br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(&self.grid_pipeline),
+                    br::VkHandleRef::from_raw_ref(unsafe { self.grid_pipeline.assume_init_ref() }),
                 )
                 .bind_descriptor_sets(
                     br::PipelineBindPoint::Graphics,
@@ -4709,7 +4576,9 @@ impl PreviewRenderer {
                 .draw(2, 500, 0, 0)
                 .bind_pipeline(
                     br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline),
+                    br::VkHandleRef::from_raw_ref(unsafe {
+                        self.origin_axes_pipeline.assume_init_ref()
+                    }),
                 )
                 .bind_descriptor_sets(
                     br::PipelineBindPoint::Graphics,
@@ -4731,6 +4600,7 @@ impl PreviewRenderer {
 
         self.active_rt_size = active_rt.size;
         self.active_framebuffer_resource_handle = active_rt.image_view;
+        self.valid = true;
     }
 
     // pub fn write_streaming_buffer_content(
@@ -4783,14 +4653,18 @@ struct PreviewComposite {
     descriptor_bound_resource_handle: br::vk::VkImageView,
     pipeline_layout: br::vk::VkPipelineLayout,
     shader: br::vk::VkShaderModule,
+    pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     pipeline_target_rt_size: br::Extent2D,
     pipeline_target_render_pass_handle: br::vk::VkRenderPass,
     pipeline_target_subpass: u32,
-    pipeline: br::vk::VkPipeline,
+    valid: bool,
 }
 impl PreviewComposite {
     unsafe fn drop(self, vk_device: &VulkanDevice) {
-        drop(unsafe { br::PipelineObject::manage(self.pipeline, vk_device) });
+        if self.valid {
+            drop(unsafe { br::PipelineObject::manage(self.pipeline.assume_init(), vk_device) });
+        }
+
         drop(unsafe { br::DescriptorPoolObject::manage(self.descriptor_pool, vk_device) });
         drop(unsafe { br::ShaderModuleObject::manage(self.shader, vk_device) });
         drop(unsafe { br::PipelineLayoutObject::manage(self.pipeline_layout, vk_device) });
@@ -4849,29 +4723,6 @@ impl PreviewComposite {
             &[],
         );
 
-        let [pipeline] = vk_device
-            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
-                &pipeline_layout,
-                target_pass,
-                &[
-                    shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                    shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
-                ],
-                VI_STATE_EMPTY,
-                IA_STATE_TRISTRIP,
-                &br::PipelineViewportStateCreateInfo::new(
-                    &[init_screen_size
-                        .into_rect(br::Offset2D::ZERO)
-                        .make_viewport(0.0..1.0)],
-                    &[init_screen_size.into_rect(br::Offset2D::ZERO)],
-                ),
-                RASTER_STATE_DEFAULT_FILL_NOCULL,
-                BLEND_STATE_SINGLE_NONE,
-            )
-            .set_multisample_state(MS_STATE_EMPTY)])
-            .expect("preview_composite.pipeline.create");
-
-        let (pipeline, _) = pipeline.unmanage();
         let (descriptor_pool, _) = descriptor_pool.unmanage();
         let (shader, _) = shader.unmanage();
         let (pipeline_layout, _) = pipeline_layout.unmanage();
@@ -4886,7 +4737,8 @@ impl PreviewComposite {
             pipeline_target_rt_size: init_screen_size,
             pipeline_target_render_pass_handle: target_pass.0.native_ptr(),
             pipeline_target_subpass: target_pass.1,
-            pipeline,
+            pipeline: core::mem::MaybeUninit::uninit(),
+            valid: false,
         }
     }
 
@@ -4897,7 +4749,7 @@ impl PreviewComposite {
         }
     }
 
-    pub fn update(
+    pub fn validate(
         &mut self,
         device: &VulkanDevice,
         content_rt: &PreviewRenderTargetBuffer,
@@ -4905,11 +4757,15 @@ impl PreviewComposite {
         new_target_render_pass_handle: br::vk::VkRenderPass,
         new_target_subpass: u32,
     ) {
-        if self.pipeline_target_rt_size != new_rt_size
+        if !self.valid
+            || self.pipeline_target_rt_size != new_rt_size
             || self.pipeline_target_render_pass_handle != new_target_render_pass_handle
             || self.pipeline_target_subpass != new_target_subpass
         {
-            drop(unsafe { br::PipelineObject::manage(self.pipeline, device) });
+            if self.valid {
+                drop(unsafe { br::PipelineObject::manage(self.pipeline.assume_init(), device) });
+            }
+
             let [pipeline] = device
                 .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
                     br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
@@ -4943,7 +4799,7 @@ impl PreviewComposite {
                 .set_multisample_state(MS_STATE_EMPTY)])
                 .expect("preview_composite.pipeline.create");
 
-            self.pipeline = pipeline.unmanage().0;
+            self.pipeline.write(pipeline.unmanage().0);
             self.pipeline_target_rt_size = new_rt_size;
             self.pipeline_target_render_pass_handle = new_target_render_pass_handle;
             self.pipeline_target_subpass = new_target_subpass;
@@ -4962,6 +4818,8 @@ impl PreviewComposite {
 
             self.descriptor_bound_resource_handle = content_rt.image_view;
         }
+
+        self.valid = true;
     }
 
     pub fn populate_commands<'r>(
@@ -4971,9 +4829,11 @@ impl PreviewComposite {
         ctx: &CustomRenderContext,
         rec: br::CmdRecord<'r>,
     ) -> br::CmdRecord<'r> {
+        debug_assert!(self.valid);
+
         rec.bind_pipeline(
             br::PipelineBindPoint::Graphics,
-            br::VkHandleRef::from_raw_ref(&self.pipeline),
+            br::VkHandleRef::from_raw_ref(unsafe { self.pipeline.assume_init_ref() }),
         )
         .push_constant(
             br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
