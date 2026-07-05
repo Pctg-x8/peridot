@@ -138,6 +138,8 @@ pub const PREVIEW_COMPOSITE: CustomRenderToken = CustomRenderToken(0);
 
 pub struct CommittedPreviewState {
     pub viewport_size: Size<LogicalUnit>,
+    pub main_camera: peridot_math::Camera,
+    pub main_camera_dirtified: bool,
 }
 
 pub struct RenderThread<'main> {
@@ -273,6 +275,7 @@ impl<'main> RenderThread<'main> {
         let mut preview_renderer = PreviewRenderer::new(
             self.vk_device,
             &preview_rt_buffer,
+            &self.preview_state.lock().expect("poisoned").main_camera,
             self.vk_device.present_queue_family_index(),
             &mut render_queue,
         );
@@ -677,18 +680,14 @@ impl<'main> RenderThread<'main> {
                     &mut preview_composite,
                     |preview_composite, ctx| {
                         crate::perf_scope!(VALIDATE_PREVIEW_RENDERING);
+                        let mut committed_state = self.preview_state.lock().expect("poisoned");
                         let resource_recreated = preview_rt_buffer.validate(
                             self.vk_device,
-                            self.preview_state
-                                .lock()
-                                .expect("poisoned")
+                            committed_state
                                 .viewport_size
                                 .to_pixels_ceil(render_scale.value())
                                 .to_vk(),
                         );
-
-                        preview_renderer.update();
-                        preview_renderer.validate(self.vk_device, &preview_rt_buffer);
 
                         if resource_recreated {
                             // 稀に同じポインタで別のオブジェクトが再生成される場合があるので強制的にキャッシュを吹き飛ばすことで必ず更新させる
@@ -953,6 +952,13 @@ impl<'main> RenderThread<'main> {
 
             crate::perf_begin!(perf = POST_QUEUE);
             if preview_composition_required {
+                preview_renderer.update();
+                preview_renderer.validate(
+                    self.vk_device,
+                    &preview_rt_buffer,
+                    &mut self.preview_state.lock().expect("poisoned"),
+                );
+
                 let mut render_waits = Vec::with_capacity(2);
                 let mut render_wait_stages = Vec::with_capacity(2);
 
@@ -3643,6 +3649,10 @@ impl PreviewRenderTargetBuffer {
     pub const fn depth_view_tref<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkImageView> {
         unsafe { br::VkHandleRef::dangling(self.depth_view) }
     }
+
+    pub const fn aspect_wh(&self) -> f32 {
+        self.size.width as f32 / self.size.height as f32
+    }
 }
 
 // std140 layout
@@ -3661,6 +3671,15 @@ pub struct PreviewOriginAxesVertex {
 pub struct PreviewCameraData {
     world_to_clip_space: Matrix4F32,
     camera_pos: [f32; 4],
+}
+
+// std430 layout
+#[repr(C)]
+pub struct PreviewGridPushConstantData {
+    dir: [f32; 4],
+    start: [f32; 4],
+    altdir: [f32; 4],
+    scale: f32,
 }
 
 const PREVIEW_VS_ORIGIN_AXES: &[PreviewOriginAxesVertex] = &[
@@ -3718,6 +3737,7 @@ impl PreviewScratchStagingBuffer {
             &br::BufferCreateInfo::new(Self::INIT_SIZE, br::BufferUsage::TRANSFER_SRC),
         )
         .expect("preview_scratch_staging.buffer.create");
+        device.dbg_set_name(&buffer, c"Preview.ScratchStaging.Buffer");
         let memreq = buffer.requirements();
         let memindex = device
             .find_host_visible_memory_index(memreq.memoryTypeBits)
@@ -3728,6 +3748,7 @@ impl PreviewScratchStagingBuffer {
             &br::MemoryAllocateInfo::new(memreq.size, memindex),
         )
         .expect("preview_scratch_staging.memory.alloc");
+        device.dbg_set_name(&memory, c"Preview.ScratchStaging.Memory");
         buffer
             .bind(&memory, 0)
             .expect("preview_scratch_staging.buffer.bind");
@@ -3792,6 +3813,9 @@ pub struct PreviewRenderer {
     origin_axes_pipeline_layout: br::vk::VkPipelineLayout,
     origin_axes_shader: br::vk::VkShaderModule,
     origin_axes_pipeline: br::vk::VkPipeline,
+    grid_pipeline_layout: br::vk::VkPipelineLayout,
+    grid_shader: br::vk::VkShaderModule,
+    grid_pipeline: br::vk::VkPipeline,
     command_pool: br::vk::VkCommandPool,
     command_buffer: br::vk::VkCommandBuffer,
     update_command_pool: br::vk::VkCommandPool,
@@ -3804,7 +3828,6 @@ pub struct PreviewRenderer {
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
-    main_camera: peridot_math::Camera,
 }
 impl PreviewRenderer {
     pub unsafe fn drop(self, device: &VulkanDevice) {
@@ -3814,6 +3837,9 @@ impl PreviewRenderer {
 
         drop(unsafe { br::CommandPoolObject::manage(self.update_command_pool, device) });
         drop(unsafe { br::CommandPoolObject::manage(self.command_pool, device) });
+        drop(unsafe { br::PipelineObject::manage(self.grid_pipeline, device) });
+        drop(unsafe { br::ShaderModuleObject::manage(self.grid_shader, device) });
+        drop(unsafe { br::PipelineLayoutObject::manage(self.grid_pipeline_layout, device) });
         drop(unsafe { br::PipelineObject::manage(self.origin_axes_pipeline, device) });
         drop(unsafe { br::ShaderModuleObject::manage(self.origin_axes_shader, device) });
         drop(unsafe { br::PipelineLayoutObject::manage(self.origin_axes_pipeline_layout, device) });
@@ -3833,6 +3859,7 @@ impl PreviewRenderer {
     pub fn new(
         device: &VulkanDevice,
         init_rt: &PreviewRenderTargetBuffer,
+        init_main_camera: &peridot_math::Camera,
         work_queue_family_index: u32,
         work_queue: &mut (impl br::QueueMut + ?Sized),
     ) -> Self {
@@ -3917,62 +3944,108 @@ impl PreviewRenderer {
             ),
         )
         .expect("preview.origin_axes.pipeline_layout.create");
-        let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
-        let [origin_axes_pipeline] = device
-            .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
-                &origin_axes_pipeline_layout,
-                render_pass.subpass(0),
+        let grid_pipeline_layout = br::PipelineLayoutObject::new(
+            device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[common_descriptor_set_layout.as_transparent_ref()],
                 &[
-                    origin_axes_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
-                    origin_axes_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    br::PushConstantRange::for_type::<PreviewGridPushConstantData>(
+                        br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                        0,
+                    ),
                 ],
-                &br::PipelineVertexInputStateCreateInfo::new(
-                    &[br::VertexInputBindingDescription(
-                        br::vk::VkVertexInputBindingDescription {
-                            binding: 0,
-                            stride: size_of::<PreviewOriginAxesVertex>() as _,
-                            inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
-                        },
-                    )],
+            ),
+        )
+        .expect("preview.grid.pipeline_layout.create");
+        let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
+        let grid_shader = device.require_shader("preview/grid.spv");
+        let [origin_axes_pipeline, grid_pipeline] = device
+            .create_graphics_pipelines_array(&[
+                br::GraphicsPipelineCreateInfo::new(
+                    &origin_axes_pipeline_layout,
+                    render_pass.subpass(0),
                     &[
-                        br::VertexInputAttributeDescription(
-                            br::vk::VkVertexInputAttributeDescription {
-                                location: 0,
-                                binding: 0,
-                                offset: core::mem::offset_of!(PreviewOriginAxesVertex, dir) as _,
-                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                            },
-                        ),
-                        br::VertexInputAttributeDescription(
-                            br::vk::VkVertexInputAttributeDescription {
-                                location: 1,
-                                binding: 0,
-                                offset: core::mem::offset_of!(PreviewOriginAxesVertex, offset) as _,
-                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                            },
-                        ),
+                        origin_axes_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        origin_axes_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
                     ],
+                    &br::PipelineVertexInputStateCreateInfo::new(
+                        &[br::VertexInputBindingDescription(
+                            br::vk::VkVertexInputBindingDescription {
+                                binding: 0,
+                                stride: size_of::<PreviewOriginAxesVertex>() as _,
+                                inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
+                            },
+                        )],
+                        &[
+                            br::VertexInputAttributeDescription(
+                                br::vk::VkVertexInputAttributeDescription {
+                                    location: 0,
+                                    binding: 0,
+                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, dir)
+                                        as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                },
+                            ),
+                            br::VertexInputAttributeDescription(
+                                br::vk::VkVertexInputAttributeDescription {
+                                    location: 1,
+                                    binding: 0,
+                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, offset)
+                                        as _,
+                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                },
+                            ),
+                        ],
+                    ),
+                    &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[init_rt
+                            .size
+                            .into_rect(br::Offset2D::ZERO)
+                            .make_viewport(0.0..1.0)],
+                        &[init_rt.size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::NONE,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_PREMULTIPLIED,
+                )
+                .set_multisample_state(MS_STATE_EMPTY)
+                .set_depth_stencil_state(
+                    &br::PipelineDepthStencilStateCreateInfo::new()
+                        .config_depth(Some(br::CompareOp::LessOrEqual), false),
                 ),
-                &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
-                &br::PipelineViewportStateCreateInfo::new(
-                    &[init_rt
-                        .size
-                        .into_rect(br::Offset2D::ZERO)
-                        .make_viewport(0.0..1.0)],
-                    &[init_rt.size.into_rect(br::Offset2D::ZERO)],
+                br::GraphicsPipelineCreateInfo::new(
+                    &grid_pipeline_layout,
+                    render_pass.subpass(0),
+                    &[
+                        grid_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        grid_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    VI_STATE_EMPTY,
+                    &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[init_rt
+                            .size
+                            .into_rect(br::Offset2D::ZERO)
+                            .make_viewport(0.0..1.0)],
+                        &[init_rt.size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::NONE,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_PREMULTIPLIED,
+                )
+                .set_multisample_state(MS_STATE_EMPTY)
+                .set_depth_stencil_state(
+                    &br::PipelineDepthStencilStateCreateInfo::new()
+                        .config_depth(Some(br::CompareOp::Less), false),
                 ),
-                &br::PipelineRasterizationStateCreateInfo::new(
-                    br::PolygonMode::Fill,
-                    br::CullModeFlags::NONE,
-                    br::FrontFace::CounterClockwise,
-                ),
-                BLEND_STATE_SINGLE_PREMULTIPLIED,
-            )
-            .set_multisample_state(MS_STATE_EMPTY)
-            .set_depth_stencil_state(
-                &br::PipelineDepthStencilStateCreateInfo::new()
-                    .config_depth(Some(br::CompareOp::Less), false),
-            )])
+            ])
             .expect("preview.origin_axes.pipelines.create");
 
         let origin_axes_vbuf_range = 0..size_of_val(PREVIEW_VS_ORIGIN_AXES) as br::DeviceSize;
@@ -4011,22 +4084,6 @@ impl PreviewRenderer {
             .bind(&internal_data_memory, 0)
             .expect("preview.internal_uniform_buffer.bind");
 
-        let mut init_camera = peridot_math::Camera {
-            position: peridot_math::Vector3(1.0, 1.0, -5.0),
-            rotation: peridot_math::Quaternion::ONE,
-            projection: Some(peridot_math::ProjectionMethod::Physical {
-                focal_length: 30.0,
-                sensor_size: peridot_math::Vector2(35.0, 24.0),
-                screen_fitting: peridot_math::PhysicalScreenFitting::Shrink,
-                lens_shift: peridot_math::Vector2(0.0, 0.0),
-            }),
-            depth_range: 0.1..1000.0,
-        };
-        init_camera.look_at(
-            peridot_math::Vector3::ZERO,
-            Some(peridot_math::Vector3::up()),
-        );
-
         struct UploadBufferData {
             origin_axes_vbuf: [PreviewOriginAxesVertex; PREVIEW_VS_ORIGIN_AXES.len()],
             camera_data_ubuf: PreviewCameraData,
@@ -4063,15 +4120,13 @@ impl PreviewRenderer {
             core::ptr::write(
                 &raw mut (*p).camera_data_ubuf,
                 PreviewCameraData {
-                    world_to_clip_space: init_camera
-                        .view_projection_matrix(
-                            init_rt.size.width as f32 / init_rt.size.height as f32,
-                        )
+                    world_to_clip_space: init_main_camera
+                        .view_projection_matrix(init_rt.aspect_wh())
                         .transpose(),
                     camera_pos: [
-                        init_camera.position.0,
-                        init_camera.position.1,
-                        init_camera.position.2,
+                        init_main_camera.position.0,
+                        init_main_camera.position.1,
+                        init_main_camera.position.2,
                         1.0,
                     ],
                 },
@@ -4212,6 +4267,38 @@ impl PreviewRenderer {
             ),
             br::SubpassContents::Inline,
         )
+        .bind_pipeline(br::PipelineBindPoint::Graphics, &grid_pipeline)
+        .bind_descriptor_sets(
+            br::PipelineBindPoint::Graphics,
+            &grid_pipeline_layout,
+            0,
+            &[common_descriptor_set],
+            &[],
+        )
+        .push_constant(
+            &grid_pipeline_layout,
+            br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+            0,
+            &PreviewGridPushConstantData {
+                dir: [1.0, 0.0, 0.0, 0.0],
+                start: [0.0, 0.0, -50.0, 1.0],
+                altdir: [0.0, 0.0, 1.0, 0.0],
+                scale: 1.0,
+            },
+        )
+        .draw(2, 100, 0, 0)
+        .push_constant(
+            &grid_pipeline_layout,
+            br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+            0,
+            &PreviewGridPushConstantData {
+                dir: [0.0, 0.0, 1.0, 0.0],
+                start: [-50.0, 0.0, 0.0, 1.0],
+                altdir: [1.0, 0.0, 0.0, 0.0],
+                scale: 1.0,
+            },
+        )
+        .draw(2, 100, 0, 0)
         .bind_pipeline(br::PipelineBindPoint::Graphics, &origin_axes_pipeline)
         .bind_descriptor_sets(
             br::PipelineBindPoint::Graphics,
@@ -4254,6 +4341,9 @@ impl PreviewRenderer {
         let (internal_data_memory, _) = internal_data_memory.unmanage();
         let (internal_uniform_buffer, _) = internal_uniform_buffer.unmanage();
         let (internal_mesh_buffer, _) = internal_mesh_buffer.unmanage();
+        let (grid_pipeline, _) = grid_pipeline.unmanage();
+        let (grid_shader, _) = grid_shader.unmanage();
+        let (grid_pipeline_layout, _) = grid_pipeline_layout.unmanage();
         let (origin_axes_pipeline, _) = origin_axes_pipeline.unmanage();
         let (origin_axes_shader, _) = origin_axes_shader.unmanage();
         let (origin_axes_pipeline_layout, _) = origin_axes_pipeline_layout.unmanage();
@@ -4277,6 +4367,9 @@ impl PreviewRenderer {
             origin_axes_pipeline_layout,
             origin_axes_shader,
             origin_axes_pipeline,
+            grid_pipeline_layout,
+            grid_shader,
+            grid_pipeline,
             internal_mesh_buffer,
             origin_axes_vbuf_range,
             internal_uniform_buffer,
@@ -4289,7 +4382,6 @@ impl PreviewRenderer {
             update_command_pool,
             update_command_buffer: update_command_buffer.native_ptr(),
             update_command_pending: false,
-            main_camera: init_camera,
         }
     }
 
@@ -4297,7 +4389,12 @@ impl PreviewRenderer {
         self.scratch_staging.reset();
     }
 
-    pub fn validate(&mut self, device: &VulkanDevice, active_rt: &PreviewRenderTargetBuffer) {
+    pub fn validate(
+        &mut self,
+        device: &VulkanDevice,
+        active_rt: &PreviewRenderTargetBuffer,
+        committed_state: &mut CommittedPreviewState,
+    ) {
         let mut framebuffer_changed = false;
         if active_rt.size != self.active_rt_size
             || active_rt.image_view != self.active_framebuffer_resource_handle
@@ -4323,78 +4420,126 @@ impl PreviewRenderer {
         let mut origin_axes_pipeline_changed = false;
         if active_rt.size != self.active_rt_size {
             drop(unsafe { br::PipelineObject::manage(self.origin_axes_pipeline, device) });
-            let [origin_axes_pipeline] = device
-                .create_graphics_pipelines_array(&[br::GraphicsPipelineCreateInfo::new(
-                    br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline_layout),
-                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
-                    &[
-                        br::PipelineShaderStage::new(
-                            br::ShaderStage::Vertex,
-                            br::VkHandleRef::from_raw_ref(&self.origin_axes_shader),
-                            c"vertMain",
-                        ),
-                        br::PipelineShaderStage::new(
-                            br::ShaderStage::Fragment,
-                            br::VkHandleRef::from_raw_ref(&self.origin_axes_shader),
-                            c"fragMain",
-                        ),
-                    ],
-                    &br::PipelineVertexInputStateCreateInfo::new(
-                        &[br::VertexInputBindingDescription(
-                            br::vk::VkVertexInputBindingDescription {
-                                binding: 0,
-                                stride: size_of::<PreviewOriginAxesVertex>() as _,
-                                inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
-                            },
-                        )],
+            drop(unsafe { br::PipelineObject::manage(self.grid_pipeline, device) });
+            let [origin_axes_pipeline, grid_pipeline] = device
+                .create_graphics_pipelines_array(&[
+                    br::GraphicsPipelineCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline_layout),
+                        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
                         &[
-                            br::VertexInputAttributeDescription(
-                                br::vk::VkVertexInputAttributeDescription {
-                                    location: 0,
-                                    binding: 0,
-                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, dir)
-                                        as _,
-                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                },
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Vertex,
+                                br::VkHandleRef::from_raw_ref(&self.origin_axes_shader),
+                                c"vertMain",
                             ),
-                            br::VertexInputAttributeDescription(
-                                br::vk::VkVertexInputAttributeDescription {
-                                    location: 1,
-                                    binding: 0,
-                                    offset: core::mem::offset_of!(PreviewOriginAxesVertex, offset)
-                                        as _,
-                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                },
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Fragment,
+                                br::VkHandleRef::from_raw_ref(&self.origin_axes_shader),
+                                c"fragMain",
                             ),
                         ],
+                        &br::PipelineVertexInputStateCreateInfo::new(
+                            &[br::VertexInputBindingDescription(
+                                br::vk::VkVertexInputBindingDescription {
+                                    binding: 0,
+                                    stride: size_of::<PreviewOriginAxesVertex>() as _,
+                                    inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
+                                },
+                            )],
+                            &[
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 0,
+                                        binding: 0,
+                                        offset: core::mem::offset_of!(PreviewOriginAxesVertex, dir)
+                                            as _,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 1,
+                                        binding: 0,
+                                        offset: core::mem::offset_of!(
+                                            PreviewOriginAxesVertex,
+                                            offset
+                                        ) as _,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                            ],
+                        ),
+                        &br::PipelineInputAssemblyStateCreateInfo::new(
+                            br::PrimitiveTopology::LineList,
+                        ),
+                        &br::PipelineViewportStateCreateInfo::new(
+                            &[active_rt
+                                .size
+                                .into_rect(br::Offset2D::ZERO)
+                                .make_viewport(0.0..1.0)],
+                            &[active_rt.size.into_rect(br::Offset2D::ZERO)],
+                        ),
+                        &br::PipelineRasterizationStateCreateInfo::new(
+                            br::PolygonMode::Fill,
+                            br::CullModeFlags::NONE,
+                            br::FrontFace::CounterClockwise,
+                        ),
+                        BLEND_STATE_SINGLE_PREMULTIPLIED,
+                    )
+                    .set_multisample_state(MS_STATE_EMPTY)
+                    .set_depth_stencil_state(
+                        &br::PipelineDepthStencilStateCreateInfo::new()
+                            .config_depth(Some(br::CompareOp::LessOrEqual), false),
                     ),
-                    &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::LineList),
-                    &br::PipelineViewportStateCreateInfo::new(
-                        &[active_rt
-                            .size
-                            .into_rect(br::Offset2D::ZERO)
-                            .make_viewport(0.0..1.0)],
-                        &[active_rt.size.into_rect(br::Offset2D::ZERO)],
+                    br::GraphicsPipelineCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.grid_pipeline_layout),
+                        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
+                        &[
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Vertex,
+                                br::VkHandleRef::from_raw_ref(&self.grid_shader),
+                                c"vertMain",
+                            ),
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Fragment,
+                                br::VkHandleRef::from_raw_ref(&self.grid_shader),
+                                c"fragMain",
+                            ),
+                        ],
+                        VI_STATE_EMPTY,
+                        &br::PipelineInputAssemblyStateCreateInfo::new(
+                            br::PrimitiveTopology::LineList,
+                        ),
+                        &br::PipelineViewportStateCreateInfo::new(
+                            &[active_rt
+                                .size
+                                .into_rect(br::Offset2D::ZERO)
+                                .make_viewport(0.0..1.0)],
+                            &[active_rt.size.into_rect(br::Offset2D::ZERO)],
+                        ),
+                        &br::PipelineRasterizationStateCreateInfo::new(
+                            br::PolygonMode::Fill,
+                            br::CullModeFlags::NONE,
+                            br::FrontFace::CounterClockwise,
+                        ),
+                        BLEND_STATE_SINGLE_PREMULTIPLIED,
+                    )
+                    .set_multisample_state(MS_STATE_EMPTY)
+                    .set_depth_stencil_state(
+                        &br::PipelineDepthStencilStateCreateInfo::new()
+                            .config_depth(Some(br::CompareOp::Less), false),
                     ),
-                    &br::PipelineRasterizationStateCreateInfo::new(
-                        br::PolygonMode::Fill,
-                        br::CullModeFlags::NONE,
-                        br::FrontFace::CounterClockwise,
-                    ),
-                    BLEND_STATE_SINGLE_PREMULTIPLIED,
-                )
-                .set_multisample_state(MS_STATE_EMPTY)
-                .set_depth_stencil_state(
-                    &br::PipelineDepthStencilStateCreateInfo::new()
-                        .config_depth(Some(br::CompareOp::Less), false),
-                )])
+                ])
                 .expect("preview.validate.origin_axes.pipelines.create");
             self.origin_axes_pipeline = origin_axes_pipeline.unmanage().0;
+            self.grid_pipeline = grid_pipeline.unmanage().0;
 
             origin_axes_pipeline_changed = true;
         }
 
-        if active_rt.size != self.active_rt_size {
+        let main_camera_dirtified =
+            core::mem::replace(&mut committed_state.main_camera_dirtified, false);
+        if main_camera_dirtified || active_rt.size != self.active_rt_size {
             let buffer_offset = *self.pending_camera_data_updates.get_or_insert_with(|| {
                 self.scratch_staging.reserve(size_of::<PreviewCameraData>())
             });
@@ -4405,16 +4550,14 @@ impl PreviewRenderer {
                         .byte_add(buffer_offset)
                         .cast::<PreviewCameraData>(),
                     PreviewCameraData {
-                        world_to_clip_space: self
+                        world_to_clip_space: committed_state
                             .main_camera
-                            .view_projection_matrix(
-                                active_rt.size.width as f32 / active_rt.size.height as f32,
-                            )
+                            .view_projection_matrix(active_rt.aspect_wh())
                             .transpose(),
                         camera_pos: [
-                            self.main_camera.position.0,
-                            self.main_camera.position.1,
-                            self.main_camera.position.2,
+                            committed_state.main_camera.position.0,
+                            committed_state.main_camera.position.1,
+                            committed_state.main_camera.position.2,
                             1.0,
                         ],
                     },
@@ -4505,6 +4648,65 @@ impl PreviewRenderer {
                     ),
                     br::SubpassContents::Inline,
                 )
+                .bind_pipeline(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.grid_pipeline),
+                )
+                .bind_descriptor_sets(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.grid_pipeline_layout),
+                    0,
+                    &[self.common_descriptor_set],
+                    &[],
+                )
+                .push_constant(
+                    br::VkHandleRef::from_raw_ref(&self.grid_pipeline_layout),
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    &PreviewGridPushConstantData {
+                        dir: [1.0, 0.0, 0.0, 0.0],
+                        start: [0.0, 0.0, -250.0, 1.0],
+                        altdir: [0.0, 0.0, 1.0, 0.0],
+                        scale: 1.0,
+                    },
+                )
+                .draw(2, 500, 0, 0)
+                .push_constant(
+                    br::VkHandleRef::from_raw_ref(&self.grid_pipeline_layout),
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    &PreviewGridPushConstantData {
+                        dir: [0.0, 0.0, 1.0, 0.0],
+                        start: [-250.0, 0.0, 0.0, 1.0],
+                        altdir: [1.0, 0.0, 0.0, 0.0],
+                        scale: 1.0,
+                    },
+                )
+                .draw(2, 500, 0, 0)
+                .push_constant(
+                    br::VkHandleRef::from_raw_ref(&self.grid_pipeline_layout),
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    &PreviewGridPushConstantData {
+                        dir: [1.0, 0.0, 0.0, 0.0],
+                        start: [0.0, 0.0, -250.0, 1.0],
+                        altdir: [0.0, 0.0, 1.0, 0.0],
+                        scale: 0.1,
+                    },
+                )
+                .draw(2, 500, 0, 0)
+                .push_constant(
+                    br::VkHandleRef::from_raw_ref(&self.grid_pipeline_layout),
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0,
+                    &PreviewGridPushConstantData {
+                        dir: [0.0, 0.0, 1.0, 0.0],
+                        start: [-250.0, 0.0, 0.0, 1.0],
+                        altdir: [1.0, 0.0, 0.0, 0.0],
+                        scale: 0.1,
+                    },
+                )
+                .draw(2, 500, 0, 0)
                 .bind_pipeline(
                     br::PipelineBindPoint::Graphics,
                     br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline),

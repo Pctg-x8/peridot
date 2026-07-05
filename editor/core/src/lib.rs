@@ -3,6 +3,7 @@ use core::cell::Cell;
 use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
 use linux_eventfd::{EventFD, EventFDFlags};
+use peridot_math::{One, Zero};
 #[cfg(target_os = "linux")]
 use peridot_tp_dbus as dbus;
 #[cfg(target_os = "linux")]
@@ -133,8 +134,25 @@ pub fn launch() {
         "wayland presentation not supported on graphics queue"
     );
 
+    let mut main_camera = peridot_math::Camera {
+        position: peridot_math::Vector3(1.0, 1.0, -5.0),
+        rotation: peridot_math::Quaternion::ONE,
+        projection: Some(peridot_math::ProjectionMethod::Physical {
+            focal_length: 30.0,
+            sensor_size: peridot_math::Vector2(35.0, 24.0),
+            screen_fitting: peridot_math::PhysicalScreenFitting::Shrink,
+            lens_shift: peridot_math::Vector2(0.0, 0.0),
+        }),
+        depth_range: 0.1..1000.0,
+    };
+    main_camera.look_at(
+        peridot_math::Vector3::ZERO,
+        Some(peridot_math::Vector3::up()),
+    );
     let preview_state = Mutex::new(CommittedPreviewState {
         viewport_size: Size::new_logical(640.0, 480.0),
+        main_camera,
+        main_camera_dirtified: false,
     });
 
     let global_time_base = std::time::Instant::now();
@@ -5901,7 +5919,8 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
 
 pub struct PreviewPanePresenter {
     ct_root: CompositeTreeRef,
-    committed_state: *const Mutex<CommittedPreviewState>,
+    ht_root: HitTestTreeRef,
+    input_handler: Rc<PreviewInputHandler>,
 }
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
@@ -5913,10 +5932,19 @@ impl PreviewPanePresenter {
             relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
         });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
+
+        let input_handler = Rc::new(PreviewInputHandler { committed_state });
+        ctx.ht_manager.set_action_handler(ht_root, &input_handler);
 
         Self {
             ct_root,
-            committed_state,
+            ht_root,
+            input_handler,
         }
     }
 }
@@ -5931,6 +5959,7 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
 
     fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
         ctx.composite_tree.add_child(target.ct_root, self.ct_root);
+        ctx.ht_manager.add_child(target.ht_root, self.ht_root);
     }
 
     fn resize(
@@ -5939,7 +5968,7 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
         _composite_tree: &mut CompositeTree<SyncEvent>,
         _ht_manager: &mut HitTestTreeManager,
     ) {
-        unsafe { &*self.committed_state }
+        unsafe { &*self.input_handler.committed_state }
             .lock()
             .expect("poisoned")
             .viewport_size = new_size.clone();
@@ -5947,9 +5976,83 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
 
     fn unmount(&self, ctx: &mut MountContext) {
         ctx.composite_tree.remove_child(self.ct_root);
+        ctx.ht_manager.remove_child(self.ht_root);
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.mount_context.composite_tree.free(self.ct_root);
+        ctx.mount_context.ht_manager.free(self.ht_root);
+    }
+}
+
+struct PreviewInputHandler {
+    committed_state: *const Mutex<CommittedPreviewState>,
+}
+impl HitTestTreeActionHandler for PreviewInputHandler {
+    fn on_scroll_wheel(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        args: &input::hittest::ScrollWheelActionArgs,
+    ) -> input::hittest::ScrollWheelActionResponse {
+        let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
+        let amplifier = 5.0f32.powf(if st.main_camera.position.1 == 0.0 {
+            0.0
+        } else {
+            st.main_camera.position.1.abs().log10().floor()
+        });
+        st.main_camera.position = st.main_camera.position
+            + peridot_math::Matrix3::from(st.main_camera.rotation)
+                * peridot_math::Vector3F32::forward()
+                * 0.25
+                * amplifier
+                * args.amount;
+        tracing::debug!(p = ?st.main_camera.position, "move cam");
+        st.main_camera_dirtified = true;
+
+        input::hittest::ScrollWheelActionResponse {
+            left_amount: 0.0,
+            continue_flags: EventContinueControl::STOP_PROPAGATION,
+        }
+    }
+
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
+    }
+
+    fn grab_delta_move(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        args: &input::hittest::GrabDeltaMoveActionArgs,
+    ) -> EventContinueControl {
+        let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
+        st.main_camera.rotation = st.main_camera.rotation
+            * peridot_math::Quaternion::new(
+                args.delta.y * 0.5f32.to_radians(),
+                peridot_math::Matrix3::from(st.main_camera.rotation)
+                    * peridot_math::Vector3::left(),
+            )
+            * peridot_math::Quaternion::new(
+                args.delta.x * 0.5f32.to_radians(),
+                peridot_math::Vector3::down(),
+            );
+        st.main_camera_dirtified = true;
+
+        EventContinueControl::STOP_PROPAGATION
     }
 }

@@ -1,10 +1,4 @@
-struct CameraData {
-  float4x4 worldToClipSpace;
-  float4 cameraPos;
-}
-
-[vk::binding(0, 0)]
-ConstantBuffer<CameraData> cameraData;
+#include "common-bindings.slang"
 
 struct Vertex {
   [vk::location(0)]
@@ -42,9 +36,10 @@ struct FshOutput {
 
 [shader("fragment")]
 func fragMain(data: FragmentData)->FshOutput {
-  let a = 1.0 - smoothstep(50.0, 100.0, length(data.p - cameraData.cameraPos));
+  let fadeout = 1.0 - smoothstep(FADEOUT_START_DIST, FADEOUT_END_DIST,
+                                 length(data.p - cameraData.cameraPos));
 
   FshOutput o;
-  o.col = data.col * a;
+  o.col = data.col * fadeout;
   return o;
 }
