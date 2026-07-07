@@ -85,6 +85,7 @@ class HeaderPresenter {
             );
             memoryTotalResidentLines.setAttribute("stroke-width", "1");
             memoryTotalResidentLines.setAttribute("stroke", "#ccc");
+            memoryTotalResidentLines.setAttribute("fill", "transparent");
             d.appendChild(memoryTotalResidentLines);
             for (const p of memoryChartModel.totalResident) {
                 const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -110,6 +111,7 @@ class HeaderPresenter {
             );
             memoryTotalReservedLines.setAttribute("stroke-width", "1");
             memoryTotalReservedLines.setAttribute("stroke", "#ccc");
+            memoryTotalReservedLines.setAttribute("fill", "transparent");
             d.appendChild(memoryTotalReservedLines);
             for (const p of memoryChartModel.totalReserved) {
                 const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -135,6 +137,7 @@ class HeaderPresenter {
             );
             memoryTotalPrivateResidentLines.setAttribute("stroke-width", "1");
             memoryTotalPrivateResidentLines.setAttribute("stroke", "#ccc");
+            memoryTotalPrivateResidentLines.setAttribute("fill", "transparent");
             d.appendChild(memoryTotalPrivateResidentLines);
             for (const p of memoryChartModel.totalPrivateResident) {
                 const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
@@ -160,6 +163,7 @@ class HeaderPresenter {
             timelineTopLine.setAttribute("y2", lineChartContentHeight.toString());
             timelineTopLine.setAttribute("stroke", "#666");
             timelineTopLine.setAttribute("stroke-width", "1");
+            timelineTopLine.setAttribute("fill", "transparent");
             d.appendChild(timelineTopLine);
             let barRectId = 0;
             for (const r of timelineChartModel.barRects) {
