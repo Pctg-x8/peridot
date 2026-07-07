@@ -122,6 +122,11 @@ pub const fn rup2_u64(x: u64, a: u64) -> u64 {
     (x + a - 1) & !(a - 1)
 }
 
+#[inline(always)]
+pub const fn range_from_len_u64(from: u64, len: u64) -> core::ops::Range<u64> {
+    from..from + len
+}
+
 #[cfg(unix)]
 #[inline(always)]
 pub fn is_budou_cluster_char(c: char) -> bool {

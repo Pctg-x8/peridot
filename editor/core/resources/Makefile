@@ -12,3 +12,6 @@ preview/grid.spv: preview/grid.slang preview/common-bindings.slang
 
 preview/origin_axes.spv: preview/origin_axes.slang preview/common-bindings.slang
 	slangc -o $@ $<
+
+preview/unlit_colored.spv: preview/unlit_colored.slang preview/common-bindings.slang
+		slangc -o $@ $<

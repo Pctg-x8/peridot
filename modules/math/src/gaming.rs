@@ -52,6 +52,7 @@ pub enum PhysicalScreenFitting {
 /// assert_eq!(mv.clone() * Vector3(5.0, 0.0, 1.0), Vector4(5.0, 0.0, 1.0, 1.0));
 /// assert_eq!(mp * mv * Vector3(5.0, 0.0, 1.0), Vector4(1.0, 0.0, 0.0, 1.0));
 /// ```
+#[derive(Clone)]
 pub struct Camera {
     /// Projection method of the camera. `None` indicates no projection(only adjust aspect ratio)
     pub projection: Option<ProjectionMethod>,

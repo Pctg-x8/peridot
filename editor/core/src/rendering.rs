@@ -30,7 +30,7 @@ use crate::{
         vg::VectorRasterizationState,
     },
     uikit::MountTarget,
-    utils::{LogicalUnit, PixelsUnit, SafeF32, Size, rup2_u64},
+    utils::{LogicalUnit, PixelsUnit, SafeF32, Size, range_from_len_u64, rup2, rup2_u64},
 };
 
 pub mod atlas;
@@ -3670,7 +3670,19 @@ pub struct PreviewOriginAxesVertex {
 #[repr(C)]
 pub struct PreviewCameraData {
     world_to_clip_space: Matrix4F32,
+    world_to_camera_space: Matrix4F32,
+    camera_to_clip_space: Matrix4F32,
     camera_pos: [f32; 4],
+}
+impl PreviewCameraData {
+    fn new(camera: &peridot_math::Camera, aspect_wh: f32) -> Self {
+        Self {
+            world_to_clip_space: camera.view_projection_matrix(aspect_wh).transpose(),
+            world_to_camera_space: camera.view_matrix().transpose(),
+            camera_to_clip_space: camera.projection_matrix(aspect_wh).transpose(),
+            camera_pos: [camera.position.0, camera.position.1, camera.position.2, 1.0],
+        }
+    }
 }
 
 // std430 layout
@@ -3708,6 +3720,11 @@ const PREVIEW_VS_ORIGIN_AXES: &[PreviewOriginAxesVertex] = &[
         offset: [0.0, 0.0, -1000.0, 0.0],
     },
 ];
+
+pub struct PreviewHandleVertex {
+    pos: [f32; 4],
+    col: [f32; 4],
+}
 
 struct PreviewScratchStagingBuffer {
     buffer: br::vk::VkBuffer,
@@ -3819,6 +3836,9 @@ pub struct PreviewRenderer {
     grid_pipeline_layout: br::vk::VkPipelineLayout,
     grid_shader: br::vk::VkShaderModule,
     grid_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
+    unlit_colored_shader: br::vk::VkShaderModule,
+    unlit_colored_object_pipeline_layout: br::vk::VkPipelineLayout,
+    gizmos_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     command_pool: br::vk::VkCommandPool,
     command_buffer: br::vk::VkCommandBuffer,
     update_command_pool: br::vk::VkCommandPool,
@@ -3828,6 +3848,8 @@ pub struct PreviewRenderer {
     pending_camera_data_updates: Option<usize>,
     internal_mesh_buffer: br::vk::VkBuffer,
     origin_axes_vbuf_range: core::ops::Range<br::DeviceSize>,
+    translate_handle_vbuf_range: core::ops::Range<br::DeviceSize>,
+    translate_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
@@ -3843,6 +3865,7 @@ impl PreviewRenderer {
         }
 
         if self.valid {
+            drop(unsafe { br::PipelineObject::manage(self.gizmos_pipeline.assume_init(), device) });
             drop(unsafe { br::PipelineObject::manage(self.grid_pipeline.assume_init(), device) });
             drop(unsafe {
                 br::PipelineObject::manage(self.origin_axes_pipeline.assume_init(), device)
@@ -3850,6 +3873,10 @@ impl PreviewRenderer {
             drop(unsafe { br::FramebufferObject::manage(self.framebuffer.assume_init(), device) });
         }
 
+        drop(unsafe { br::ShaderModuleObject::manage(self.unlit_colored_shader, device) });
+        drop(unsafe {
+            br::PipelineLayoutObject::manage(self.unlit_colored_object_pipeline_layout, device)
+        });
         drop(unsafe { br::ShaderModuleObject::manage(self.grid_shader, device) });
         drop(unsafe { br::PipelineLayoutObject::manage(self.grid_pipeline_layout, device) });
         drop(unsafe { br::ShaderModuleObject::manage(self.origin_axes_shader, device) });
@@ -3957,23 +3984,64 @@ impl PreviewRenderer {
             ),
         )
         .expect("preview.grid.pipeline_layout.create");
+        let unlit_colored_object_pipeline_layout = br::PipelineLayoutObject::new(
+            device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[common_descriptor_set_layout.as_transparent_ref()],
+                &[],
+            ),
+        )
+        .expect("preview.unlit_colored_object.pipeline_layout.create");
         let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
         let grid_shader = device.require_shader("preview/grid.spv");
+        let unlit_colored_shader = device.require_shader("preview/unlit_colored.spv");
+
+        const TRANSLATE_HANDLE_BAR_LENGTH: f32 = 0.2;
+        const TRANSLATE_HANDLE_ARROW_SIZE: f32 = 0.05;
+        const TRANSLATE_HANDLE_BAR_RADIUS: f32 = 0.005;
+        const TRANSLATE_HANDLE_ARROW_RADIUS: f32 = 0.02;
+        const TRANSLATE_HANDLE_BAR_DIVISION: u32 = 6;
+        const TRANSLATE_HANDLE_ARROW_DIVISION: u32 = 12;
+        let translate_handle_vcount = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
+            + TRANSLATE_HANDLE_ARROW_DIVISION as usize
+            + 1)
+            * 3;
+        let translate_handle_icount = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+            + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+            + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3)
+            * 3;
 
         let origin_axes_vbuf_range = 0..size_of_val(PREVIEW_VS_ORIGIN_AXES) as br::DeviceSize;
+        let translate_handle_vbuf_range = range_from_len_u64(
+            rup2_u64(
+                origin_axes_vbuf_range.end,
+                align_of::<PreviewHandleVertex>() as _,
+            ),
+            (size_of::<PreviewHandleVertex>() * translate_handle_vcount) as _,
+        );
+        let translate_handle_ibuf_range = range_from_len_u64(
+            rup2_u64(translate_handle_vbuf_range.end, align_of::<u16>() as _),
+            (size_of::<u16>() * translate_handle_icount) as _,
+        );
         let mut internal_mesh_buffer = br::BufferObject::new(
             device,
             &br::BufferCreateInfo::new(
-                origin_axes_vbuf_range.end,
-                br::BufferUsage::VERTEX_BUFFER | br::BufferUsage::TRANSFER_DEST,
+                translate_handle_ibuf_range.end,
+                br::BufferUsage::VERTEX_BUFFER
+                    | br::BufferUsage::INDEX_BUFFER
+                    | br::BufferUsage::TRANSFER_DEST,
             ),
         )
         .expect("preview.internal_mesh_buffer.create");
         let camera_data_ubuf_range = 0..size_of::<PreviewCameraData>() as br::DeviceSize;
+        let gizmos_camera_data_ubuf_range = range_from_len_u64(
+            camera_data_ubuf_range.end,
+            size_of::<PreviewCameraData>() as _,
+        );
         let mut internal_uniform_buffer = br::BufferObject::new(
             device,
             &br::BufferCreateInfo::new(
-                camera_data_ubuf_range.end,
+                gizmos_camera_data_ubuf_range.end,
                 br::BufferUsage::UNIFORM_BUFFER | br::BufferUsage::TRANSFER_DEST,
             ),
         )
@@ -4000,9 +4068,20 @@ impl PreviewRenderer {
             origin_axes_vbuf: [PreviewOriginAxesVertex; PREVIEW_VS_ORIGIN_AXES.len()],
             camera_data_ubuf: PreviewCameraData,
         }
+        let translate_handle_vbuf_upload_offset = rup2(
+            size_of::<UploadBufferData>(),
+            align_of::<PreviewHandleVertex>(),
+        );
+        let translate_handle_ibuf_upload_offset = rup2(
+            translate_handle_vbuf_upload_offset
+                + size_of::<UploadBufferData>() * translate_handle_vcount,
+            align_of::<u16>(),
+        );
+        let upload_size =
+            translate_handle_ibuf_upload_offset + size_of::<u16>() * translate_handle_icount;
         let mut upload_buffer = br::BufferObject::new(
             device,
-            &br::BufferCreateInfo::new_for_type::<UploadBufferData>(br::BufferUsage::TRANSFER_SRC),
+            &br::BufferCreateInfo::new(upload_size as _, br::BufferUsage::TRANSFER_SRC),
         )
         .expect("preview.upload_buffer.create");
         let memreq = upload_buffer.requirements();
@@ -4020,7 +4099,7 @@ impl PreviewRenderer {
             .expect("preview.upload_buffer.bind");
         let memhandle = mem.native_ptr();
         let ptr = mem
-            .map(0..size_of::<UploadBufferData>())
+            .map(0..upload_size as _)
             .expect("preview.upload_memory.map");
         unsafe {
             let p = ptr.ptr().cast::<UploadBufferData>();
@@ -4031,18 +4110,248 @@ impl PreviewRenderer {
             );
             core::ptr::write(
                 &raw mut (*p).camera_data_ubuf,
-                PreviewCameraData {
-                    world_to_clip_space: init_main_camera
-                        .view_projection_matrix(init_rt.aspect_wh())
-                        .transpose(),
-                    camera_pos: [
-                        init_main_camera.position.0,
-                        init_main_camera.position.1,
-                        init_main_camera.position.2,
-                        1.0,
-                    ],
-                },
+                PreviewCameraData::new(init_main_camera, init_rt.aspect_wh()),
             );
+
+            let vs = ptr
+                .ptr()
+                .byte_add(translate_handle_vbuf_upload_offset)
+                .cast::<PreviewHandleVertex>();
+            let is = ptr
+                .ptr()
+                .byte_add(translate_handle_ibuf_upload_offset)
+                .cast::<u16>();
+            let base_vindex_x = 0;
+            let base_vindex_y = base_vindex_x
+                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
+                + 1
+                + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
+            let base_vindex_z = base_vindex_y
+                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
+                + 1
+                + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
+            let mut iindex_x = 0;
+            let mut iindex_y = iindex_x
+                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+                + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+                + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
+            let mut iindex_z = iindex_y
+                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+                + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+                + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
+            for r in 0..TRANSLATE_HANDLE_BAR_DIVISION {
+                let (s, c) = (core::f32::consts::TAU * r as f32
+                    / TRANSLATE_HANDLE_BAR_DIVISION as f32)
+                    .sin_cos();
+
+                vs.add(base_vindex_x + r as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            0.0,
+                            TRANSLATE_HANDLE_BAR_RADIUS * s,
+                            TRANSLATE_HANDLE_BAR_RADIUS * c,
+                            1.0,
+                        ],
+                        col: [1.0, 0.0, 0.0, 1.0],
+                    });
+                vs.add(base_vindex_x + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_BAR_LENGTH,
+                            TRANSLATE_HANDLE_BAR_RADIUS * s,
+                            TRANSLATE_HANDLE_BAR_RADIUS * c,
+                            1.0,
+                        ],
+                        col: [1.0, 0.0, 0.0, 1.0],
+                    });
+                vs.add(base_vindex_y + r as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_BAR_RADIUS * s,
+                            0.0,
+                            TRANSLATE_HANDLE_BAR_RADIUS * c,
+                            1.0,
+                        ],
+                        col: [0.0, 1.0, 0.0, 1.0],
+                    });
+                vs.add(base_vindex_y + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_BAR_RADIUS * s,
+                            TRANSLATE_HANDLE_BAR_LENGTH,
+                            TRANSLATE_HANDLE_BAR_RADIUS * c,
+                            1.0,
+                        ],
+                        col: [0.0, 1.0, 0.0, 1.0],
+                    });
+                vs.add(base_vindex_z + r as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_BAR_RADIUS * s,
+                            TRANSLATE_HANDLE_BAR_RADIUS * c,
+                            0.0,
+                            1.0,
+                        ],
+                        col: [0.0, 0.0, 1.0, 1.0],
+                    });
+                vs.add(base_vindex_z + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_BAR_RADIUS * s,
+                            TRANSLATE_HANDLE_BAR_RADIUS * c,
+                            TRANSLATE_HANDLE_BAR_LENGTH,
+                            1.0,
+                        ],
+                        col: [0.0, 0.0, 1.0, 1.0],
+                    });
+
+                let prev_r = if r > 0 {
+                    r as u16
+                } else {
+                    TRANSLATE_HANDLE_BAR_DIVISION as u16
+                } - 1;
+
+                let a0 = base_vindex_x as u16 + prev_r;
+                let b0 = base_vindex_x as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+                let a1 = base_vindex_x as u16 + r as u16;
+                let b1 = base_vindex_x as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+                is.add(iindex_x + 0).write(a0);
+                is.add(iindex_x + 1).write(b0);
+                is.add(iindex_x + 2).write(a1);
+                is.add(iindex_x + 3).write(a1);
+                is.add(iindex_x + 4).write(b1);
+                is.add(iindex_x + 5).write(b0);
+                iindex_x += 6;
+
+                let a0 = base_vindex_y as u16 + prev_r;
+                let b0 = base_vindex_y as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+                let a1 = base_vindex_y as u16 + r as u16;
+                let b1 = base_vindex_y as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+                is.add(iindex_y + 0).write(a0);
+                is.add(iindex_y + 1).write(b0);
+                is.add(iindex_y + 2).write(a1);
+                is.add(iindex_y + 3).write(a1);
+                is.add(iindex_y + 4).write(b1);
+                is.add(iindex_y + 5).write(b0);
+                iindex_y += 6;
+
+                let a0 = base_vindex_z as u16 + prev_r;
+                let b0 = base_vindex_z as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+                let a1 = base_vindex_z as u16 + r as u16;
+                let b1 = base_vindex_z as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+                is.add(iindex_z + 0).write(a0);
+                is.add(iindex_z + 1).write(b0);
+                is.add(iindex_z + 2).write(a1);
+                is.add(iindex_z + 3).write(a1);
+                is.add(iindex_z + 4).write(b1);
+                is.add(iindex_z + 5).write(b0);
+                iindex_z += 6;
+            }
+            let arrow_top_vindex_x = base_vindex_x + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+            let arrow_top_vindex_y = base_vindex_y + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+            let arrow_top_vindex_z = base_vindex_z + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+            vs.add(arrow_top_vindex_x).write(PreviewHandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+                col: [1.0, 0.0, 0.0, 1.0],
+            });
+            vs.add(arrow_top_vindex_y).write(PreviewHandleVertex {
+                pos: [
+                    0.0,
+                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                    0.0,
+                    1.0,
+                ],
+                col: [0.0, 1.0, 0.0, 1.0],
+            });
+            vs.add(arrow_top_vindex_z).write(PreviewHandleVertex {
+                pos: [
+                    0.0,
+                    0.0,
+                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                    1.0,
+                ],
+                col: [0.0, 0.0, 1.0, 1.0],
+            });
+            let base_vindex_x = arrow_top_vindex_x + 1;
+            let base_vindex_y = arrow_top_vindex_y + 1;
+            let base_vindex_z = arrow_top_vindex_z + 1;
+            for r in 0..TRANSLATE_HANDLE_ARROW_DIVISION {
+                let (s, c) = (core::f32::consts::TAU * r as f32
+                    / TRANSLATE_HANDLE_ARROW_DIVISION as f32)
+                    .sin_cos();
+
+                vs.add(base_vindex_x + r as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_BAR_LENGTH,
+                            TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                            TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                            1.0,
+                        ],
+                        col: [1.0, 0.0, 0.0, 1.0],
+                    });
+                vs.add(base_vindex_y + r as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                            TRANSLATE_HANDLE_BAR_LENGTH,
+                            TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                            1.0,
+                        ],
+                        col: [0.0, 1.0, 0.0, 1.0],
+                    });
+                vs.add(base_vindex_z + r as usize)
+                    .write(PreviewHandleVertex {
+                        pos: [
+                            TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                            TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                            TRANSLATE_HANDLE_BAR_LENGTH,
+                            1.0,
+                        ],
+                        col: [0.0, 0.0, 1.0, 1.0],
+                    });
+
+                let prev_r = if r > 0 {
+                    r as u16
+                } else {
+                    TRANSLATE_HANDLE_ARROW_DIVISION as u16
+                } - 1;
+                is.add(iindex_x + 0).write(arrow_top_vindex_x as u16);
+                is.add(iindex_x + 1).write(base_vindex_x as u16 + prev_r);
+                is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
+                iindex_x += 3;
+                is.add(iindex_y + 0).write(arrow_top_vindex_y as u16);
+                is.add(iindex_y + 1).write(base_vindex_y as u16 + prev_r);
+                is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
+                iindex_y += 3;
+                is.add(iindex_z + 0).write(arrow_top_vindex_z as u16);
+                is.add(iindex_z + 1).write(base_vindex_z as u16 + prev_r);
+                is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
+                iindex_z += 3;
+
+                if r > 1 {
+                    is.add(iindex_x + 0).write(base_vindex_x as u16 + 0);
+                    is.add(iindex_x + 1)
+                        .write(base_vindex_x as u16 + r as u16 - 1);
+                    is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
+                    iindex_x += 3;
+                    is.add(iindex_y + 0).write(base_vindex_y as u16 + 0);
+                    is.add(iindex_y + 1)
+                        .write(base_vindex_y as u16 + r as u16 - 1);
+                    is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
+                    iindex_y += 3;
+                    is.add(iindex_z + 0).write(base_vindex_z as u16 + 0);
+                    is.add(iindex_z + 1)
+                        .write(base_vindex_z as u16 + r as u16 - 1);
+                    is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
+                    iindex_z += 3;
+                }
+            }
         }
         if should_flush {
             unsafe {
@@ -4050,7 +4359,7 @@ impl PreviewRenderer {
                     .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
                         memhandle,
                         0,
-                        size_of::<UploadBufferData>() as _,
+                        upload_size as _,
                     )])
                     .expect("preview.upload_memory.flush");
             }
@@ -4078,18 +4387,30 @@ impl PreviewRenderer {
         .copy_buffer(
             &upload_buffer,
             &internal_mesh_buffer,
-            &[br::BufferCopy(br::vk::VkBufferCopy {
-                srcOffset: core::mem::offset_of!(UploadBufferData, origin_axes_vbuf) as _,
-                dstOffset: 0,
-                size: size_of_val(PREVIEW_VS_ORIGIN_AXES) as _,
-            })],
+            &[
+                br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: core::mem::offset_of!(UploadBufferData, origin_axes_vbuf) as _,
+                    dstOffset: 0,
+                    size: size_of_val(PREVIEW_VS_ORIGIN_AXES) as _,
+                }),
+                br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: translate_handle_vbuf_upload_offset as _,
+                    dstOffset: translate_handle_vbuf_range.start,
+                    size: translate_handle_vbuf_range.end - translate_handle_vbuf_range.start,
+                }),
+                br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: translate_handle_ibuf_upload_offset as _,
+                    dstOffset: translate_handle_ibuf_range.start,
+                    size: translate_handle_ibuf_range.end - translate_handle_ibuf_range.start,
+                }),
+            ],
         )
         .copy_buffer(
             &upload_buffer,
             &internal_uniform_buffer,
             &[br::BufferCopy::copy_data::<PreviewCameraData>(
                 core::mem::offset_of!(UploadBufferData, camera_data_ubuf) as _,
-                0,
+                camera_data_ubuf_range.start,
             )],
         )
         .inject(|r| {
@@ -4187,6 +4508,9 @@ impl PreviewRenderer {
         let (internal_data_memory, _) = internal_data_memory.unmanage();
         let (internal_uniform_buffer, _) = internal_uniform_buffer.unmanage();
         let (internal_mesh_buffer, _) = internal_mesh_buffer.unmanage();
+        let (unlit_colored_shader, _) = unlit_colored_shader.unmanage();
+        let (unlit_colored_object_pipeline_layout, _) =
+            unlit_colored_object_pipeline_layout.unmanage();
         let (grid_shader, _) = grid_shader.unmanage();
         let (grid_pipeline_layout, _) = grid_pipeline_layout.unmanage();
         let (origin_axes_shader, _) = origin_axes_shader.unmanage();
@@ -4213,8 +4537,13 @@ impl PreviewRenderer {
             grid_pipeline_layout,
             grid_shader,
             grid_pipeline: core::mem::MaybeUninit::uninit(),
+            unlit_colored_object_pipeline_layout,
+            unlit_colored_shader,
+            gizmos_pipeline: core::mem::MaybeUninit::uninit(),
             internal_mesh_buffer,
             origin_axes_vbuf_range,
+            translate_handle_vbuf_range,
+            translate_handle_ibuf_range,
             internal_uniform_buffer,
             camera_data_ubuf_range,
             internal_data_memory,
@@ -4278,9 +4607,12 @@ impl PreviewRenderer {
                 drop(unsafe {
                     br::PipelineObject::manage(self.grid_pipeline.assume_init(), device)
                 });
+                drop(unsafe {
+                    br::PipelineObject::manage(self.gizmos_pipeline.assume_init(), device)
+                });
             }
 
-            let [origin_axes_pipeline, grid_pipeline] = device
+            let [origin_axes_pipeline, grid_pipeline, gizmos_pipeline] = device
                 .create_graphics_pipelines_array(&[
                     br::GraphicsPipelineCreateInfo::new(
                         br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline_layout),
@@ -4388,11 +4720,68 @@ impl PreviewRenderer {
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .config_depth(Some(br::CompareOp::Less), false),
                     ),
+                    br::GraphicsPipelineCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
+                        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
+                        &[
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Vertex,
+                                br::VkHandleRef::from_raw_ref(&self.unlit_colored_shader),
+                                c"vertMain",
+                            ),
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Fragment,
+                                br::VkHandleRef::from_raw_ref(&self.unlit_colored_shader),
+                                c"fragMain",
+                            ),
+                        ],
+                        &br::PipelineVertexInputStateCreateInfo::new(
+                            &[br::VertexInputBindingDescription::per_vertex_typed::<
+                                PreviewHandleVertex,
+                            >(0)],
+                            &[
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 0,
+                                        binding: 0,
+                                        offset: core::mem::offset_of!(PreviewHandleVertex, pos)
+                                            as _,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 1,
+                                        binding: 0,
+                                        offset: core::mem::offset_of!(PreviewHandleVertex, col)
+                                            as _,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                            ],
+                        ),
+                        IA_STATE_TRILIST,
+                        &br::PipelineViewportStateCreateInfo::new(
+                            &[active_rt
+                                .size
+                                .into_rect(br::Offset2D::ZERO)
+                                .make_viewport(0.0..1.0)],
+                            &[active_rt.size.into_rect(br::Offset2D::ZERO)],
+                        ),
+                        RASTER_STATE_DEFAULT_FILL_NOCULL,
+                        BLEND_STATE_SINGLE_NONE,
+                    )
+                    .set_multisample_state(MS_STATE_EMPTY)
+                    .set_depth_stencil_state(
+                        &br::PipelineDepthStencilStateCreateInfo::new()
+                            .config_depth(Some(br::CompareOp::Less), false),
+                    ),
                 ])
                 .expect("preview.validate.origin_axes.pipelines.create");
             self.origin_axes_pipeline
                 .write(origin_axes_pipeline.unmanage().0);
             self.grid_pipeline.write(grid_pipeline.unmanage().0);
+            self.gizmos_pipeline.write(gizmos_pipeline.unmanage().0);
 
             origin_axes_pipeline_changed = true;
         }
@@ -4409,18 +4798,7 @@ impl PreviewRenderer {
                         .mapped_ptr
                         .byte_add(buffer_offset)
                         .cast::<PreviewCameraData>(),
-                    PreviewCameraData {
-                        world_to_clip_space: committed_state
-                            .main_camera
-                            .view_projection_matrix(active_rt.aspect_wh())
-                            .transpose(),
-                        camera_pos: [
-                            committed_state.main_camera.position.0,
-                            committed_state.main_camera.position.1,
-                            committed_state.main_camera.position.2,
-                            1.0,
-                        ],
-                    },
+                    PreviewCameraData::new(&committed_state.main_camera, active_rt.aspect_wh()),
                 );
             }
         }
@@ -4593,6 +4971,44 @@ impl PreviewRenderer {
                     &[self.origin_axes_vbuf_range.start],
                 )
                 .draw(PREVIEW_VS_ORIGIN_AXES.len() as _, 1, 0, 0)
+                // clear depth for gizmos rendering
+                .clear_attachments(
+                    &[br::vk::VkClearAttachment {
+                        aspectMask: (br::AspectMask::DEPTH | br::AspectMask::STENCIL).bits(),
+                        colorAttachment: 0,
+                        clearValue: br::ClearValue::depth_stencil(1.0, 0).0,
+                    }],
+                    &[br::vk::VkClearRect {
+                        rect: active_rt.size.into_rect(br::Offset2D::ZERO),
+                        baseArrayLayer: 0,
+                        layerCount: 1,
+                    }],
+                )
+                .bind_pipeline(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(unsafe {
+                        self.gizmos_pipeline.assume_init_ref()
+                    }),
+                )
+                .bind_descriptor_sets(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
+                    0,
+                    &[self.common_descriptor_set],
+                    &[],
+                )
+                .bind_vertex_buffer_array(
+                    0,
+                    &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                    &[self.translate_handle_vbuf_range.start],
+                )
+                .bind_index_buffer(
+                    br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                    self.translate_handle_ibuf_range.start as _,
+                    br::IndexType::U16,
+                )
+                // TODO: あとでちゃんと計算する
+                .draw_indexed(102 * 3, 1, 0, 0, 0)
                 .end_render_pass()
                 .end()
                 .expect("preview.validate.command_buffer.end");

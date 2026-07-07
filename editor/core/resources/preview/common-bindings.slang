@@ -1,5 +1,7 @@
 struct CameraData {
   float4x4 worldToClipSpace;
+  float4x4 worldToCameraSpace;
+  float4x4 cameraToClipSpace;
   float4 cameraPos;
 }
 
