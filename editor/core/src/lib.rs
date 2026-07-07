@@ -5920,12 +5920,14 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
 pub struct PreviewPanePresenter {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    kf_token: FocusTargetToken,
     input_handler: Rc<PreviewInputHandler>,
 }
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
     pub fn new(ctx: &mut ViewInitContext, committed_state: &Mutex<CommittedPreviewState>) -> Self {
+        let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ct_root = ctx.composite_tree.create(CompositeRect {
             // has_bitmap: true,
             custom_render_token: Some(rendering::PREVIEW_COMPOSITE),
@@ -5935,15 +5937,22 @@ impl PreviewPanePresenter {
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
+            keyboard_focus: Some(kf_token),
             ..Default::default()
         });
 
-        let input_handler = Rc::new(PreviewInputHandler { committed_state });
+        let input_handler = Rc::new(PreviewInputHandler {
+            committed_state,
+            main_camera_moving: Cell::new(false),
+        });
         ctx.ht_manager.set_action_handler(ht_root, &input_handler);
+        ctx.keyboard_focus_registry
+            .set_event_handler(kf_token, &input_handler);
 
         Self {
             ct_root,
             ht_root,
+            kf_token,
             input_handler,
         }
     }
@@ -5982,11 +5991,15 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.mount_context.composite_tree.free(self.ct_root);
         ctx.mount_context.ht_manager.free(self.ht_root);
+        ctx.mount_context
+            .keyboard_focus_registry
+            .release_token(self.kf_token);
     }
 }
 
 struct PreviewInputHandler {
     committed_state: *const Mutex<CommittedPreviewState>,
+    main_camera_moving: Cell<bool>,
 }
 impl HitTestTreeActionHandler for PreviewInputHandler {
     fn on_scroll_wheel(
@@ -6018,6 +6031,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        self.main_camera_moving.set(true);
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
     }
 
@@ -6027,6 +6041,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        self.main_camera_moving.set(false);
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
 
@@ -6050,5 +6065,26 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         st.main_camera_dirtified = true;
 
         EventContinueControl::STOP_PROPAGATION
+    }
+}
+impl KeyInputEventHandler for PreviewInputHandler {
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        match code {
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'w') => {
+                if self.main_camera_moving.get() {
+                    let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
+                    let amplifier = 5.0f32.powf(if st.main_camera.position.1 == 0.0 {
+                        0.0
+                    } else {
+                        st.main_camera.position.1.abs().log10().floor()
+                    });
+                    st.main_camera.position =
+                        st.main_camera.position + st.main_camera.forward() * 0.25 * amplifier;
+                    tracing::debug!(p = ?st.main_camera.position, "move cam");
+                    st.main_camera_dirtified = true;
+                }
+            }
+            _ => (),
+        }
     }
 }

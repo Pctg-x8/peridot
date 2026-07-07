@@ -126,6 +126,7 @@ crate::perf_section!(RENDERLOOP = "RenderLoop");
 crate::perf_section!(PROCESS_MESSAGE = "RenderLoop.ProcessMessage");
 crate::perf_section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
 crate::perf_section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
+crate::perf_section!(ACQUIRE_WINDOW_BACKBUFFER = "RenderLoop.UpdateWindow.AcquireBackbuffer");
 crate::perf_section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
 crate::perf_section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
 crate::perf_section!(VALIDATE_PREVIEW_RENDERING = "RenderLoop.ValidatePreviewRendering");
@@ -1992,6 +1993,7 @@ impl<'d> WindowRenderer<'d> {
     }
 
     pub fn acquire_backbuffer_with_wait(&mut self) -> br::Result<u32> {
+        crate::perf_scope!(ACQUIRE_WINDOW_BACKBUFFER);
         let backbuffer_index = self.swapchain.acquire_next(
             None,
             br::CompletionHandlerMut::Queue(
