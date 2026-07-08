@@ -1,12 +1,6 @@
-import {
-    loadBin,
-    type BinMetadata,
-    type EventMarker,
-    type MemoryStatsMarker,
-    type SectionBeginMarker,
-    type SectionEndMarker,
-} from "./binloader";
-import { bnMax, bnMin, hasValue } from "./utils";
+import { Application, type SectionRange } from "./app";
+import { type EventMarker, type MemoryStatsMarker } from "./binloader";
+import { hasValue } from "./utils";
 import { PrefixedViewGroup, ViewElement } from "./viewHelper";
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -22,10 +16,9 @@ class HeaderPresenter {
     readonly #chartSurface = new ViewElement<SVGGElement>("ChartSurface");
     readonly #chartContainer = new ViewElement<SVGGElement>("ChartContainer");
 
-    #binMetadata: BinMetadata | null = null;
     #timelineChartModel: TimelineChartModel | null = null;
     #memoryChartModel: MemoryChartModel | null = null;
-    #chartTimestampRange: { readonly start: bigint; readonly end: bigint } = { start: 0n, end: 0n };
+    #timestampRange: { readonly start: bigint; readonly end: bigint } = { start: 0n, end: 0n };
 
     launch() {
         this.#loadButtonView.ref.addEventListener("click", async () => {
@@ -35,54 +28,58 @@ class HeaderPresenter {
                 return;
             }
 
-            const [binMetadata, markerStream] = await loadBin(file);
-            const sectionMarkers = [];
-            const events = [];
-            const memoryStats = [];
-            for await (const m of markerStream) {
-                if (m.type === "Section.Begin" || m.type === "Section.End") {
-                    sectionMarkers.push(m);
-                }
-                if (m.type == "Event") {
-                    events.push(m);
-                }
-                if (m.type == "MemoryStats") {
-                    memoryStats.push(m);
-                }
-            }
-            console.log("finish", binMetadata, events, sectionMarkers, memoryStats);
-
-            const sectionRanges = buildSectionRanges(sectionMarkers, binMetadata.markerAddrToName);
-            console.log(sectionRanges);
-            const chartTimestampRange = computeTimestampRange(sectionRanges, events, memoryStats);
-            this.#timelineChartModel = buildTimelineChartModel(
-                sectionRanges,
-                events,
-                chartTimestampRange,
-                binMetadata.timestampFrequency,
-                binMetadata.markerAddrToName,
-            );
-            console.log(this.#timelineChartModel);
-            this.#memoryChartModel = buildMemoryChartModel(
-                memoryStats,
-                chartTimestampRange,
-                binMetadata.timestampFrequency,
-            );
-            console.log(this.#memoryChartModel);
-
-            this.#binMetadata = binMetadata;
-            this.#chartTimestampRange = chartTimestampRange;
-            this.#renderChart();
+            await Application.instance.load(file);
         });
 
         this.#horizontalScaleInputView.ref.value = "1";
         this.#horizontalScaleInputView.ref.addEventListener("change", () => {
             this.#renderChart();
         });
+
+        var sourceDataChanged = false;
+        Application.instance.addEventListener("sourceDataChanged", () => {
+            sourceDataChanged = true;
+        });
+        Application.instance.addEventListener("performAtomic", () => {
+            var needsRender = false;
+
+            if (sourceDataChanged) {
+                const timestampRange = Application.instance.computeChartTimestampRange();
+
+                this.#timelineChartModel = buildTimelineChartModel(
+                    Application.instance.sectionRanges,
+                    Application.instance.events,
+                    timestampRange,
+                    Application.instance.currentBinMetadata!.timestampFrequency,
+                    Application.instance.currentBinMetadata!.markerAddrToName,
+                );
+                console.log(this.#timelineChartModel);
+                this.#memoryChartModel = buildMemoryChartModel(
+                    Application.instance.memoryStats,
+                    timestampRange,
+                    Application.instance.currentBinMetadata!.timestampFrequency,
+                );
+                console.log(this.#memoryChartModel);
+                this.#timestampRange = timestampRange;
+
+                needsRender = true;
+                sourceDataChanged = false;
+            }
+
+            if (needsRender) {
+                this.#renderChart();
+            }
+        });
     }
 
     #renderChart() {
-        if (this.#timelineChartModel === null || this.#memoryChartModel === null || this.#binMetadata === null) {
+        const binMetadata = Application.instance.currentBinMetadata;
+        if (!hasValue(binMetadata)) {
+            // not loaded
+            return;
+        }
+
+        if (!hasValue(this.#timelineChartModel) || !hasValue(this.#memoryChartModel)) {
             return;
         }
 
@@ -256,10 +253,7 @@ class HeaderPresenter {
         }
 
         const w =
-            timestampToSecs(
-                this.#chartTimestampRange.end - this.#chartTimestampRange.start,
-                this.#binMetadata.timestampFrequency,
-            ) *
+            timestampToSecs(this.#timestampRange.end - this.#timestampRange.start, binMetadata.timestampFrequency) *
             TIMELINE_CHART_WIDTH_PER_SEC *
             horizontalScale;
         const h = lineChartContentHeight + timelineChartContentHeight;
@@ -271,111 +265,12 @@ class HeaderPresenter {
     }
 }
 
-type Range<T> = {
-    readonly begin: T;
-    readonly end: T;
-};
-
-type SectionRange = {
-    readonly markerName: string;
-    readonly auxData: unknown[];
-    readonly timestamp: Range<bigint>;
-};
-
-function buildSectionRanges(
-    markers: (SectionBeginMarker | SectionEndMarker)[],
-    markerAddrToName: Map<bigint, string>,
-): SectionRange[] {
-    const sectionById = new Map<bigint, { readonly begin?: SectionBeginMarker; readonly end?: SectionEndMarker }>();
-    let maxTimestamp = 0n;
-    for (const m of markers) {
-        switch (m.type) {
-            case "Section.Begin":
-                {
-                    const existingSection = sectionById.get(m.sectionId) ?? {};
-                    if (hasValue(existingSection.begin)) {
-                        console.error("section has begun twice", m, existingSection);
-                        throw new Error(`section id ${m.sectionId} has begun twice`);
-                    }
-
-                    sectionById.set(m.sectionId, { ...existingSection, begin: m });
-                }
-                break;
-            case "Section.End": {
-                const existingSection = sectionById.get(m.sectionId) ?? {};
-                if (hasValue(existingSection.end)) {
-                    console.error(
-                        "section ended twice",
-                        m,
-                        existingSection,
-                        markerAddrToName.get(existingSection.begin!.markerAddr),
-                    );
-                    throw new Error(`section id ${m.sectionId} ended twice`);
-                }
-
-                sectionById.set(m.sectionId, { ...existingSection, end: m });
-            }
-        }
-
-        if (m.timestamp > maxTimestamp) {
-            maxTimestamp = m.timestamp;
-        }
-    }
-
-    return sectionById
-        .values()
-        .map(v => {
-            let markerName: string;
-            if (hasValue(v.begin)) {
-                markerName = markerAddrToName.get(v.begin.markerAddr) ?? "<Unknown Section>";
-            } else {
-                markerName = "<Unknown Section>";
-            }
-
-            return {
-                markerName,
-                auxData: v.begin?.auxData ?? [],
-                timestamp: {
-                    begin: v.begin?.timestamp ?? 0n,
-                    end: v.end?.timestamp ?? maxTimestamp,
-                },
-            };
-        })
-        .toArray();
-}
-
 const TIMELINE_CHART_BAR_THICKNESS: number = 12.0;
 const TIMELINE_CHART_WIDTH_PER_SEC: number = 128.0 * 50.0;
 const TIMELINE_CHART_TOP_MARGIN: number = 120.0;
 
 export function timestampToSecs(timestamp: bigint, freq: bigint): number {
     return Number(timestamp) / Number(freq);
-}
-
-function computeTimestampRange(
-    sectionRanges: SectionRange[],
-    events: EventMarker[],
-    memoryStats: MemoryStatsMarker[],
-): { readonly start: bigint; readonly end: bigint } {
-    let minTimestamp: bigint | null = null;
-    let maxTimestamp: bigint | null = null;
-
-    for (const r of sectionRanges) {
-        minTimestamp = minTimestamp === null ? r.timestamp.begin : bnMin(minTimestamp, r.timestamp.begin);
-        maxTimestamp = maxTimestamp === null ? r.timestamp.end : bnMax(maxTimestamp, r.timestamp.end);
-    }
-
-    for (const e of events) {
-        minTimestamp = minTimestamp === null ? e.timestamp : bnMin(minTimestamp, e.timestamp);
-        maxTimestamp = maxTimestamp === null ? e.timestamp : bnMax(maxTimestamp, e.timestamp);
-    }
-
-    for (const m of memoryStats) {
-        minTimestamp = minTimestamp === null ? m.timestamp : bnMin(minTimestamp, m.timestamp);
-        maxTimestamp = maxTimestamp === null ? m.timestamp : bnMax(maxTimestamp, m.timestamp);
-    }
-
-    return { start: minTimestamp ?? 0n, end: maxTimestamp ?? 0n };
 }
 
 type BarRect = {
