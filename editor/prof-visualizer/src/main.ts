@@ -1,5 +1,6 @@
 import {
     loadBin,
+    type BinMetadata,
     type EventMarker,
     type MemoryStatsMarker,
     type SectionBeginMarker,
@@ -17,8 +18,14 @@ class HeaderPresenter {
 
     readonly #inputFileView = HeaderPresenter.#ViewGroup.view<HTMLInputElement>("InputFile");
     readonly #loadButtonView = HeaderPresenter.#ViewGroup.view<HTMLButtonElement>("LoadButton");
+    readonly #horizontalScaleInputView = HeaderPresenter.#ViewGroup.view<HTMLInputElement>("HorizontalScaleInput");
     readonly #chartSurface = new ViewElement<SVGGElement>("ChartSurface");
     readonly #chartContainer = new ViewElement<SVGGElement>("ChartContainer");
+
+    #binMetadata: BinMetadata | null = null;
+    #timelineChartModel: TimelineChartModel | null = null;
+    #memoryChartModel: MemoryChartModel | null = null;
+    #chartTimestampRange: { readonly start: bigint; readonly end: bigint } = { start: 0n, end: 0n };
 
     launch() {
         this.#loadButtonView.ref.addEventListener("click", async () => {
@@ -48,197 +55,219 @@ class HeaderPresenter {
             const sectionRanges = buildSectionRanges(sectionMarkers, binMetadata.markerAddrToName);
             console.log(sectionRanges);
             const chartTimestampRange = computeTimestampRange(sectionRanges, events, memoryStats);
-            const timelineChartModel = buildTimelineChartModel(
+            this.#timelineChartModel = buildTimelineChartModel(
                 sectionRanges,
                 events,
                 chartTimestampRange,
                 binMetadata.timestampFrequency,
                 binMetadata.markerAddrToName,
             );
-            console.log(timelineChartModel);
-            const memoryChartModel = buildMemoryChartModel(
+            console.log(this.#timelineChartModel);
+            this.#memoryChartModel = buildMemoryChartModel(
                 memoryStats,
                 chartTimestampRange,
                 binMetadata.timestampFrequency,
             );
-            console.log(memoryChartModel);
+            console.log(this.#memoryChartModel);
 
-            // 最大値よりちょっと大きめに取る
-            const lineChartContentHeight = Math.max(
-                memoryChartModel.totalResident
-                    .map(x => x.y + 500.0 * MEMORY_CHART_HEIGHT_PER_BYTES)
-                    .reduce((a, b) => Math.max(a, b), TIMELINE_CHART_TOP_MARGIN),
-                memoryChartModel.totalReserved
-                    .map(x => x.y + 500.0 * MEMORY_CHART_HEIGHT_PER_BYTES)
-                    .reduce((a, b) => Math.max(a, b), TIMELINE_CHART_TOP_MARGIN),
-            );
-            const timelineChartContentHeight = timelineChartModel.barRects
-                .map(x => x.top + x.height)
-                .reduce((a, b) => Math.max(a, b), 0);
-
-            const d = new DocumentFragment();
-
-            const memoryTotalResidentLines = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-            memoryTotalResidentLines.setAttribute(
-                "points",
-                memoryChartModel.totalResident.map(x => `${x.x},${lineChartContentHeight - x.y}`).join(" "),
-            );
-            memoryTotalResidentLines.setAttribute("stroke-width", "1");
-            memoryTotalResidentLines.setAttribute("stroke", "#ccc");
-            memoryTotalResidentLines.setAttribute("fill", "transparent");
-            d.appendChild(memoryTotalResidentLines);
-            for (const p of memoryChartModel.totalResident) {
-                const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-
-                const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-                point.setAttribute("cx", p.x.toString());
-                point.setAttribute("cy", (lineChartContentHeight - p.y).toString());
-                point.setAttribute("r", "2");
-                point.setAttribute("fill", "#ccc");
-                g.appendChild(point);
-
-                const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-                title.textContent = p.tooltipText;
-                g.appendChild(title);
-
-                d.appendChild(g);
-            }
-
-            const memoryTotalReservedLines = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-            memoryTotalReservedLines.setAttribute(
-                "points",
-                memoryChartModel.totalReserved.map(x => `${x.x},${lineChartContentHeight - x.y}`).join(" "),
-            );
-            memoryTotalReservedLines.setAttribute("stroke-width", "1");
-            memoryTotalReservedLines.setAttribute("stroke", "#ccc");
-            memoryTotalReservedLines.setAttribute("fill", "transparent");
-            d.appendChild(memoryTotalReservedLines);
-            for (const p of memoryChartModel.totalReserved) {
-                const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-
-                const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-                point.setAttribute("cx", p.x.toString());
-                point.setAttribute("cy", (lineChartContentHeight - p.y).toString());
-                point.setAttribute("r", "2");
-                point.setAttribute("fill", "#ccc");
-                g.appendChild(point);
-
-                const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-                title.textContent = p.tooltipText;
-                g.appendChild(title);
-
-                d.appendChild(g);
-            }
-
-            const memoryTotalPrivateResidentLines = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-            memoryTotalPrivateResidentLines.setAttribute(
-                "points",
-                memoryChartModel.totalPrivateResident.map(x => `${x.x},${lineChartContentHeight - x.y}`).join(" "),
-            );
-            memoryTotalPrivateResidentLines.setAttribute("stroke-width", "1");
-            memoryTotalPrivateResidentLines.setAttribute("stroke", "#ccc");
-            memoryTotalPrivateResidentLines.setAttribute("fill", "transparent");
-            d.appendChild(memoryTotalPrivateResidentLines);
-            for (const p of memoryChartModel.totalPrivateResident) {
-                const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-
-                const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-                point.setAttribute("cx", p.x.toString());
-                point.setAttribute("cy", (lineChartContentHeight - p.y).toString());
-                point.setAttribute("r", "2");
-                point.setAttribute("fill", "#ccc");
-                g.appendChild(point);
-
-                const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-                title.textContent = p.tooltipText;
-                g.appendChild(title);
-
-                d.appendChild(g);
-            }
-
-            const timelineTopLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
-            timelineTopLine.setAttribute("x1", "0");
-            timelineTopLine.setAttribute("y1", lineChartContentHeight.toString());
-            timelineTopLine.setAttribute("x2", "100%");
-            timelineTopLine.setAttribute("y2", lineChartContentHeight.toString());
-            timelineTopLine.setAttribute("stroke", "#666");
-            timelineTopLine.setAttribute("stroke-width", "1");
-            timelineTopLine.setAttribute("fill", "transparent");
-            d.appendChild(timelineTopLine);
-            let barRectId = 0;
-            for (const r of timelineChartModel.barRects) {
-                const hue =
-                    r.labelText
-                        .split("")
-                        .map(c => c.charCodeAt(0) * 7)
-                        .reduce((a, b) => a + b, 0) % 360;
-                const top = lineChartContentHeight + r.top;
-
-                const clip = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
-                const clipId = (clip.id = `barRectClip-${barRectId}`);
-                const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-                rect.setAttribute("x", r.left.toString());
-                rect.setAttribute("y", top.toString());
-                rect.setAttribute("width", r.width.toString());
-                rect.setAttribute("height", r.height.toString());
-                clip.appendChild(rect);
-                d.appendChild(clip);
-
-                const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-                const e = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-                e.setAttribute("x", r.left.toString());
-                e.setAttribute("y", top.toString());
-                e.setAttribute("width", r.width.toString());
-                e.setAttribute("height", r.height.toString());
-                e.style.fill = `oklch(100% 0.25 ${hue})`;
-                e.setAttribute("stroke", "transparent");
-                e.setAttribute("stroke-width", "0");
-                const tx = document.createElementNS("http://www.w3.org/2000/svg", "text");
-                tx.textContent = r.labelText;
-                tx.setAttribute("x", r.left.toString());
-                tx.setAttribute("y", (top + r.height * 0.5).toString());
-                tx.setAttribute("clip-path", `url(#${clipId})`);
-                tx.setAttribute("dominant-baseline", "middle");
-                const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
-                t.textContent = r.tooltipText;
-
-                g.appendChild(e);
-                g.appendChild(tx);
-                g.appendChild(t);
-                d.appendChild(g);
-                barRectId += 1;
-            }
-
-            for (const l of timelineChartModel.eventLines) {
-                const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-                text.textContent = l.labelText;
-                text.setAttribute("x", l.left.toString());
-                text.setAttribute("y", "0");
-                text.setAttribute("dominant-baseline", "text-top");
-                text.classList.add("eventLine");
-
-                const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-                line.setAttribute("x1", l.left.toString());
-                line.setAttribute("x2", l.left.toString());
-                line.setAttribute("y1", "0");
-                line.setAttribute("y2", "100%");
-                line.setAttribute("stroke-width", "1");
-                line.setAttribute("stroke", "#999");
-
-                d.appendChild(text);
-                d.appendChild(line);
-            }
-
-            const w =
-                timestampToSecs(chartTimestampRange.end - chartTimestampRange.start, binMetadata.timestampFrequency) *
-                TIMELINE_CHART_WIDTH_PER_SEC;
-            const h = lineChartContentHeight + timelineChartContentHeight;
-            this.#chartSurface.ref.setAttribute("width", (w * window.devicePixelRatio).toString());
-            this.#chartSurface.ref.setAttribute("height", (h * window.devicePixelRatio).toString());
-            this.#chartSurface.ref.setAttribute("viewBox", `0 0 ${w} ${h}`);
-
-            this.#chartContainer.ref.replaceChildren(d);
+            this.#binMetadata = binMetadata;
+            this.#chartTimestampRange = chartTimestampRange;
+            this.#renderChart();
         });
+
+        this.#horizontalScaleInputView.ref.value = "1";
+        this.#horizontalScaleInputView.ref.addEventListener("change", () => {
+            this.#renderChart();
+        });
+    }
+
+    #renderChart() {
+        if (this.#timelineChartModel === null || this.#memoryChartModel === null || this.#binMetadata === null) {
+            return;
+        }
+
+        const horizontalScale1 = Number.parseFloat(this.#horizontalScaleInputView.ref.value);
+        const horizontalScale = isNaN(horizontalScale1) ? 1.0 : horizontalScale1;
+
+        // 最大値よりちょっと大きめに取る
+        const lineChartContentHeight = Math.max(
+            this.#memoryChartModel.totalResident
+                .map(x => x.y + 500.0 * MEMORY_CHART_HEIGHT_PER_BYTES)
+                .reduce((a, b) => Math.max(a, b), TIMELINE_CHART_TOP_MARGIN),
+            this.#memoryChartModel.totalReserved
+                .map(x => x.y + 500.0 * MEMORY_CHART_HEIGHT_PER_BYTES)
+                .reduce((a, b) => Math.max(a, b), TIMELINE_CHART_TOP_MARGIN),
+        );
+        const timelineChartContentHeight = this.#timelineChartModel.barRects
+            .map(x => x.top + x.height)
+            .reduce((a, b) => Math.max(a, b), 0);
+
+        const d = new DocumentFragment();
+
+        const memoryTotalResidentLines = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        memoryTotalResidentLines.setAttribute(
+            "points",
+            this.#memoryChartModel.totalResident.map(x => `${x.x},${lineChartContentHeight - x.y}`).join(" "),
+        );
+        memoryTotalResidentLines.setAttribute("stroke-width", "1");
+        memoryTotalResidentLines.setAttribute("stroke", "#ccc");
+        memoryTotalResidentLines.setAttribute("fill", "transparent");
+        d.appendChild(memoryTotalResidentLines);
+        for (const p of this.#memoryChartModel.totalResident) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+
+            const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            point.setAttribute("cx", (p.x * horizontalScale).toString());
+            point.setAttribute("cy", (lineChartContentHeight - p.y).toString());
+            point.setAttribute("r", "2");
+            point.setAttribute("fill", "#ccc");
+            g.appendChild(point);
+
+            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            title.textContent = p.tooltipText;
+            g.appendChild(title);
+
+            d.appendChild(g);
+        }
+
+        const memoryTotalReservedLines = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        memoryTotalReservedLines.setAttribute(
+            "points",
+            this.#memoryChartModel.totalReserved.map(x => `${x.x},${lineChartContentHeight - x.y}`).join(" "),
+        );
+        memoryTotalReservedLines.setAttribute("stroke-width", "1");
+        memoryTotalReservedLines.setAttribute("stroke", "#ccc");
+        memoryTotalReservedLines.setAttribute("fill", "transparent");
+        d.appendChild(memoryTotalReservedLines);
+        for (const p of this.#memoryChartModel.totalReserved) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+
+            const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            point.setAttribute("cx", (p.x * horizontalScale).toString());
+            point.setAttribute("cy", (lineChartContentHeight - p.y).toString());
+            point.setAttribute("r", "2");
+            point.setAttribute("fill", "#ccc");
+            g.appendChild(point);
+
+            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            title.textContent = p.tooltipText;
+            g.appendChild(title);
+
+            d.appendChild(g);
+        }
+
+        const memoryTotalPrivateResidentLines = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+        memoryTotalPrivateResidentLines.setAttribute(
+            "points",
+            this.#memoryChartModel.totalPrivateResident.map(x => `${x.x},${lineChartContentHeight - x.y}`).join(" "),
+        );
+        memoryTotalPrivateResidentLines.setAttribute("stroke-width", "1");
+        memoryTotalPrivateResidentLines.setAttribute("stroke", "#ccc");
+        memoryTotalPrivateResidentLines.setAttribute("fill", "transparent");
+        d.appendChild(memoryTotalPrivateResidentLines);
+        for (const p of this.#memoryChartModel.totalPrivateResident) {
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+
+            const point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            point.setAttribute("cx", (p.x * horizontalScale).toString());
+            point.setAttribute("cy", (lineChartContentHeight - p.y).toString());
+            point.setAttribute("r", "2");
+            point.setAttribute("fill", "#ccc");
+            g.appendChild(point);
+
+            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            title.textContent = p.tooltipText;
+            g.appendChild(title);
+
+            d.appendChild(g);
+        }
+
+        const timelineTopLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        timelineTopLine.setAttribute("x1", "0");
+        timelineTopLine.setAttribute("y1", lineChartContentHeight.toString());
+        timelineTopLine.setAttribute("x2", "100%");
+        timelineTopLine.setAttribute("y2", lineChartContentHeight.toString());
+        timelineTopLine.setAttribute("stroke", "#666");
+        timelineTopLine.setAttribute("stroke-width", "1");
+        timelineTopLine.setAttribute("fill", "transparent");
+        d.appendChild(timelineTopLine);
+        let barRectId = 0;
+        for (const r of this.#timelineChartModel.barRects) {
+            const hue =
+                r.labelText
+                    .split("")
+                    .map(c => c.charCodeAt(0) * 7)
+                    .reduce((a, b) => a + b, 0) % 360;
+            const top = lineChartContentHeight + r.top;
+
+            const clip = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
+            const clipId = (clip.id = `barRectClip-${barRectId}`);
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            rect.setAttribute("x", (r.left * horizontalScale).toString());
+            rect.setAttribute("y", top.toString());
+            rect.setAttribute("width", (r.width * horizontalScale).toString());
+            rect.setAttribute("height", r.height.toString());
+            clip.appendChild(rect);
+            d.appendChild(clip);
+
+            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+            const e = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            e.setAttribute("x", (r.left * horizontalScale).toString());
+            e.setAttribute("y", top.toString());
+            e.setAttribute("width", (r.width * horizontalScale).toString());
+            e.setAttribute("height", r.height.toString());
+            e.style.fill = `oklch(100% 0.25 ${hue})`;
+            e.setAttribute("stroke", "transparent");
+            e.setAttribute("stroke-width", "0");
+            const tx = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            tx.textContent = r.labelText;
+            tx.setAttribute("x", (r.left * horizontalScale).toString());
+            tx.setAttribute("y", (top + r.height * 0.5).toString());
+            tx.setAttribute("clip-path", `url(#${clipId})`);
+            tx.setAttribute("dominant-baseline", "middle");
+            const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            t.textContent = r.tooltipText;
+
+            g.appendChild(e);
+            g.appendChild(tx);
+            g.appendChild(t);
+            d.appendChild(g);
+            barRectId += 1;
+        }
+
+        for (const l of this.#timelineChartModel.eventLines) {
+            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            text.textContent = l.labelText;
+            text.setAttribute("x", (l.left * horizontalScale).toString());
+            text.setAttribute("y", "0");
+            text.setAttribute("dominant-baseline", "text-top");
+            text.classList.add("eventLine");
+
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", (l.left * horizontalScale).toString());
+            line.setAttribute("x2", (l.left * horizontalScale).toString());
+            line.setAttribute("y1", "0");
+            line.setAttribute("y2", "100%");
+            line.setAttribute("stroke-width", "1");
+            line.setAttribute("stroke", "#999");
+
+            d.appendChild(text);
+            d.appendChild(line);
+        }
+
+        const w =
+            timestampToSecs(
+                this.#chartTimestampRange.end - this.#chartTimestampRange.start,
+                this.#binMetadata.timestampFrequency,
+            ) *
+            TIMELINE_CHART_WIDTH_PER_SEC *
+            horizontalScale;
+        const h = lineChartContentHeight + timelineChartContentHeight;
+        this.#chartSurface.ref.setAttribute("width", (w * window.devicePixelRatio).toString());
+        this.#chartSurface.ref.setAttribute("height", (h * window.devicePixelRatio).toString());
+        this.#chartSurface.ref.setAttribute("viewBox", `0 0 ${w} ${h}`);
+
+        this.#chartContainer.ref.replaceChildren(d);
     }
 }
 
