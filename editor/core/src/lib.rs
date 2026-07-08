@@ -1,3 +1,4 @@
+use bitflags::Flags;
 use core::cell::Cell;
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
@@ -36,8 +37,8 @@ use crate::{
         },
     },
     rendering::{
-        CommittedPreviewState, MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
-        RenderThread, RendererSync, ShaderTexture, TextureID,
+        CommittedPreviewState, MainThreadTextureIDIssuer, PreviewKeyInputState, RenderMessage,
+        RenderMessageSender, RenderThread, RendererSync, ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -134,25 +135,12 @@ pub fn launch() {
         "wayland presentation not supported on graphics queue"
     );
 
-    let mut main_camera = peridot_math::Camera {
-        position: peridot_math::Vector3(1.0, 1.0, -5.0),
-        rotation: peridot_math::Quaternion::ONE,
-        projection: Some(peridot_math::ProjectionMethod::Physical {
-            focal_length: 30.0,
-            sensor_size: peridot_math::Vector2(35.0, 24.0),
-            screen_fitting: peridot_math::PhysicalScreenFitting::Shrink,
-            lens_shift: peridot_math::Vector2(0.0, 0.0),
-        }),
-        depth_range: 0.1..1000.0,
-    };
-    main_camera.look_at(
-        peridot_math::Vector3::ZERO,
-        Some(peridot_math::Vector3::up()),
-    );
     let preview_state = Mutex::new(CommittedPreviewState {
         viewport_size: Size::new_logical(640.0, 480.0),
-        main_camera,
-        main_camera_dirtified: false,
+        scroll_amount: 0.0,
+        grabbing: false,
+        grab_delta: Point::new_logical(0.0, 0.0),
+        key_input: PreviewKeyInputState::empty(),
     });
 
     let global_time_base = std::time::Instant::now();
@@ -773,6 +761,11 @@ pub enum Event {
         code: KeyInputCode,
         modifier: ModifierKey,
     },
+    KeyChar {
+        window: WindowHandle,
+        ch: char,
+        modifier: ModifierKey,
+    },
     IMEStateChanges {
         window: WindowHandle,
         committed_string: Option<String>,
@@ -935,6 +928,7 @@ impl Event {
             Self::ScrollWheel { .. } => "ScrollWheel",
             Self::KeyDown { .. } => "KeyDown",
             Self::KeyUp { .. } => "KeyUp",
+            Self::KeyChar { .. } => "KeyChar",
             Self::IMEStateChanges { .. } => "IMEStateChanges",
             Self::WindowMove { .. } => "WindowMove",
             Self::WindowResize { .. } => "WindowResize",
@@ -3801,6 +3795,25 @@ async fn run<'sys>(
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
+            Event::KeyChar {
+                window,
+                ch,
+                modifier,
+            } => {
+                window.keyboard_focus_state().handle_char(
+                    ch,
+                    modifier,
+                    &mut InputEventContext {
+                        composite_tree: &mut composite_tree,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &mut system_link,
+                        ht_manager: &ht_manager,
+                    },
+                    &keyboard_focus_registry,
+                );
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+            }
             Event::IMEStateChanges {
                 window,
                 committed_string,
@@ -6009,15 +6022,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         args: &input::hittest::ScrollWheelActionArgs,
     ) -> input::hittest::ScrollWheelActionResponse {
         let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
-        let amplifier = 5.0f32.powf(if st.main_camera.position.1 == 0.0 {
-            0.0
-        } else {
-            st.main_camera.position.1.abs().log10().floor()
-        });
-        st.main_camera.position =
-            st.main_camera.position + st.main_camera.forward() * 0.25 * amplifier * args.amount;
-        tracing::debug!(p = ?st.main_camera.position, "move cam");
-        st.main_camera_dirtified = true;
+        st.scroll_amount += args.amount;
 
         input::hittest::ScrollWheelActionResponse {
             left_amount: 0.0,
@@ -6031,7 +6036,10 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.main_camera_moving.set(true);
+        unsafe { &*self.committed_state }
+            .lock()
+            .expect("poisoned")
+            .grabbing = true;
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
     }
 
@@ -6041,7 +6049,10 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.main_camera_moving.set(false);
+        unsafe { &*self.committed_state }
+            .lock()
+            .expect("poisoned")
+            .grabbing = false;
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
 
@@ -6052,39 +6063,77 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         args: &input::hittest::GrabDeltaMoveActionArgs,
     ) -> EventContinueControl {
         let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
-        st.main_camera.rotation = st.main_camera.rotation
-            * peridot_math::Quaternion::new(
-                args.delta.y * 0.5f32.to_radians(),
-                peridot_math::Matrix3::from(st.main_camera.rotation)
-                    * peridot_math::Vector3::left(),
-            )
-            * peridot_math::Quaternion::new(
-                args.delta.x * 0.5f32.to_radians(),
-                peridot_math::Vector3::down(),
-            );
-        st.main_camera_dirtified = true;
+        st.grab_delta.x += args.delta.x;
+        st.grab_delta.y += args.delta.y;
 
         EventContinueControl::STOP_PROPAGATION
     }
 }
 impl KeyInputEventHandler for PreviewInputHandler {
-    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+    fn focus_released(&self, context: &mut InputEventContext) {
+        unsafe { &*self.committed_state }
+            .lock()
+            .expect("poisoned")
+            .key_input
+            .clear();
+    }
+
+    fn keydown(
+        &self,
+        _context: &mut InputEventContext,
+        code: KeyInputCode,
+        _modifier: ModifierKey,
+    ) {
         match code {
             KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'w') => {
-                if self.main_camera_moving.get() {
-                    let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
-                    let amplifier = 5.0f32.powf(if st.main_camera.position.1 == 0.0 {
-                        0.0
-                    } else {
-                        st.main_camera.position.1.abs().log10().floor()
-                    });
-                    st.main_camera.position =
-                        st.main_camera.position + st.main_camera.forward() * 0.25 * amplifier;
-                    tracing::debug!(p = ?st.main_camera.position, "move cam");
-                    st.main_camera_dirtified = true;
-                }
+                self.set_key(PreviewKeyInputState::W);
+            }
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'a') => {
+                self.set_key(PreviewKeyInputState::A);
+            }
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'s') => {
+                self.set_key(PreviewKeyInputState::S);
+            }
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'d') => {
+                self.set_key(PreviewKeyInputState::D);
             }
             _ => (),
         }
+    }
+
+    fn keyup(&self, _context: &mut InputEventContext, code: KeyInputCode, _modifier: ModifierKey) {
+        tracing::debug!(?code, "keyup");
+        match code {
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'w') => {
+                self.unset_key(PreviewKeyInputState::W);
+            }
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'a') => {
+                self.unset_key(PreviewKeyInputState::A);
+            }
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'s') => {
+                self.unset_key(PreviewKeyInputState::S);
+            }
+            KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'d') => {
+                self.unset_key(PreviewKeyInputState::D);
+            }
+            _ => (),
+        }
+    }
+}
+impl PreviewInputHandler {
+    fn set_key(&self, key: PreviewKeyInputState) {
+        unsafe { &*self.committed_state }
+            .lock()
+            .expect("poisoned")
+            .key_input
+            .insert(key);
+    }
+
+    fn unset_key(&self, key: PreviewKeyInputState) {
+        unsafe { &*self.committed_state }
+            .lock()
+            .expect("poisoned")
+            .key_input
+            .remove(key);
     }
 }

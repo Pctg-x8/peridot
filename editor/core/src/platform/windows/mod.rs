@@ -16,6 +16,7 @@ use windows::{
         },
     },
     Win32::{
+        Devices::HumanInterfaceDevice::KEYBOARD_OVERRUN_MAKE_CODE,
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
@@ -44,11 +45,17 @@ use windows::{
         UI::{
             Controls::{MARGINS, WM_MOUSELEAVE},
             HiDpi::GetDpiForWindow,
-            Input::KeyboardAndMouse::{
-                ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-                TrackMouseEvent, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_LCONTROL, VK_LEFT,
-                VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
-                VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP,
+            Input::{
+                GetRawInputData, HRAWINPUT,
+                KeyboardAndMouse::{
+                    MAPVK_VK_TO_VSC_EX, MAPVK_VSC_TO_VK_EX, MapVirtualKeyW, ReleaseCapture,
+                    SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+                    TrackMouseEvent, VK_0, VK_9, VK_A, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN,
+                    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL,
+                    VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP, VK_Z,
+                },
+                RAWINPUT, RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RID_INPUT,
+                RIM_TYPEKEYBOARD, RegisterRawInputDevices,
             },
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GCW_ATOM,
@@ -56,15 +63,16 @@ use windows::{
                 HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
                 HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
                 IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, IsZoomed,
-                LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage, SC_CLOSE,
-                SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED,
-                SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
-                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
-                SetCursorPos, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-                WA_INACTIVE, WHEEL_DELTA, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
-                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
-                WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+                LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage,
+                RI_KEY_BREAK, RI_KEY_E0, RI_KEY_E1, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
+                SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW,
+                SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetCursorPos, SetForegroundWindow,
+                SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE, WHEEL_DELTA,
+                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
+                WM_DPICHANGED, WM_INPUT, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST,
+                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
                 WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
                 WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
                 WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
@@ -893,6 +901,24 @@ impl WindowEventHandler {
         ht == HTCLOSE || ht == HTMAXBUTTON || ht == HTMINBUTTON
     }
 
+    fn translate_keycode(code: usize) -> KeyInputCode {
+        match code {
+            v if v == VK_LEFT.0 as _ => KeyInputCode::LeftArrow,
+            v if v == VK_RIGHT.0 as _ => KeyInputCode::RightArrow,
+            v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
+            v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
+            v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
+            v if v == VK_DELETE.0 as _ => KeyInputCode::Delete,
+            v if v == VK_BACK.0 as _ => KeyInputCode::Backspace,
+            v if (VK_0.0 as usize <= v && v <= VK_9.0 as usize)
+                || (VK_A.0 as usize <= v && v <= VK_Z.0 as usize) =>
+            {
+                KeyInputCode::Character(v as u8 as _)
+            }
+            _ => KeyInputCode::UnknownNativeCode(code as _),
+        }
+    }
+
     fn keydown(&mut self, hwnd: HWND, code: usize) {
         if code == VK_SHIFT.0 as _ || code == VK_LSHIFT.0 as _ || code == VK_RSHIFT.0 as _ {
             self.modifier_key_state |= ModifierKey::SHIFT;
@@ -908,16 +934,7 @@ impl WindowEventHandler {
         }
 
         self.event_dispatcher.dispatch(Event::KeyDown {
-            code: match code {
-                v if v == VK_LEFT.0 as _ => KeyInputCode::LeftArrow,
-                v if v == VK_RIGHT.0 as _ => KeyInputCode::RightArrow,
-                v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
-                v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
-                v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
-                v if v == VK_DELETE.0 as _ => KeyInputCode::Delete,
-                v if v == VK_BACK.0 as _ => KeyInputCode::Backspace,
-                _ => KeyInputCode::UnknownNativeCode(code as _),
-            },
+            code: Self::translate_keycode(code),
             modifier: self.modifier_key_state,
             window: WindowHandle(hwnd),
         });
@@ -938,29 +955,20 @@ impl WindowEventHandler {
         }
 
         self.event_dispatcher.dispatch(Event::KeyUp {
-            code: match code {
-                v if v == VK_LEFT.0 as _ => KeyInputCode::LeftArrow,
-                v if v == VK_RIGHT.0 as _ => KeyInputCode::RightArrow,
-                v if v == VK_UP.0 as _ => KeyInputCode::UpArrow,
-                v if v == VK_DOWN.0 as _ => KeyInputCode::DownArrow,
-                v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
-                v if v == VK_DELETE.0 as _ => KeyInputCode::Delete,
-                v if v == VK_BACK.0 as _ => KeyInputCode::Backspace,
-                _ => KeyInputCode::UnknownNativeCode(code as _),
-            },
+            code: Self::translate_keycode(code),
             modifier: self.modifier_key_state,
             window: WindowHandle(hwnd),
         });
     }
 
     fn char_key(&self, hwnd: HWND, code: usize) {
-        if code == 0x08 || code == 0x0d || code == 0x08 {
+        if code == 0x08 || code == 0x0d {
             // 一部の記号キーはすでにイベント投げてるのでここでは見ない
             return;
         }
 
-        self.event_dispatcher.dispatch(Event::KeyDown {
-            code: KeyInputCode::Character(unsafe { char::from_u32_unchecked(code as _) }),
+        self.event_dispatcher.dispatch(Event::KeyChar {
+            ch: unsafe { char::from_u32_unchecked(code as _) },
             modifier: self.modifier_key_state,
             window: WindowHandle(hwnd),
         });
@@ -1082,6 +1090,54 @@ impl WindowEventHandler {
                 window: WindowHandle(hwnd),
                 focused: false,
             });
+
+            return LRESULT(0);
+        }
+
+        if msg == WM_INPUT {
+            let handle = HRAWINPUT(core::ptr::without_provenance_mut(lparam.0.cast_unsigned()));
+            let mut data = core::mem::MaybeUninit::<RAWINPUT>::uninit();
+            let mut data_size = size_of::<RAWINPUT>() as _;
+            let r = unsafe {
+                GetRawInputData(
+                    handle,
+                    RID_INPUT,
+                    Some(data.as_mut_ptr().cast()),
+                    &mut data_size,
+                    size_of::<RAWINPUTHEADER>() as _,
+                )
+            };
+            if r.cast_signed() == -1 {
+                panic!("GetRawInputData error");
+            }
+            let data = unsafe { data.assume_init_ref() };
+            tracing::debug!(header = ?data.header, "raw input");
+            if data.header.dwType == RIM_TYPEKEYBOARD.0 {
+                let keyboard = unsafe { &data.data.keyboard };
+
+                // scancode detection and overrun handling: https://learn.microsoft.com/ja-jp/windows/win32/api/winuser/ns-winuser-rawkeyboard
+                if keyboard.MakeCode as u32 == KEYBOARD_OVERRUN_MAKE_CODE {
+                    // ignore overrun event
+                    return LRESULT(0);
+                }
+
+                let vk = if keyboard.MakeCode != 0 {
+                    let scan_code = (keyboard.MakeCode & 0x7f)
+                        | if (keyboard.Flags as u32 & RI_KEY_E0) != 0 {
+                            0x0e000u16
+                        } else if (keyboard.Flags as u32 & RI_KEY_E1) != 0 {
+                            0xe100u16
+                        } else {
+                            0u16
+                        };
+                    unsafe { MapVirtualKeyW(scan_code as _, MAPVK_VSC_TO_VK_EX) }
+                } else {
+                    keyboard.VKey as u32
+                };
+                let is_down = (keyboard.Flags as u32 & RI_KEY_BREAK) == 0;
+
+                tracing::debug!(data = ?unsafe { data.data.keyboard }, vk, "raw input keyboard");
+            }
 
             return LRESULT(0);
         }
@@ -1600,6 +1656,20 @@ impl ApplicationContext {
 
         let ctm =
             CoreTextServicesManager::GetForCurrentView().expect("coretextservicesmanager.get");
+
+        unsafe {
+            RegisterRawInputDevices(
+                &[RAWINPUTDEVICE {
+                    // keyboard
+                    usUsagePage: 0x01,
+                    usUsage: 0x06,
+                    dwFlags: RAWINPUTDEVICE_FLAGS(0),
+                    hwndTarget: HWND(core::ptr::null_mut()),
+                }],
+                size_of::<RAWINPUTDEVICE>() as _,
+            )
+            .expect("RegisterRawInputDevices")
+        }
 
         Self {
             drag_preview_popover: DragPreviewPopover::new(hinstance, &native_compositor),

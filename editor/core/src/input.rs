@@ -1393,6 +1393,8 @@ pub trait KeyInputEventHandler {
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {}
     #[allow(unused_variables)]
     fn keyup(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {}
+    #[allow(unused_variables)]
+    fn r#char(&self, context: &mut InputEventContext, ch: char, modifier: ModifierKey) {}
 
     #[allow(unused_variables)]
     fn ime_state_changes(
@@ -1637,6 +1639,23 @@ impl PerWindowKeyboardFocusState {
         };
 
         eh.keyup(context, code, modifier);
+    }
+
+    pub fn handle_char(
+        &self,
+        ch: char,
+        modifier: ModifierKey,
+        context: &mut InputEventContext,
+        registry: &KeyboardFocusTokenRegistry,
+    ) {
+        let Some(eh) = self
+            .current_focus
+            .and_then(|x| registry.event_handler(FocusTargetToken(x)))
+        else {
+            return;
+        };
+
+        eh.r#char(context, ch, modifier);
     }
 
     #[tracing::instrument(skip(self, context, registry))]
