@@ -265,6 +265,7 @@ function buildSectionRanges(
                 {
                     const existingSection = sectionById.get(m.sectionId) ?? {};
                     if (hasValue(existingSection.begin)) {
+                        console.error("section has begun twice", m, existingSection);
                         throw new Error(`section id ${m.sectionId} has begun twice`);
                     }
 
@@ -274,7 +275,13 @@ function buildSectionRanges(
             case "Section.End": {
                 const existingSection = sectionById.get(m.sectionId) ?? {};
                 if (hasValue(existingSection.end)) {
-                    throw new Error(`section id ${m.sectionId} has begun twice`);
+                    console.error(
+                        "section ended twice",
+                        m,
+                        existingSection,
+                        markerAddrToName.get(existingSection.begin!.markerAddr),
+                    );
+                    throw new Error(`section id ${m.sectionId} ended twice`);
                 }
 
                 sectionById.set(m.sectionId, { ...existingSection, end: m });

@@ -37,8 +37,8 @@ use crate::{
         },
     },
     rendering::{
-        CommittedPreviewState, MainThreadTextureIDIssuer, PreviewKeyInputState, RenderMessage,
-        RenderMessageSender, RenderThread, RendererSync, ShaderTexture, TextureID,
+        CommittedPreviewState, MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
+        RenderThread, RendererSync, ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -135,12 +135,30 @@ pub fn launch() {
         "wayland presentation not supported on graphics queue"
     );
 
+    let mut main_camera = peridot_math::Camera {
+        position: peridot_math::Vector3(1.0, 1.0, -5.0),
+        rotation: peridot_math::Quaternion::ONE,
+        projection: Some(peridot_math::ProjectionMethod::Physical {
+            focal_length: 30.0,
+            sensor_size: peridot_math::Vector2(35.0, 24.0),
+            screen_fitting: peridot_math::PhysicalScreenFitting::Shrink,
+            lens_shift: peridot_math::Vector2(0.0, 0.0),
+        }),
+        depth_range: 0.1..1000.0,
+    };
+    main_camera.look_at(
+        peridot_math::Vector3::ZERO,
+        Some(peridot_math::Vector3::up()),
+    );
+
     let preview_state = Mutex::new(CommittedPreviewState {
         viewport_size: Size::new_logical(640.0, 480.0),
-        scroll_amount: 0.0,
+        /*scroll_amount: 0.0,
         grabbing: false,
         grab_delta: Point::new_logical(0.0, 0.0),
-        key_input: PreviewKeyInputState::empty(),
+        key_input: PreviewKeyInputState::empty(),*/
+        main_camera,
+        main_camera_dirtified: false,
     });
 
     let global_time_base = std::time::Instant::now();
@@ -2993,6 +3011,7 @@ struct LaunchArgs<'sys> {
 
 crate::perf_section!(INITIALIZE = "LogicFiber.Initialize");
 crate::perf_section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
+crate::perf_section!(LOCK_WAIT = "Mutex.LockWait");
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
 async fn run<'sys>(
@@ -3034,6 +3053,14 @@ async fn run<'sys>(
 
     let mut delayed_render_messages = Vec::new();
     let mut docking_preview_state = None;
+
+    let mut preview_input_state = PreviewInputState {
+        new_viewport_size: None,
+        scroll_amount: 0.0,
+        grabbing: false,
+        grab_delta: Point::new_logical(0.0, 0.0),
+        key_input: PreviewKeyInputState::empty(),
+    };
 
     let last_window_state = 'try_restore_last_window_state: {
         let fp = match std::fs::File::open(file_system.window_state_save_path()) {
@@ -3268,7 +3295,7 @@ async fn run<'sys>(
                     AssetPreviewPanePresenter::ID => Box::new(AssetPreviewPanePresenter {}),
                     PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
                         view_init_ctx,
-                        committed_preview_state,
+                        &mut preview_input_state,
                     )),
                     id => todo!("generic pane id handling: {id:?}"),
                 })
@@ -3356,7 +3383,7 @@ async fn run<'sys>(
                                         PreviewPanePresenter::ID => {
                                             Box::new(PreviewPanePresenter::new(
                                                 view_init_ctx,
-                                                committed_preview_state,
+                                                &mut preview_input_state,
                                             ))
                                         }
                                         id => todo!("generic pane id handling: {id:?}"),
@@ -4479,7 +4506,91 @@ async fn run<'sys>(
                 }
             }
             Event::Sync(SyncEvent::NewPresentID { id }) => {
-                // tracing::debug!(id, "NewPresentID");
+                // vsync update period
+                crate::perf_scope!(perf = LOCK_WAIT);
+                let mut preview_state = committed_preview_state.lock().expect("poisoned");
+                crate::perf_scope!(drop perf);
+
+                if let Some(new_viewport_size) = preview_input_state.new_viewport_size.take() {
+                    preview_state.viewport_size = new_viewport_size;
+                }
+
+                let scroll_amount = core::mem::replace(&mut preview_input_state.scroll_amount, 0.0);
+                let grab_delta = core::mem::replace(
+                    &mut preview_input_state.grab_delta,
+                    Point::new_logical(0.0, 0.0),
+                );
+
+                if grab_delta.x != 0.0 || grab_delta.y != 0.0 {
+                    // rotate by grab
+                    preview_state.main_camera.rotation = preview_state.main_camera.rotation
+                        * peridot_math::Quaternion::new(
+                            grab_delta.y * 0.5f32.to_radians(),
+                            peridot_math::Matrix3::from(preview_state.main_camera.rotation)
+                                * peridot_math::Vector3::left(),
+                        )
+                        * peridot_math::Quaternion::new(
+                            grab_delta.x * 0.5f32.to_radians(),
+                            peridot_math::Vector3::down(),
+                        );
+                    preview_state.main_camera_dirtified = true;
+                }
+
+                if scroll_amount != 0.0 {
+                    // move by scroll
+                    let amplifier = 5.0f32.powf(if preview_state.main_camera.position.1 == 0.0 {
+                        0.0
+                    } else {
+                        preview_state.main_camera.position.1.abs().log10().floor()
+                    });
+                    preview_state.main_camera.position = preview_state.main_camera.position
+                        + preview_state.main_camera.forward() * 0.25 * amplifier * scroll_amount;
+                    preview_state.main_camera_dirtified = true;
+                }
+
+                if preview_input_state.grabbing {
+                    let mut key_forwards = 0.0f32;
+                    let mut key_rights = 0.0f32;
+                    if preview_input_state
+                        .key_input
+                        .contains(PreviewKeyInputState::W)
+                    {
+                        key_forwards += 1.0;
+                    }
+                    if preview_input_state
+                        .key_input
+                        .contains(PreviewKeyInputState::S)
+                    {
+                        key_forwards -= 1.0;
+                    }
+                    if preview_input_state
+                        .key_input
+                        .contains(PreviewKeyInputState::D)
+                    {
+                        key_rights += 1.0;
+                    }
+                    if preview_input_state
+                        .key_input
+                        .contains(PreviewKeyInputState::A)
+                    {
+                        key_rights -= 1.0;
+                    }
+
+                    if key_forwards != 0.0 || key_rights != 0.0 {
+                        // move by key
+                        let amplifier =
+                            5.0f32.powf(if preview_state.main_camera.position.1 == 0.0 {
+                                0.0
+                            } else {
+                                preview_state.main_camera.position.1.abs().log10().floor()
+                            });
+                        preview_state.main_camera.position = preview_state.main_camera.position
+                            + preview_state.main_camera.forward()
+                                * (0.25 * amplifier * key_forwards)
+                            + preview_state.main_camera.right() * (0.25 * amplifier * key_rights);
+                        preview_state.main_camera_dirtified = true;
+                    }
+                }
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
@@ -5252,6 +5363,8 @@ pub use platform::unix::wayland::{
 #[cfg(target_os = "macos")]
 pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
 
+crate::perf_section!(SYNC_EVENT_BUS_PUSH = "SyncEventBus.Push");
+
 pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,
     #[cfg(target_os = "linux")]
@@ -5280,6 +5393,8 @@ impl SyncEventBus {
     }
 
     pub fn push(&self, e: SyncEvent) {
+        crate::perf_scope!(SYNC_EVENT_BUS_PUSH);
+
         self.queue.lock().expect("poisoned").push_back(e);
         #[cfg(target_os = "linux")]
         self.efd.inc(1).unwrap();
@@ -5934,6 +6049,24 @@ impl dbus::WatchFunction for DBusWatcher<'_> {
     }
 }
 
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    pub struct PreviewKeyInputState : u8 {
+        const W = 0x01;
+        const A = 0x02;
+        const S = 0x04;
+        const D = 0x08;
+    }
+}
+
+struct PreviewInputState {
+    new_viewport_size: Option<Size<LogicalUnit>>,
+    scroll_amount: f32,
+    grabbing: bool,
+    grab_delta: Point<LogicalUnit>,
+    key_input: PreviewKeyInputState,
+}
+
 pub struct PreviewPanePresenter {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
@@ -5943,7 +6076,7 @@ pub struct PreviewPanePresenter {
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
-    pub fn new(ctx: &mut ViewInitContext, committed_state: &Mutex<CommittedPreviewState>) -> Self {
+    pub fn new(ctx: &mut ViewInitContext, input_state: *mut PreviewInputState) -> Self {
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ct_root = ctx.composite_tree.create(CompositeRect {
             // has_bitmap: true,
@@ -5959,7 +6092,7 @@ impl PreviewPanePresenter {
         });
 
         let input_handler = Rc::new(PreviewInputHandler {
-            committed_state,
+            input_state,
             main_camera_moving: Cell::new(false),
         });
         ctx.ht_manager.set_action_handler(ht_root, &input_handler);
@@ -5994,10 +6127,7 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
         _composite_tree: &mut CompositeTree<SyncEvent>,
         _ht_manager: &mut HitTestTreeManager,
     ) {
-        unsafe { &*self.input_handler.committed_state }
-            .lock()
-            .expect("poisoned")
-            .viewport_size = new_size.clone();
+        unsafe { &mut *self.input_handler.input_state }.new_viewport_size = Some(new_size.clone());
     }
 
     fn unmount(&self, ctx: &mut MountContext) {
@@ -6015,7 +6145,7 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
 }
 
 struct PreviewInputHandler {
-    committed_state: *const Mutex<CommittedPreviewState>,
+    input_state: *mut PreviewInputState,
     main_camera_moving: Cell<bool>,
 }
 impl HitTestTreeActionHandler for PreviewInputHandler {
@@ -6025,8 +6155,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         args: &input::hittest::ScrollWheelActionArgs,
     ) -> input::hittest::ScrollWheelActionResponse {
-        let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
-        st.scroll_amount += args.amount;
+        unsafe { &mut *self.input_state }.scroll_amount += args.amount;
 
         input::hittest::ScrollWheelActionResponse {
             left_amount: 0.0,
@@ -6040,10 +6169,8 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        unsafe { &*self.committed_state }
-            .lock()
-            .expect("poisoned")
-            .grabbing = true;
+        unsafe { &mut *self.input_state }.grabbing = true;
+
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
     }
 
@@ -6053,10 +6180,8 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        unsafe { &*self.committed_state }
-            .lock()
-            .expect("poisoned")
-            .grabbing = false;
+        unsafe { &mut *self.input_state }.grabbing = false;
+
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
 
@@ -6066,7 +6191,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         args: &input::hittest::GrabDeltaMoveActionArgs,
     ) -> EventContinueControl {
-        let mut st = unsafe { &*self.committed_state }.lock().expect("poisoned");
+        let mut st = unsafe { &mut *self.input_state };
         st.grab_delta.x += args.delta.x;
         st.grab_delta.y += args.delta.y;
 
@@ -6075,11 +6200,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
 }
 impl KeyInputEventHandler for PreviewInputHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
-        unsafe { &*self.committed_state }
-            .lock()
-            .expect("poisoned")
-            .key_input
-            .clear();
+        unsafe { &mut *self.input_state }.key_input.clear();
     }
 
     fn keydown(
@@ -6126,18 +6247,10 @@ impl KeyInputEventHandler for PreviewInputHandler {
 }
 impl PreviewInputHandler {
     fn set_key(&self, key: PreviewKeyInputState) {
-        unsafe { &*self.committed_state }
-            .lock()
-            .expect("poisoned")
-            .key_input
-            .insert(key);
+        unsafe { &mut *self.input_state }.key_input.insert(key);
     }
 
     fn unset_key(&self, key: PreviewKeyInputState) {
-        unsafe { &*self.committed_state }
-            .lock()
-            .expect("poisoned")
-            .key_input
-            .remove(key);
+        unsafe { &mut *self.input_state }.key_input.remove(key);
     }
 }

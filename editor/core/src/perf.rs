@@ -698,6 +698,14 @@ macro_rules! perf_scope {
 }
 
 #[macro_export]
+macro_rules! perf_wrap {
+    ($marker: expr; { $($xs: tt)* }) => {{
+        $crate::perf_scope!($marker);
+        $($xs)*
+    }}
+}
+
+#[macro_export]
 macro_rules! perf_sample_memory {
     () => {
         #[cfg(feature = "enable-profiling")]

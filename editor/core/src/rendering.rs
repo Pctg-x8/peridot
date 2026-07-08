@@ -130,6 +130,7 @@ crate::perf_section!(ACQUIRE_WINDOW_BACKBUFFER = "RenderLoop.UpdateWindow.Acquir
 crate::perf_section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
 crate::perf_section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
 crate::perf_section!(VALIDATE_PREVIEW_RENDERING = "RenderLoop.ValidatePreviewRendering");
+crate::perf_section!(UPDATE_PREVIEW = "RenderLoop.UpdatePreview");
 crate::perf_section!(POST_QUEUE = "RenderLoop.PostQueue");
 crate::perf_section!(WAIT_QUEUE = "RenderLoop.WaitQueue");
 #[cfg(windows)]
@@ -270,6 +271,7 @@ impl<'main> RenderThread<'main> {
         let mut preview_renderer = PreviewRenderer::new(
             self.vk_device,
             &preview_rt_buffer,
+            &self.preview_state.lock().expect("poisoned"),
             self.vk_device.present_queue_family_index(),
             &mut render_queue,
         );
@@ -944,13 +946,22 @@ impl<'main> RenderThread<'main> {
                 }
             }
 
+            if preview_composition_required {
+                // preview may still updating on main thread...
+                if let Ok(mut st) = self.preview_state.try_lock() {
+                    crate::perf_scope!(UPDATE_PREVIEW);
+                    preview_renderer.update(&mut st);
+                    preview_renderer.validate(self.vk_device, &preview_rt_buffer, &mut st);
+                }
+            }
+
+            // enqueue next update for main thread
+            present_id += 1;
+            self.event_bus
+                .push(SyncEvent::NewPresentID { id: present_id });
+
             crate::perf_begin!(perf = POST_QUEUE);
             if preview_composition_required {
-                let mut st = self.preview_state.lock().expect("poisoned");
-                preview_renderer.update(&mut st);
-                preview_renderer.validate(self.vk_device, &preview_rt_buffer, &mut st);
-                drop(st);
-
                 let mut render_waits = Vec::with_capacity(2);
                 let mut render_wait_stages = Vec::with_capacity(2);
 
@@ -1016,6 +1027,9 @@ impl<'main> RenderThread<'main> {
                     .expect("queue submit");
             }
 
+            crate::perf_wrap!(WAIT_QUEUE; { render_queue.wait().expect("render_queue.wait"); });
+            crate::perf_end!(perf);
+
             if !present_parameters.is_empty() {
                 let mut results = present_parameters
                     .iter()
@@ -1061,15 +1075,8 @@ impl<'main> RenderThread<'main> {
                     }
                 }
             }
-            crate::perf_end!(perf);
 
-            crate::perf_begin!(perf = WAIT_QUEUE);
-            render_queue.wait().expect("render_queue.wait");
-            crate::perf_end!(perf);
-
-            present_id += 1;
-            self.event_bus
-                .push(SyncEvent::NewPresentID { id: present_id });
+            crate::perf_wrap!(WAIT_QUEUE; { render_queue.wait().expect("render_queue.wait"); });
 
             #[cfg(windows)]
             crate::perf_begin!(perf = WIN32_DX_PRESENT);
@@ -3812,22 +3819,10 @@ impl PreviewScratchStagingBuffer {
     }
 }
 
-bitflags::bitflags! {
-    #[derive(Clone, Copy)]
-    pub struct PreviewKeyInputState : u8 {
-        const W = 0x01;
-        const A = 0x02;
-        const S = 0x04;
-        const D = 0x08;
-    }
-}
-
 pub struct CommittedPreviewState {
     pub viewport_size: Size<LogicalUnit>,
-    pub scroll_amount: f32,
-    pub grabbing: bool,
-    pub grab_delta: Point<LogicalUnit>,
-    pub key_input: PreviewKeyInputState,
+    pub main_camera: peridot_math::Camera,
+    pub main_camera_dirtified: bool,
 }
 
 pub struct PreviewRenderer {
@@ -3864,7 +3859,6 @@ pub struct PreviewRenderer {
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
-    main_camera: peridot_math::Camera,
     valid: bool,
 }
 impl PreviewRenderer {
@@ -3908,6 +3902,7 @@ impl PreviewRenderer {
     pub fn new(
         device: &VulkanDevice,
         init_rt: &PreviewRenderTargetBuffer,
+        init_state: &CommittedPreviewState,
         work_queue_family_index: u32,
         work_queue: &mut (impl br::QueueMut + ?Sized),
     ) -> Self {
@@ -4075,22 +4070,6 @@ impl PreviewRenderer {
             .bind(&internal_data_memory, 0)
             .expect("preview.internal_uniform_buffer.bind");
 
-        let mut main_camera = peridot_math::Camera {
-            position: peridot_math::Vector3(1.0, 1.0, -5.0),
-            rotation: peridot_math::Quaternion::ONE,
-            projection: Some(peridot_math::ProjectionMethod::Physical {
-                focal_length: 30.0,
-                sensor_size: peridot_math::Vector2(35.0, 24.0),
-                screen_fitting: peridot_math::PhysicalScreenFitting::Shrink,
-                lens_shift: peridot_math::Vector2(0.0, 0.0),
-            }),
-            depth_range: 0.1..1000.0,
-        };
-        main_camera.look_at(
-            peridot_math::Vector3::ZERO,
-            Some(peridot_math::Vector3::up()),
-        );
-
         struct UploadBufferData {
             origin_axes_vbuf: [PreviewOriginAxesVertex; PREVIEW_VS_ORIGIN_AXES.len()],
             camera_data_ubuf: PreviewCameraData,
@@ -4137,7 +4116,7 @@ impl PreviewRenderer {
             );
             core::ptr::write(
                 &raw mut (*p).camera_data_ubuf,
-                PreviewCameraData::new(&main_camera, init_rt.aspect_wh()),
+                PreviewCameraData::new(&init_state.main_camera, init_rt.aspect_wh()),
             );
 
             let vs = ptr
@@ -4581,96 +4560,12 @@ impl PreviewRenderer {
             update_command_pool,
             update_command_buffer: update_command_buffer.native_ptr(),
             update_command_pending: false,
-            main_camera,
             valid: false,
         }
     }
 
     pub fn update(&mut self, committed_state: &mut CommittedPreviewState) {
         self.scratch_staging.reset();
-
-        let scroll_amount = core::mem::replace(&mut committed_state.scroll_amount, 0.0);
-        let grab_delta = core::mem::replace(
-            &mut committed_state.grab_delta,
-            Point::new_logical(0.0, 0.0),
-        );
-
-        let mut main_camera_dirtified = false;
-
-        if grab_delta.x != 0.0 || grab_delta.y != 0.0 {
-            // rotate by grab
-            self.main_camera.rotation = self.main_camera.rotation
-                * peridot_math::Quaternion::new(
-                    grab_delta.y * 0.5f32.to_radians(),
-                    peridot_math::Matrix3::from(self.main_camera.rotation)
-                        * peridot_math::Vector3::left(),
-                )
-                * peridot_math::Quaternion::new(
-                    grab_delta.x * 0.5f32.to_radians(),
-                    peridot_math::Vector3::down(),
-                );
-            main_camera_dirtified = true;
-        }
-
-        if scroll_amount != 0.0 {
-            // move by scroll
-            let amplifier = 5.0f32.powf(if self.main_camera.position.1 == 0.0 {
-                0.0
-            } else {
-                self.main_camera.position.1.abs().log10().floor()
-            });
-            self.main_camera.position = self.main_camera.position
-                + self.main_camera.forward() * 0.25 * amplifier * scroll_amount;
-            main_camera_dirtified = true;
-        }
-
-        if committed_state.grabbing {
-            let mut key_forwards = 0.0f32;
-            let mut key_rights = 0.0f32;
-            if committed_state.key_input.contains(PreviewKeyInputState::W) {
-                key_forwards += 1.0;
-            }
-            if committed_state.key_input.contains(PreviewKeyInputState::S) {
-                key_forwards -= 1.0;
-            }
-            if committed_state.key_input.contains(PreviewKeyInputState::D) {
-                key_rights += 1.0;
-            }
-            if committed_state.key_input.contains(PreviewKeyInputState::A) {
-                key_rights -= 1.0;
-            }
-
-            if key_forwards != 0.0 || key_rights != 0.0 {
-                // move by key
-                let amplifier = 5.0f32.powf(if self.main_camera.position.1 == 0.0 {
-                    0.0
-                } else {
-                    self.main_camera.position.1.abs().log10().floor()
-                });
-                self.main_camera.position = self.main_camera.position
-                    + self.main_camera.forward() * (0.25 * amplifier * key_forwards)
-                    + self.main_camera.right() * (0.25 * amplifier * key_rights);
-                main_camera_dirtified = true;
-            }
-        }
-
-        if main_camera_dirtified {
-            let buffer_offset = *self.pending_camera_data_updates.get_or_insert_with(|| {
-                self.scratch_staging.reserve(size_of::<PreviewCameraData>())
-            });
-            unsafe {
-                core::ptr::write(
-                    self.scratch_staging
-                        .mapped_ptr
-                        .byte_add(buffer_offset)
-                        .cast::<PreviewCameraData>(),
-                    PreviewCameraData::new(
-                        &self.main_camera,
-                        self.active_rt_size.width as f32 / self.active_rt_size.height as f32,
-                    ),
-                );
-            }
-        }
     }
 
     pub fn validate(
@@ -4897,7 +4792,9 @@ impl PreviewRenderer {
             origin_axes_pipeline_changed = true;
         }
 
-        if active_rt.size != self.active_rt_size {
+        let main_camera_dirtified =
+            core::mem::replace(&mut committed_state.main_camera_dirtified, false);
+        if main_camera_dirtified || active_rt.size != self.active_rt_size {
             let buffer_offset = *self.pending_camera_data_updates.get_or_insert_with(|| {
                 self.scratch_staging.reserve(size_of::<PreviewCameraData>())
             });
@@ -4907,7 +4804,7 @@ impl PreviewRenderer {
                         .mapped_ptr
                         .byte_add(buffer_offset)
                         .cast::<PreviewCameraData>(),
-                    PreviewCameraData::new(&self.main_camera, active_rt.aspect_wh()),
+                    PreviewCameraData::new(&committed_state.main_camera, active_rt.aspect_wh()),
                 );
             }
         }
