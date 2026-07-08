@@ -2037,7 +2037,6 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
         self.confirm_direct_input(context.system_link, context.composite_tree);
     }
 
-    #[inline(always)]
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         if code == KeyInputCode::Enter {
             // 確定or入力開始
@@ -2052,6 +2051,11 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
         }
 
         self.raw.fwd_keydown(context, code, modifier);
+    }
+
+    #[inline(always)]
+    fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
+        self.raw.fwd_char(context, ch);
     }
 
     #[inline(always)]

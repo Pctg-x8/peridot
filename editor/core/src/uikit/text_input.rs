@@ -264,14 +264,29 @@ impl RawTextInputView {
             KeyInputCode::Backspace => self.eh.delete_selection(),
             KeyInputCode::Delete if !self.eh.has_selection() => self.eh.delete_next_char(),
             KeyInputCode::Delete => self.eh.delete_selection(),
-            // non-control chars
-            KeyInputCode::Character(c) if !c.is_control() && !self.eh.has_selection() => {
-                self.eh.insert_char_at_cursor(c)
-            }
-            KeyInputCode::Character(c) if !c.is_control() => self.eh.replace_selection_by_char(c),
-            // ignore enter key
-            KeyInputCode::Enter => TextInputViewUpdateMask::empty(),
             _ => TextInputViewUpdateMask::empty(),
+        };
+
+        self.eh.update_views(
+            update_mask,
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
+    }
+
+    pub fn fwd_char(&self, context: &mut InputEventContext, ch: char) {
+        tracing::debug!(%ch, "char");
+
+        if ch.is_control() {
+            return;
+        }
+
+        let update_mask = if self.eh.has_selection() {
+            self.eh.replace_selection_by_char(ch)
+        } else {
+            self.eh.insert_char_at_cursor(ch)
         };
 
         self.eh.update_views(
@@ -1783,6 +1798,11 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
     }
 
     #[inline(always)]
+    fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
+        self.raw.fwd_char(context, ch)
+    }
+
+    #[inline(always)]
     #[cfg(feature = "wayland")]
     fn ime_state_changes(
         &self,
@@ -1885,7 +1905,6 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
         self.confirm_direct_input(context.system_link);
     }
 
-    #[inline(always)]
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         if code == KeyInputCode::Enter {
             // 確定or入力開始
@@ -1905,6 +1924,11 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
         }
 
         self.raw.fwd_keydown(context, code, modifier);
+    }
+
+    #[inline(always)]
+    fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
+        self.raw.fwd_char(context, ch);
     }
 
     #[inline(always)]
@@ -2520,13 +2544,34 @@ impl KeyInputEventHandler for MultilineTextInputEventHandler {
             KeyInputCode::Delete if !self.has_selection() => self.delete_next_char(),
             KeyInputCode::Delete => self.delete_selection(),
             // non-control chars
-            KeyInputCode::Character(c) if !c.is_control() && !self.has_selection() => {
-                self.insert_char_at_cursor(c)
-            }
-            KeyInputCode::Character(c) if !c.is_control() => self.replace_selection_by_char(c),
             KeyInputCode::Enter if !self.has_selection() => self.insert_char_at_cursor('\n'),
             KeyInputCode::Enter => self.replace_selection_by_char('\n'),
+            // nop for chars(char callback will be process this)
+            KeyInputCode::Character(_) => TextInputViewUpdateMask::empty(),
             _ => TextInputViewUpdateMask::empty(),
+        };
+
+        self.update_views(
+            update_mask,
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
+    }
+
+    #[inline(always)]
+    fn r#char(&self, context: &mut InputEventContext, ch: char, modifier: ModifierKey) {
+        tracing::debug!(%ch, "char");
+
+        if ch.is_control() {
+            return;
+        }
+
+        let update_mask = if self.has_selection() {
+            self.replace_selection_by_char(ch)
+        } else {
+            self.insert_char_at_cursor(ch)
         };
 
         self.update_views(
