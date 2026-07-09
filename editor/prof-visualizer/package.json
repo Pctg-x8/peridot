@@ -7,6 +7,6 @@
     "oxfmt": "^0.48.0"
   },
   "peerDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }

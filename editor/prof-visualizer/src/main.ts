@@ -44,23 +44,28 @@ class HeaderPresenter {
             var needsRender = false;
 
             if (sourceDataChanged) {
-                const timestampRange = Application.instance.computeChartTimestampRange();
+                const binMetadata = Application.instance.currentBinMetadata;
+                if (!hasValue(binMetadata)) {
+                    this.#timelineChartModel = null;
+                    this.#memoryChartModel = null;
+                } else {
+                    this.#timestampRange = Application.instance.computeChartTimestampRange();
 
-                this.#timelineChartModel = buildTimelineChartModel(
-                    Application.instance.sectionRanges,
-                    Application.instance.events,
-                    timestampRange,
-                    Application.instance.currentBinMetadata!.timestampFrequency,
-                    Application.instance.currentBinMetadata!.markerAddrToName,
-                );
-                console.log(this.#timelineChartModel);
-                this.#memoryChartModel = buildMemoryChartModel(
-                    Application.instance.memoryStats,
-                    timestampRange,
-                    Application.instance.currentBinMetadata!.timestampFrequency,
-                );
-                console.log(this.#memoryChartModel);
-                this.#timestampRange = timestampRange;
+                    this.#timelineChartModel = buildTimelineChartModel(
+                        Application.instance.sectionRanges,
+                        Application.instance.events,
+                        this.#timestampRange,
+                        binMetadata.timestampFrequency,
+                        binMetadata.markerAddrToName,
+                    );
+                    console.log(this.#timelineChartModel);
+                    this.#memoryChartModel = buildMemoryChartModel(
+                        Application.instance.memoryStats,
+                        this.#timestampRange,
+                        binMetadata.timestampFrequency,
+                    );
+                    console.log(this.#memoryChartModel);
+                }
 
                 needsRender = true;
                 sourceDataChanged = false;
