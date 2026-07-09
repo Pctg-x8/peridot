@@ -1,10 +1,23 @@
-import { Application, type SectionRange } from "./app";
-import { type EventMarker, type MemoryStatsMarker } from "./binloader";
-import { hasValue } from "./utils";
+import { Application, type SectionRange, type ViewTab } from "./app";
+import { type MemoryStatsMarker } from "./binloader";
+import {
+    buildTimelineChartModel,
+    displayByteSize,
+    instantiateTimelineChart,
+    timelineChartHeight,
+    type ChartPoint,
+    type TimelineChartDesignMetrics,
+    type TimelineChartModel,
+} from "./chartCommonModel";
+import { hasValue, Lazy, timestampToSecs, type Range } from "./utils";
 import { PrefixedViewGroup, ViewElement } from "./viewHelper";
+import * as PerRenderLoopTab from "./ui/tabs/perRenderLoop";
 
 document.addEventListener("DOMContentLoaded", () => {
     new HeaderPresenter().launch();
+    new PerRenderLoopTab.Presenter().launch();
+
+    Application.instance.sync();
 });
 
 class HeaderPresenter {
@@ -15,20 +28,53 @@ class HeaderPresenter {
     readonly #horizontalScaleInputView = HeaderPresenter.#ViewGroup.view<HTMLInputElement>("HorizontalScaleInput");
     readonly #chartSurface = new ViewElement<SVGGElement>("ChartSurface");
     readonly #chartContainer = new ViewElement<SVGGElement>("ChartContainer");
+    readonly #tabViewSelector = new Lazy(
+        () =>
+            HeaderPresenter.#ViewGroup
+                .queryView<HTMLFormElement>("TabViewSelector")
+                .elements.namedItem("items")! as RadioNodeList,
+    );
 
     #timelineChartModel: TimelineChartModel | null = null;
     #memoryChartModel: MemoryChartModel | null = null;
-    #timestampRange: { readonly start: bigint; readonly end: bigint } = { start: 0n, end: 0n };
+    #timestampRange: Range<bigint> = { begin: 0n, end: 0n };
+
+    static #modelToViewValue(model: ViewTab): string {
+        switch (model) {
+            case "Main":
+                return "main";
+            case "PerRenderLoop":
+                return "perRenderLoop";
+        }
+    }
+
+    static #viewValueToModel(value: string): ViewTab {
+        switch (value) {
+            case "main":
+                return "Main";
+            case "perRenderLoop":
+                return "PerRenderLoop";
+            default:
+                throw new Error(`Unhandled tab value: ${value}`);
+        }
+    }
 
     launch() {
-        this.#loadButtonView.ref.addEventListener("click", async () => {
+        this.#loadButtonView.ref.addEventListener("click", () => {
             const file = this.#inputFileView.ref.files?.item(0);
             if (!hasValue(file)) {
                 alert("ファイルが選択されていません");
                 return;
             }
 
-            await Application.instance.load(file);
+            Application.instance.load(file);
+        });
+
+        this.#tabViewSelector.value.value = HeaderPresenter.#modelToViewValue(Application.instance.currentTab);
+        this.#tabViewSelector.value.forEach(e => {
+            e.addEventListener("change", function () {
+                Application.instance.switchTab(HeaderPresenter.#viewValueToModel(this.value));
+            });
         });
 
         this.#horizontalScaleInputView.ref.value = "1";
@@ -36,12 +82,27 @@ class HeaderPresenter {
             this.#renderChart();
         });
 
-        var sourceDataChanged = false;
+        let isActiveView = Application.instance.currentTab === "Main";
+        let viewActivated = false;
+        Application.instance.addEventListener("tabSwitched", t => {
+            isActiveView = t.detail === "Main";
+            viewActivated = isActiveView;
+        });
+        let sourceDataChanged = false;
         Application.instance.addEventListener("sourceDataChanged", () => {
             sourceDataChanged = true;
         });
         Application.instance.addEventListener("performAtomic", () => {
+            if (!isActiveView) {
+                // suspending
+                return;
+            }
+
             var needsRender = false;
+            if (viewActivated) {
+                needsRender = true;
+                viewActivated = false;
+            }
 
             if (sourceDataChanged) {
                 const binMetadata = Application.instance.currentBinMetadata;
@@ -57,6 +118,7 @@ class HeaderPresenter {
                         this.#timestampRange,
                         binMetadata.timestampFrequency,
                         binMetadata.markerAddrToName,
+                        TIMELINE_CHART_DESIGN_METRICS,
                     );
                     console.log(this.#timelineChartModel);
                     this.#memoryChartModel = buildMemoryChartModel(
@@ -100,9 +162,7 @@ class HeaderPresenter {
                 .map(x => x.y + 500.0 * MEMORY_CHART_HEIGHT_PER_BYTES)
                 .reduce((a, b) => Math.max(a, b), TIMELINE_CHART_TOP_MARGIN),
         );
-        const timelineChartContentHeight = this.#timelineChartModel.barRects
-            .map(x => x.top + x.height)
-            .reduce((a, b) => Math.max(a, b), 0);
+        const timelineChartContentHeight = timelineChartHeight(this.#timelineChartModel);
 
         const d = new DocumentFragment();
 
@@ -193,73 +253,11 @@ class HeaderPresenter {
         timelineTopLine.setAttribute("stroke-width", "1");
         timelineTopLine.setAttribute("fill", "transparent");
         d.appendChild(timelineTopLine);
-        let barRectId = 0;
-        for (const r of this.#timelineChartModel.barRects) {
-            const hue =
-                r.labelText
-                    .split("")
-                    .map(c => c.charCodeAt(0) * 7)
-                    .reduce((a, b) => a + b, 0) % 360;
-            const top = lineChartContentHeight + r.top;
-
-            const clip = document.createElementNS("http://www.w3.org/2000/svg", "clipPath");
-            const clipId = (clip.id = `barRectClip-${barRectId}`);
-            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-            rect.setAttribute("x", (r.left * horizontalScale).toString());
-            rect.setAttribute("y", top.toString());
-            rect.setAttribute("width", (r.width * horizontalScale).toString());
-            rect.setAttribute("height", r.height.toString());
-            clip.appendChild(rect);
-            d.appendChild(clip);
-
-            const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
-            const e = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-            e.setAttribute("x", (r.left * horizontalScale).toString());
-            e.setAttribute("y", top.toString());
-            e.setAttribute("width", (r.width * horizontalScale).toString());
-            e.setAttribute("height", r.height.toString());
-            e.style.fill = `oklch(100% 0.25 ${hue})`;
-            e.setAttribute("stroke", "transparent");
-            e.setAttribute("stroke-width", "0");
-            const tx = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            tx.textContent = r.labelText;
-            tx.setAttribute("x", (r.left * horizontalScale).toString());
-            tx.setAttribute("y", (top + r.height * 0.5).toString());
-            tx.setAttribute("clip-path", `url(#${clipId})`);
-            tx.setAttribute("dominant-baseline", "middle");
-            const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
-            t.textContent = r.tooltipText;
-
-            g.appendChild(e);
-            g.appendChild(tx);
-            g.appendChild(t);
-            d.appendChild(g);
-            barRectId += 1;
-        }
-
-        for (const l of this.#timelineChartModel.eventLines) {
-            const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-            text.textContent = l.labelText;
-            text.setAttribute("x", (l.left * horizontalScale).toString());
-            text.setAttribute("y", "0");
-            text.setAttribute("dominant-baseline", "text-top");
-            text.classList.add("eventLine");
-
-            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-            line.setAttribute("x1", (l.left * horizontalScale).toString());
-            line.setAttribute("x2", (l.left * horizontalScale).toString());
-            line.setAttribute("y1", "0");
-            line.setAttribute("y2", "100%");
-            line.setAttribute("stroke-width", "1");
-            line.setAttribute("stroke", "#999");
-
-            d.appendChild(text);
-            d.appendChild(line);
-        }
+        instantiateTimelineChart(d, this.#timelineChartModel, lineChartContentHeight, 0, { horizontalScale });
 
         const w =
-            timestampToSecs(this.#timestampRange.end - this.#timestampRange.start, binMetadata.timestampFrequency) *
-            TIMELINE_CHART_WIDTH_PER_SEC *
+            timestampToSecs(this.#timestampRange.end - this.#timestampRange.begin, binMetadata.timestampFrequency) *
+            TIMELINE_CHART_DESIGN_METRICS.widthPerSec *
             horizontalScale;
         const h = lineChartContentHeight + timelineChartContentHeight;
         this.#chartSurface.ref.setAttribute("width", (w * window.devicePixelRatio).toString());
@@ -270,100 +268,14 @@ class HeaderPresenter {
     }
 }
 
-const TIMELINE_CHART_BAR_THICKNESS: number = 12.0;
-const TIMELINE_CHART_WIDTH_PER_SEC: number = 128.0 * 50.0;
+const TIMELINE_CHART_DESIGN_METRICS: TimelineChartDesignMetrics = {
+    widthPerSec: 128.0 * 50.0,
+    barThickness: 12.0,
+};
 const TIMELINE_CHART_TOP_MARGIN: number = 120.0;
-
-export function timestampToSecs(timestamp: bigint, freq: bigint): number {
-    return Number(timestamp) / Number(freq);
-}
-
-type BarRect = {
-    readonly labelText: string;
-    readonly tooltipText: string;
-    readonly left: number;
-    readonly top: number;
-    readonly width: number;
-    readonly height: number;
-};
-type EventLine = {
-    readonly labelText: string;
-    readonly left: number;
-};
-type TimelineChartModel = {
-    readonly barRects: BarRect[];
-    readonly eventLines: EventLine[];
-};
-function buildTimelineChartModel(
-    sectionRanges: SectionRange[],
-    events: EventMarker[],
-    timestampRange: { readonly start: bigint; readonly end: bigint },
-    timestampFrequency: bigint,
-    markerAddrToName: Map<bigint, string>,
-): TimelineChartModel {
-    const sortedRanges = sectionRanges.toSorted((a, b) => Number(a.timestamp.begin - b.timestamp.begin));
-    const rects: BarRect[] = [];
-    const endTimestampStack: bigint[] = [];
-    for (const r of sortedRanges) {
-        while (endTimestampStack.length > 0) {
-            if (r.timestamp.begin < endTimestampStack.at(-1)!) {
-                // stack onto this
-                break;
-            }
-
-            endTimestampStack.pop();
-        }
-
-        if (r.timestamp.end < timestampRange.start || timestampRange.end < r.timestamp.begin) {
-            // completely out of range
-            continue;
-        }
-
-        const durationNs = ((r.timestamp.end - r.timestamp.begin) * 1_000_000_000n) / timestampFrequency;
-        const labelText = formatSectionText(r);
-        const tooltipText = `${labelText} (${displayNanos(durationNs)})`;
-        const left =
-            timestampToSecs(r.timestamp.begin - timestampRange.start, timestampFrequency) *
-            TIMELINE_CHART_WIDTH_PER_SEC;
-        const right =
-            timestampToSecs(r.timestamp.end - timestampRange.start, timestampFrequency) * TIMELINE_CHART_WIDTH_PER_SEC;
-        rects.push({
-            labelText,
-            tooltipText,
-            left,
-            top: endTimestampStack.length * TIMELINE_CHART_BAR_THICKNESS,
-            width: right - left,
-            height: TIMELINE_CHART_BAR_THICKNESS,
-        });
-        endTimestampStack.push(r.timestamp.end);
-    }
-
-    const eventLines = events
-        .toSorted((a, b) => Number(a.timestamp - b.timestamp))
-        .map(e => {
-            if (e.timestamp < timestampRange.start || timestampRange.end < e.timestamp) {
-                // out of range
-                return null;
-            }
-
-            const labelText = markerAddrToName.get(e.markerAddr)!;
-            const left =
-                timestampToSecs(e.timestamp - timestampRange.start, timestampFrequency) * TIMELINE_CHART_WIDTH_PER_SEC;
-
-            return { labelText, left };
-        })
-        .filter(x => x !== null);
-
-    return { barRects: rects, eventLines };
-}
 
 const MEMORY_CHART_HEIGHT_PER_BYTES: number = 1.0 / 1_000_000.0;
 
-type ChartPoint = {
-    readonly x: number;
-    readonly y: number;
-    readonly tooltipText: string;
-};
 type MemoryChartModel = {
     readonly totalResident: ChartPoint[];
     readonly totalReserved: ChartPoint[];
@@ -371,7 +283,7 @@ type MemoryChartModel = {
 };
 export function buildMemoryChartModel(
     memoryStats: MemoryStatsMarker[],
-    timestampRange: { readonly start: bigint; readonly end: bigint },
+    timestampRange: Range<bigint>,
     timestampFrequency: bigint,
 ): MemoryChartModel {
     const totalResident = [];
@@ -380,11 +292,12 @@ export function buildMemoryChartModel(
 
     let lastBeyond = false;
     for (const stat of memoryStats.toSorted((a, b) => Number(a.timestamp - b.timestamp))) {
-        const past = stat.timestamp < timestampRange.start;
+        const past = stat.timestamp < timestampRange.begin;
         const beyond = stat.timestamp >= timestampRange.end;
 
         const x =
-            timestampToSecs(stat.timestamp - timestampRange.start, timestampFrequency) * TIMELINE_CHART_WIDTH_PER_SEC;
+            timestampToSecs(stat.timestamp - timestampRange.begin, timestampFrequency) *
+            TIMELINE_CHART_DESIGN_METRICS.widthPerSec;
 
         if (past) {
             // これより前の点は不要
@@ -416,57 +329,4 @@ export function buildMemoryChartModel(
     }
 
     return { totalResident, totalReserved, totalPrivateResident };
-}
-
-function formatSectionText(section: SectionRange): string {
-    let text = section.markerName;
-    if (section.auxData.length > 0) {
-        text += `: ${section.auxData.join(", ")}`;
-    }
-
-    return text;
-}
-
-function displayNanos(ns: bigint): string {
-    let unit = "ns";
-    let val = Number(ns);
-    if (val >= 1000) {
-        unit = "us";
-        val /= 1000;
-    }
-    if (val >= 1000) {
-        unit = "ms";
-        val /= 1000;
-    }
-
-    if (unit === "ns") {
-        // no conversion occured
-        return `${ns} ns`;
-    }
-
-    return `${val.toFixed(2)} ${unit}`;
-}
-
-function displayByteSize(bytes: bigint): string {
-    let unit = "B";
-    let val = Number(bytes);
-    if (val >= 1000) {
-        unit = "KB";
-        val /= 1024;
-    }
-    if (val >= 1000) {
-        unit = "MB";
-        val /= 1024;
-    }
-    if (val >= 1000) {
-        unit = "GB";
-        val /= 1024;
-    }
-
-    if (unit === "B") {
-        // no conversion occured
-        return `${bytes} B`;
-    }
-
-    return `${val.toFixed(3)} ${unit}`;
 }

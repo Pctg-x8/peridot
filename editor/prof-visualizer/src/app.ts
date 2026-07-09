@@ -6,14 +6,31 @@ import {
     type SectionBeginMarker,
     type SectionEndMarker,
 } from "./binloader";
-import { bnMax, bnMin, hasValue, type Range } from "./utils";
+import { bnMax, bnMin, bnRangeSlice, hasValue, type Range } from "./utils";
 import type { TypedEventTarget } from "./utils/typedEvents";
+
+export type ViewTab = "Main" | "PerRenderLoop";
 
 export class Application extends (EventTarget as typeof TypedEventTarget<ApplicationEvents>) {
     static readonly instance = new Application();
 
     private constructor() {
         super();
+    }
+
+    #tab: ViewTab = "Main";
+    get currentTab(): ViewTab {
+        return this.#tab;
+    }
+    switchTab(tab: ViewTab) {
+        if (this.#tab === tab) {
+            // switch to same tab
+            return;
+        }
+
+        this.#tab = tab;
+        this.#typedDispatchEvent("tabSwitched", tab);
+        this.#typedDispatchEvent("performAtomic");
     }
 
     #binMetadata: BinMetadata | null = null;
@@ -37,8 +54,14 @@ export class Application extends (EventTarget as typeof TypedEventTarget<Applica
         return this.#memoryStats;
     }
 
-    computeChartTimestampRange(): { readonly start: bigint; readonly end: bigint } {
+    computeChartTimestampRange(): Range<bigint> {
         return computeTimestampRange(this.#sectionRanges, this.#events, this.#memoryStats);
+    }
+
+    sliceSectionRange(timestampRange: Range<bigint>): SectionRange[] {
+        return this.#sectionRanges
+            .map(r => ({ ...r, timestamp: bnRangeSlice(r.timestamp, timestampRange) }))
+            .filter(r => r.timestamp.end - r.timestamp.begin > 0n);
     }
 
     async load(blob: Blob): Promise<void> {
@@ -71,6 +94,10 @@ export class Application extends (EventTarget as typeof TypedEventTarget<Applica
         this.#typedDispatchEvent("performAtomic");
     }
 
+    sync() {
+        this.#typedDispatchEvent("performAtomic");
+    }
+
     /** type safe dispatchEvent */
     #typedDispatchEvent<T extends keyof ApplicationEvents>(
         key: T,
@@ -82,6 +109,7 @@ export class Application extends (EventTarget as typeof TypedEventTarget<Applica
 
 type ApplicationEvents = {
     performAtomic: void;
+    tabSwitched: ViewTab;
     sourceDataChanged: BinMetadata;
 };
 
@@ -157,7 +185,7 @@ function computeTimestampRange(
     sectionRanges: SectionRange[],
     events: EventMarker[],
     memoryStats: MemoryStatsMarker[],
-): { readonly start: bigint; readonly end: bigint } {
+): Range<bigint> {
     let minTimestamp: bigint | null = null;
     let maxTimestamp: bigint | null = null;
 
@@ -176,5 +204,5 @@ function computeTimestampRange(
         maxTimestamp = maxTimestamp === null ? m.timestamp : bnMax(maxTimestamp, m.timestamp);
     }
 
-    return { start: minTimestamp ?? 0n, end: maxTimestamp ?? 0n };
+    return { begin: minTimestamp ?? 0n, end: maxTimestamp ?? 0n };
 }

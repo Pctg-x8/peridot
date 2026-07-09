@@ -44,3 +44,24 @@ header {
         }
     }
 }
+
+#PerRenderLoopTab-Controls {
+    display: flex;
+    align-items: center;
+
+    #PerRenderLoopTab-FrameSlider {
+        margin-inline: 0.4em;
+        width: 50vw;
+    }
+
+    button {
+        width: 1.2em;
+        height: 1.2em;
+        margin-inline: 0.2em;
+        line-height: 0;
+    }
+}
+
+.hidden {
+    display: none !important;
+}
