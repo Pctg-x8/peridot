@@ -3064,6 +3064,8 @@ async fn run<'sys>(
         grab_delta: Point::new_logical(0.0, 0.0),
         key_input: PreviewKeyInputState::empty(),
     };
+    // preview local states
+    let mut preview_latched_key_motion_amplifier = None::<f32>;
 
     let last_window_state = 'try_restore_last_window_state: {
         let fp = match std::fs::File::open(file_system.window_state_save_path()) {
@@ -4737,10 +4739,12 @@ async fn run<'sys>(
                     if key_forwards != 0.0 || key_rights != 0.0 || key_y_motions != 0.0 {
                         // move by key
                         let amplifier =
-                            5.0f32.powf(if preview_state.main_camera.position.1 == 0.0 {
-                                0.0
-                            } else {
-                                preview_state.main_camera.position.1.abs().log10().floor()
+                            *preview_latched_key_motion_amplifier.get_or_insert_with(|| {
+                                2.5f32.powf(if preview_state.main_camera.position.1 == 0.0 {
+                                    0.0
+                                } else {
+                                    preview_state.main_camera.position.1.abs().log10().floor()
+                                })
                             });
                         preview_state.main_camera.position = preview_state.main_camera.position
                             + preview_state.main_camera.forward()
@@ -4748,7 +4752,11 @@ async fn run<'sys>(
                             + preview_state.main_camera.right() * (0.25 * amplifier * key_rights)
                             + peridot_math::Vector3(0.0, key_y_motions * 0.25 * amplifier, 0.0);
                         preview_state.main_camera_dirtified = true;
+                    } else {
+                        preview_latched_key_motion_amplifier = None;
                     }
+                } else {
+                    preview_latched_key_motion_amplifier = None;
                 }
             }
             #[cfg(windows)]
