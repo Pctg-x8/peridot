@@ -37,8 +37,9 @@ use crate::{
         },
     },
     rendering::{
-        CommittedPreviewMeshData, CommittedPreviewState, IndexType, MainThreadTextureIDIssuer,
-        RenderMessage, RenderMessageSender, RenderThread, RendererSync, ShaderTexture, TextureID,
+        CommittedPreviewMeshData, CommittedPreviewRenderData, CommittedPreviewState, IndexType,
+        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
+        ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -3408,25 +3409,144 @@ async fn run<'sys>(
     // initial push test
     let mut preview_state =
         crate::perf_wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
-    let mut vbuf_bytes = vec![0u8; size_of::<peridot_math::Vector4F32>() * 8];
+    let mut vbuf_bytes = vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * 24];
+    let mut ibuf_bytes = vec![0u8; size_of::<u16>() * 36];
     unsafe {
-        let ph = vbuf_bytes.as_mut_ptr().cast::<peridot_math::Vector4F32>();
-        ph.write(peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0));
-        ph.add(1).write(peridot_math::Vector4(0.5, -0.5, -0.5, 1.0));
-        ph.add(2).write(peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0));
-        ph.add(3).write(peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0));
-        ph.add(4).write(peridot_math::Vector4(0.5, 0.5, -0.5, 1.0));
-        ph.add(5).write(peridot_math::Vector4(0.5, -0.5, 0.5, 1.0));
-        ph.add(6).write(peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0));
-        ph.add(7).write(peridot_math::Vector4(0.5, 0.5, 0.5, 1.0));
+        const VERTICES: &[[peridot_math::Vector4F32; 2]] = &[
+            // +x
+            [
+                peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+            ],
+            // -x
+            [
+                peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+            ],
+            // +y
+            [
+                peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+            ],
+            // -y
+            [
+                peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+            ],
+            // +z
+            [
+                peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+            ],
+            // -z
+            [
+                peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+            ],
+            [
+                peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+            ],
+        ];
+        const INDICES: &[u16] = &[
+            0, 1, 2, 2, 1, 3, // +x
+            4, 5, 6, 6, 5, 7, // -x
+            8, 9, 10, 10, 9, 11, // +y
+            12, 13, 14, 14, 13, 15, // -y
+            16, 17, 18, 18, 17, 19, // +z
+            20, 21, 22, 22, 21, 23, // -z
+        ];
+
+        vbuf_bytes
+            .as_mut_ptr()
+            .cast::<[peridot_math::Vector4F32; 2]>()
+            .copy_from_nonoverlapping(VERTICES.as_ptr(), VERTICES.len());
+        ibuf_bytes
+            .as_mut_ptr()
+            .cast::<u16>()
+            .copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
     }
     preview_state.pushed_meshes.push(CommittedPreviewMeshData {
         vertices: std::sync::Arc::from(vbuf_bytes),
-        vertex_stride: size_of::<peridot_math::Vector4F32>(),
-        indices: std::sync::Arc::new([0, 1]),
+        vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
+        indices: std::sync::Arc::from(ibuf_bytes),
         index_type: IndexType::U16,
-        sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..8)]),
+        sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..36)]),
     });
+    preview_state
+        .pushed_render_data
+        .push(CommittedPreviewRenderData {
+            object_to_world: peridot_math::Matrix4F32::ONE,
+            mesh_id: 0,
+        });
     drop(preview_state);
 
     system_link.prelaunch(main_window);
@@ -4576,6 +4696,7 @@ async fn run<'sys>(
                 if preview_input_state.grabbing {
                     let mut key_forwards = 0.0f32;
                     let mut key_rights = 0.0f32;
+                    let mut key_y_motions = 0.0f32;
                     if preview_input_state
                         .key_input
                         .contains(PreviewKeyInputState::W)
@@ -4600,8 +4721,20 @@ async fn run<'sys>(
                     {
                         key_rights -= 1.0;
                     }
+                    if preview_input_state
+                        .key_input
+                        .contains(PreviewKeyInputState::SHIFT)
+                    {
+                        key_y_motions += 1.0;
+                    }
+                    if preview_input_state
+                        .key_input
+                        .contains(PreviewKeyInputState::CONTROL)
+                    {
+                        key_y_motions -= 1.0;
+                    }
 
-                    if key_forwards != 0.0 || key_rights != 0.0 {
+                    if key_forwards != 0.0 || key_rights != 0.0 || key_y_motions != 0.0 {
                         // move by key
                         let amplifier =
                             5.0f32.powf(if preview_state.main_camera.position.1 == 0.0 {
@@ -4612,7 +4745,8 @@ async fn run<'sys>(
                         preview_state.main_camera.position = preview_state.main_camera.position
                             + preview_state.main_camera.forward()
                                 * (0.25 * amplifier * key_forwards)
-                            + preview_state.main_camera.right() * (0.25 * amplifier * key_rights);
+                            + preview_state.main_camera.right() * (0.25 * amplifier * key_rights)
+                            + peridot_math::Vector3(0.0, key_y_motions * 0.25 * amplifier, 0.0);
                         preview_state.main_camera_dirtified = true;
                     }
                 }
@@ -6081,6 +6215,8 @@ bitflags::bitflags! {
         const A = 0x02;
         const S = 0x04;
         const D = 0x08;
+        const SHIFT = 0x10;
+        const CONTROL = 0x20;
     }
 }
 
@@ -6243,6 +6379,12 @@ impl KeyInputEventHandler for PreviewInputHandler {
             KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'d') => {
                 self.set_key(PreviewKeyInputState::D);
             }
+            KeyInputCode::RightShift | KeyInputCode::LeftShift => {
+                self.set_key(PreviewKeyInputState::SHIFT);
+            }
+            KeyInputCode::RightControl | KeyInputCode::LeftControl => {
+                self.set_key(PreviewKeyInputState::CONTROL);
+            }
             _ => (),
         }
     }
@@ -6261,6 +6403,12 @@ impl KeyInputEventHandler for PreviewInputHandler {
             }
             KeyInputCode::Character(c) if c.eq_ignore_ascii_case(&'d') => {
                 self.unset_key(PreviewKeyInputState::D);
+            }
+            KeyInputCode::RightShift | KeyInputCode::LeftShift => {
+                self.unset_key(PreviewKeyInputState::SHIFT);
+            }
+            KeyInputCode::RightControl | KeyInputCode::LeftControl => {
+                self.unset_key(PreviewKeyInputState::CONTROL);
             }
             _ => (),
         }

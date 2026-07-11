@@ -10,7 +10,7 @@ struct PushConstants {
 [vk::push_constant]
 PushConstants pushConstants;
 
-static const float4 COLOR = float4(0.25, 0.25, 0.25, 0.25);
+static const float4 COLOR = float4(0.125, 0.125, 0.125, 0.375);
 
 struct VshInput {
   uint vindex : SV_VertexID;

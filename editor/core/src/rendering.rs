@@ -1,7 +1,9 @@
 use core::num::NonZeroUsize;
 use std::{
+    cell::UnsafeCell,
     collections::{HashMap, HashSet},
     num::NonZero,
+    rc::Rc,
     sync::{Mutex, atomic::AtomicBool},
 };
 
@@ -951,7 +953,7 @@ impl<'main> RenderThread<'main> {
                 // preview may still updating on main thread...
                 if let Ok(mut st) = self.preview_state.try_lock() {
                     crate::perf_scope!(UPDATE_PREVIEW);
-                    preview_renderer.update(&mut st);
+                    preview_renderer.update(self.vk_device, &mut st);
                     preview_renderer.validate(self.vk_device, &preview_rt_buffer, &mut st);
                 }
             }
@@ -3893,9 +3895,52 @@ struct DynamicBufferPage {
     second_level_freemap: [u16; DB_TLSF_FL_COUNT],
     block_list_headings: [br::DeviceSize; DB_TLSF_FL_COUNT * DB_TLSF_SL_PER_FL],
     block_states: HashMap<br::DeviceSize, DynamicBufferBlockState>,
+    device_memory: br::vk::VkDeviceMemory,
+    buffer: br::vk::VkBuffer,
 }
 impl DynamicBufferPage {
-    fn new() -> Self {
+    unsafe fn drop(self, device: &VulkanDevice) {
+        drop(unsafe { br::DeviceMemoryObject::manage(self.device_memory, device) });
+        drop(unsafe { br::BufferObject::manage(self.buffer, device) });
+    }
+
+    fn new(
+        device: &VulkanDevice,
+        usage: br::BufferUsage,
+        dbg_name: &'static str,
+        dbg_identifier: usize,
+    ) -> Self {
+        let mut buffer =
+            br::BufferObject::new(device, &br::BufferCreateInfo::new(DB_TLSF_PAGE_SIZE, usage))
+                .expect("buffer.create");
+        let memreq = buffer.requirements();
+        let mem = br::DeviceMemoryObject::new(
+            device,
+            &br::MemoryAllocateInfo::new(
+                memreq.size,
+                device
+                    .find_device_local_memory_index(memreq.memoryTypeBits)
+                    .expect("device_memory.index"),
+            ),
+        )
+        .expect("device_memory.alloc");
+        buffer.bind(&mem, 0).expect("buffer.bind");
+
+        device.dbg_set_name(
+            &buffer,
+            &std::ffi::CString::new(format!(
+                "DynamicBuffer[{dbg_name}].Page#{dbg_identifier}.Buffer"
+            ))
+            .unwrap(),
+        );
+        device.dbg_set_name(
+            &mem,
+            &std::ffi::CString::new(format!(
+                "DynamicBuffer[{dbg_name}].Page#{dbg_identifier}.Memory"
+            ))
+            .unwrap(),
+        );
+
         let mut block_states = HashMap::new();
         block_states.insert(
             0,
@@ -3910,11 +3955,15 @@ impl DynamicBufferPage {
         let mut second_level_freemap = [0; DB_TLSF_FL_COUNT];
         second_level_freemap[first_f as usize] |= 1 << first_s;
 
+        let (mem, _) = mem.unmanage();
+        let (buffer, _) = buffer.unmanage();
         Self {
             first_level_freemap: 1 << first_f,
             second_level_freemap,
             block_list_headings: [0; _],
             block_states,
+            buffer,
+            device_memory: mem,
         }
     }
 
@@ -4096,27 +4145,68 @@ impl DynamicBufferPage {
     }
 }
 
+struct DynamicBufferPointer {
+    // TODO: これ制限した型でwrapしたほうがよさそう（DynamicBufferPointer経由でalloc/freeできないようにする）
+    pub source_page: Rc<UnsafeCell<DynamicBufferPage>>,
+    pub offset: br::DeviceSize,
+}
+
 /// TLSF based dynamic allocatable gpu buffer
 struct DynamicBuffer {
-    page_pools: Vec<DynamicBufferPage>,
+    usage: br::BufferUsage,
+    page_pools: Vec<Rc<UnsafeCell<DynamicBufferPage>>>,
+    dbg_name: &'static str,
 }
 impl DynamicBuffer {
-    fn new() -> Self {
-        Self {
-            page_pools: Vec::new(),
+    unsafe fn drop(self, device: &VulkanDevice) {
+        for p in self.page_pools {
+            unsafe {
+                Rc::try_unwrap(p)
+                    .unwrap_or_else(|_| unreachable!("dynamic buffer still referenced"))
+                    .into_inner()
+                    .drop(device);
+            }
         }
     }
 
-    fn alloc(&mut self, size: br::DeviceSize) -> br::DeviceSize {
-        if let Some(found_offs) = self.page_pools.iter_mut().find_map(|x| x.try_alloc(size)) {
-            return found_offs;
+    fn new(usage: br::BufferUsage, dbg_name: &'static str) -> Self {
+        Self {
+            usage,
+            page_pools: Vec::new(),
+            dbg_name,
+        }
+    }
+
+    fn alloc(
+        &mut self,
+        device: &VulkanDevice,
+        size: br::DeviceSize,
+        mut on_create_page: impl FnMut(usize, &br::VkHandleRef<br::vk::VkBuffer>),
+    ) -> DynamicBufferPointer {
+        for p in self.page_pools.iter() {
+            if let Some(found_offs) = unsafe { &mut *p.get() }.try_alloc(size) {
+                // allocated
+                return DynamicBufferPointer {
+                    source_page: p.clone(),
+                    offset: found_offs,
+                };
+            }
         }
 
         // allocate new one
-        let mut new_page = DynamicBufferPage::new();
+        let mut new_page =
+            DynamicBufferPage::new(device, self.usage, self.dbg_name, self.page_pools.len());
         let found_offs = unsafe { new_page.try_alloc(size).unwrap_unchecked() };
-        self.page_pools.push(new_page);
-        found_offs
+        on_create_page(
+            self.page_pools.len(),
+            &br::VkHandleRef::from_raw_ref(&new_page.buffer),
+        );
+        let new_page = Rc::new(UnsafeCell::new(new_page));
+        self.page_pools.push(new_page.clone());
+        DynamicBufferPointer {
+            source_page: new_page,
+            offset: found_offs,
+        }
     }
 }
 
@@ -4131,7 +4221,7 @@ pub struct CommittedPreviewMeshData {
     pub vertex_stride: usize,
     pub indices: std::sync::Arc<[u8]>,
     pub index_type: IndexType,
-    pub sub_mesh_ranges: std::sync::Arc<[core::range::Range<usize>]>,
+    pub sub_mesh_ranges: std::sync::Arc<[core::range::Range<u32>]>,
 }
 
 pub struct CommittedPreviewRenderData {
@@ -4151,20 +4241,31 @@ pub struct CommittedPreviewState {
     pub removed_render_data: HashSet<usize>,
 }
 
-struct PreviewSubMeshData {
-    vertex_range: core::range::Range<br::DeviceSize>,
-    index_range: core::range::Range<br::DeviceSize>,
+struct PreviewMeshData {
+    vertex_offset: DynamicBufferPointer,
+    index_offset: DynamicBufferPointer,
+    vertex_size: br::DeviceSize,
+    index_size: br::DeviceSize,
+    vertex_update_pending: Option<usize>,
+    index_update_pending: Option<usize>,
+    index_type: IndexType,
+    sub_mesh_ranges: Vec<core::range::Range<u32>>,
 }
 
 struct PreviewRenderData {
-    object_uniform_range: core::range::Range<br::DeviceSize>,
+    object_uniform_start: DynamicBufferPointer,
+    object_uniform_update_pending: Option<usize>,
     mesh_id: usize,
 }
 
 pub struct PreviewRenderer {
     common_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
+    object_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
     descriptor_pool: br::vk::VkDescriptorPool,
     common_descriptor_set: br::DescriptorSet,
+    dynamic_ubuf_object_descriptor_pool: br::vk::VkDescriptorPool,
+    dynamic_ubuf_object_descriptor_sets: Vec<br::DescriptorSet>,
+    dynamic_ubuf_object_descriptor_set_index_by_buffer_handle: HashMap<br::vk::VkBuffer, usize>,
     streaming_buffer: br::vk::VkBuffer,
     streaming_memory: br::vk::VkDeviceMemory,
     streaming_memory_should_flush: bool,
@@ -4172,6 +4273,9 @@ pub struct PreviewRenderer {
     active_framebuffer_resource_handle: br::vk::VkImageView,
     render_pass: br::vk::VkRenderPass,
     framebuffer: core::mem::MaybeUninit<br::vk::VkFramebuffer>,
+    default_material_pipeline_layout: br::vk::VkPipelineLayout,
+    default_material_shader: br::vk::VkShaderModule,
+    default_material_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     origin_axes_pipeline_layout: br::vk::VkPipelineLayout,
     origin_axes_shader: br::vk::VkShaderModule,
     origin_axes_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
@@ -4197,17 +4301,23 @@ pub struct PreviewRenderer {
     internal_data_memory: br::vk::VkDeviceMemory,
     dynamic_buffer: DynamicBuffer,
     dynamic_ubuf: DynamicBuffer,
-    user_meshes: Vec<Vec<PreviewSubMeshData>>,
+    user_meshes: Vec<PreviewMeshData>,
     user_renders: Vec<PreviewRenderData>,
+    user_data_update_pending: bool,
     valid: bool,
 }
 impl PreviewRenderer {
-    pub unsafe fn drop(self, device: &VulkanDevice) {
+    pub unsafe fn drop(mut self, device: &VulkanDevice) {
+        self.user_renders.clear();
+        self.user_meshes.clear();
+
         drop(unsafe { br::CommandPoolObject::manage(self.update_command_pool, device) });
         drop(unsafe { br::CommandPoolObject::manage(self.command_pool, device) });
 
         unsafe {
             self.scratch_staging.drop(device);
+            self.dynamic_buffer.drop(device);
+            self.dynamic_ubuf.drop(device);
         }
 
         if self.valid {
@@ -4215,6 +4325,9 @@ impl PreviewRenderer {
             drop(unsafe { br::PipelineObject::manage(self.grid_pipeline.assume_init(), device) });
             drop(unsafe {
                 br::PipelineObject::manage(self.origin_axes_pipeline.assume_init(), device)
+            });
+            drop(unsafe {
+                br::PipelineObject::manage(self.default_material_pipeline.assume_init(), device)
             });
             drop(unsafe { br::FramebufferObject::manage(self.framebuffer.assume_init(), device) });
         }
@@ -4227,10 +4340,20 @@ impl PreviewRenderer {
         drop(unsafe { br::PipelineLayoutObject::manage(self.grid_pipeline_layout, device) });
         drop(unsafe { br::ShaderModuleObject::manage(self.origin_axes_shader, device) });
         drop(unsafe { br::PipelineLayoutObject::manage(self.origin_axes_pipeline_layout, device) });
+        drop(unsafe { br::ShaderModuleObject::manage(self.default_material_shader, device) });
+        drop(unsafe {
+            br::PipelineLayoutObject::manage(self.default_material_pipeline_layout, device)
+        });
         drop(unsafe { br::RenderPassObject::manage(self.render_pass, device) });
         drop(unsafe { br::DeviceMemoryObject::manage(self.streaming_memory, device) });
         drop(unsafe { br::BufferObject::manage(self.streaming_buffer, device) });
+        drop(unsafe {
+            br::DescriptorPoolObject::manage(self.dynamic_ubuf_object_descriptor_pool, device)
+        });
         drop(unsafe { br::DescriptorPoolObject::manage(self.descriptor_pool, device) });
+        drop(unsafe {
+            br::DescriptorSetLayoutObject::manage(self.object_descriptor_set_layout, device)
+        });
         drop(unsafe {
             br::DescriptorSetLayoutObject::manage(self.common_descriptor_set_layout, device)
         });
@@ -4308,7 +4431,25 @@ impl PreviewRenderer {
             ]),
         )
         .expect("preview.common_descriptor_set_layout.create");
+        let object_descriptor_set_layout = br::DescriptorSetLayoutObject::new(
+            device,
+            &br::DescriptorSetLayoutCreateInfo::new(&[
+                br::DescriptorType::UniformBufferDynamic.make_binding(0, 1)
+            ]),
+        )
+        .expect("preview.object_descriptor_set_layout.create");
 
+        let default_material_pipeline_layout = br::PipelineLayoutObject::new(
+            device,
+            &br::PipelineLayoutCreateInfo::new(
+                &[
+                    common_descriptor_set_layout.as_transparent_ref(),
+                    object_descriptor_set_layout.as_transparent_ref(),
+                ],
+                &[],
+            ),
+        )
+        .expect("preview.default_material.pipeline_layout.create");
         let origin_axes_pipeline_layout = br::PipelineLayoutObject::new(
             device,
             &br::PipelineLayoutCreateInfo::new(
@@ -4338,6 +4479,7 @@ impl PreviewRenderer {
             ),
         )
         .expect("preview.unlit_colored_object.pipeline_layout.create");
+        let default_material_shader = device.require_shader("preview/default.spv");
         let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
         let grid_shader = device.require_shader("preview/grid.spv");
         let unlit_colored_shader = device.require_shader("preview/unlit_colored.spv");
@@ -4816,6 +4958,18 @@ impl PreviewRenderer {
             &[],
         );
 
+        let mut dynamic_ubuf_object_descriptor_pool = br::DescriptorPoolObject::new(
+            device,
+            &br::DescriptorPoolCreateInfo::new(
+                16,
+                &[br::DescriptorType::UniformBufferDynamic.make_size(16)],
+            ),
+        )
+        .expect("preview.dynamic_object_descriptor_pool.create");
+        let dynamic_ubuf_object_descriptor_sets = dynamic_ubuf_object_descriptor_pool
+            .alloc(&[object_descriptor_set_layout.as_transparent_ref(); 16])
+            .expect("preview.dynamic_object_descriptor.alloc");
+
         let mut command_pool = br::CommandPoolObject::new(
             device,
             &br::CommandPoolCreateInfo::new(device.present_queue_family_index()),
@@ -4854,6 +5008,8 @@ impl PreviewRenderer {
         let (internal_data_memory, _) = internal_data_memory.unmanage();
         let (internal_uniform_buffer, _) = internal_uniform_buffer.unmanage();
         let (internal_mesh_buffer, _) = internal_mesh_buffer.unmanage();
+        let (default_material_shader, _) = default_material_shader.unmanage();
+        let (default_material_pipeline_layout, _) = default_material_pipeline_layout.unmanage();
         let (unlit_colored_shader, _) = unlit_colored_shader.unmanage();
         let (unlit_colored_object_pipeline_layout, _) =
             unlit_colored_object_pipeline_layout.unmanage();
@@ -4864,12 +5020,19 @@ impl PreviewRenderer {
         let (render_pass, _) = render_pass.unmanage();
         let (streaming_memory, _) = streaming_memory.unmanage();
         let (streaming_buffer, _) = streaming_buffer.unmanage();
+        let (dynamic_ubuf_object_descriptor_pool, _) =
+            dynamic_ubuf_object_descriptor_pool.unmanage();
         let (descriptor_pool, _) = descriptor_pool.unmanage();
+        let (object_descriptor_set_layout, _) = object_descriptor_set_layout.unmanage();
         let (common_descriptor_set_layout, _) = common_descriptor_set_layout.unmanage();
         Self {
             common_descriptor_set_layout,
+            object_descriptor_set_layout,
             descriptor_pool,
             common_descriptor_set,
+            dynamic_ubuf_object_descriptor_pool,
+            dynamic_ubuf_object_descriptor_sets,
+            dynamic_ubuf_object_descriptor_set_index_by_buffer_handle: HashMap::new(),
             streaming_buffer,
             streaming_memory,
             streaming_memory_should_flush,
@@ -4877,6 +5040,9 @@ impl PreviewRenderer {
             active_framebuffer_resource_handle: init_rt.image_view,
             render_pass,
             framebuffer: core::mem::MaybeUninit::uninit(),
+            default_material_pipeline_layout,
+            default_material_shader,
+            default_material_pipeline: core::mem::MaybeUninit::uninit(),
             origin_axes_pipeline_layout,
             origin_axes_shader,
             origin_axes_pipeline: core::mem::MaybeUninit::uninit(),
@@ -4900,25 +5066,150 @@ impl PreviewRenderer {
             update_command_pool,
             update_command_buffer: update_command_buffer.native_ptr(),
             update_command_pending: false,
-            dynamic_buffer: DynamicBuffer::new(),
-            dynamic_ubuf: DynamicBuffer::new(),
+            dynamic_buffer: DynamicBuffer::new(
+                br::BufferUsage::VERTEX_BUFFER
+                    | br::BufferUsage::INDEX_BUFFER
+                    | br::BufferUsage::TRANSFER_DEST,
+                "Preview.Std",
+            ),
+            dynamic_ubuf: DynamicBuffer::new(
+                br::BufferUsage::UNIFORM_BUFFER | br::BufferUsage::TRANSFER_DEST,
+                "Preview.Uniform",
+            ),
             user_meshes: Vec::new(),
             user_renders: Vec::new(),
+            user_data_update_pending: false,
             valid: false,
         }
     }
 
-    pub fn update(&mut self, committed_state: &mut CommittedPreviewState) {
+    pub fn update(&mut self, device: &VulkanDevice, committed_state: &mut CommittedPreviewState) {
         self.scratch_staging.reset();
 
         for m in committed_state.pushed_meshes.drain(..) {
-            let index_stride = match m.index_type {
-                IndexType::U16 => 2,
-                IndexType::U32 => 4,
-            };
+            let vbuf = self
+                .dynamic_buffer
+                .alloc(device, m.vertices.len() as _, |_, _| {});
+            let ibuf = self
+                .dynamic_buffer
+                .alloc(device, m.indices.len() as _, |_, _| {});
 
-            let vbuf = self.dynamic_buffer.alloc(m.vertices.len() as _);
-            let ibuf = self.dynamic_buffer.alloc(m.indices.len() as _);
+            let vertex_update = self.scratch_staging.reserve(m.vertices.len());
+            let index_update = self.scratch_staging.reserve(m.indices.len());
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    m.vertices.as_ptr(),
+                    self.scratch_staging
+                        .mapped_ptr
+                        .byte_add(vertex_update)
+                        .cast(),
+                    m.vertices.len(),
+                );
+                core::ptr::copy_nonoverlapping(
+                    m.indices.as_ptr(),
+                    self.scratch_staging
+                        .mapped_ptr
+                        .byte_add(index_update)
+                        .cast(),
+                    m.indices.len(),
+                );
+            }
+            self.user_data_update_pending = true;
+
+            self.user_meshes.push(PreviewMeshData {
+                vertex_offset: vbuf,
+                index_offset: ibuf,
+                vertex_size: m.vertices.len() as _,
+                index_size: m.indices.len() as _,
+                vertex_update_pending: Some(vertex_update),
+                index_update_pending: Some(index_update),
+                index_type: m.index_type,
+                sub_mesh_ranges: m.sub_mesh_ranges.as_ref().to_owned(),
+            });
+        }
+
+        for r in committed_state.pushed_render_data.drain(..) {
+            let object_uniform_start = self.dynamic_ubuf.alloc(
+                device,
+                size_of::<peridot_math::Matrix4F32>() as _,
+                |new_buffer_index, buffer| {
+                    self.dynamic_ubuf_object_descriptor_set_index_by_buffer_handle
+                        .insert(buffer.native_ptr(), new_buffer_index);
+
+                    // setup descriptor set for newly created pool
+                    if self.dynamic_ubuf_object_descriptor_sets.len() > new_buffer_index {
+                        // without extend
+                        device.update_descriptor_sets(
+                            &[self.dynamic_ubuf_object_descriptor_sets[new_buffer_index]
+                                .binding_at(0)
+                                .write(br::DescriptorContents::uniform_buffer_dynamic(
+                                    buffer,
+                                    0..size_of::<peridot_math::Matrix4F32>() as _,
+                                ))],
+                            &[],
+                        );
+                        return;
+                    }
+
+                    // with extending
+                    let mut new_pool = br::DescriptorPoolObject::new(
+                        device,
+                        &br::DescriptorPoolCreateInfo::new(
+                            (self.dynamic_ubuf_object_descriptor_sets.len() * 2) as _,
+                            &[br::DescriptorType::UniformBufferDynamic.make_size(
+                                (self.dynamic_ubuf_object_descriptor_sets.len() * 2) as _,
+                            )],
+                        ),
+                    )
+                    .expect("preview.dynamic_ubuf_object_descriptor_pool.recreate");
+                    let new_sets = new_pool
+                        .alloc(&vec![
+                            unsafe {
+                                br::VkHandleRef::dangling(self.object_descriptor_set_layout)
+                            };
+                            self.dynamic_ubuf_object_descriptor_sets.len() * 2
+                        ])
+                        .expect("preview.dynamic_ubuf_objet_descriptors.realloc");
+                    device.update_descriptor_sets(
+                        &[new_sets[new_buffer_index].binding_at(0).write(
+                            br::DescriptorContents::uniform_buffer_dynamic(
+                                buffer,
+                                0..size_of::<peridot_math::Matrix4F32>() as _,
+                            ),
+                        )],
+                        &self
+                            .dynamic_ubuf_object_descriptor_sets
+                            .iter()
+                            .zip(new_sets.iter())
+                            .map(|(src, dst)| src.binding_at(0).copy(1, dst.binding_at(0)))
+                            .collect::<Vec<_>>(),
+                    );
+                    let old_pool = core::mem::replace(
+                        &mut self.dynamic_ubuf_object_descriptor_pool,
+                        new_pool.unmanage().0,
+                    );
+                    self.dynamic_ubuf_object_descriptor_sets = new_sets;
+                    drop(unsafe { br::DescriptorPoolObject::manage(old_pool, device) });
+                },
+            );
+
+            let object_ubuf = self
+                .scratch_staging
+                .reserve(size_of::<peridot_math::Matrix4F32>());
+            unsafe {
+                self.scratch_staging
+                    .mapped_ptr
+                    .byte_add(object_ubuf)
+                    .cast::<peridot_math::Matrix4F32>()
+                    .write(r.object_to_world);
+            }
+            self.user_data_update_pending = true;
+
+            self.user_renders.push(PreviewRenderData {
+                object_uniform_start,
+                object_uniform_update_pending: Some(object_ubuf),
+                mesh_id: r.mesh_id,
+            });
         }
     }
 
@@ -4962,6 +5253,9 @@ impl PreviewRenderer {
         if !self.valid || active_rt.size != self.active_rt_size {
             if self.valid {
                 drop(unsafe {
+                    br::PipelineObject::manage(self.default_material_pipeline.assume_init(), device)
+                });
+                drop(unsafe {
                     br::PipelineObject::manage(self.origin_axes_pipeline.assume_init(), device)
                 });
                 drop(unsafe {
@@ -4972,8 +5266,73 @@ impl PreviewRenderer {
                 });
             }
 
-            let [origin_axes_pipeline, grid_pipeline, gizmos_pipeline] = device
+            let [
+                default_material_pipeline,
+                origin_axes_pipeline,
+                grid_pipeline,
+                gizmos_pipeline,
+            ] = device
                 .create_graphics_pipelines_array(&[
+                    br::GraphicsPipelineCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.default_material_pipeline_layout),
+                        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
+                        &[
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Vertex,
+                                br::VkHandleRef::from_raw_ref(&self.default_material_shader),
+                                c"vertMain",
+                            ),
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Fragment,
+                                br::VkHandleRef::from_raw_ref(&self.default_material_shader),
+                                c"fragMain",
+                            ),
+                        ],
+                        // TODO: from mesh
+                        &br::PipelineVertexInputStateCreateInfo::new(
+                            &[br::VertexInputBindingDescription::per_vertex_typed::<
+                                [peridot_math::Vector4F32; 2],
+                            >(0)],
+                            &[
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 0,
+                                        binding: 0,
+                                        offset: 0,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 1,
+                                        binding: 0,
+                                        offset: size_of::<peridot_math::Vector4F32>() as _,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                            ],
+                        ),
+                        // TODO: from mesh
+                        IA_STATE_TRILIST,
+                        &br::PipelineViewportStateCreateInfo::new(
+                            &[active_rt
+                                .size
+                                .into_rect(br::Offset2D::ZERO)
+                                .make_viewport(0.0..1.0)],
+                            &[active_rt.size.into_rect(br::Offset2D::ZERO)],
+                        ),
+                        &br::PipelineRasterizationStateCreateInfo::new(
+                            br::PolygonMode::Fill,
+                            br::CullModeFlags::BACK,
+                            br::FrontFace::CounterClockwise,
+                        ),
+                        BLEND_STATE_SINGLE_PREMULTIPLIED,
+                    )
+                    .set_multisample_state(MS_STATE_EMPTY)
+                    .set_depth_stencil_state(
+                        &br::PipelineDepthStencilStateCreateInfo::new()
+                            .config_depth(Some(br::CompareOp::Less), true),
+                    ),
                     br::GraphicsPipelineCreateInfo::new(
                         br::VkHandleRef::from_raw_ref(&self.origin_axes_pipeline_layout),
                         br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
@@ -5138,6 +5497,8 @@ impl PreviewRenderer {
                     ),
                 ])
                 .expect("preview.validate.origin_axes.pipelines.create");
+            self.default_material_pipeline
+                .write(default_material_pipeline.unmanage().0);
             self.origin_axes_pipeline
                 .write(origin_axes_pipeline.unmanage().0);
             self.grid_pipeline.write(grid_pipeline.unmanage().0);
@@ -5164,7 +5525,9 @@ impl PreviewRenderer {
         }
 
         self.update_command_pending = false;
-        if self.pending_camera_data_updates.is_some() {
+        let user_data_update_pending =
+            core::mem::replace(&mut self.user_data_update_pending, false);
+        if self.pending_camera_data_updates.is_some() || user_data_update_pending {
             // needs update device data
             self.scratch_staging.ops_before_copy(device);
 
@@ -5194,6 +5557,58 @@ impl PreviewRenderer {
                             self.camera_data_ubuf_range.start,
                         )],
                     ),
+                })
+                .inject(|r| {
+                    let mut std_buffer_copies = HashMap::new();
+                    for m in self.user_meshes.iter_mut() {
+                        if let Some(o) = m.vertex_update_pending.take() {
+                            std_buffer_copies
+                                .entry(unsafe { &*m.vertex_offset.source_page.get() }.buffer)
+                                .or_insert_with(Vec::new)
+                                .push(br::BufferCopy(br::vk::VkBufferCopy {
+                                    srcOffset: o as _,
+                                    dstOffset: m.vertex_offset.offset,
+                                    size: m.vertex_size,
+                                }));
+                        }
+                        if let Some(o) = m.index_update_pending.take() {
+                            std_buffer_copies
+                                .entry(unsafe { &*m.index_offset.source_page.get() }.buffer)
+                                .or_insert_with(Vec::new)
+                                .push(br::BufferCopy(br::vk::VkBufferCopy {
+                                    srcOffset: o as _,
+                                    dstOffset: m.index_offset.offset,
+                                    size: m.index_size,
+                                }));
+                        }
+                    }
+                    for r in self.user_renders.iter_mut() {
+                        if let Some(o) = r.object_uniform_update_pending.take() {
+                            std_buffer_copies
+                                .entry(unsafe { &*r.object_uniform_start.source_page.get() }.buffer)
+                                .or_insert_with(Vec::new)
+                                .push(br::BufferCopy(br::vk::VkBufferCopy {
+                                    srcOffset: o as _,
+                                    dstOffset: r.object_uniform_start.offset,
+                                    size: size_of::<peridot_math::Matrix4F32>() as _,
+                                }));
+                        }
+                    }
+
+                    if std_buffer_copies.is_empty() {
+                        // no copies
+                        r
+                    } else {
+                        std_buffer_copies
+                            .into_iter()
+                            .fold(r, |r, (dest_buffer, copies)| {
+                                r.copy_buffer(
+                                    br::VkHandleRef::from_raw_ref(&self.scratch_staging.buffer),
+                                    br::VkHandleRef::from_raw_ref(&dest_buffer),
+                                    &copies,
+                                )
+                            })
+                    }
                 })
                 .inject(|r| {
                     device.cmd_pipeline_barrier(
@@ -5253,6 +5668,58 @@ impl PreviewRenderer {
                     ),
                     br::SubpassContents::Inline,
                 )
+                .inject(|mut r| {
+                    // TODO: needs approprivate batching
+                    for x in self.user_renders.iter() {
+                        let mesh = &self.user_meshes[x.mesh_id];
+                        r = r
+                            .bind_pipeline(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(unsafe {
+                                    self.default_material_pipeline.assume_init_ref()
+                                }),
+                            )
+                            .bind_descriptor_sets(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(
+                                    &self.default_material_pipeline_layout,
+                                ),
+                                0,
+                                &[
+                                    self.common_descriptor_set,
+                                    self.dynamic_ubuf_object_descriptor_sets[self
+                                        .dynamic_ubuf_object_descriptor_set_index_by_buffer_handle
+                                        [&unsafe { &*x.object_uniform_start.source_page.get() }
+                                            .buffer]],
+                                ],
+                                &[0, x.object_uniform_start.offset as _],
+                            )
+                            .bind_vertex_buffer_array(
+                                0,
+                                &[unsafe {
+                                    br::VkHandleRef::dangling(
+                                        (&*mesh.vertex_offset.source_page.get()).buffer,
+                                    )
+                                }],
+                                &[mesh.vertex_offset.offset],
+                            )
+                            .bind_index_buffer(
+                                br::VkHandleRef::from_raw_ref(
+                                    &unsafe { &*mesh.index_offset.source_page.get() }.buffer,
+                                ),
+                                mesh.index_offset.offset as _,
+                                match mesh.index_type {
+                                    IndexType::U16 => br::IndexType::U16,
+                                    IndexType::U32 => br::IndexType::U32,
+                                },
+                            );
+                        for sub in mesh.sub_mesh_ranges.iter() {
+                            r = r.draw_indexed(sub.end - sub.start, 1, sub.start, 0, 0);
+                        }
+                    }
+
+                    r
+                })
                 .bind_pipeline(
                     br::PipelineBindPoint::Graphics,
                     br::VkHandleRef::from_raw_ref(unsafe { self.grid_pipeline.assume_init_ref() }),

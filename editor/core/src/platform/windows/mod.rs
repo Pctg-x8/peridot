@@ -910,11 +910,25 @@ impl WindowEventHandler {
             v if v == VK_RETURN.0 as _ => KeyInputCode::Enter,
             v if v == VK_DELETE.0 as _ => KeyInputCode::Delete,
             v if v == VK_BACK.0 as _ => KeyInputCode::Backspace,
+            v if v == VK_LSHIFT.0 as _ => KeyInputCode::LeftShift,
+            v if v == VK_RSHIFT.0 as _ => KeyInputCode::RightShift,
+            v if v == VK_LCONTROL.0 as _ => KeyInputCode::LeftControl,
+            v if v == VK_RCONTROL.0 as _ => KeyInputCode::RightControl,
+            v if v == VK_LMENU.0 as _ => KeyInputCode::LeftAlt,
+            v if v == VK_RMENU.0 as _ => KeyInputCode::RightAlt,
+            v if v == VK_LWIN.0 as _ => KeyInputCode::LeftSuper,
+            v if v == VK_RWIN.0 as _ => KeyInputCode::RightSuper,
+            // 左右判定のないキーコード いったんLeft扱い
+            v if v == VK_SHIFT.0 as _ => KeyInputCode::LeftShift,
+            v if v == VK_CONTROL.0 as _ => KeyInputCode::LeftControl,
+            v if v == VK_MENU.0 as _ => KeyInputCode::LeftAlt,
+            // character
             v if (VK_0.0 as usize <= v && v <= VK_9.0 as usize)
                 || (VK_A.0 as usize <= v && v <= VK_Z.0 as usize) =>
             {
                 KeyInputCode::Character(v as u8 as _)
             }
+            // fallback
             _ => KeyInputCode::UnknownNativeCode(code as _),
         }
     }
