@@ -1,6 +1,7 @@
 use core::num::NonZeroUsize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    num::NonZero,
     sync::{Mutex, atomic::AtomicBool},
 };
 
@@ -1027,7 +1028,7 @@ impl<'main> RenderThread<'main> {
                     .expect("queue submit");
             }
 
-            crate::perf_wrap!(WAIT_QUEUE; { render_queue.wait().expect("render_queue.wait"); });
+            crate::perf_wrap!(WAIT_QUEUE, render_queue.wait().expect("render_queue.wait"));
             crate::perf_end!(perf);
 
             if !present_parameters.is_empty() {
@@ -1076,7 +1077,7 @@ impl<'main> RenderThread<'main> {
                 }
             }
 
-            crate::perf_wrap!(WAIT_QUEUE; { render_queue.wait().expect("render_queue.wait"); });
+            crate::perf_wrap!(WAIT_QUEUE, render_queue.wait().expect("render_queue.wait"));
 
             #[cfg(windows)]
             crate::perf_begin!(perf = WIN32_DX_PRESENT);
@@ -3819,10 +3820,345 @@ impl PreviewScratchStagingBuffer {
     }
 }
 
+/// # Examples
+///
+/// ```
+/// assert_eq!(most_top_bit_pos_u64(0), 0);
+/// assert_eq!(most_top_bit_pos_u64(64), 6);
+/// assert_eq!(most_top_bit_pos_u64(128), 7);
+/// ```
+const fn most_top_bit_pos_u64(v: u64) -> u32 {
+    64 - v.leading_zeros() - 1
+}
+
+/// # Examples
+///
+/// ```
+/// assert_eq!(lowest_bit_pos_u64(1), 0);
+/// assert_eq!(lowest_bit_pos_u64(5), 0);
+/// assert_eq!(lowest_bit_pos_u64(10), 1);
+/// assert_eq!(lowest_bit_pos_u64(0x24), 2);
+/// ```
+const fn lowest_bit_pos_u16(v: u16) -> u8 {
+    v.trailing_zeros() as _
+}
+
+const fn find_lowest_bit_pos_from_u16(v: u16, bitpos: u16) -> Option<u8> {
+    match v & (!0 << bitpos) {
+        0 => None,
+        x => Some(lowest_bit_pos_u16(x)),
+    }
+}
+
+enum DynamicBufferBlockState {
+    Free {
+        size: NonZero<br::DeviceSize>,
+        prev_block: br::DeviceSize,
+        prev_free_block: Option<br::DeviceSize>,
+        next_free_block: Option<br::DeviceSize>,
+    },
+    Used {
+        size: NonZero<br::DeviceSize>,
+        prev_block: br::DeviceSize,
+    },
+}
+
+/// 最小アロケーション単位
+const DB_TLSF_ALLOC_GRANULARITY: br::DeviceSize = 64; // float4x4
+/// ページサイズ（一括でDeviceMemory/Bufferとして確保するサイズ）
+const DB_TLSF_PAGE_SIZE: br::DeviceSize = 64 * 1024; // 64kb
+/// 最小アロケーション単位のビット位置
+const DB_TLSF_ALLOC_GRANULARITY_BITS: u32 = 6;
+/// ページサイズのビット位置
+const DB_TLSF_PAGE_SIZE_BIT: u32 = 6 + 10;
+/// Second Levelの分割数のビット位置
+const DB_TLSF_LV2_SUBDIV_BITS: u32 = 4;
+/// Second Levelを抽出するためのビットマスク（大きさにからSecond Levelを抽出するのに使う）
+const DB_TLSF_LV2_MASK: br::DeviceSize = (1 << DB_TLSF_LV2_SUBDIV_BITS) - 1;
+/// First Levelの数
+const DB_TLSF_FL_COUNT: usize = (DB_TLSF_PAGE_SIZE_BIT
+    - DB_TLSF_ALLOC_GRANULARITY_BITS
+    - DB_TLSF_LV2_SUBDIV_BITS
+    + 2/* idx0(2^0 based) + idxlast(entire size of page) */)
+    as usize;
+/// First Level 1段階におけるSecond Levelの数
+const DB_TLSF_SL_PER_FL: usize = 1 << DB_TLSF_LV2_SUBDIV_BITS;
+/// First Level 0におくサイズの最大値
+const DB_TLSF_FL0_MAX_SIZE: br::DeviceSize =
+    1 << (DB_TLSF_ALLOC_GRANULARITY_BITS + DB_TLSF_LV2_SUBDIV_BITS);
+struct DynamicBufferPage {
+    /// 1で空きあり
+    first_level_freemap: u16,
+    /// 1で空きあり
+    second_level_freemap: [u16; DB_TLSF_FL_COUNT],
+    block_list_headings: [br::DeviceSize; DB_TLSF_FL_COUNT * DB_TLSF_SL_PER_FL],
+    block_states: HashMap<br::DeviceSize, DynamicBufferBlockState>,
+}
+impl DynamicBufferPage {
+    fn new() -> Self {
+        let mut block_states = HashMap::new();
+        block_states.insert(
+            0,
+            DynamicBufferBlockState::Free {
+                size: unsafe { NonZero::new_unchecked(DB_TLSF_PAGE_SIZE) },
+                prev_block: 0, // self
+                next_free_block: None,
+                prev_free_block: None,
+            },
+        );
+        let (first_f, first_s) = Self::mapping(DB_TLSF_PAGE_SIZE);
+        let mut second_level_freemap = [0; DB_TLSF_FL_COUNT];
+        second_level_freemap[first_f as usize] |= 1 << first_s;
+
+        Self {
+            first_level_freemap: 1 << first_f,
+            second_level_freemap,
+            block_list_headings: [0; _],
+            block_states,
+        }
+    }
+
+    /// maps size to (first level index, second level index)
+    const fn mapping(size: br::DeviceSize) -> (u32, u32) {
+        if size < DB_TLSF_FL0_MAX_SIZE {
+            // force level0(2^0..2^(DB_TLSF_ALLOC_GRANULARITY_BIT + DB_TLSF_LV2_SUBDIV_BITS9))
+            return (
+                0,
+                ((size >> DB_TLSF_ALLOC_GRANULARITY_BITS) & DB_TLSF_LV2_MASK) as _,
+            );
+        }
+
+        let f =
+            most_top_bit_pos_u64(size) - DB_TLSF_ALLOC_GRANULARITY_BITS - DB_TLSF_LV2_SUBDIV_BITS
+                + 1;
+        assert!(f >= 1);
+        (
+            f,
+            ((size >> (f - 1 + DB_TLSF_ALLOC_GRANULARITY_BITS)) & DB_TLSF_LV2_MASK) as _,
+        )
+    }
+
+    const fn block_list_index(f: u32, s: u32) -> usize {
+        f as usize * DB_TLSF_SL_PER_FL + s as usize
+    }
+
+    const fn sl_is_fully_occupied(&self, fl: u32) -> bool {
+        self.second_level_freemap[fl as usize] == 0
+    }
+    const fn has_free_block(&self, fl: u32, sl: u32) -> bool {
+        (self.second_level_freemap[fl as usize] & (1 << sl)) != 0
+    }
+    fn mark_free(&mut self, fl: u32, sl: u32) {
+        self.second_level_freemap[fl as usize] |= 1 << sl;
+        self.first_level_freemap |= 1 << fl;
+    }
+    fn mark_no_free(&mut self, fl: u32, sl: u32) {
+        self.second_level_freemap[fl as usize] &= !(1 << sl);
+        if self.sl_is_fully_occupied(fl) {
+            // also first level has no free
+            self.first_level_freemap &= !(1 << fl);
+        }
+    }
+
+    fn find_free_at_least(&self, least_f: u32, least_s: u32) -> Option<(u32, u32)> {
+        if let Some(usable_bit) =
+            find_lowest_bit_pos_from_u16(self.second_level_freemap[least_f as usize], least_s as _)
+        {
+            // available in this first level
+            return Some((least_f, usable_bit as _));
+        }
+
+        // use more upper level
+        let Some(usable_bit) =
+            find_lowest_bit_pos_from_u16(self.first_level_freemap, least_f as u16 + 1)
+        else {
+            tracing::warn!("no usable block");
+            return None;
+        };
+
+        let actual_f = usable_bit as _;
+        assert!(
+            !self.sl_is_fully_occupied(actual_f),
+            "selected first-level could not be used?"
+        );
+        Some((
+            actual_f,
+            lowest_bit_pos_u16(self.second_level_freemap[actual_f as usize]) as _,
+        ))
+    }
+
+    #[tracing::instrument(name = "DynamicBufferPage::try_alloc", skip(self), ret(level = tracing::Level::TRACE))]
+    fn try_alloc(&mut self, size: br::DeviceSize) -> Option<br::DeviceSize> {
+        let size = rup2_u64(size, DB_TLSF_ALLOC_GRANULARITY);
+        assert!(0 < size && size <= DB_TLSF_PAGE_SIZE);
+
+        let (f, s) = Self::mapping(size);
+        tracing::debug!(f, s, "tlsf level");
+        let (f, s) = self.find_free_at_least(f, s)?;
+        tracing::debug!(f, s, "free found");
+
+        let head = self.block_list_headings[Self::block_list_index(f, s)];
+        let Some(DynamicBufferBlockState::Free {
+            size: block_size,
+            prev_block,
+            prev_free_block,
+            next_free_block,
+        }) = self.block_states.remove(&head)
+        else {
+            unreachable!();
+        };
+        // this should be the first
+        assert!(prev_free_block.is_none());
+
+        self.block_states.insert(
+            head,
+            DynamicBufferBlockState::Used {
+                size: unsafe { NonZero::new_unchecked(size) },
+                prev_block,
+            },
+        );
+        if let Some(next) = next_free_block {
+            // move head ptr to next
+            self.block_list_headings[Self::block_list_index(f, s)] = next;
+            let Some(&mut DynamicBufferBlockState::Free {
+                prev_free_block: ref mut next_prev_free_block,
+                ..
+            }) = self.block_states.get_mut(&next)
+            else {
+                unreachable!();
+            };
+            *next_prev_free_block = None;
+        } else {
+            // no free block for this size class
+            self.mark_no_free(f, s);
+        }
+
+        let left_block_size = block_size.get() - size;
+        if left_block_size > 0 {
+            // subdiv needed
+            let (left_f, left_s) = Self::mapping(left_block_size);
+            if !self.has_free_block(left_f, left_s) {
+                // this is first free block
+                self.block_list_headings[Self::block_list_index(left_f, left_s)] = head + size;
+                self.block_states.insert(
+                    head + size,
+                    DynamicBufferBlockState::Free {
+                        size: unsafe { NonZero::new_unchecked(left_block_size) },
+                        prev_block: head,
+                        prev_free_block: None,
+                        next_free_block: None,
+                    },
+                );
+            } else {
+                // connect to head of free list
+                let old_free_head = core::mem::replace(
+                    &mut self.block_list_headings[Self::block_list_index(left_f, left_s)],
+                    head + size,
+                );
+                if old_free_head == head {
+                    // sipmle replacement
+                    self.block_states.insert(
+                        head + size,
+                        DynamicBufferBlockState::Free {
+                            size: unsafe { NonZero::new_unchecked(left_block_size) },
+                            prev_block: head,
+                            prev_free_block: None,
+                            next_free_block,
+                        },
+                    );
+                } else {
+                    // chaining needed
+                    self.block_states.insert(
+                        head + size,
+                        DynamicBufferBlockState::Free {
+                            size: unsafe { NonZero::new_unchecked(left_block_size) },
+                            prev_block: head,
+                            prev_free_block: None,
+                            next_free_block: Some(old_free_head),
+                        },
+                    );
+                    let Some(&mut DynamicBufferBlockState::Free {
+                        prev_free_block: ref mut old_free_prev_free_block,
+                        ..
+                    }) = self.block_states.get_mut(&old_free_head)
+                    else {
+                        unreachable!();
+                    };
+                    assert!(old_free_prev_free_block.is_none());
+                    *old_free_prev_free_block = Some(head + size);
+                }
+            }
+
+            self.mark_free(left_f, left_s);
+        }
+
+        Some(head)
+    }
+}
+
+/// TLSF based dynamic allocatable gpu buffer
+struct DynamicBuffer {
+    page_pools: Vec<DynamicBufferPage>,
+}
+impl DynamicBuffer {
+    fn new() -> Self {
+        Self {
+            page_pools: Vec::new(),
+        }
+    }
+
+    fn alloc(&mut self, size: br::DeviceSize) -> br::DeviceSize {
+        if let Some(found_offs) = self.page_pools.iter_mut().find_map(|x| x.try_alloc(size)) {
+            return found_offs;
+        }
+
+        // allocate new one
+        let mut new_page = DynamicBufferPage::new();
+        let found_offs = unsafe { new_page.try_alloc(size).unwrap_unchecked() };
+        self.page_pools.push(new_page);
+        found_offs
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IndexType {
+    U16,
+    U32,
+}
+
+pub struct CommittedPreviewMeshData {
+    pub vertices: std::sync::Arc<[u8]>,
+    pub vertex_stride: usize,
+    pub indices: std::sync::Arc<[u8]>,
+    pub index_type: IndexType,
+    pub sub_mesh_ranges: std::sync::Arc<[core::range::Range<usize>]>,
+}
+
+pub struct CommittedPreviewRenderData {
+    pub object_to_world: Matrix4F32,
+    pub mesh_id: usize,
+}
+
 pub struct CommittedPreviewState {
     pub viewport_size: Size<LogicalUnit>,
     pub main_camera: peridot_math::Camera,
     pub main_camera_dirtified: bool,
+    pub pushed_meshes: Vec<CommittedPreviewMeshData>,
+    pub dirty_meshes: HashMap<usize, CommittedPreviewMeshData>,
+    pub removed_meshes: HashSet<usize>,
+    pub pushed_render_data: Vec<CommittedPreviewRenderData>,
+    pub dirty_render_data: HashMap<usize, CommittedPreviewRenderData>,
+    pub removed_render_data: HashSet<usize>,
+}
+
+struct PreviewSubMeshData {
+    vertex_range: core::range::Range<br::DeviceSize>,
+    index_range: core::range::Range<br::DeviceSize>,
+}
+
+struct PreviewRenderData {
+    object_uniform_range: core::range::Range<br::DeviceSize>,
+    mesh_id: usize,
 }
 
 pub struct PreviewRenderer {
@@ -3859,6 +4195,10 @@ pub struct PreviewRenderer {
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
+    dynamic_buffer: DynamicBuffer,
+    dynamic_ubuf: DynamicBuffer,
+    user_meshes: Vec<Vec<PreviewSubMeshData>>,
+    user_renders: Vec<PreviewRenderData>,
     valid: bool,
 }
 impl PreviewRenderer {
@@ -4560,12 +4900,26 @@ impl PreviewRenderer {
             update_command_pool,
             update_command_buffer: update_command_buffer.native_ptr(),
             update_command_pending: false,
+            dynamic_buffer: DynamicBuffer::new(),
+            dynamic_ubuf: DynamicBuffer::new(),
+            user_meshes: Vec::new(),
+            user_renders: Vec::new(),
             valid: false,
         }
     }
 
     pub fn update(&mut self, committed_state: &mut CommittedPreviewState) {
         self.scratch_staging.reset();
+
+        for m in committed_state.pushed_meshes.drain(..) {
+            let index_stride = match m.index_type {
+                IndexType::U16 => 2,
+                IndexType::U32 => 4,
+            };
+
+            let vbuf = self.dynamic_buffer.alloc(m.vertices.len() as _);
+            let ibuf = self.dynamic_buffer.alloc(m.indices.len() as _);
+        }
     }
 
     pub fn validate(

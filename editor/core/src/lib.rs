@@ -13,7 +13,7 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,
@@ -37,8 +37,8 @@ use crate::{
         },
     },
     rendering::{
-        CommittedPreviewState, MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender,
-        RenderThread, RendererSync, ShaderTexture, TextureID,
+        CommittedPreviewMeshData, CommittedPreviewState, IndexType, MainThreadTextureIDIssuer,
+        RenderMessage, RenderMessageSender, RenderThread, RendererSync, ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -153,12 +153,14 @@ pub fn launch() {
 
     let preview_state = Mutex::new(CommittedPreviewState {
         viewport_size: Size::new_logical(640.0, 480.0),
-        /*scroll_amount: 0.0,
-        grabbing: false,
-        grab_delta: Point::new_logical(0.0, 0.0),
-        key_input: PreviewKeyInputState::empty(),*/
         main_camera,
         main_camera_dirtified: false,
+        pushed_meshes: Vec::new(),
+        dirty_meshes: HashMap::new(),
+        removed_meshes: HashSet::new(),
+        pushed_render_data: Vec::new(),
+        dirty_render_data: HashMap::new(),
+        removed_render_data: HashSet::new(),
     });
 
     let global_time_base = std::time::Instant::now();
@@ -3403,6 +3405,30 @@ async fn run<'sys>(
         system_link.rt_sender().send(msg).expect("rt_sender.send");
     }
 
+    // initial push test
+    let mut preview_state =
+        crate::perf_wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
+    let mut vbuf_bytes = vec![0u8; size_of::<peridot_math::Vector4F32>() * 8];
+    unsafe {
+        let ph = vbuf_bytes.as_mut_ptr().cast::<peridot_math::Vector4F32>();
+        ph.write(peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0));
+        ph.add(1).write(peridot_math::Vector4(0.5, -0.5, -0.5, 1.0));
+        ph.add(2).write(peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0));
+        ph.add(3).write(peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0));
+        ph.add(4).write(peridot_math::Vector4(0.5, 0.5, -0.5, 1.0));
+        ph.add(5).write(peridot_math::Vector4(0.5, -0.5, 0.5, 1.0));
+        ph.add(6).write(peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0));
+        ph.add(7).write(peridot_math::Vector4(0.5, 0.5, 0.5, 1.0));
+    }
+    preview_state.pushed_meshes.push(CommittedPreviewMeshData {
+        vertices: std::sync::Arc::from(vbuf_bytes),
+        vertex_stride: size_of::<peridot_math::Vector4F32>(),
+        indices: std::sync::Arc::new([0, 1]),
+        index_type: IndexType::U16,
+        sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..8)]),
+    });
+    drop(preview_state);
+
     system_link.prelaunch(main_window);
     crate::perf_end!(perf);
     loop {
@@ -4507,9 +4533,8 @@ async fn run<'sys>(
             }
             Event::Sync(SyncEvent::NewPresentID { id }) => {
                 // vsync update period
-                crate::perf_scope!(perf = LOCK_WAIT);
-                let mut preview_state = committed_preview_state.lock().expect("poisoned");
-                crate::perf_scope!(drop perf);
+                let mut preview_state =
+                    crate::perf_wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
 
                 if let Some(new_viewport_size) = preview_input_state.new_viewport_size.take() {
                     preview_state.viewport_size = new_viewport_size;
@@ -6076,7 +6101,7 @@ pub struct PreviewPanePresenter {
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
-    pub fn new(ctx: &mut ViewInitContext, input_state: *mut PreviewInputState) -> Self {
+    fn new(ctx: &mut ViewInitContext, input_state: *mut PreviewInputState) -> Self {
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ct_root = ctx.composite_tree.create(CompositeRect {
             // has_bitmap: true,
@@ -6091,10 +6116,7 @@ impl PreviewPanePresenter {
             ..Default::default()
         });
 
-        let input_handler = Rc::new(PreviewInputHandler {
-            input_state,
-            main_camera_moving: Cell::new(false),
-        });
+        let input_handler = Rc::new(PreviewInputHandler { input_state });
         ctx.ht_manager.set_action_handler(ht_root, &input_handler);
         ctx.keyboard_focus_registry
             .set_event_handler(kf_token, &input_handler);
@@ -6146,7 +6168,6 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
 
 struct PreviewInputHandler {
     input_state: *mut PreviewInputState,
-    main_camera_moving: Cell<bool>,
 }
 impl HitTestTreeActionHandler for PreviewInputHandler {
     fn on_scroll_wheel(
@@ -6199,7 +6220,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
     }
 }
 impl KeyInputEventHandler for PreviewInputHandler {
-    fn focus_released(&self, context: &mut InputEventContext) {
+    fn focus_released(&self, _context: &mut InputEventContext) {
         unsafe { &mut *self.input_state }.key_input.clear();
     }
 

@@ -699,10 +699,14 @@ macro_rules! perf_scope {
 
 #[macro_export]
 macro_rules! perf_wrap {
-    ($marker: expr; { $($xs: tt)* }) => {{
+    ($marker: expr, { $($xs: tt)* }) => {{
         $crate::perf_scope!($marker);
         $($xs)*
-    }}
+    }};
+    ($marker: expr, $x: expr) => {{
+        $crate::perf_scope!($marker);
+        $x
+    }};
 }
 
 #[macro_export]
