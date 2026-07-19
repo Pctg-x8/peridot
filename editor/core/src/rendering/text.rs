@@ -1952,23 +1952,50 @@ impl TextLayout {
             .iter()
             .map(|l| l.visual_width(font_set))
             .fold(0.0, f32::max);
-    }
 
-    #[cfg(target_os = "macos")]
-    #[inline(always)]
-    pub fn height(&self) -> f32 {
-        if self.frame.lines().len() == 0 {
-            // no lines(empty string)
-            return 0.0;
+        #[cfg(target_os = "macos")]
+        let mut width = 0.0f32;
+        #[cfg(target_os = "macos")]
+        for l in self.frame.lines().iter() {
+            // Note: inline spacingは常に0なので計算しない
+            for r in l.glyph_runs().iter() {
+                // r.attributes().apply_untyped_value(|key, value| {
+                //     tracing::debug!(?key, ?value, "run attribute");
+                // });
+                let font = unsafe {
+                    apple_sdk_port::text::Font::ref_from_untyped_ptr(
+                        r.attributes()
+                            .get_untyped_value(
+                                apple_sdk_port::foundation::AttributedStringKey::font(),
+                            )
+                            .expect("font not set?")
+                            .as_ptr(),
+                    )
+                };
+
+                let glyph_count = r.glyph_count();
+                let positions =
+                    unsafe { core::slice::from_raw_parts(r.positions(), glyph_count as _) };
+                let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
+                font.bounding_rects_for_glyphs(
+                    apple_sdk_port::text::FontOrientation::Horizontal,
+                    unsafe { core::slice::from_raw_parts(r.glyphs_ptr(), glyph_count as _) },
+                    glyph_bounding_rects.spare_capacity_mut(),
+                );
+                unsafe {
+                    glyph_bounding_rects.set_len(glyph_count as _);
+                }
+
+                width = positions
+                    .into_iter()
+                    .zip(glyph_bounding_rects)
+                    .map(|(p, r)| (p.x + r.origin.x) as f32 + (r.size.width as f32).ceil())
+                    .fold(width, |a, b| a.max(b));
+            }
         }
 
-        // TODO: multi-line consideration
-        let mut ascender = core::mem::MaybeUninit::uninit();
-        let mut descender = core::mem::MaybeUninit::uninit();
-        let l = &self.frame.lines()[0];
-        l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
-
-        unsafe { (ascender.assume_init() + descender.assume_init()) as f32 }
+        #[cfg(target_os = "macos")]
+        return width;
     }
 
     pub fn height(&self) -> f32 {
@@ -1985,9 +2012,28 @@ impl TextLayout {
         };
         #[cfg(windows)]
         return unsafe { metrics.assume_init_ref() }.height;
+
+        #[cfg(target_os = "macos")]
+        if self.frame.lines().len() == 0 {
+            // no lines(empty string)
+            return 0.0;
+        }
+
+        // TODO: multi-line consideration
+        #[cfg(target_os = "macos")]
+        let mut ascender = core::mem::MaybeUninit::uninit();
+        #[cfg(target_os = "macos")]
+        let mut descender = core::mem::MaybeUninit::uninit();
+        #[cfg(target_os = "macos")]
+        let l = &self.frame.lines()[0];
+        #[cfg(target_os = "macos")]
+        l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
+
+        #[cfg(target_os = "macos")]
+        return unsafe { (ascender.assume_init() + descender.assume_init()) as f32 };
     }
 
-    #[tracing::instrument(skip(text, font, font_set))]
+    #[tracing::instrument(skip(font_set))]
     pub fn measure_height(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         Self::new(
@@ -2003,7 +2049,7 @@ impl TextLayout {
         .height()
     }
 
-    #[tracing::instrument(skip(text, font, font_set))]
+    #[tracing::instrument(skip(font_set))]
     pub fn measure_cursor_rect(text: &str, font: FontID, font_set: &FontSet) -> Rect<LogicalUnit> {
         // TODO: 最適化はあとで
         let layout = Self::new_single(
@@ -2076,9 +2122,14 @@ impl TextLayout {
                 )
             }
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            unimplemented!()
+        }
     }
 
-    #[tracing::instrument(skip(text, range, font, font_set))]
+    #[tracing::instrument(skip(font_set))]
     pub fn measure_line_rects(
         text: &str,
         range: core::ops::Range<usize>,
@@ -2211,9 +2262,14 @@ impl TextLayout {
                 })
                 .collect();
         }
+
+        #[cfg(target_os = "macos")]
+        {
+            unimplemented!()
+        }
     }
 
-    #[tracing::instrument(skip(text, font, font_set))]
+    #[tracing::instrument(skip(font_set))]
     pub fn measure_visual_width(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         return Self::new(
@@ -2227,56 +2283,9 @@ impl TextLayout {
             None,
         )
         .visual_width(font_set);
-
-        #[cfg(target_os = "macos")]
-        let mut width = 0.0f32;
-        #[cfg(target_os = "macos")]
-        for l in layout.frame.lines().iter() {
-            // Note: inline spacingは常に0なので計算しない
-            for r in l.glyph_runs().iter() {
-                // r.attributes().apply_untyped_value(|key, value| {
-                //     tracing::debug!(?key, ?value, "run attribute");
-                // });
-                let font = unsafe {
-                    apple_sdk_port::text::Font::ref_from_untyped_ptr(
-                        r.attributes()
-                            .get_untyped_value(
-                                apple_sdk_port::foundation::AttributedStringKey::font(),
-                            )
-                            .expect("font not set?")
-                            .as_ptr(),
-                    )
-                };
-
-                let glyph_count = r.glyph_count();
-                let positions =
-                    unsafe { core::slice::from_raw_parts(r.positions(), glyph_count as _) };
-                let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
-                font.bounding_rects_for_glyphs(
-                    apple_sdk_port::text::FontOrientation::Horizontal,
-                    unsafe { core::slice::from_raw_parts(r.glyphs_ptr(), glyph_count as _) },
-                    glyph_bounding_rects.spare_capacity_mut(),
-                );
-                unsafe {
-                    glyph_bounding_rects.set_len(glyph_count as _);
-                }
-
-                width = positions
-                    .into_iter()
-                    .zip(glyph_bounding_rects)
-                    .map(|(p, r)| {
-                        (p.x + r.origin.x) as f32 * render_scale
-                            + (r.size.width as f32 * render_scale).ceil()
-                    })
-                    .fold(width, |a, b| a.max(b));
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        return width;
     }
 
-    #[tracing::instrument(skip(text, font, font_set))]
+    #[tracing::instrument(skip(font_set))]
     pub fn measure_total_advances(text: &str, font: FontID, font_set: &FontSet) -> f32 {
         // TODO: 最適化はあとで
         let layout = Self::new(
@@ -2334,10 +2343,7 @@ impl TextLayout {
                 line_left_cursor = positions
                     .into_iter()
                     .zip(glyph_bounding_rects)
-                    .map(|(p, b)| {
-                        (p.x + b.origin.x) as f32 * render_scale
-                            + (b.size.width as f32 * render_scale).ceil()
-                    })
+                    .map(|(p, b)| (p.x + b.origin.x) as f32 + (b.size.width as f32).ceil())
                     .fold(line_left_cursor, |a, b| a.max(b));
             }
 
@@ -2360,7 +2366,7 @@ impl TextLayout {
         return unsafe { metrics.assume_init_ref() }.widthIncludingTrailingWhitespace;
     }
 
-    #[tracing::instrument(skip(x, y, text, font, font_set))]
+    #[tracing::instrument(skip(font_set))]
     pub fn find_nearest_bytes(
         x: f32,
         y: f32,
@@ -2531,10 +2537,9 @@ impl TextLayout {
             return 0;
         }
         #[cfg(target_os = "macos")]
-        match layout.frame.lines()[0].string_index_for_position(apple_sdk_port::raw::CGPoint {
-            x: (x / render_scale) as _,
-            y: 0.0,
-        }) {
+        match layout.frame.lines()[0]
+            .string_index_for_position(apple_sdk_port::raw::CGPoint { x: x as _, y: 0.0 })
+        {
             Some(x) => text.chars().take(x as _).map(|x| x.len_utf8()).sum(),
             None => text.len() - 1,
         }

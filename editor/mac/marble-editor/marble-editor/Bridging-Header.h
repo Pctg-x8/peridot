@@ -14,11 +14,14 @@ typedef struct {
     void (*onResize)(void* callerContext, WindowLink window, double width, double height);
     void (*onPointerDown)(void* callerContext, WindowLink window, double x, double y, uint8_t button);
     void (*onPointerMove)(void* callerContext, WindowLink window, double x, double y);
+    void (*onPointerDeltaMove)(void* callerContext, WindowLink window, double x, double y);
     void (*onPointerUp)(void* callerContext, WindowLink window, uint8_t button);
     void (*onKeyDown)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags);
     void (*onKeyDownWithChar)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags, uint32_t ch);
     void (*onKeyUp)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags);
+    void (*onKeyUpWithChar)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags, uint32_t ch);
     void (*onKeyFocusStateChanged)(void* callerContext, WindowLink window, uint8_t focused);
+    void (*onScrollWheel)(void* callerContext, WindowLink window, uint32_t modifierFlags, double amount);
 } WindowLinkCallbacks;
 
 typedef struct ContextMenuSurface_* ContextMenuSurface;

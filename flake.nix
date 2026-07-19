@@ -2,7 +2,7 @@
   description = "Peridot devenv";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
   };
   outputs =
     { nixpkgs, ... }:
@@ -53,7 +53,7 @@
         pkgs.vulkan-validation-layers
       ];
       native-deps = pkgs: [ pkgs.pkg-config ];
-      shell-set-common-env-vars = ''
+      shell-set-common-env-vars = pkgs: ''
         export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
         # set library search paths for thirdparty
         export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/source-repo/build:${pkgs.vulkan-loader.outPath}/lib
@@ -79,6 +79,11 @@
               ]
             else
               [ ];
+          platform-extra-setup-script = if system == "aarch64-darwin" then
+            ''
+              echo "export PATH=${pkgs.rustup.outPath}/bin:\$PATH" > editor/mac/marble-editor/.build.envrc
+            ''
+          else "";
           LIBCLANG_PATH = libclang-path pkgs;
 
           fishPrehook = pkgs.writeScriptBin "startup" ''
@@ -98,7 +103,10 @@
             default = pkgs.mkShell {
               buildInputs = common-deps pkgs ++ platform-deps;
               nativeBuildInputs = native-deps pkgs;
-              shellHook = shell-set-common-env-vars;
+              shellHook = ''
+                ${shell-set-common-env-vars pkgs}
+                ${platform-extra-setup-script}
+              '';
 
               # このへんはないとエラーになる
               inherit LIBCLANG_PATH;
@@ -107,7 +115,8 @@
               buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
               nativeBuildInputs = native-deps pkgs;
               shellHook = ''
-                ${shell-set-common-env-vars}
+                ${shell-set-common-env-vars pkgs}
+                ${platform-extra-setup-script}
 
                 exec ${pkgs.fish.outPath}/bin/fish -C "source ${fishPrehook}/bin/startup"
               '';

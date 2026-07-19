@@ -249,6 +249,13 @@ impl PointerInputManager {
                 ));
                 #[cfg(feature = "wayland")]
                 pointer.acquire_lock_on_surface();
+                #[cfg(target_os = "macos")]
+                match surface {
+                    NativeDesktopSurface::Window(w) => w.lock_cursor(),
+                    NativeDesktopSurface::ContextMenu(_) => {
+                        unimplemented!("flyout cannot take grab")
+                    }
+                }
             }
             if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                 break;
@@ -319,7 +326,7 @@ impl PointerInputManager {
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         action_args: &PointerButtonActionArgs,
-        surface: &NativeDesktopSurface,
+        surface: NativeDesktopSurface,
         pointer: PointerID,
     ) {
         self.down_gesture = PointerDownGestureState::Drag;
@@ -374,6 +381,13 @@ impl PointerInputManager {
                         };
                         #[cfg(feature = "wayland")]
                         pointer.acquire_lock_on_surface();
+                        #[cfg(target_os = "macos")]
+                        match surface {
+                            NativeDesktopSurface::Window(w) => w.lock_cursor(),
+                            NativeDesktopSurface::ContextMenu(_) => {
+                                unimplemented!("flyout cannot take grab")
+                            }
+                        }
                     }
                     if flags.contains(EventContinueControl::STOP_PROPAGATION) {
                         break;
@@ -385,7 +399,7 @@ impl PointerInputManager {
 
     fn end_drag(
         &mut self,
-        sh: &(impl ShellPointerActions + ?Sized),
+        surface: NativeDesktopSurface,
         ht: &HitTestTreeManager,
         ht_root: HitTestTreeRef,
         action_context: &mut InputEventContext,
@@ -412,9 +426,16 @@ impl PointerInputManager {
                     });
 
                 if flags.releasing_capture() {
-                    sh.release_pointer();
+                    surface.release_pointer();
                     #[cfg(feature = "wayland")]
                     pointer_id.release_lock();
+                    #[cfg(target_os = "macos")]
+                    match surface {
+                        NativeDesktopSurface::Window(w) => w.unlock_cursor(),
+                        NativeDesktopSurface::ContextMenu(_) => {
+                            unimplemented!("flyout cannot take grab")
+                        }
+                    }
 
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
@@ -429,7 +450,7 @@ impl PointerInputManager {
                     });
 
                 if flags.releasing_capture() {
-                    sh.release_pointer();
+                    surface.release_pointer();
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 needs_recompute_pointer_enter = flags.needs_recompute_pointer_enter();
@@ -444,7 +465,7 @@ impl PointerInputManager {
 
                     let flags = a.on_drag_end(ht_ref, action_context, &args);
                     if flags.releasing_capture() {
-                        sh.release_pointer();
+                        surface.release_pointer();
                         capture_released = true;
                     }
                     if flags.needs_recompute_pointer_enter() {
@@ -619,7 +640,7 @@ impl PointerInputManager {
                     client_pos,
                     client_size: ws,
                 },
-                &surface,
+                surface,
                 pointer_id,
             );
         }
@@ -650,11 +671,12 @@ impl PointerInputManager {
                         delta: Point::new_logical(client_pos.x - pos.x, client_pos.y - pos.y),
                     };
 
+                    tracing::debug!(?args.delta, "[grb] delta move");
                     let _ = h.grab_delta_move(target, action_context, &args);
                 }
 
                 // grab中の場合はポインタ位置をとどまらせる(Windowsのみ 他はcompositorがやってくれる)
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "macos"))]
                 self.last_client_pointer_pos
                     .insert(pointer_id, (surface, pos));
                 #[cfg(windows)]
@@ -893,7 +915,7 @@ impl PointerInputManager {
         if self.down_gesture.is_dragging() {
             // ドラッグ状態だった
             self.end_drag(
-                &entering_surface,
+                entering_surface,
                 ht,
                 ht_root,
                 action_context,
@@ -924,6 +946,13 @@ impl PointerInputManager {
                     entering_surface.release_pointer();
                     #[cfg(feature = "wayland")]
                     pointer_id.release_lock();
+                    #[cfg(target_os = "macos")]
+                    match entering_surface {
+                        NativeDesktopSurface::Window(w) => w.unlock_cursor(),
+                        NativeDesktopSurface::ContextMenu(_) => {
+                            unimplemented!("flyout cannot take grab")
+                        }
+                    }
 
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }

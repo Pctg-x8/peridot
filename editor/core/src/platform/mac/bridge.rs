@@ -28,6 +28,8 @@ pub struct WindowLinkCallbacks {
     ),
     pub on_pointer_move:
         extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, x: f64, y: f64),
+    pub on_pointer_delta_move:
+        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, x: f64, y: f64),
     pub on_pointer_up:
         extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, button: MouseButton),
     pub on_key_down: extern "C" fn(
@@ -49,8 +51,21 @@ pub struct WindowLinkCallbacks {
         code: u16,
         modifier_flags: u32,
     ),
+    pub on_key_up_with_char: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        code: u16,
+        modifier_flags: u32,
+        char: u32,
+    ),
     pub on_key_focus_state_changed:
         extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, focused: u8),
+    pub on_scroll_wheel: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        modifier_flags: u32,
+        amount: f64,
+    ),
 }
 
 #[repr(C)]
@@ -289,6 +304,7 @@ pub enum CursorShape {
     Pointer = 1,
     IBeam = 2,
     ResizeHorizontal = 3,
+    ResizeVertical = 4,
 }
 
 #[repr(u8)]
@@ -329,7 +345,11 @@ unsafe extern "C" {
         x: *mut c_double,
         y: *mut c_double,
     );
+    pub fn ni_lock_cursor();
+    pub fn ni_unlock_cursor();
     pub fn ni_set_cursor_shape(shape: u8);
+
+    pub fn ni_begin_drag(window_link: *mut WindowLink);
 
     pub fn ni_accepts_key_inputs_to_view(
         window_link: *mut WindowLink,
@@ -347,6 +367,7 @@ unsafe extern "C" {
     pub fn ni_move_drag_preview(x: c_double, y: c_double);
 
     pub fn ni_query_filesystem_cachedir_path() -> *const c_char;
+    pub fn ni_query_filesystem_persist_statedir_path() -> *const c_char;
 
     pub fn ni_degreade_thread_priroity_temporarily() -> *mut c_void;
     pub fn ni_restore_thread_priority(context_ptr: *mut c_void);

@@ -145,6 +145,7 @@
 			inputFileListPaths = (
 			);
 			inputPaths = (
+				"$(PROJECT_DIR)/.build.envrc",
 			);
 			name = "Build Rust";
 			outputFileListPaths = (
@@ -153,8 +154,8 @@
 				"$(PROJECT_DIR)/../target/debug/libperidot_marble_editor.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n\ncd \"$PROJECT_DIR\"/..\n~/.cargo/bin/cargo build\n";
+			shellPath = /bin/bash;
+			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n\nsource $PROJECT_DIR/.build.envrc\n\ncd \"$PROJECT_DIR\"/..\ncargo build\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

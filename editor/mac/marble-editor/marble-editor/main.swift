@@ -9,6 +9,7 @@ app.delegate = delegate
 let logger = Logger()
 
 let filesystemCacheDir = URL.cachesDirectory.path.utf8CString
+let filesystemPersistStateDir = URL.applicationSupportDirectory.path.utf8CString
 
 let menu = NSMenu()
 let appMenu = NSMenu(title: "Peridot Marble Editor")
@@ -55,6 +56,7 @@ enum CursorShape {
     static let Pointer: UInt8 = 1
     static let IBeam: UInt8 = 2
     static let ResizeHorizontal: UInt8 = 3
+    static let ResizeVertical: UInt8 = 4
 }
 
 @_cdecl("ni_set_cursor_shape")
@@ -67,9 +69,11 @@ func setCursorShape(shape: UInt8) {
     case CursorShape.IBeam:
         NSCursor.iBeam.set()
     case CursorShape.ResizeHorizontal:
+        NSCursor.columnResize.set()
+    case CursorShape.ResizeVertical:
         NSCursor.rowResize.set()
     default:
-        NSLog("[PeridotMarbleEditor:Warn] invalid CursorShape value: \(shape)")
+        logger.warning("invalid CursorShape value: \(shape)")
         break
     }
 }
@@ -77,6 +81,11 @@ func setCursorShape(shape: UInt8) {
 @_cdecl("ni_query_filesystem_cachedir_path")
 func queryFilesystemCachedirPath() -> UnsafePointer<CChar> {
     filesystemCacheDir.withUnsafeBufferPointer { $0.baseAddress! }
+}
+
+@_cdecl("ni_query_filesystem_persist_statedir_path")
+func queryFilesystemPersistStateDirPath() -> UnsafePointer<CChar> {
+    filesystemPersistStateDir.withUnsafeBufferPointer { $0.baseAddress! }
 }
 
 final class ThreadPriorityContext {

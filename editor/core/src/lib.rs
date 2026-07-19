@@ -316,7 +316,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 delayed_action_timer,
             },
             #[cfg(target_os = "macos")]
-            flyout_surface_context: platform::mac::context_menu::SharedState {
+            flyout_surface_context: platform::mac::flyout_surface::SharedState {
                 event_dispatcher: app_event_dispatcher.as_mut().get_mut()
             },
         },
@@ -1989,6 +1989,7 @@ impl ColorPickerHexTextInputView {
         rect: Rect<LogicalUnit>,
         parent_view_handler: &std::rc::Weak<ColorPickerEventHandler>,
     ) -> Self {
+        let view_id = ctx.view_registry.alloc();
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let raw = uikit::RawTextInputView::new(
             ctx,
@@ -1996,11 +1997,12 @@ impl ColorPickerHexTextInputView {
             "00000000".into(),
             kf_token,
             uikit::RawTextInputViewCreateFlags::NON_DELEGATED_HT,
+            view_id,
         );
         let eh = Rc::new(ColorPickerHexTextInputEventHandler {
             value: Cell::new(0),
             raw,
-            id: ctx.view_registry.alloc(),
+            id: view_id,
             token: kf_token,
             parent_view_handler: parent_view_handler.clone(),
         });
@@ -2047,14 +2049,14 @@ impl ViewEventHandler for ColorPickerHexTextInputEventHandler {
 impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.set_focus_lazy();
+        self.raw.set_focus_lazy(context.ht_manager);
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.id });
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
-        self.raw.release_focus_lazy();
+        self.raw.release_focus_lazy(context.ht_manager);
         self.confirm_direct_input(context.system_link, context.composite_tree);
     }
 
@@ -3269,6 +3271,7 @@ async fn run<'sys>(
         } else {
             0.0
         };
+    let main_window_size = main_window.client_size();
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
         header: window_header_view,
@@ -3279,7 +3282,10 @@ async fn run<'sys>(
             &mut view_init_ctx,
             Rect::from_lt_size(
                 Point::new_logical(0.0, dock_top_offset),
-                Size::new_logical(320.0, 256.0),
+                Size::new_logical(
+                    main_window_size.width,
+                    main_window_size.height - dock_top_offset - ui::window_footer::View::THICKNESS,
+                ),
             ),
             &mut dock_store,
             |view_init_ctx, store| {
@@ -3732,8 +3738,8 @@ async fn run<'sys>(
                 pointer_id,
                 button,
             } => {
-                #[cfg(target_os = "macos")]
-                drag_preview_popover.bind_position_base_window_link(window);
+                // #[cfg(target_os = "macos")]
+                // drag_preview_popover.bind_position_base_window_link(window);
 
                 if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu {
                     a.on_close_all(
@@ -3742,46 +3748,40 @@ async fn run<'sys>(
                     );
                 }
 
-                if !system_link.any_pointer_on_context_menu() {
-                    if let Some(c) = current_active_menu_session.take() {
-                        if let Some(ref a) =
-                            unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
-                        {
-                            a.on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
-                        }
-
-                        c.terminate(
-                            &system_link,
+                if let Some(c) = current_active_menu_session.take() {
+                    if let Some(ref a) =
+                        unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
+                    {
+                        a.on_close_all(
                             &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
+                            global_time_base.elapsed().as_secs_f32(),
                         );
                     }
+
+                    c.terminate(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
                 }
 
-                if !system_link.any_pointer_on_dropdown_menu() {
-                    if let Some(mut c) = current_active_dropdown_menu_session.take() {
-                        c.close_all(
-                            &system_link,
-                            &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
-                        );
-                    }
+                if let Some(mut c) = current_active_dropdown_menu_session.take() {
+                    c.close_all(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
                 }
 
-                if !system_link.any_pointer_on_dropdown_menu() {
-                    if let Some(c) = custom_view_flyout_session.take() {
-                        c.terminate(
-                            &system_link,
-                            &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
-                        );
-                    }
+                if let Some(c) = custom_view_flyout_session.take() {
+                    c.terminate(
+                        &system_link,
+                        &mut composite_tree,
+                        &mut ht_manager,
+                        &mut keyboard_focus_registry,
+                    );
                 }
 
                 pointer_input_manager.handle_mouse_down(
@@ -5117,7 +5117,7 @@ impl MenuSession {
         common_res: &MenuItemCommonResources,
     ) -> Self {
         #[cfg(target_os = "macos")]
-        system_link.context_menu.observe_global_click();
+        system_link.flyout_surface_context.observe_global_click();
 
         let (root_surface, base_event_handler, item_views) = system_link.pop_context_menu(
             parent,
@@ -5334,7 +5334,7 @@ impl MenuSession {
         }
 
         #[cfg(target_os = "macos")]
-        system_link.context_menu.unobserve_global_click();
+        system_link.flyout_surface_context.unobserve_global_click();
     }
 
     pub fn select_item(
@@ -5407,7 +5407,7 @@ pub struct SystemLink<'sys> {
     #[cfg(feature = "wayland")]
     pub flyout_surface_context: platform::unix::wayland::flyout_surface::SharedState,
     #[cfg(target_os = "macos")]
-    pub context_menu: platform::mac::context_menu::SharedState,
+    pub flyout_surface_context: platform::mac::flyout_surface::SharedState,
 }
 #[cfg(not(windows))]
 impl SystemLink<'_> {
@@ -5509,26 +5509,20 @@ pub enum WindowType {
 }
 
 #[cfg(target_os = "macos")]
-pub type PointerID = platform::mac::PointerID;
-
-#[cfg(target_os = "macos")]
-pub type DragPreviewPopoverHandle = platform::mac::DragPreviewPopoverHandle;
-
-#[cfg(windows)]
-pub use platform::windows::{
-    PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
+pub use platform::mac::{
+    DragPreviewPopoverHandle, PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
     flyout_surface::Handle as FlyoutSurfaceHandle,
 };
-#[cfg(target_os = "macos")]
-pub type WindowHandle = platform::mac::WindowHandle;
 #[cfg(feature = "wayland")]
 pub use platform::unix::wayland::{
     FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle,
     WindowPersistentStateNativeGeometryUnit,
 };
-
-#[cfg(target_os = "macos")]
-pub type FlyoutSurfaceHandle = platform::mac::context_menu::Handle;
+#[cfg(windows)]
+pub use platform::windows::{
+    PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
+    flyout_surface::Handle as FlyoutSurfaceHandle,
+};
 
 crate::perf_section!(SYNC_EVENT_BUS_PUSH = "SyncEventBus.Push");
 
@@ -6070,6 +6064,15 @@ impl FileSystem {
             .expect("fs.cache_base_path.invalid_str")
         })
         .join("peridot/.editor");
+        #[cfg(target_os = "macos")]
+        let persist_state_base_path = PathBuf::from(unsafe {
+            core::ffi::CStr::from_ptr(
+                crate::platform::mac::bridge::ni_query_filesystem_persist_statedir_path(),
+            )
+            .to_str()
+            .expect("fs,persist_state_base_path.invalid_str")
+        })
+        .join("peridot/.editor");
 
         #[cfg(target_os = "linux")]
         let persist_state_base_path = 'persist_state_base_path: {
@@ -6356,7 +6359,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         _context: &mut InputEventContext,
         args: &input::hittest::GrabDeltaMoveActionArgs,
     ) -> EventContinueControl {
-        let mut st = unsafe { &mut *self.input_state };
+        let st = unsafe { &mut *self.input_state };
         st.grab_delta.x += args.delta.x;
         st.grab_delta.y += args.delta.y;
 

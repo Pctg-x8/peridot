@@ -6,6 +6,10 @@ final class WindowLink : NSWindow {
     private var callbacks: CallbackSet? = nil
     let mainView = MainView()
     
+    static func fromBorrowedPtr(_ ptr: UnsafeMutableRawPointer) -> WindowLink {
+        Unmanaged<WindowLink>.fromOpaque(ptr).takeUnretainedValue()
+    }
+    
     init(_ flags: CreationFlags) {
         let styleMask: StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         
@@ -67,56 +71,31 @@ final class WindowLink : NSWindow {
         self.makeFirstResponder(nil)
     }
     
-    override func mouseDown(with event: NSEvent) {
-        let p = event.locationInWindow
-        self.callbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonLeft)
-    }
-    
-    override func rightMouseDown(with event: NSEvent) {
-        let p = event.locationInWindow
-        self.callbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonRight)
-    }
-    
-    override func mouseMoved(with event: NSEvent) {
-        let p = event.locationInWindow
-        self.callbacks?.notifyPointerMove(Double(p.x), Double(self.frame.height - p.y))
-    }
-    
-    override func mouseDragged(with event: NSEvent) {
-        let p = event.locationInWindow
-        self.callbacks?.notifyPointerMove(Double(p.x), Double(self.frame.height - p.y))
-    }
-    
-    override func mouseUp(with event: NSEvent) {
-        if event.clickCount == 2 && isOnTitleBar(event.locationInWindow) {
-            self.performZoom(self)
-            return
-        }
-        
-        self.callbacks?.notifyPointerUp(MouseButtonLeft)
-    }
-    
-    override func rightMouseUp(with event: NSEvent) {
-        self.callbacks?.notifyPointerUp(MouseButtonRight)
-    }
-    
     override func keyDown(with event: NSEvent) {
         if let characters = event.characters {
             if characters.unicodeScalars.count > 1 {
                 logger.warning("multiple unicode codepoint contained in keydown event: \(characters)")
             }
         
-            self.callbacks?.notifyKeyDownWithChar(event.keyCode, event.modifierFlags, characters.unicodeScalars.first!)
+            self.callbacks?.notifyKeyDown(event.keyCode, event.modifierFlags, characters.unicodeScalars.first!)
         } else {
             self.callbacks?.notifyKeyDown(event.keyCode, event.modifierFlags)
         }
     }
     
     override func keyUp(with event: NSEvent) {
-        self.callbacks?.notifyKeyUp(event.keyCode, event.modifierFlags)
+        if let characters = event.characters {
+            if characters.unicodeScalars.count > 1 {
+                logger.warning("multiple unicode codepoint contained in keydown event: \(characters)")
+            }
+        
+            self.callbacks?.notifyKeyUp(event.keyCode, event.modifierFlags, characters.unicodeScalars.first!)
+        } else {
+            self.callbacks?.notifyKeyUp(event.keyCode, event.modifierFlags)
+        }
     }
     
-    private func isOnTitleBar(_ point: NSPoint) -> Bool {
+    func isOnTitleBar(_ point: NSPoint) -> Bool {
         // https://stackoverflow.com/a/61712229
         NSRect(
             x: self.contentLayoutRect.minX,
@@ -179,6 +158,10 @@ final class WindowLink : NSWindow {
             self.funcs.pointee.onPointerMove(self.ctx, self.windowLinkPointer, x, y)
         }
         
+        func notifyPointerDeltaMove(_ x: Double, _ y: Double) {
+            self.funcs.pointee.onPointerDeltaMove(self.ctx, self.windowLinkPointer, x, y)
+        }
+        
         func notifyPointerUp(_ button: UInt8) {
             self.funcs.pointee.onPointerUp(self.ctx, self.windowLinkPointer, button)
         }
@@ -192,7 +175,7 @@ final class WindowLink : NSWindow {
             )
         }
         
-        func notifyKeyDownWithChar(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags, _ ch: Unicode.Scalar) {
+        func notifyKeyDown(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags, _ ch: Unicode.Scalar) {
             self.funcs.pointee.onKeyDownWithChar(
                 self.ctx,
                 self.windowLinkPointer,
@@ -209,6 +192,20 @@ final class WindowLink : NSWindow {
                 code,
                 UInt32(modifierFlags.rawValue)
             )
+        }
+        
+        func notifyKeyUp(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags, _ ch: Unicode.Scalar) {
+            self.funcs.pointee.onKeyUpWithChar(
+                self.ctx,
+                self.windowLinkPointer,
+                code,
+                UInt32(modifierFlags.rawValue),
+                ch.value
+            )
+        }
+        
+        func notifyScrollWheel(_ modifierFlags: NSEvent.ModifierFlags, _ amount: CGFloat) {
+            self.funcs.pointee.onScrollWheel(self.ctx, self.windowLinkPointer, UInt32(modifierFlags.rawValue), amount)
         }
     }
 
@@ -243,10 +240,11 @@ struct TextInputClientForwarding {
     let context: UnsafeMutableRawPointer
 }
 
-final class MainView : NSView, NSTextInputClient {
+final class MainView : NSView, NSTextInputClient, NSDraggingSource {
     var windowLinkCallbacks: WindowLink.CallbackSet? = nil
     var contentsScale: CGFloat = 1.0
     var textInputClientForwarding: TextInputClientForwarding? = nil
+    var lastMouseDownEvent: NSEvent? = nil
     
     func setup() {
         self.wantsLayer = true
@@ -283,6 +281,47 @@ final class MainView : NSView, NSTextInputClient {
         }
     }
     
+    private func processMouseMoveEvents(_ event: NSEvent) {
+        if mouseAndMouseCursorAssociated {
+            let p = event.locationInWindow
+            self.windowLinkCallbacks?.notifyPointerMove(Double(p.x), Double(self.frame.height - p.y))
+        } else {
+            self.windowLinkCallbacks?.notifyPointerDeltaMove(Double(event.deltaX), Double(event.deltaY))
+        }
+    }
+    
+    override func mouseDown(with event: NSEvent) {
+        self.lastMouseDownEvent = event
+        let p = event.locationInWindow
+        self.windowLinkCallbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonLeft)
+    }
+    
+    override func rightMouseDown(with event: NSEvent) {
+        let p = event.locationInWindow
+        self.windowLinkCallbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonRight)
+    }
+    
+    override func mouseMoved(with event: NSEvent) {
+        self.processMouseMoveEvents(event)
+    }
+    
+    override func mouseDragged(with event: NSEvent) {
+        self.processMouseMoveEvents(event)
+    }
+    
+    override func mouseUp(with event: NSEvent) {
+        if event.clickCount == 2 && (self.window! as! WindowLink).isOnTitleBar(event.locationInWindow) {
+            self.window!.performZoom(self)
+            return
+        }
+        
+        self.windowLinkCallbacks?.notifyPointerUp(MouseButtonLeft)
+    }
+    
+    override func rightMouseUp(with event: NSEvent) {
+        self.windowLinkCallbacks?.notifyPointerUp(MouseButtonRight)
+    }
+    
     override func keyDown(with event: NSEvent) {
         if self.textInputClientForwarding == nil {
             // no text input context available
@@ -291,6 +330,10 @@ final class MainView : NSView, NSTextInputClient {
         }
         
         self.inputContext!.handleEvent(event)
+    }
+    
+    override func scrollWheel(with event: NSEvent) {
+        self.windowLinkCallbacks?.notifyScrollWheel(event.modifierFlags, event.scrollingDeltaY)
     }
     
     // NSTextInputClient
@@ -493,37 +536,47 @@ final class MainView : NSView, NSTextInputClient {
     }
     
     override func moveRight(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSRightArrowFunctionKey)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSRightArrowFunctionKey)!)
     }
     
     override func moveLeft(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSLeftArrowFunctionKey)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSLeftArrowFunctionKey)!)
     }
     
     override func scrollToBeginningOfDocument(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSHomeFunctionKey)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSHomeFunctionKey)!)
     }
     
     override func scrollToEndOfDocument(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSEndFunctionKey)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSEndFunctionKey)!)
     }
     
     override func deleteBackward(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSBackspaceCharacter)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSBackspaceCharacter)!)
     }
     
     override func deleteForward(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSDeleteFunctionKey)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSDeleteFunctionKey)!)
     }
     
     override func moveRightAndModifySelection(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, .shift, Unicode.Scalar(NSRightArrowFunctionKey)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, .shift, Unicode.Scalar(NSRightArrowFunctionKey)!)
     }
     
     override func moveLeftAndModifySelection(_ sender: Any?) {
-        self.windowLinkCallbacks?.notifyKeyDownWithChar(0, .shift, Unicode.Scalar(NSLeftArrowFunctionKey)!)
+        self.windowLinkCallbacks?.notifyKeyDown(0, .shift, Unicode.Scalar(NSLeftArrowFunctionKey)!)
+    }
+    
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        return .move
+    }
+    
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        logger.log("dragging ended")
     }
 }
+
+var mouseAndMouseCursorAssociated = true
 
 @_cdecl("ni_create_window")
 func createWindow(flags: UInt32) -> UnsafeMutableRawPointer {
@@ -618,4 +671,23 @@ func convertPointToScreen(windowLink: UnsafeMutableRawPointer, x: UnsafeMutableP
     x.pointee = result.x
     // こっちは再変換しなくていい（よくわからん）
     y.pointee = result.y
+}
+
+@_cdecl("ni_lock_cursor")
+func lockCursor() {
+    CGAssociateMouseAndMouseCursorPosition(0)
+    mouseAndMouseCursorAssociated = false
+}
+
+@_cdecl("ni_unlock_cursor")
+func unlockCursor() {
+    CGAssociateMouseAndMouseCursorPosition(1)
+    mouseAndMouseCursorAssociated = true
+}
+
+@_cdecl("ni_begin_drag")
+func beginDrag(windowLink: UnsafeMutableRawPointer) {
+    let w = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue()
+    
+    w.mainView.beginDraggingSession(with: [], event: w.mainView.lastMouseDownEvent!, source: w.mainView)
 }

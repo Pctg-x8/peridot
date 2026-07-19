@@ -129,7 +129,7 @@ pub const fn range_from_len_u64(from: u64, len: u64) -> core::ops::Range<u64> {
     from..from + len
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 #[inline(always)]
 pub fn is_budou_cluster_char(c: char) -> bool {
     // 一部Commonにあるらしいので特別対応

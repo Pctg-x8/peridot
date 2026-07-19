@@ -14,7 +14,7 @@ use crate::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::{MenuBaseSurfaceEventHandler, MenuItemView, MountTarget},
+    uikit::{MenuBaseSurfaceEventHandler, MenuItemSubMenuView, MenuItemView, MountTarget},
     utils::{LogicalUnit, PixelsUnit, Point, Size},
 };
 
@@ -69,7 +69,6 @@ impl Handle {
                     ht_root,
                     kf_state: PerWindowKeyboardFocusState::new(kf_root_group),
                     kf_root_group,
-                    views: Vec::new(),
                     spawned_position: surface_pos,
                     size: Size::new_logical(0.0, 0.0),
                     _base_surface_event_handler: base_surface_event_handler,
@@ -85,14 +84,6 @@ impl Handle {
         });
 
         h
-    }
-
-    pub(super) fn set_views(&mut self, views: Vec<MenuItemView>) {
-        unsafe {
-            &mut *super::bridge::ni_context_menu_instance_vars_ptr(self.0.as_ptr())
-                .cast::<InstanceVars>()
-        }
-        .views = views;
     }
 
     pub(super) fn create_render_thread_objects(&self, syslink: &SystemLink) {
@@ -117,10 +108,10 @@ impl Handle {
             .expect("rt_sender.send");
     }
 
-    pub fn close(
+    pub fn close<E>(
         self,
         syslink: &SystemLink,
-        composite_tree: &mut CompositeTree<SyncEvent>,
+        composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
@@ -197,26 +188,12 @@ impl Handle {
         &mut self.instance_vars_mut().kf_state
     }
 
-    #[inline(always)]
-    pub fn view(&self, index: usize) -> Option<&MenuItemView> {
-        self.instance_vars().views.get(index)
-    }
-
-    pub fn submenu_pop_position(&self, index: usize) -> Option<Point<LogicalUnit>> {
+    pub fn submenu_pop_position(&self, view: &MenuItemSubMenuView) -> Point<LogicalUnit> {
         let ivars = self.instance_vars();
+        let base = ivars.spawned_position;
+        let size = ivars.size;
 
-        match ivars.views.get(index)? {
-            MenuItemView::SubMenu(x) => {
-                let base = ivars.spawned_position;
-                let size = ivars.size;
-
-                Some(Point::new_logical(
-                    base.x + size.width,
-                    base.y + x.placement_y,
-                ))
-            }
-            _ => None,
-        }
+        Point::new_logical(base.x + size.width, base.y + view.placement_y)
     }
 
     extern "C" fn pointer_down(
@@ -228,32 +205,29 @@ impl Handle {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
 
         // move then down
-        h.instance_vars()
-            .dispatch_event(Event::ContextMenuPointerMove {
-                pointer_id: super::PointerID(),
-                target: h,
-                client_pos: Point::new_logical(x as _, y as _),
-            });
-        h.instance_vars()
-            .dispatch_event(Event::ContextMenuPointerDown {
-                pointer_id: super::PointerID(),
-                target: h,
-                button: match button {
-                    super::bridge::MouseButton::Left => PointerButton::Primary,
-                    super::bridge::MouseButton::Right => PointerButton::Secondary,
-                },
-            });
+        h.instance_vars().dispatch_event(Event::MenuPointerMove {
+            pointer_id: super::PointerID(),
+            target: h,
+            client_pos: Point::new_logical(x as _, y as _),
+        });
+        h.instance_vars().dispatch_event(Event::MenuPointerDown {
+            pointer_id: super::PointerID(),
+            target: h,
+            button: match button {
+                super::bridge::MouseButton::Left => PointerButton::Primary,
+                super::bridge::MouseButton::Right => PointerButton::Secondary,
+            },
+        });
     }
 
     extern "C" fn pointer_move(sender: *mut super::bridge::ContextMenuSurface, x: f64, y: f64) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
 
-        h.instance_vars()
-            .dispatch_event(Event::ContextMenuPointerMove {
-                pointer_id: super::PointerID(),
-                target: h,
-                client_pos: Point::new_logical(x as _, y as _),
-            });
+        h.instance_vars().dispatch_event(Event::MenuPointerMove {
+            pointer_id: super::PointerID(),
+            target: h,
+            client_pos: Point::new_logical(x as _, y as _),
+        });
     }
 
     extern "C" fn pointer_up(
@@ -262,25 +236,30 @@ impl Handle {
     ) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
 
-        h.instance_vars()
-            .dispatch_event(Event::ContextMenuPointerUp {
-                pointer_id: super::PointerID(),
-                target: h,
-                button: match button {
-                    super::bridge::MouseButton::Left => PointerButton::Primary,
-                    super::bridge::MouseButton::Right => PointerButton::Secondary,
-                },
-            });
+        h.instance_vars().dispatch_event(Event::MenuPointerUp {
+            pointer_id: super::PointerID(),
+            target: h,
+            button: match button {
+                super::bridge::MouseButton::Left => PointerButton::Primary,
+                super::bridge::MouseButton::Right => PointerButton::Secondary,
+            },
+        });
     }
 
     extern "C" fn pointer_leave(sender: *mut super::bridge::ContextMenuSurface) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
 
-        h.instance_vars()
-            .dispatch_event(Event::ContextMenuDeselectItem {
-                depth: h.instance_vars().depth,
-            });
+        h.instance_vars().dispatch_event(Event::MenuDeselectItem {
+            depth: h.instance_vars().depth,
+        });
     }
+}
+impl crate::input::ShellPointerActions for Handle {
+    #[inline(always)]
+    fn capture_pointer(&self) {}
+
+    #[inline(always)]
+    fn release_pointer(&self) {}
 }
 
 struct InstanceVars {
@@ -290,7 +269,6 @@ struct InstanceVars {
     ht_root: HitTestTreeRef,
     kf_state: PerWindowKeyboardFocusState,
     kf_root_group: KeyboardFocusGroupRef,
-    views: Vec<MenuItemView>,
     spawned_position: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
     _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
@@ -308,7 +286,7 @@ impl SharedState {
     pub fn reserve_delayed_action(&self) {
         extern "C" fn cb(ctx: *mut core::ffi::c_void) {
             unsafe { &*ctx.cast::<LogicFiberEventDispatcher>() }
-                .dispatch(Event::ContextMenuPerformDelayedAction);
+                .dispatch(Event::MenuPerformDelayedAction);
         }
 
         unsafe {
@@ -330,8 +308,7 @@ impl SharedState {
         extern "C" fn cb(ctx: *mut core::ffi::c_void, on_context_menu_surface: u8) {
             if on_context_menu_surface == 0 {
                 // コンテキストメニュー以外でクリックが入った
-                unsafe { &*ctx.cast::<LogicFiberEventDispatcher>() }
-                    .dispatch(Event::ContextMenuCloseAll);
+                unsafe { &*ctx.cast::<LogicFiberEventDispatcher>() }.dispatch(Event::MenuCloseAll);
             }
         }
 

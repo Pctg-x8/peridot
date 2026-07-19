@@ -1,9 +1,10 @@
-use std::sync::Mutex;
+use std::{rc::Rc, sync::Mutex};
 
 use bedrock::{InstanceChild, SurfaceCreateInfo};
 
 use crate::{
-    ContextMenuHandle, Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowType,
+    Event, FlyoutSurfaceHandle, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode,
+    SyncEvent, SystemLink, WindowGeometryState, WindowType,
     graphics::VulkanSurface,
     input::{
         KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
@@ -17,12 +18,16 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::{MenuItemLayout, MenuItemView, ViewInitContext},
-    utils::{LogicalUnit, PixelsUnit, Point, Size},
+    uikit::{
+        MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemView, MountTarget, ViewInitContext,
+    },
+    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
 
 pub mod bridge;
-pub mod context_menu;
+pub mod flyout_surface;
+
+pub type WindowPersistentStateNativeGeometryUnit = LogicalUnit;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowHandle(*mut self::bridge::WindowLink);
@@ -85,13 +90,20 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub fn composite_root(&self) -> CompositeTreeRef {
-        self.state().composite_root
+    pub fn latest_ui_scale_changes(&self) -> &Mutex<Option<f32>> {
+        &self.state().latest_ui_scale_changes
     }
 
-    #[inline(always)]
-    pub fn ht_root(&self) -> HitTestTreeRef {
-        self.state().ht_root
+    pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
+        self.state()
+            .swapchain_externally_invalidation_signal
+            .compare_exchange_weak(
+                true,
+                false,
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+            )
+            == Ok(true)
     }
 
     #[inline(always)]
@@ -138,6 +150,14 @@ impl WindowHandle {
         unimplemented!("WindowHandle::on_click_sys_restore_button")
     }
 
+    pub fn is_maximized(&self) -> bool {
+        false
+    }
+
+    pub fn geometry_state_snapshot(&self, syslink: &SystemLink) -> WindowGeometryState {
+        unimplemented!()
+    }
+
     pub fn begin_text_input<T: TextInputClientForwarding>(&self, forwarding: *mut T) {
         unsafe {
             self::bridge::ni_accepts_key_inputs_to_view(
@@ -164,6 +184,20 @@ impl WindowHandle {
 
         drop(unsafe { Box::from_raw(ftable.assume_init().cast_mut()) })
     }
+
+    #[inline(always)]
+    pub fn lock_cursor(&self) {
+        unsafe {
+            self::bridge::ni_lock_cursor();
+        }
+    }
+
+    #[inline(always)]
+    pub fn unlock_cursor(&self) {
+        unsafe {
+            self::bridge::ni_unlock_cursor();
+        }
+    }
 }
 impl crate::input::ShellPointerActions for WindowHandle {
     #[inline(always)]
@@ -171,6 +205,17 @@ impl crate::input::ShellPointerActions for WindowHandle {
 
     #[inline(always)]
     fn release_pointer(&self) {}
+}
+impl crate::uikit::MountTarget for WindowHandle {
+    #[inline(always)]
+    fn ct_root(&self) -> CompositeTreeRef {
+        self.state().composite_root
+    }
+
+    #[inline(always)]
+    fn ht_root(&self) -> HitTestTreeRef {
+        self.state().ht_root
+    }
 }
 
 pub struct DragPreviewPopoverHandle {
@@ -230,11 +275,18 @@ impl DragPreviewPopoverHandle {
 pub struct PointerID();
 
 impl crate::SystemLink<'_> {
+    pub const fn needs_app_menu_in_surface(&self) -> bool {
+        // macOSはfalse固定
+        false
+    }
+
     pub fn create_main_window(
         &self,
+        mode: MainWindowOpenMode,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> WindowHandle {
         let ht_root = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
@@ -260,12 +312,10 @@ impl crate::SystemLink<'_> {
                 .execute((&*self.vk_device).instance(), None)
                 .expect("vk_surface.create")
         });
-        self.rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                key: main_window_handle,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            }))
-            .expect("rt_sender.send");
+        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
+            key: main_window_handle,
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+        }));
 
         main_window_handle
     }
@@ -278,9 +328,11 @@ impl crate::SystemLink<'_> {
 
     pub fn open_window<'h>(
         &self,
+        mode: SubWindowOpenMode,
         composite_tree: &mut CompositeTree<SyncEvent>,
         hit_tree: &mut HitTestTreeManager<'h>,
         keyboard_focus_manager: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         setup_content: impl FnOnce(
             WindowHandle,
             &mut CompositeTree<SyncEvent>,
@@ -329,12 +381,10 @@ impl crate::SystemLink<'_> {
             )
             .expect("vk_surface.create")
         });
-        self.rt_sender
-            .send(RenderMessage::NewWindow(NewWindowData {
-                key: handle,
-                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-            }))
-            .expect("rt_sender.send");
+        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
+            key: handle,
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+        }));
 
         setup_content(
             handle,
@@ -385,6 +435,7 @@ impl crate::SystemLink<'_> {
                 CursorShape::Pointer => self::bridge::CursorShape::Pointer as _,
                 CursorShape::IBeam => self::bridge::CursorShape::IBeam as _,
                 CursorShape::ResizeHorizontal => self::bridge::CursorShape::ResizeHorizontal as _,
+                CursorShape::ResizeVertical => self::bridge::CursorShape::ResizeVertical as _,
             })
         }
     }
@@ -407,6 +458,19 @@ impl crate::SystemLink<'_> {
         }
     }
 
+    pub fn new_flyout_surface<E>(
+        &self,
+        parent: WindowHandle,
+        pos: Point<LogicalUnit>,
+        size: Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        delayed_render_messages: &mut Vec<RenderMessage>,
+    ) -> FlyoutSurfaceHandle {
+        unimplemented!()
+    }
+
     pub fn pop_context_menu(
         &self,
         parent: WindowHandle,
@@ -414,13 +478,18 @@ impl crate::SystemLink<'_> {
         depth: usize,
         surface_pos: Point<LogicalUnit>,
         layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
-            ContextMenuHandle,
+            FlyoutSurfaceHandle,
             &mut ViewInitContext,
         ) -> Vec<MenuItemView>,
-    ) -> ContextMenuHandle {
-        let mut h = ContextMenuHandle::new(
+    ) -> (
+        FlyoutSurfaceHandle,
+        Rc<MenuBaseSurfaceEventHandler>,
+        Vec<MenuItemView>,
+    ) {
+        let mut h = FlyoutSurfaceHandle::new(
             parent,
             depth,
             surface_pos,
@@ -435,11 +504,34 @@ impl crate::SystemLink<'_> {
         let height = MenuItemLayout::height(layouted_items.iter());
         h.resize(Size::new_logical(width.value(), height.value()));
 
+        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
+        view_init_context
+            .ht_manager
+            .set_action_handler(h.ht_root(), &base_surface_event_handler);
         let views = setup_contents(layouted_items, h, view_init_context);
-        h.set_views(views);
 
         h.create_render_thread_objects(self);
-        h
+        (h, base_surface_event_handler, views)
+    }
+
+    pub fn begin_pane_drag(
+        &self,
+        initiator: WindowHandle,
+        pointer: &PointerID,
+        offset: Point<LogicalUnit>,
+        rect: &Rect<LogicalUnit>,
+    ) {
+        unsafe {
+            self::bridge::ni_begin_drag(initiator.0);
+        }
+    }
+
+    pub fn update_pane_drag(&self, _on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
+        unimplemented!();
+    }
+
+    pub fn end_pane_drag(&self) {
+        unimplemented!();
     }
 }
 
@@ -488,11 +580,14 @@ impl NativeWindow {
                 on_resize: WindowDispatcher::on_resize,
                 on_pointer_down: WindowDispatcher::on_pointer_down,
                 on_pointer_move: WindowDispatcher::on_pointer_move,
+                on_pointer_delta_move: WindowDispatcher::on_pointer_delta_move,
                 on_pointer_up: WindowDispatcher::on_pointer_up,
                 on_key_down: WindowDispatcher::on_key_down,
                 on_key_down_with_char: WindowDispatcher::on_key_down_with_char,
                 on_key_up: WindowDispatcher::on_key_up,
+                on_key_up_with_char: WindowDispatcher::on_key_up_with_char,
                 on_key_focus_state_changed: WindowDispatcher::on_key_focus_state_changed,
+                on_scroll_wheel: WindowDispatcher::on_scroll_wheel,
             };
         unsafe {
             self::bridge::ni_set_window_callbacks(
@@ -614,11 +709,25 @@ impl WindowDispatcher {
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        // tracing::trace!(x, y, "pointer move");
         this.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(window),
             client_pos: Point::new_logical(x as _, y as _),
+        });
+    }
+
+    extern "C" fn on_pointer_delta_move(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut crate::platform::mac::bridge::WindowLink,
+        dx: f64,
+        dy: f64,
+    ) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        this.event_dispatcher.dispatch(Event::PointerMoveRelative {
+            pointer_id: PointerID(),
+            window: WindowHandle(window),
+            relative: Point::new_logical(dx as _, dy as _),
         });
     }
 
@@ -692,21 +801,63 @@ impl WindowDispatcher {
             modifier |= ModifierKey::SUPER;
         }
 
-        this.event_dispatcher.dispatch(Event::KeyDown {
-            window: WindowHandle(window),
-            // Macの場合はいくつか文字コードで入ってくる
-            code: match char {
-                '\r' => KeyInputCode::Enter,
-                '\x08' => KeyInputCode::Backspace,
-                self::bridge::NS_LEFT_ARROW_FUNCTION_KEY => KeyInputCode::LeftArrow,
-                self::bridge::NS_RIGHT_ARROW_FUNCTION_KEY => KeyInputCode::RightArrow,
-                self::bridge::NS_HOME_FUNCTION_KEY => KeyInputCode::Home,
-                self::bridge::NS_END_FUNCTION_KEY => KeyInputCode::End,
-                self::bridge::NS_DELETE_FUNCTION_KEY => KeyInputCode::Delete,
-                c => KeyInputCode::Character(c),
-            },
-            modifier,
-        });
+        // Macの場合はいくつか文字コードで入ってくる
+        match char {
+            '\r' => this.event_dispatcher.dispatch(Event::KeyDown {
+                window: WindowHandle(window),
+                code: KeyInputCode::Enter,
+                modifier,
+            }),
+            '\x08' => this.event_dispatcher.dispatch(Event::KeyDown {
+                window: WindowHandle(window),
+                code: KeyInputCode::Backspace,
+                modifier,
+            }),
+            self::bridge::NS_LEFT_ARROW_FUNCTION_KEY => {
+                this.event_dispatcher.dispatch(Event::KeyDown {
+                    window: WindowHandle(window),
+                    code: KeyInputCode::LeftArrow,
+                    modifier,
+                })
+            }
+            self::bridge::NS_RIGHT_ARROW_FUNCTION_KEY => {
+                this.event_dispatcher.dispatch(Event::KeyDown {
+                    window: WindowHandle(window),
+                    code: KeyInputCode::RightArrow,
+                    modifier,
+                })
+            }
+            self::bridge::NS_HOME_FUNCTION_KEY => this.event_dispatcher.dispatch(Event::KeyDown {
+                window: WindowHandle(window),
+                code: KeyInputCode::Home,
+                modifier,
+            }),
+            self::bridge::NS_END_FUNCTION_KEY => this.event_dispatcher.dispatch(Event::KeyDown {
+                window: WindowHandle(window),
+                code: KeyInputCode::End,
+                modifier,
+            }),
+            self::bridge::NS_DELETE_FUNCTION_KEY => {
+                this.event_dispatcher.dispatch(Event::KeyDown {
+                    window: WindowHandle(window),
+                    code: KeyInputCode::Delete,
+                    modifier,
+                })
+            }
+            c => {
+                this.event_dispatcher.dispatch(Event::KeyDown {
+                    window: WindowHandle(window),
+                    code: KeyInputCode::Character(c),
+                    modifier,
+                });
+                // 普通の文字の場合はKeyCharも発行（Windowsと挙動を合わせる）
+                this.event_dispatcher.dispatch(Event::KeyChar {
+                    window: WindowHandle(window),
+                    ch: c,
+                    modifier,
+                });
+            }
+        }
     }
 
     extern "C" fn on_key_up(
@@ -738,6 +889,75 @@ impl WindowDispatcher {
         });
     }
 
+    extern "C" fn on_key_up_with_char(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut crate::platform::mac::bridge::WindowLink,
+        code: u16,
+        modifier_flags: u32,
+        char: u32,
+    ) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let char = unsafe { char::from_u32_unchecked(char) };
+
+        let mut modifier = ModifierKey::empty();
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
+            modifier |= ModifierKey::SHIFT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
+            modifier |= ModifierKey::CONTROL;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
+            modifier |= ModifierKey::ALT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
+            modifier |= ModifierKey::SUPER;
+        }
+
+        // Macの場合はいくつか文字コードで入ってくる
+        this.event_dispatcher.dispatch(match char {
+            '\r' => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::Enter,
+                modifier,
+            },
+            '\x08' => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::Backspace,
+                modifier,
+            },
+            self::bridge::NS_LEFT_ARROW_FUNCTION_KEY => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::LeftArrow,
+                modifier,
+            },
+            self::bridge::NS_RIGHT_ARROW_FUNCTION_KEY => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::RightArrow,
+                modifier,
+            },
+            self::bridge::NS_HOME_FUNCTION_KEY => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::Home,
+                modifier,
+            },
+            self::bridge::NS_END_FUNCTION_KEY => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::End,
+                modifier,
+            },
+            self::bridge::NS_DELETE_FUNCTION_KEY => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::Delete,
+                modifier,
+            },
+            c => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::Character(c),
+                modifier,
+            },
+        });
+    }
+
     extern "C" fn on_key_focus_state_changed(
         caller_context: *mut core::ffi::c_void,
         window: *mut crate::platform::mac::bridge::WindowLink,
@@ -748,6 +968,34 @@ impl WindowDispatcher {
         this.event_dispatcher.dispatch(Event::WindowFocusChanged {
             window: WindowHandle(window),
             focused: focused != 0,
+        });
+    }
+
+    extern "C" fn on_scroll_wheel(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut self::bridge::WindowLink,
+        modifier_flags: u32,
+        amount: f64,
+    ) {
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+
+        let mut modifier = ModifierKey::empty();
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
+            modifier |= ModifierKey::SHIFT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
+            modifier |= ModifierKey::CONTROL;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
+            modifier |= ModifierKey::ALT;
+        }
+        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
+            modifier |= ModifierKey::SUPER;
+        }
+
+        this.event_dispatcher.dispatch(Event::ScrollWheel {
+            amount: amount as _,
+            key_modifier: modifier,
         });
     }
 }

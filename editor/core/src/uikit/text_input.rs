@@ -32,8 +32,6 @@ use crate::{
     },
     utils::{LogicalUnit, Point, Rect, SafeF32},
 };
-#[cfg(target_os = "macos")]
-use crate::{Event, LogicFiberEventDispatcher, input::hittest::HitTestTreeManager};
 
 bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -54,6 +52,7 @@ impl RawTextInputView {
         init_content: String,
         keyboard_focus_token: FocusTargetToken,
         flags: RawTextInputViewCreateFlags,
+        delegated_view_id: ViewIdentifier,
     ) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -156,9 +155,12 @@ impl RawTextInputView {
             ),
             #[cfg(target_os = "macos")]
             ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
+            #[cfg(target_os = "macos")]
+            font_set_ptr: core::ptr::from_ref(ctx.system_link.font_set()),
             pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
             event_dispatcher: ctx.system_link.event_dispatcher,
             creation_flags: flags,
+            delegated_view_id,
         });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.ht_manager
@@ -193,16 +195,16 @@ impl RawTextInputView {
         }*/
     }
 
-    pub fn set_focus_lazy(&self) {
+    pub fn set_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
         self.eh
             .pending_update_mask
-            .update(|x| x | self.eh.set_focus());
+            .update(|x| x | self.eh.set_focus(ht_manager));
     }
 
-    pub fn release_focus_lazy(&self) {
+    pub fn release_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
         self.eh
             .pending_update_mask
-            .update(|x| x | self.eh.release_focus());
+            .update(|x| x | self.eh.release_focus(ht_manager));
     }
 
     pub fn set_content_lazy(&self, content: String) {
@@ -436,9 +438,12 @@ struct RawTextInputViewEventHandler {
     native_text_input_context: crate::platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
     ht_manager_ptr: *const HitTestTreeManager<'static>,
+    #[cfg(target_os = "macos")]
+    font_set_ptr: *const FontSet,
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
     creation_flags: RawTextInputViewCreateFlags,
+    delegated_view_id: ViewIdentifier,
 }
 impl HitTestTreeScreenRepositionHandler for RawTextInputViewEventHandler {
     fn on_screen_reposition_required(
@@ -553,7 +558,10 @@ impl HitTestTreeActionHandler for RawTextInputViewEventHandler {
     }
 }
 impl RawTextInputViewEventHandler {
-    pub fn set_focus(&self) -> TextInputViewUpdateMask {
+    pub fn set_focus(
+        &self,
+        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
+    ) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus taken");
 
         if self.has_focus.replace(true) {
@@ -564,8 +572,7 @@ impl RawTextInputViewEventHandler {
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
         #[cfg(target_os = "macos")]
-        context
-            .ht_manager
+        ht_manager
             .query_root_window(self.ht_root)
             .expect("not mounted")
             .begin_text_input(core::ptr::from_ref(self).cast_mut());
@@ -573,7 +580,10 @@ impl RawTextInputViewEventHandler {
         TextInputViewUpdateMask::FOCUS
     }
 
-    pub fn release_focus(&self) -> TextInputViewUpdateMask {
+    pub fn release_focus(
+        &self,
+        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
+    ) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus released");
 
         if !self.has_focus.replace(false) {
@@ -584,8 +594,7 @@ impl RawTextInputViewEventHandler {
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
         #[cfg(target_os = "macos")]
-        context
-            .ht_manager
+        ht_manager
             .query_root_window(self.ht_root)
             .expect("not mounted")
             .end_text_input();
@@ -714,7 +723,7 @@ impl RawTextInputViewEventHandler {
                     .sum()
             };
 
-            start_bytes..end_bytes
+            self.select_range(start_bytes..end_bytes)
         }
 
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -851,7 +860,7 @@ impl RawTextInputViewEventHandler {
         &self,
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
-        ht_manager: &HitTestTreeManager,
+        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
     ) {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
@@ -1528,7 +1537,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for RawTextInputVie
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
+                id: self.delegated_view_id,
+            });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -1544,7 +1555,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for RawTextInputVie
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
+                id: self.delegated_view_id,
+            });
         }
     }
 
@@ -1582,7 +1595,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for RawTextInputVie
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
+                id: self.delegated_view_id,
+            });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -1598,7 +1613,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for RawTextInputVie
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
+                id: self.delegated_view_id,
+            });
         }
     }
 
@@ -1668,14 +1685,10 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for RawTextInputVie
             .map(|x| x.len_utf8())
             .sum();
 
-        let window = unsafe { &*self.ht_manager_ptr }
-            .query_root_window(self.ht_root)
-            .expect("not mounted");
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..endloc],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
-            1.0, // no scaling for this measure
+            unsafe { &*self.font_set_ptr },
         );
 
         if !actual_location.is_null() {
@@ -1716,6 +1729,7 @@ pub struct TextInputView {
 }
 impl TextInputView {
     pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
+        let view_id = ctx.view_registry.alloc();
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
             width: rect.width,
@@ -1732,10 +1746,11 @@ impl TextInputView {
             "".into(),
             kf_token,
             RawTextInputViewCreateFlags::empty(),
+            view_id,
         );
         let eh = Rc::new(TextInputViewEventHandler {
             raw,
-            id: ctx.view_registry.alloc(),
+            id: view_id,
             token: kf_token,
             ht_root,
         });
@@ -1775,7 +1790,7 @@ impl ViewEventHandler for TextInputViewEventHandler {
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.eh.pending_update_mask.set(self.raw.eh.set_focus());
+        self.raw.set_focus_lazy(context.ht_manager);
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.id });
@@ -1783,10 +1798,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 
     fn focus_released(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw
-            .eh
-            .pending_update_mask
-            .set(self.raw.eh.release_focus());
+        self.raw.release_focus_lazy(context.ht_manager);
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.id });
@@ -1834,6 +1846,7 @@ pub struct NumericInputView {
 }
 impl NumericInputView {
     pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
+        let view_id = ctx.view_registry.alloc();
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
             width: rect.width,
@@ -1850,11 +1863,12 @@ impl NumericInputView {
             "0".into(),
             kf_token,
             RawTextInputViewCreateFlags::empty(),
+            view_id,
         );
         let eh = Rc::new(NumericInputViewEventHandler {
             value: Cell::new(0),
             raw,
-            id: ctx.view_registry.alloc(),
+            id: view_id,
             token: kf_token,
             ht_root,
             key_input_enabled: Cell::new(false),
@@ -1902,16 +1916,16 @@ impl ViewEventHandler for NumericInputViewEventHandler {
 }
 impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
-        self.confirm_direct_input(context.system_link);
+        self.confirm_direct_input(context.system_link, context.ht_manager);
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         if code == KeyInputCode::Enter {
             // 確定or入力開始
             if self.key_input_enabled.get() {
-                self.confirm_direct_input(context.system_link);
+                self.confirm_direct_input(context.system_link, context.ht_manager);
             } else {
-                self.begin_direct_input(context.system_link);
+                self.begin_direct_input(context.system_link, context.ht_manager);
             }
 
             return;
@@ -1919,7 +1933,7 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
 
         if code == KeyInputCode::Esc {
             // 入力キャンセル
-            self.cancel_direct_input(context.system_link);
+            self.cancel_direct_input(context.system_link, context.ht_manager);
             return;
         }
 
@@ -2041,12 +2055,12 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.begin_direct_input(context.system_link);
+        self.begin_direct_input(context.system_link, context.ht_manager);
         EventContinueControl::STOP_PROPAGATION
     }
 }
 impl NumericInputViewEventHandler {
-    fn begin_direct_input(&self, syslink: &SystemLink) {
+    fn begin_direct_input(&self, syslink: &SystemLink, ht_manager: &HitTestTreeManager) {
         if self.key_input_enabled.replace(true) {
             // already enabled
             return;
@@ -2057,11 +2071,11 @@ impl NumericInputViewEventHandler {
         self.raw
             .eh
             .pending_update_mask
-            .set(self.raw.eh.set_focus() | self.raw.eh.select_all() | update_mask);
+            .set(self.raw.eh.set_focus(ht_manager) | self.raw.eh.select_all() | update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    fn confirm_direct_input(&self, syslink: &SystemLink) {
+    fn confirm_direct_input(&self, syslink: &SystemLink, ht_manager: &HitTestTreeManager) {
         if !self.key_input_enabled.replace(false) {
             // already disabled
             return;
@@ -2078,7 +2092,7 @@ impl NumericInputViewEventHandler {
         drop(content);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.raw.eh.release_focus();
+        let mut update_mask = self.raw.eh.release_focus(ht_manager);
         update_mask |= self.raw.set_content(new_value.to_string());
         update_mask |= self.raw.eh.move_cursor(0);
 
@@ -2086,9 +2100,9 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    fn cancel_direct_input(&self, syslink: &SystemLink) {
+    fn cancel_direct_input(&self, syslink: &SystemLink, ht_manager: &HitTestTreeManager) {
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.raw.eh.release_focus();
+        let mut update_mask = self.raw.eh.release_focus(ht_manager);
         // キャンセル時はもとにもどす
         update_mask |= self.raw.set_content(self.value.get().to_string());
         update_mask |= self.raw.eh.move_cursor(0);
@@ -2220,6 +2234,8 @@ impl MultilineTextInputView {
             ),
             #[cfg(target_os = "macos")]
             ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
+            #[cfg(target_os = "macos")]
+            font_set_ptr: core::ptr::from_ref(ctx.system_link.font_set()),
             pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
             event_dispatcher: ctx.system_link.event_dispatcher,
             creation_flags: flags,
@@ -2260,16 +2276,16 @@ impl MultilineTextInputView {
         }*/
     }
 
-    pub fn set_focus_lazy(&self) {
+    pub fn set_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
         self.eh
             .pending_update_mask
-            .update(|x| x | self.eh.set_focus());
+            .update(|x| x | self.eh.set_focus(ht_manager));
     }
 
-    pub fn release_focus_lazy(&self) {
+    pub fn release_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
         self.eh
             .pending_update_mask
-            .update(|x| x | self.eh.release_focus());
+            .update(|x| x | self.eh.release_focus(ht_manager));
     }
 
     pub fn set_content_lazy(&self, content: String) {
@@ -2484,6 +2500,8 @@ struct MultilineTextInputEventHandler {
     native_text_input_context: crate::platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
     ht_manager_ptr: *const HitTestTreeManager<'static>,
+    #[cfg(target_os = "macos")]
+    font_set_ptr: *const FontSet,
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
     creation_flags: RawTextInputViewCreateFlags,
@@ -2502,7 +2520,8 @@ impl ViewEventHandler for MultilineTextInputEventHandler {
 impl KeyInputEventHandler for MultilineTextInputEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.pending_update_mask.set(self.set_focus());
+        self.pending_update_mask
+            .set(self.set_focus(context.ht_manager));
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.view_id });
@@ -2510,7 +2529,8 @@ impl KeyInputEventHandler for MultilineTextInputEventHandler {
 
     fn focus_released(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.pending_update_mask.set(self.release_focus());
+        self.pending_update_mask
+            .set(self.release_focus(context.ht_manager));
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.view_id });
@@ -2788,7 +2808,10 @@ impl HitTestTreeActionHandler for MultilineTextInputEventHandler {
     }
 }
 impl MultilineTextInputEventHandler {
-    pub fn set_focus(&self) -> TextInputViewUpdateMask {
+    pub fn set_focus(
+        &self,
+        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
+    ) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus taken");
 
         if self.has_focus.replace(true) {
@@ -2799,8 +2822,7 @@ impl MultilineTextInputEventHandler {
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_enter();
         #[cfg(target_os = "macos")]
-        context
-            .ht_manager
+        ht_manager
             .query_root_window(self.ht_root)
             .expect("not mounted")
             .begin_text_input(core::ptr::from_ref(self).cast_mut());
@@ -2808,7 +2830,10 @@ impl MultilineTextInputEventHandler {
         TextInputViewUpdateMask::FOCUS
     }
 
-    pub fn release_focus(&self) -> TextInputViewUpdateMask {
+    pub fn release_focus(
+        &self,
+        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
+    ) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus released");
 
         if !self.has_focus.replace(false) {
@@ -2819,8 +2844,7 @@ impl MultilineTextInputEventHandler {
         #[cfg(windows)]
         self.native_text_input_context.notify_focus_leave();
         #[cfg(target_os = "macos")]
-        context
-            .ht_manager
+        ht_manager
             .query_root_window(self.ht_root)
             .expect("not mounted")
             .end_text_input();
@@ -2949,7 +2973,7 @@ impl MultilineTextInputEventHandler {
                     .sum()
             };
 
-            start_bytes..end_bytes
+            self.select_range(start_bytes..end_bytes)
         }
 
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -3084,7 +3108,7 @@ impl MultilineTextInputEventHandler {
         &self,
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
-        ht_manager: &HitTestTreeManager,
+        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
     ) {
         let cr = TextLayout::measure_cursor_rect(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
@@ -3899,7 +3923,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -3915,7 +3939,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
         }
     }
 
@@ -3953,7 +3977,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -3969,7 +3993,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.id });
+            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
         }
     }
 
@@ -4045,8 +4069,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..endloc],
             FontID::UIDefault,
-            unsafe { &window.extra_data_ref::<PerWindowData>().font_set },
-            1.0, // no scaling for this measure
+            unsafe { &*self.font_set_ptr },
         );
 
         if !actual_location.is_null() {
