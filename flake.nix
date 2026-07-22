@@ -53,7 +53,7 @@
       '';
       libclang-path = pkgs: "${pkgs.llvmPackages.libclang.lib}/lib";
     in
-    builtins.foldl' (a: b: a // b) { } (
+    { devShells = builtins.foldl' (a: b: a // b) { } (
       map (
         system:
         let
@@ -84,7 +84,7 @@
           '';
         in
         {
-          devShells."${system}" = {
+          "${system}" = {
             default = pkgs.mkShell {
               buildInputs = common-deps pkgs ++ platform-deps;
               nativeBuildInputs = native-deps pkgs;
@@ -108,5 +108,5 @@
           };
         }
       ) target-systems
-    );
+    ); };
 }
