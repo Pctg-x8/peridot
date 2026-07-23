@@ -6,11 +6,16 @@
   };
   outputs =
     { nixpkgs, ... }:
-    let
-      target-systems = [
+    let target-systems = [
         "x86_64-linux"
         "aarch64-darwin"
       ];
+      NDK_PLATFORM_TARGET = "35";
+      android-composition = pkgs: pkgs.androidenv.composeAndroidPackages {
+        platformVersions = [NDK_PLATFORM_TARGET];
+        abiVersions = ["arm64-v8a"];
+        includeNDK = true;
+      };
       build-tools =
         pkgs:
         pkgs.writeShellApplication {
@@ -41,6 +46,9 @@
         (build-tools pkgs)
         # debugging
         pkgs.vulkan-validation-layers
+        # android
+        (android-composition pkgs).androidsdk
+        pkgs.cargo-ndk
       ];
       native-deps = pkgs: [ pkgs.pkg-config ];
       shell-set-common-env-vars = ''
@@ -57,7 +65,7 @@
       map (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs { inherit system; config.allowUnfree = true; config.android_sdk.accept_license = true; };
           platform-deps =
             if system == "x86_64-linux" then
               [
@@ -84,6 +92,9 @@
               __peridot_fish_prompt_org
             end
           '';
+          # android vars
+          ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
+          ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
         in
         {
           "${system}" = {
@@ -94,6 +105,8 @@
 
               # このへんはないとエラーになる
               inherit LIBCLANG_PATH;
+              # android
+              inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
             fish = pkgs.mkShell {
               buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
@@ -106,6 +119,8 @@
 
               # このへんはないとエラーになる
               inherit LIBCLANG_PATH;
+              # android
+              inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
           };
         }
