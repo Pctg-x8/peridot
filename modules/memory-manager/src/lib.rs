@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bedrock::{self as br, DeviceBindMemory2Extension};
+use bedrock::{self as br, DeviceBindMemory2Extension, DeviceGetMemoryRequirements2Extension};
 use br::{Device, TypedVulkanSinkStructure, TypedVulkanStructure, VkHandle};
 use num_integer::Integer;
 #[allow(unused_imports)]
@@ -268,18 +268,14 @@ impl MemoryRequirements {
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
 
             unsafe {
-                core::ptr::write(
-                    core::ptr::addr_of_mut!((*req.as_mut_ptr()).pNext),
-                    sink_dedicated_alloc.as_mut_ptr() as _,
-                );
-
-                (e.device().get_buffer_memory_requirements2_fn().0)(
-                    e.device().native_ptr(),
-                    br::BufferMemoryRequirementsInfo2::new(&br::VkHandleRef::dangling(buffer))
-                        .as_ref(),
-                    req.as_mut_ptr(),
-                );
+                (&raw mut (*req.as_mut_ptr()).pNext)
+                    .write(sink_dedicated_alloc.as_mut_ptr().cast());
             }
+
+            e.device().get_buffer_memory_requirements2_khr(
+                &br::BufferMemoryRequirementsInfo2::new(br::VkHandleRef::from_raw_ref(&buffer)),
+                &mut req,
+            );
 
             return Self {
                 size: unsafe { req.assume_init_ref().memoryRequirements.size },
@@ -328,18 +324,14 @@ impl MemoryRequirements {
             let mut req = br::vk::VkMemoryRequirements2KHR::uninit_sink();
             let mut sink_dedicated_alloc = br::vk::VkMemoryDedicatedRequirementsKHR::uninit_sink();
             unsafe {
-                core::ptr::write(
-                    core::ptr::addr_of_mut!((*req.as_mut_ptr()).pNext),
-                    sink_dedicated_alloc.as_mut_ptr() as _,
-                );
-
-                (e.device().get_image_memory_requirements2_fn().0)(
-                    e.device().native_ptr(),
-                    br::ImageMemoryRequirementsInfo2::new(&br::VkHandleRef::dangling(image))
-                        .as_ref(),
-                    req.as_mut_ptr(),
-                );
+                (&raw mut (*req.as_mut_ptr()).pNext)
+                    .write(sink_dedicated_alloc.as_mut_ptr().cast());
             }
+
+            e.device().get_image_memory_requirements2_khr(
+                &br::ImageMemoryRequirementsInfo2::new(br::VkHandleRef::from_raw_ref(&image)),
+                &mut req,
+            );
 
             return Self {
                 size: unsafe { req.assume_init_ref().memoryRequirements.size },

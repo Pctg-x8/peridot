@@ -738,38 +738,6 @@ impl VulkanGfx {
     pub unsafe fn load_function<F: br::vk::PFN>(&self) -> F {
         unsafe { br::vk::load_function_unconstrainted(&br::DeviceResolverImpl(self.0.device)) }
     }
-
-    #[inline]
-    pub fn get_buffer_memory_requirements2_fn(
-        &self,
-    ) -> &br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
-        self.0
-            .get_buffer_memory_requirements2_fn
-            .get_or_init(|| unsafe { self.load_function() })
-    }
-
-    #[inline]
-    pub fn get_image_memory_requirements2_fn(
-        &self,
-    ) -> &br::vk::PFN_vkGetImageMemoryRequirements2KHR {
-        self.0
-            .get_image_memory_requirements2_fn
-            .get_or_init(|| unsafe { self.load_function() })
-    }
-
-    #[inline]
-    pub fn bind_buffer_memory2_fn(&self) -> &br::vk::PFN_vkBindBufferMemory2KHR {
-        self.0
-            .bind_buffer_memory2_fn
-            .get_or_init(|| unsafe { self.load_function() })
-    }
-
-    #[inline]
-    pub fn bind_image_memory2_fn(&self) -> &br::vk::PFN_vkBindImageMemory2KHR {
-        self.0
-            .bind_image_memory2_fn
-            .get_or_init(|| unsafe { self.load_function() })
-    }
 }
 impl br::VkHandle for VulkanGfx {
     type Handle = br::vk::VkDevice;
@@ -787,25 +755,41 @@ impl br::InstanceChild for VulkanGfx {
 }
 impl br::Device for VulkanGfx {}
 impl br::DeviceBindMemory2Extension for VulkanGfx {
-    fn bind_buffer_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindBufferMemory2KHR {
-        todo!("vkBindBufferMemory2KHR resolve")
+    #[inline]
+    fn bind_buffer_memory2_khr_fn(&self) -> br::vk::PFN_vkBindBufferMemory2KHR {
+        *self
+            .0
+            .bind_buffer_memory2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
-    fn bind_image_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindImageMemory2KHR {
-        todo!("vkBindImageMemory2KHR resolve")
+    #[inline]
+    fn bind_image_memory2_khr_fn(&self) -> br::vk::PFN_vkBindImageMemory2KHR {
+        *self
+            .0
+            .bind_image_memory2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 }
 impl br::DeviceGetMemoryRequirements2Extension for VulkanGfx {
+    #[inline]
     fn get_buffer_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
-        todo!("vkGetBufferMemoryRequirements2KHR resolve");
+        *self
+            .0
+            .get_buffer_memory_requirements2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
+    #[inline]
     fn get_image_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetImageMemoryRequirements2KHR {
-        todo!("vkGetImageMemoryRequirements2KHR resolve");
+        *self
+            .0
+            .get_image_memory_requirements2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
     fn get_image_sparse_memory_requirements_2_khr_fn(
@@ -815,11 +799,11 @@ impl br::DeviceGetMemoryRequirements2Extension for VulkanGfx {
     }
 }
 impl br::DeviceSynchronization2Extension for VulkanGfx {
-    fn cmd_pipeline_barrier_2_khr_fn(&self) -> bedrock::vk::PFN_vkCmdPipelineBarrier2KHR {
+    fn cmd_pipeline_barrier_2_khr_fn(&self) -> br::vk::PFN_vkCmdPipelineBarrier2KHR {
         todo!("vkCmdPipelineBarrier2KHR resolve")
     }
 
-    fn queue_submit2_khr_fn(&self) -> bedrock::vk::PFN_vkQueueSubmit2KHR {
+    fn queue_submit2_khr_fn(&self) -> br::vk::PFN_vkQueueSubmit2KHR {
         todo!("vkQueueSubmit2KHR resolve")
     }
 }
@@ -931,8 +915,8 @@ impl Graphics {
         &self.gfx_device
     }
 
-    pub fn adapter_raw(&self) -> br::vk::VkPhysicalDevice {
-        self.gfx_device.0.adapter
+    pub fn native_adapter_ref<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkPhysicalDevice> {
+        unsafe { br::VkHandleRef::dangling(self.gfx_device.0.adapter) }
     }
 
     /// Submits any commands as transient commands.
