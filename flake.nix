@@ -66,6 +66,8 @@
                 pkgs.wayland
                 pkgs.pulseaudio
                 pkgs.pipewire
+                pkgs.freetype
+                pkgs.fontconfig
               ]
             else
               [ ];

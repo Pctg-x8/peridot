@@ -200,13 +200,9 @@ impl TwoPassStencilSDFRenderer {
         sdf_max_distance: f32,
     ) -> Self {
         let attachments = [
-            br::vk::VkAttachmentDescription::new(
-                color_format,
-                target_final_layout,
-                target_final_layout,
-            )
-            .color_memory_op(br::LoadOp::Load, br::StoreOp::Store),
-            br::vk::VkAttachmentDescription::new(
+            br::AttachmentDescription::new(color_format, target_final_layout, target_final_layout)
+                .color_memory_op(br::LoadOp::Load, br::StoreOp::Store),
+            br::AttachmentDescription::new(
                 br::vk::VK_FORMAT_S8_UINT,
                 br::ImageLayout::DepthStencilReadOnlyOpt,
                 br::ImageLayout::DepthStencilReadOnlyOpt,
@@ -214,8 +210,8 @@ impl TwoPassStencilSDFRenderer {
             .stencil_load_op(br::LoadOp::Clear),
         ];
         let depth_stencil_attachment_ref =
-            br::vk::VkAttachmentReference::new(1, br::ImageLayout::DepthStencilAttachmentOpt);
-        let color_attachments = [br::vk::VkAttachmentReference::new(
+            br::AttachmentReference::new(1, br::ImageLayout::DepthStencilAttachmentOpt);
+        let color_attachments = [br::AttachmentReference::new(
             0,
             br::ImageLayout::ColorAttachmentOpt,
         )];
@@ -704,10 +700,12 @@ impl TwoPassStencilSDFRenderer {
         .into_rect(br::vk::VkOffset2D::ZERO)
     }
 
-    pub const CLEAR_VALUES: &'static [br::ClearValue] = &[
-        br::ClearValue::color_f32([0.0; 4]), // ignored
-        br::ClearValue::depth_stencil(0.0, 0),
-    ];
+    fn clear_values() -> Vec<br::ClearValue> {
+        vec![
+            br::ClearValue::color_f32([0.0; 4]), // ignored
+            br::ClearValue::depth_stencil(0.0, 0),
+        ]
+    }
 }
 pub struct TwoPassStencilSDFRenderTarget {
     gfx_device: peridot::VulkanGfx,
@@ -781,7 +779,7 @@ impl TwoPassStencilSDFRenderer {
             self.render_area(),
             br::SubpassContents::Inline,
         )
-        .with_clear_values(Self::CLEAR_VALUES.into());
+        .with_clear_values(Self::clear_values());
 
         let stencil_fill_triangles_render = buffers
             .fill_triangle_groups
