@@ -1106,11 +1106,7 @@ impl<'main> RenderThread<'main> {
         }
 
         unsafe {
-            // TODO: これdanglingつかわない方法にしたい スレッド専用のDeviceをつくるか......？
-            br::vkfn_wrapper::device_wait_idle(br::VkHandleRefMut::dangling(
-                self.vk_device.native_ptr(),
-            ))
-            .expect("device wait");
+            self.vk_device.wait().expect("device wait");
         }
         #[cfg(windows)]
         if let Err(e) =
