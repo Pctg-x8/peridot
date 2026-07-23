@@ -41,7 +41,11 @@ impl Drop for Image {
         }
 
         unsafe {
-            br::vkfn_wrapper::destroy_image(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_image(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -201,10 +205,9 @@ impl Buffer {
         let p = match self.memory_block {
             BackingMemory::Managed(ref m) => unsafe {
                 br::vkfn_wrapper::map_memory(
-                    self.device.native_ptr(),
-                    m.borrow_mut().handle,
-                    self.offset + range.start,
-                    range.end - range.start,
+                    self.device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(m.borrow_mut().handle),
+                    self.offset + range.start..self.offset + range.end,
                     0,
                 )
             },
@@ -228,7 +231,10 @@ impl Buffer {
                 let locked = m.borrow_mut();
 
                 unsafe {
-                    br::vkfn_wrapper::unmap_memory(locked.device.native_ptr(), locked.handle);
+                    br::vkfn_wrapper::unmap_memory(
+                        locked.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(locked.handle),
+                    );
                 }
             }
             BackingMemory::Native(ref mut m) => m.unmap(),
@@ -248,8 +254,7 @@ impl Buffer {
                 let locked = m.borrow_mut();
 
                 unsafe {
-                    br::vkfn_wrapper::invalidate_mapped_memory_ranges(
-                        locked.device.native_ptr(),
+                    locked.device.invalidate_memory_range(
                         &ranges
                             .iter()
                             .map(|r| {
@@ -294,8 +299,7 @@ impl Buffer {
                 let locked = m.borrow_mut();
 
                 unsafe {
-                    br::vkfn_wrapper::flush_mapped_memory_ranges(
-                        locked.device.native_ptr(),
+                    locked.device.flush_mapped_memory_ranges(
                         &ranges
                             .iter()
                             .map(|r| {
@@ -339,10 +343,9 @@ impl Buffer {
 
                 let ptr = unsafe {
                     br::vkfn_wrapper::map_memory(
-                        locked.device.native_ptr(),
-                        locked.handle,
-                        self.offset,
-                        self.size as _,
+                        locked.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(locked.handle),
+                        self.offset..self.offset + self.size as u64,
                         0,
                     )?
                 };
@@ -372,7 +375,10 @@ impl Buffer {
                     }
                 }
                 unsafe {
-                    br::vkfn_wrapper::unmap_memory(locked.device.native_ptr(), locked.handle);
+                    br::vkfn_wrapper::unmap_memory(
+                        locked.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(locked.handle),
+                    );
                 }
 
                 Ok(r)
@@ -482,7 +488,11 @@ impl Drop for Buffer {
         }
 
         unsafe {
-            br::vkfn_wrapper::destroy_buffer(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_buffer(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }

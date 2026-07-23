@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bedrock::{self as br};
+use bedrock::{self as br, DeviceBindMemory2Extension};
 use br::{Device, TypedVulkanSinkStructure, TypedVulkanStructure, VkHandle};
 use num_integer::Integer;
 #[allow(unused_imports)]
@@ -34,7 +34,7 @@ impl MemoryType {
 }
 #[allow(dead_code)]
 struct HeapStats {
-    pub info: br::vk::VkMemoryHeap,
+    pub info: br::MemoryHeap,
     pub used_bytes: u64,
 }
 
@@ -45,7 +45,11 @@ struct TmpBuffer<'d> {
 impl Drop for TmpBuffer<'_> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_buffer(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_buffer(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -78,7 +82,11 @@ struct TmpImage<'d> {
 impl Drop for TmpImage<'_> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_image(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -121,7 +129,11 @@ struct MemoryBlock {
 impl Drop for MemoryBlock {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::free_memory(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::free_memory(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -292,7 +304,10 @@ impl MemoryRequirements {
 
         // use old
         let req = unsafe {
-            br::vkfn_wrapper::get_buffer_memory_requirements(e.device().native_ptr(), buffer)
+            br::vkfn_wrapper::get_buffer_memory_requirements(
+                e.device().as_transparent_ref(),
+                br::VkHandleRef::dangling(buffer),
+            )
         };
 
         Self {
@@ -349,7 +364,10 @@ impl MemoryRequirements {
 
         // use old
         let req = unsafe {
-            br::vkfn_wrapper::get_image_memory_requirements(e.device().native_ptr(), image)
+            br::vkfn_wrapper::get_image_memory_requirements(
+                e.device().as_transparent_ref(),
+                br::VkHandleRef::dangling(image),
+            )
         };
 
         Self {
@@ -401,18 +419,29 @@ impl MemoryManager {
         for (n, t) in memory_properties.types().iter().enumerate() {
             let mt = MemoryType {
                 index: n as _,
-                heap_index: t.heapIndex,
-                is_coherent: (t.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0,
-                is_cached: (t.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_CACHED_BIT) != 0,
+                heap_index: t.heap_index(),
+                is_coherent: t
+                    .property_flags()
+                    .has_any(br::MemoryPropertyFlags::HOST_COHERENT),
+                is_cached: t
+                    .property_flags()
+                    .has_any(br::MemoryPropertyFlags::HOST_CACHED),
             };
 
-            if (t.propertyFlags & br::vk::VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 {
-                if (t.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 {
+            if t.property_flags()
+                .has_any(br::MemoryPropertyFlags::DEVICE_LOCAL)
+            {
+                if t.property_flags()
+                    .has_any(br::MemoryPropertyFlags::HOST_VISIBLE)
+                {
                     direct_memory_types.push(mt);
                 } else {
                     device_local_memory_types.push(mt);
                 }
-            } else if (t.propertyFlags & br::vk::VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0 {
+            } else if t
+                .property_flags()
+                .has_any(br::MemoryPropertyFlags::HOST_VISIBLE)
+            {
                 host_visible_memory_types.push(mt);
             }
         }
@@ -423,11 +452,11 @@ impl MemoryManager {
         tracing::debug!("memory heaps");
         for (n, h) in memory_properties.heaps().iter().enumerate() {
             let mut flags = Vec::new();
-            if (h.flags & br::vk::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0 {
+            if h.flags().has_any(br::MemoryHeapFlags::DEVICE_LOCAL) {
                 flags.push("Device Local");
             }
 
-            let (mut v, mut units) = (h.size as f64, "bytes");
+            let (mut v, mut units) = (h.size() as f64, "bytes");
             if v > 1000.0 {
                 v /= 1024.0;
                 units = "KB";
@@ -447,7 +476,7 @@ impl MemoryManager {
 
             tracing::debug!(
                 "* #{n}: size {}({v:.1} {units}) {}",
-                h.size,
+                h.size(),
                 flags.join("/")
             );
 
@@ -455,7 +484,7 @@ impl MemoryManager {
                 .types()
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| t.heapIndex == n as _)
+                .filter(|(_, t)| t.heap_index() == n as _)
             {
                 let flags = [
                     (br::vk::VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "Device Local"),
@@ -472,7 +501,7 @@ impl MemoryManager {
                     (br::vk::VK_MEMORY_PROPERTY_PROTECTED_BIT, "Protected"),
                 ]
                 .into_iter()
-                .filter_map(|(f, d)| ((t.propertyFlags & f) != 0).then_some(d))
+                .filter_map(|(f, d)| ((t.property_flags().bits() & f) != 0).then_some(d))
                 .collect::<Vec<_>>();
 
                 tracing::debug!("  * type #{n}: {}", flags.join("/"));
@@ -556,13 +585,11 @@ impl MemoryManager {
             Self::NEW_MANAGED_ALLOCATION_SIZE
         );
         let mut new_block = MemoryBlock::new(
-            unsafe {
-                br::vkfn_wrapper::allocate_memory(
-                    device.native_ptr(),
-                    &br::MemoryAllocateInfo::new(Self::NEW_MANAGED_ALLOCATION_SIZE, memory_index),
-                    None,
-                )?
-            },
+            br::vkfn_wrapper::allocate_memory(
+                device.as_transparent_ref(),
+                &br::MemoryAllocateInfo::new(Self::NEW_MANAGED_ALLOCATION_SIZE, memory_index),
+                None,
+            )?,
             device.clone(),
             Self::NEW_MANAGED_ALLOCATION_SIZE,
         );
@@ -586,9 +613,7 @@ impl MemoryManager {
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
         let o = TmpBuffer {
-            handle: unsafe {
-                br::vkfn_wrapper::create_buffer(e.device().native_ptr(), &desc, None)?
-            },
+            handle: br::vkfn_wrapper::create_buffer(e.device().as_transparent_ref(), &desc, None)?,
             device: e.device().as_transparent_ref(),
         };
 
@@ -612,9 +637,9 @@ impl MemoryManager {
         let aligned_offset = align2_u64(offset, req.alignment);
         unsafe {
             br::vkfn_wrapper::bind_buffer_memory(
-                e.device().native_ptr(),
-                o.handle,
-                memory.vk_handle(),
+                e.device().as_transparent_ref(),
+                br::VkHandleRefMut::dangling(o.handle),
+                br::VkHandleRef::dangling(memory.vk_handle()),
                 aligned_offset as _,
             )?;
         }
@@ -646,7 +671,7 @@ impl MemoryManager {
         for d in descs {
             exact_sizes.push(d.size());
             let handle =
-                unsafe { br::vkfn_wrapper::create_buffer(e.device().native_ptr(), &d, None)? };
+                br::vkfn_wrapper::create_buffer(e.device().as_transparent_ref(), &d, None)?;
 
             let req = unsafe { MemoryRequirements::query_for_buffer(e, handle) };
             tracing::debug!("ReqMemoryMask: {:08x}", req.memory_type_bits);
@@ -717,12 +742,14 @@ impl MemoryManager {
                     let memory = br::DeviceMemoryObject::new(e.device().clone(), &memory_req)?;
 
                     let handle = handle.unwrap_handle();
-                    binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
-                        sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
-                        pNext: core::ptr::null(),
-                        buffer: handle,
-                        memory: memory.native_ptr(),
-                        memoryOffset: 0,
+                    binding_info.push(unsafe {
+                        br::BindBufferMemoryInfo::from_raw(br::vk::VkBindBufferMemoryInfoKHR {
+                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            buffer: handle,
+                            memory: memory.native_ptr(),
+                            memoryOffset: 0,
+                        })
                     });
                     bound_objects.push(Buffer {
                         handle,
@@ -739,12 +766,14 @@ impl MemoryManager {
                         // placement into combined native memory
 
                         let handle = handle.unwrap_handle();
-                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
-                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
-                            pNext: core::ptr::null(),
-                            buffer: handle,
-                            memory: combined.borrow().native_ptr(),
-                            memoryOffset: offset,
+                        binding_info.push(unsafe {
+                            br::BindBufferMemoryInfo::from_raw(br::vk::VkBindBufferMemoryInfoKHR {
+                                sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                                pNext: core::ptr::null(),
+                                buffer: handle,
+                                memory: combined.borrow().native_ptr(),
+                                memoryOffset: offset,
+                            })
                         });
                         bound_objects.push(Buffer {
                             handle,
@@ -766,12 +795,14 @@ impl MemoryManager {
                         let aligned_offset = align2_u64(offset, req.alignment);
 
                         let handle = handle.unwrap_handle();
-                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
-                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
-                            pNext: core::ptr::null(),
-                            buffer: handle,
-                            memory: memory.vk_handle(),
-                            memoryOffset: aligned_offset,
+                        binding_info.push(unsafe {
+                            br::BindBufferMemoryInfo::from_raw(br::vk::VkBindBufferMemoryInfoKHR {
+                                sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                                pNext: core::ptr::null(),
+                                buffer: handle,
+                                memory: memory.vk_handle(),
+                                memoryOffset: aligned_offset,
+                            })
                         });
                         bound_objects.push(Buffer {
                             handle,
@@ -868,9 +899,7 @@ impl MemoryManager {
     ) -> br::Result<Buffer> {
         let exact_size = desc.size();
         let o = TmpBuffer {
-            handle: unsafe {
-                br::vkfn_wrapper::create_buffer(e.device().native_ptr(), &desc, None)?
-            },
+            handle: br::vkfn_wrapper::create_buffer(e.device().as_transparent_ref(), &desc, None)?,
             device: e.device().as_transparent_ref(),
         };
 
@@ -895,9 +924,9 @@ impl MemoryManager {
         let aligned_offset = align2_u64(offset, req.alignment);
         unsafe {
             br::vkfn_wrapper::bind_buffer_memory(
-                e.device().native_ptr(),
-                o.handle,
-                memory.vk_handle(),
+                e.device().as_transparent_ref(),
+                br::VkHandleRefMut::dangling(o.handle),
+                br::VkHandleRef::dangling(memory.vk_handle()),
                 aligned_offset as _,
             )?;
         }
@@ -929,9 +958,7 @@ impl MemoryManager {
         for d in descs {
             exact_sizes.push(d.size());
             let object = TmpBuffer {
-                handle: unsafe {
-                    br::vkfn_wrapper::create_buffer(e.device().native_ptr(), &d, None)?
-                },
+                handle: br::vkfn_wrapper::create_buffer(e.device().as_transparent_ref(), &d, None)?,
                 device: e.device().as_transparent_ref(),
             };
             let req = unsafe { MemoryRequirements::query_for_buffer(e, object.handle) };
@@ -998,12 +1025,14 @@ impl MemoryManager {
                     let memory = br::DeviceMemoryObject::new(e.device().clone(), &memory_req)?;
 
                     let handle = object.unwrap_handle();
-                    binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
-                        sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
-                        pNext: core::ptr::null(),
-                        buffer: handle,
-                        memory: memory.native_ptr(),
-                        memoryOffset: 0,
+                    binding_info.push(unsafe {
+                        br::BindBufferMemoryInfo::from_raw(br::vk::VkBindBufferMemoryInfoKHR {
+                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            buffer: handle,
+                            memory: memory.native_ptr(),
+                            memoryOffset: 0,
+                        })
                     });
                     bound_objects.push(Buffer {
                         handle,
@@ -1020,12 +1049,14 @@ impl MemoryManager {
                         // placement into combined native memory
 
                         let handle = object.unwrap_handle();
-                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
-                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
-                            pNext: core::ptr::null(),
-                            buffer: handle,
-                            memory: combined.borrow().native_ptr(),
-                            memoryOffset: offset,
+                        binding_info.push(unsafe {
+                            br::BindBufferMemoryInfo::from_raw(br::vk::VkBindBufferMemoryInfoKHR {
+                                sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                                pNext: core::ptr::null(),
+                                buffer: handle,
+                                memory: combined.borrow().native_ptr(),
+                                memoryOffset: offset,
+                            })
                         });
                         bound_objects.push(Buffer {
                             handle,
@@ -1047,12 +1078,14 @@ impl MemoryManager {
                         let aligned_offset = align2_u64(offset, req.alignment);
 
                         let handle = object.unwrap_handle();
-                        binding_info.push(br::vk::VkBindBufferMemoryInfoKHR {
-                            sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
-                            pNext: core::ptr::null(),
-                            buffer: handle,
-                            memory: memory.vk_handle(),
-                            memoryOffset: aligned_offset,
+                        binding_info.push(unsafe {
+                            br::BindBufferMemoryInfo::from_raw(br::vk::VkBindBufferMemoryInfoKHR {
+                                sType: br::vk::VkBindBufferMemoryInfoKHR::TYPE,
+                                pNext: core::ptr::null(),
+                                buffer: handle,
+                                memory: memory.vk_handle(),
+                                memoryOffset: aligned_offset,
+                            })
                         });
                         bound_objects.push(Buffer {
                             handle,
@@ -1158,9 +1191,8 @@ impl MemoryManager {
         desc: br::ImageCreateInfo,
     ) -> br::Result<Image> {
         let o = TmpImage {
-            handle: unsafe {
-                br::vkfn_wrapper::create_image(e.device().native_ptr(), &desc, None)?
-            },
+            handle: br::vkfn_wrapper::create_image(e.device().as_transparent_ref(), &desc, None)?,
+
             device: e.device().as_transparent_ref(),
             format: desc.as_ref().format,
             size: desc.as_ref().extent,
@@ -1191,9 +1223,9 @@ impl MemoryManager {
         let aligned_offset = align2_u64(offset, req.alignment);
         unsafe {
             br::vkfn_wrapper::bind_image_memory(
-                e.device().native_ptr(),
-                o.handle,
-                memory.vk_handle(),
+                e.device().as_transparent_ref(),
+                br::VkHandleRefMut::dangling(o.handle),
+                br::VkHandleRef::dangling(memory.vk_handle()),
                 aligned_offset as _,
             )?;
         }
@@ -1222,9 +1254,7 @@ impl MemoryManager {
         let (mut objects, mut requirements) = (Vec::with_capacity(s), Vec::with_capacity(s));
         for d in descs {
             let object = TmpImage {
-                handle: unsafe {
-                    br::vkfn_wrapper::create_image(e.device().native_ptr(), &d, None)?
-                },
+                handle: br::vkfn_wrapper::create_image(e.device().as_transparent_ref(), &d, None)?,
                 device: e.device().as_transparent_ref(),
                 format: d.as_ref().format,
                 size: d.as_ref().extent,
@@ -1298,12 +1328,14 @@ impl MemoryManager {
                     let memory = br::DeviceMemoryObject::new(e.device().clone(), &memory_req)?;
 
                     let (handle, format, size, image_type) = object.release();
-                    bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
-                        sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
-                        pNext: core::ptr::null(),
-                        image: handle,
-                        memory: memory.native_ptr(),
-                        memoryOffset: 0,
+                    bind_infos.push(unsafe {
+                        br::BindImageMemoryInfo::from_raw(br::vk::VkBindImageMemoryInfoKHR {
+                            sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
+                            pNext: core::ptr::null(),
+                            image: handle,
+                            memory: memory.native_ptr(),
+                            memoryOffset: 0,
+                        })
                     });
                     bound_objects.push(Image {
                         handle,
@@ -1322,12 +1354,14 @@ impl MemoryManager {
                         // placement into combined native memory
 
                         let (handle, format, size, image_type) = object.release();
-                        bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
-                            sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
-                            pNext: core::ptr::null(),
-                            image: handle,
-                            memory: combined.borrow().native_ptr(),
-                            memoryOffset: offset as _,
+                        bind_infos.push(unsafe {
+                            br::BindImageMemoryInfo::from_raw(br::vk::VkBindImageMemoryInfoKHR {
+                                sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
+                                pNext: core::ptr::null(),
+                                image: handle,
+                                memory: combined.borrow().native_ptr(),
+                                memoryOffset: offset as _,
+                            })
                         });
                         bound_objects.push(Image {
                             handle,
@@ -1351,12 +1385,14 @@ impl MemoryManager {
                         let aligned_offset = align2_u64(offset, req.alignment);
 
                         let (handle, format, size, image_type) = object.release();
-                        bind_infos.push(br::vk::VkBindImageMemoryInfoKHR {
-                            sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
-                            pNext: core::ptr::null(),
-                            image: handle,
-                            memory: memory.vk_handle(),
-                            memoryOffset: aligned_offset as _,
+                        bind_infos.push(unsafe {
+                            br::BindImageMemoryInfo::from_raw(br::vk::VkBindImageMemoryInfoKHR {
+                                sType: br::vk::VkBindImageMemoryInfoKHR::TYPE,
+                                pNext: core::ptr::null(),
+                                image: handle,
+                                memory: memory.vk_handle(),
+                                memoryOffset: aligned_offset as _,
+                            })
                         });
                         bound_objects.push(Image {
                             handle,
@@ -1425,58 +1461,40 @@ impl ObjectAllocationInfo {
     }
 }
 
-fn bind_buffers(
-    e: &peridot::Graphics,
-    binds: &[br::vk::VkBindBufferMemoryInfoKHR],
-) -> br::Result<()> {
+fn bind_buffers(e: &peridot::Graphics, binds: &[br::BindBufferMemoryInfo]) -> br::Result<()> {
     if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
-
-        return unsafe {
-            (e.device().bind_buffer_memory2_fn().0)(
-                e.device().native_ptr(),
-                binds.len() as _,
-                binds.as_ptr(),
-            )
-            .into_result()
-            .map(drop)
-        };
+        return e.device().bind_buffer_memory2_khr(binds);
     }
 
     // use old binding
     for b in binds.iter() {
         unsafe {
-            e.device()
-                .bind_buffer_raw(b.buffer, b.memory, b.memoryOffset)?;
+            e.device().bind_buffer_raw(
+                br::VkHandleRefMut::dangling(b.as_ref().buffer),
+                br::VkHandleRef::dangling(b.as_ref().memory),
+                b.as_ref().memoryOffset,
+            )?;
         }
     }
 
     Ok(())
 }
 
-fn bind_images(
-    e: &peridot::Graphics,
-    binds: &[br::vk::VkBindImageMemoryInfoKHR],
-) -> br::Result<()> {
+fn bind_images(e: &peridot::Graphics, binds: &[br::BindImageMemoryInfo]) -> br::Result<()> {
     if e.is_extension_available(&peridot::VulkanExtension::BIND_MEMORY2_KHR) {
         // use batched binding
-
-        return unsafe {
-            (e.device().bind_image_memory2_fn().0)(
-                e.device().native_ptr(),
-                binds.len() as _,
-                binds.as_ptr(),
-            )
-            .into_result()
-            .map(drop)
-        };
+        return e.device().bind_image_memory2_khr(binds);
     }
 
     // use old binding
     for b in binds.iter() {
         unsafe {
-            e.device()
-                .bind_image_raw(b.image, b.memory, b.memoryOffset)?;
+            e.device().bind_image_raw(
+                br::VkHandleRefMut::dangling(b.as_ref().image),
+                br::VkHandleRef::dangling(b.as_ref().memory),
+                b.as_ref().memoryOffset,
+            )?;
         }
     }
 

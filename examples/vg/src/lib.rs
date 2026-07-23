@@ -41,7 +41,11 @@ pub struct StandaloneImageView {
 impl Drop for StandaloneImageView {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.gfx_device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -59,7 +63,7 @@ impl StandaloneImageView {
     ) -> br::Result<Self> {
         Ok(Self {
             handle: unsafe {
-                br::vkfn_wrapper::create_image_view(device.native_ptr(), create_info, None)?
+                br::vkfn_wrapper::create_image_view(device.as_transparent_ref(), create_info, None)?
             },
             gfx_device: device.clone(),
         })
@@ -292,13 +296,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 e.graphics().device(),
                 &br::ImageViewCreateInfo::new(
                     &x,
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::COLOR.bits(),
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
                     e.back_buffer_format(),
                 ),
@@ -632,13 +630,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             e.graphics().device(),
                             &br::ImageViewCreateInfo::new(
                                 &x,
-                                br::vk::VkImageSubresourceRange {
-                                    aspectMask: br::AspectMask::COLOR.bits(),
-                                    baseMipLevel: 0,
-                                    levelCount: 1,
-                                    baseArrayLayer: 0,
-                                    layerCount: 1,
-                                },
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                                 br::vk::VK_IMAGE_VIEW_TYPE_2D,
                                 e.back_buffer_format(),
                             ),

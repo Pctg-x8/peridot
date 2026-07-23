@@ -14,7 +14,11 @@ pub struct UnboundedStandaloneBuffer(br::vk::VkBuffer, VulkanGfx);
 impl Drop for UnboundedStandaloneBuffer {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_buffer(self.1 .0.device, self.0, None);
+            br::vkfn_wrapper::destroy_buffer(
+                self.1.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.0),
+                None,
+            );
         }
     }
 }
@@ -31,7 +35,11 @@ pub struct Buffer(br::vk::VkBuffer, SharedMemoryBlock, u64);
 impl Drop for Buffer {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_buffer(self.1.lock_shared().device.0.device, self.0, None)
+            br::vkfn_wrapper::destroy_buffer(
+                self.1.lock_shared().device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.0),
+                None,
+            )
         }
     }
 }
@@ -44,9 +52,9 @@ impl Buffer {
         let UnboundedStandaloneBuffer(handle, _) = b;
         unsafe {
             br::vkfn_wrapper::bind_buffer_memory(
-                mem.lock_shared().device.0.device,
-                handle,
-                mem.lock_shared().handle,
+                mem.lock_shared().device.native_device_ref(),
+                br::VkHandleRefMut::dangling(handle),
+                br::VkHandleRef::dangling(mem.lock_shared().handle),
                 offset as _,
             )?;
         }
@@ -351,37 +359,31 @@ impl<'g> BufferPrealloc<'g> {
     }
 
     pub fn build(&self) -> br::Result<UnboundedStandaloneBuffer> {
-        let handle = unsafe {
-            br::vkfn_wrapper::create_buffer(
-                self.g.gfx_device.0.device,
-                &br::BufferCreateInfo::new(self.total as _, self.usage),
-                None,
-            )?
-        };
+        let handle = br::vkfn_wrapper::create_buffer(
+            self.g.gfx_device.native_device_ref(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage),
+            None,
+        )?;
 
         Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }
 
     pub fn build_transferred(&self) -> br::Result<UnboundedStandaloneBuffer> {
-        let handle = unsafe {
-            br::vkfn_wrapper::create_buffer(
-                self.g.gfx_device.0.device,
-                &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_dest()),
-                None,
-            )?
-        };
+        let handle = br::vkfn_wrapper::create_buffer(
+            self.g.gfx_device.native_device_ref(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_dest()),
+            None,
+        )?;
 
         Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }
 
     pub fn build_upload(&self) -> br::Result<UnboundedStandaloneBuffer> {
-        let handle = unsafe {
-            br::vkfn_wrapper::create_buffer(
-                self.g.gfx_device.0.device,
-                &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_src()),
-                None,
-            )?
-        };
+        let handle = br::vkfn_wrapper::create_buffer(
+            self.g.gfx_device.native_device_ref(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage.transfer_src()),
+            None,
+        )?;
 
         Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }
@@ -390,13 +392,11 @@ impl<'g> BufferPrealloc<'g> {
         &self,
         usage: br::BufferUsage,
     ) -> br::Result<UnboundedStandaloneBuffer> {
-        let handle = unsafe {
-            br::vkfn_wrapper::create_buffer(
-                self.g.gfx_device.0.device,
-                &br::BufferCreateInfo::new(self.total as _, self.usage | usage),
-                None,
-            )?
-        };
+        let handle = br::vkfn_wrapper::create_buffer(
+            self.g.gfx_device.native_device_ref(),
+            &br::BufferCreateInfo::new(self.total as _, self.usage | usage),
+            None,
+        )?;
 
         Ok(UnboundedStandaloneBuffer(handle, self.g.gfx_device.clone()))
     }

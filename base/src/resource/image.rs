@@ -19,7 +19,11 @@ pub struct UnboundedStandaloneImage {
 impl Drop for UnboundedStandaloneImage {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image(self.gfx_device.0.device, self.handle, None);
+            br::vkfn_wrapper::destroy_image(
+                self.gfx_device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -44,8 +48,8 @@ impl Drop for Image {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_image(
-                self.memory.lock_shared().device.0.device,
-                self.handle,
+                self.memory.lock_shared().device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
                 None,
             );
         }
@@ -66,9 +70,9 @@ impl Image {
         } = r;
         unsafe {
             br::vkfn_wrapper::bind_image_memory(
-                mem.lock_shared().device.0.device,
-                handle,
-                mem.lock_shared().handle,
+                mem.lock_shared().device.native_device_ref(),
+                br::VkHandleRefMut::dangling(handle),
+                br::VkHandleRef::dangling(mem.lock_shared().handle),
                 offset as _,
             )?;
         }

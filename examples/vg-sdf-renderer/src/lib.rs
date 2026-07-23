@@ -86,8 +86,8 @@ impl StencilState {
         Self { write_mask, ..self }
     }
 
-    pub const fn into_vk(self) -> br::vk::VkStencilOpState {
-        br::vk::VkStencilOpState {
+    pub const fn into_vk(self) -> br::StencilOpState {
+        br::StencilOpState(br::vk::VkStencilOpState {
             failOp: self.ops.fail,
             passOp: self.ops.pass,
             depthFailOp: self.ops.depth_fail,
@@ -95,10 +95,10 @@ impl StencilState {
             compareMask: self.compare.mask,
             writeMask: self.write_mask,
             reference: self.compare.reference,
-        }
+        })
     }
 }
-impl From<StencilState> for br::vk::VkStencilOpState {
+impl From<StencilState> for br::StencilOpState {
     fn from(value: StencilState) -> Self {
         value.into_vk()
     }
@@ -144,51 +144,51 @@ impl Drop for TwoPassStencilSDFRenderer {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                self.invert_pipeline,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.invert_pipeline),
                 None,
             );
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                self.outline_distance_pipeline,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.outline_distance_pipeline),
                 None,
             );
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                self.curve_triangles_stencil_pipeline,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.curve_triangles_stencil_pipeline),
                 None,
             );
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                self.triangle_fans_stencil_pipeline,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.triangle_fans_stencil_pipeline),
                 None,
             );
             br::vkfn_wrapper::destroy_pipeline_layout(
-                self.gfx_device.native_ptr(),
-                self.pipeline_layout,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_layout),
                 None,
             );
             br::vkfn_wrapper::destroy_render_pass(
-                self.gfx_device.native_ptr(),
-                self.render_pass,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.render_pass),
                 None,
             );
         }
     }
 }
 impl TwoPassStencilSDFRenderer {
-    fn stencil_invert() -> br::vk::VkStencilOpState {
-        StencilState::new(br::StencilOp::Invert)
-            .with_write_mask(0x01)
-            .into_vk()
+    fn stencil_invert() -> br::StencilOpState {
+        br::StencilOpState::always_forall(br::StencilOp::Invert).write_mask(0x01)
     }
-    fn stencil_match() -> br::vk::VkStencilOpState {
-        StencilState::new(br::StencilOp::Keep)
-            .with_compare(StencilCompare::new(br::CompareOp::Equal, 0x01).with_mask(0x01))
-            .into_vk()
+    fn stencil_match() -> br::StencilOpState {
+        br::StencilOpState::always_forall(br::StencilOp::Keep).set_compare(
+            br::CompareOp::Equal,
+            0x01,
+            0x01,
+        )
     }
-    fn stencil_noop() -> br::vk::VkStencilOpState {
-        StencilState::new(br::StencilOp::Keep).into_vk()
+    fn stencil_noop() -> br::StencilOpState {
+        br::StencilOpState::always_forall(br::StencilOp::Keep)
     }
 
     pub fn new(
@@ -300,14 +300,12 @@ impl TwoPassStencilSDFRenderer {
             &outline_shader.vertex_attributes,
         );
 
-        let pipeline_layout = unsafe {
-            br::vkfn_wrapper::create_pipeline_layout(
-                e.graphics().device().native_ptr(),
-                &br::PipelineLayoutCreateInfo::new(&[], &[]),
-                None,
-            )
-            .expect("Failed to create pipeline layout")
-        };
+        let pipeline_layout = br::vkfn_wrapper::create_pipeline_layout(
+            e.graphics().device().as_transparent_ref(),
+            &br::PipelineLayoutCreateInfo::new(&[], &[]),
+            None,
+        )
+        .expect("Failed to create pipeline layout");
 
         let stencil_triangle_vsh_parameters =
             br::SpecializationInfo::new(&stencil_triangle_vsh_parameters);
@@ -326,7 +324,7 @@ impl TwoPassStencilSDFRenderer {
 
         let [triangle_fans_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] = unsafe {
             br::vkfn_wrapper::create_graphics_pipeline_array(
-                e.graphics().device().native_ptr(),
+                e.graphics().device().as_transparent_ref(),
                 None,
                 &[
                     br::GraphicsPipelineCreateInfo::new(
@@ -541,7 +539,7 @@ impl TwoPassStencilSDFRenderer {
 
         let [triangles_stencil_pipeline, curve_triangles_stencil_pipeline, invert_pipeline, outline_distance_pipeline] = unsafe {
             br::vkfn_wrapper::create_graphics_pipeline_array(
-                self.gfx_device.native_ptr(),
+                self.gfx_device.as_transparent_ref(),
                 None,
                 &[
                     br::GraphicsPipelineCreateInfo::new(
@@ -664,32 +662,35 @@ impl TwoPassStencilSDFRenderer {
         self.target_size = new_size;
         unsafe {
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                core::mem::replace(
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(core::mem::replace(
                     &mut self.triangle_fans_stencil_pipeline,
                     triangles_stencil_pipeline,
-                ),
+                )),
                 None,
             );
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                core::mem::replace(
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(core::mem::replace(
                     &mut self.curve_triangles_stencil_pipeline,
                     curve_triangles_stencil_pipeline,
-                ),
+                )),
                 None,
             );
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                core::mem::replace(&mut self.invert_pipeline, invert_pipeline),
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(core::mem::replace(
+                    &mut self.invert_pipeline,
+                    invert_pipeline,
+                )),
                 None,
             );
             br::vkfn_wrapper::destroy_pipeline(
-                self.gfx_device.native_ptr(),
-                core::mem::replace(
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(core::mem::replace(
                     &mut self.outline_distance_pipeline,
                     outline_distance_pipeline,
-                ),
+                )),
                 None,
             );
         }
@@ -716,8 +717,8 @@ impl Drop for TwoPassStencilSDFRenderTarget {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_framebuffer(
-                self.gfx_device.native_ptr(),
-                self.framebuffer,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.framebuffer),
                 None,
             );
         }
@@ -740,7 +741,7 @@ impl TwoPassStencilSDFRenderTarget {
     ) -> Self {
         let framebuffer = unsafe {
             br::vkfn_wrapper::create_framebuffer(
-                g.native_ptr(),
+                g.as_transparent_ref(),
                 &br::FramebufferCreateInfo::new(
                     &renderer.render_pass(),
                     &[color_buffer_view, stencil_buffer_view],
@@ -827,7 +828,11 @@ pub struct StandaloneImageView {
 impl Drop for StandaloneImageView {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.gfx_device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -840,8 +845,9 @@ impl br::VkHandle for StandaloneImageView {
 }
 impl StandaloneImageView {
     pub fn new(g: &peridot::VulkanGfx, create_info: &br::ImageViewCreateInfo) -> br::Result<Self> {
-        let handle =
-            unsafe { br::vkfn_wrapper::create_image_view(g.native_ptr(), create_info, None)? };
+        let handle = unsafe {
+            br::vkfn_wrapper::create_image_view(g.as_transparent_ref(), create_info, None)?
+        };
 
         Ok(Self {
             gfx_device: g.clone(),
@@ -859,8 +865,8 @@ impl Drop for StencilBuffer {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_image_view(
-                self.gfx_device.native_ptr(),
-                self.image_view,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.image_view),
                 None,
             );
         }
@@ -889,16 +895,10 @@ impl StencilBuffer {
             .expect("Failed to create stencil buffer image");
         let image_view = unsafe {
             br::vkfn_wrapper::create_image_view(
-                g.device().native_ptr(),
+                g.device().as_transparent_ref(),
                 &br::ImageViewCreateInfo::new(
                     &image,
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::STENCIL.bits(),
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
+                    br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
                     format,
                 ),
@@ -930,16 +930,10 @@ impl StencilBuffer {
             .expect("Failed to allocate stencil buffer");
         let view = unsafe {
             br::vkfn_wrapper::create_image_view(
-                self.gfx_device.native_ptr(),
+                self.gfx_device.as_transparent_ref(),
                 &br::ImageViewCreateInfo::new(
                     &self.image,
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::STENCIL.bits(),
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
+                    br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
                     format,
                 ),
@@ -949,8 +943,8 @@ impl StencilBuffer {
         };
         unsafe {
             br::vkfn_wrapper::destroy_image_view(
-                self.gfx_device.native_ptr(),
-                core::mem::replace(&mut self.image_view, view),
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(core::mem::replace(&mut self.image_view, view)),
                 None,
             );
         }
@@ -1149,13 +1143,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 e.graphics().device(),
                 &br::ImageViewCreateInfo::new(
                     &b,
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::COLOR.bits(),
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
                     e.back_buffer_format(),
                 ),
@@ -1334,13 +1322,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             e.graphics().device(),
                             &br::ImageViewCreateInfo::new(
                                 &b,
-                                br::vk::VkImageSubresourceRange {
-                                    aspectMask: br::AspectMask::COLOR.bits(),
-                                    baseMipLevel: 0,
-                                    levelCount: 1,
-                                    baseArrayLayer: 0,
-                                    layerCount: 1,
-                                },
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                                 br::vk::VK_IMAGE_VIEW_TYPE_2D,
                                 e.back_buffer_format(),
                             ),

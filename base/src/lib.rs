@@ -4,7 +4,7 @@ pub use peridot_archive as archive;
 pub use peridot_math as math;
 pub use peridot_native_io as native_io;
 
-use bedrock::{self as br, VkHandle};
+use bedrock::{self as br};
 use parking_lot::RwLock;
 use std::cell::{Ref, RefCell};
 use std::collections::VecDeque;
@@ -274,15 +274,21 @@ struct LastRenderingCompletionFence {
 impl Drop for LastRenderingCompletionFence {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_fence(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_fence(
+                self.device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
 impl LastRenderingCompletionFence {
     pub fn new(device: &VulkanGfx) -> br::Result<Self> {
-        let handle = unsafe {
-            br::vkfn_wrapper::create_fence(device.0.device, &br::FenceCreateInfo::new(0), None)?
-        };
+        let handle = br::vkfn_wrapper::create_fence(
+            device.native_device_ref(),
+            &br::FenceCreateInfo::new(0),
+            None,
+        )?;
 
         Ok(Self {
             handle,
@@ -295,13 +301,13 @@ impl LastRenderingCompletionFence {
         if self.used {
             unsafe {
                 br::vkfn_wrapper::wait_for_fences(
-                    self.device.0.device,
-                    &[self.handle],
+                    self.device.native_device_ref(),
+                    &[br::VkHandleRef::dangling(self.handle)],
                     true,
                     u64::MAX,
                 )?;
                 br::vkfn_wrapper::reset_fences(
-                    self.device.0.device,
+                    self.device.native_device_ref(),
                     &[br::VkHandleRefMut::dangling(self.handle)],
                 )?;
             }
@@ -442,10 +448,10 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     pub fn requesting_back_buffer_layout(&self) -> (br::ImageLayout, br::PipelineStageFlags) {
         self.presenter.requesting_back_buffer_layout()
     }
-    pub fn back_buffer_attachment_desc(&self) -> br::vk::VkAttachmentDescription {
+    pub fn back_buffer_attachment_desc(&self) -> br::AttachmentDescription {
         let (ol, _) = self.requesting_back_buffer_layout();
 
-        br::vk::VkAttachmentDescription::new(self.back_buffer_format(), ol, ol)
+        br::AttachmentDescription::new(self.back_buffer_format(), ol, ol)
     }
 
     pub fn screen_size(&self) -> peridot_math::Vector2<u32> {
@@ -533,7 +539,9 @@ impl<PL: NativeLinker> Engine<'_, PL> {
 
         let dt = self.game_timer.delta_time();
         let backbuffer_index = match self.presenter.next_back_buffer_index() {
-            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
+            Err(e)
+                if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e.0 == br::vk::VK_SUBOPTIMAL_KHR =>
+            {
                 return Err(PrepareFrameError::FramebufferOutOfDate);
             }
             e => e.expect("Acquiring available back-buffer index failed"),
@@ -586,7 +594,9 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         );
 
         match pr {
-            Err(e) if e == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e == br::vk::VK_SUBOPTIMAL_KHR => {
+            Err(e)
+                if e.0 == br::vk::VK_ERROR_OUT_OF_DATE_KHR || e.0 == br::vk::VK_SUBOPTIMAL_KHR =>
+            {
                 // Fire resize
                 self.request_resize = true;
 
