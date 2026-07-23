@@ -2,6 +2,8 @@ mod color;
 pub use self::color::*;
 mod coord;
 pub use self::coord::*;
+mod bitops;
+pub use self::bitops::*;
 pub mod platform;
 pub mod range_helper;
 
