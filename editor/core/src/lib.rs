@@ -37,7 +37,6 @@ use crate::{
         },
     },
     rendering::{
-        CommittedPreviewMeshData, CommittedPreviewRenderData, CommittedPreviewState, IndexType,
         MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
         ShaderTexture, TextureID,
         composite::{
@@ -152,7 +151,7 @@ pub fn launch() {
         Some(peridot_math::Vector3::up()),
     );
 
-    let preview_state = Mutex::new(CommittedPreviewState {
+    let preview_state = Mutex::new(rendering::preview::CommittedState {
         viewport_size: Size::new_logical(640.0, 480.0),
         main_camera,
         main_camera_dirtified: false,
@@ -203,7 +202,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     rt_sender: RenderMessageSender,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     root_font_set: FontSet,
-    preview_state: &'sys Mutex<CommittedPreviewState>,
+    preview_state: &'sys Mutex<rendering::preview::CommittedState>,
     #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
     #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
@@ -3011,7 +3010,7 @@ struct LaunchArgs<'sys> {
     pub global_time_base: &'sys std::time::Instant,
     pub renderer_sync: &'sys Mutex<RendererSync>,
     pub file_system: &'sys FileSystem,
-    pub committed_preview_state: &'sys Mutex<CommittedPreviewState>,
+    pub committed_preview_state: &'sys Mutex<rendering::preview::CommittedState>,
 }
 
 crate::perf_section!(INITIALIZE = "LogicFiber.Initialize");
@@ -3542,16 +3541,18 @@ async fn run<'sys>(
             .cast::<u16>()
             .copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
     }
-    preview_state.pushed_meshes.push(CommittedPreviewMeshData {
-        vertices: std::sync::Arc::from(vbuf_bytes),
-        vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
-        indices: std::sync::Arc::from(ibuf_bytes),
-        index_type: IndexType::U16,
-        sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..36)]),
-    });
+    preview_state
+        .pushed_meshes
+        .push(rendering::preview::CommittedMeshData {
+            vertices: std::sync::Arc::from(vbuf_bytes),
+            vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
+            indices: std::sync::Arc::from(ibuf_bytes),
+            index_type: rendering::preview::IndexType::U16,
+            sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..36)]),
+        });
     preview_state
         .pushed_render_data
-        .push(CommittedPreviewRenderData {
+        .push(rendering::preview::CommittedRenderData {
             object_to_world: peridot_math::Matrix4F32::ONE,
             mesh_id: 0,
         });
