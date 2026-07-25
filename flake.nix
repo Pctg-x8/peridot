@@ -31,11 +31,7 @@
       common-deps = pkgs: [
         pkgs.rustup
         # for building cdeps
-        pkgs.cmake
-        pkgs.ninja
-        pkgs.pkg-config
-        pkgs.clang
-        pkgs.llvmPackages.libclang
+        pkgs.python3
         # required libs for building engine
         pkgs.vulkan-loader
         # required for some asset processing
@@ -76,10 +72,16 @@
                 pkgs.pipewire
                 pkgs.freetype
                 pkgs.fontconfig
+                # building cdeps(explicit compiler for linux)
+                pkgs.cmake
+                pkgs.ninja
+                pkgs.pkg-config
+                pkgs.clang
+                pkgs.llvmPackages.libclang
               ]
             else
               [ ];
-          LIBCLANG_PATH = libclang-path pkgs;
+          LIBCLANG_PATH = if system == "x86_64-linux" then libclang-path pkgs else "";
 
           fishPrehook = pkgs.writeScriptBin "startup" ''
             # prepend devenv prompt
@@ -95,10 +97,11 @@
           # android vars
           ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
           ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
+          mksh = if system == "x86_64-linux" then pkgs.mkShell else pkgs.mkShellNoCC;
         in
         {
           "${system}" = {
-            default = pkgs.mkShell {
+            default = mksh {
               buildInputs = common-deps pkgs ++ platform-deps;
               nativeBuildInputs = native-deps pkgs;
               shellHook = shell-set-common-env-vars;
@@ -108,7 +111,7 @@
               # android
               inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
-            fish = pkgs.mkShell {
+            fish = mksh {
               buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
               nativeBuildInputs = native-deps pkgs;
               shellHook = ''
