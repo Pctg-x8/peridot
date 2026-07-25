@@ -7,10 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		4B2CAECC2CD9153B00178F62 /* MoltenVK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B158F832CD90BDB0051A6BC /* MoltenVK.xcframework */; };
-		4B2CAECD2CD9153B00178F62 /* MoltenVK.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B158F832CD90BDB0051A6BC /* MoltenVK.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */ = {isa = PBXBuildFile; fileRef = 4B40D4B621DCFB5B00C1B31F /* assets.par */; };
+		4B643A4430157D3D0024EF86 /* libvulkan.1.4.350.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; };
+		4B643A4530157D3D0024EF86 /* libvulkan.1.4.350.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B696EED231BD4E000C2417C /* AudioUnit.framework */; };
+		4B988915301584040005AB61 /* libvulkan_kosmickrisp.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1821B2554E0006BE24 /* Assets.xcassets */; };
 		4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1A21B2554E0006BE24 /* MainMenu.xib */; };
 		4BAF7A2721B29F1F0006BE24 /* PeridotRenderableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BAF7A2621B29F1F0006BE24 /* PeridotRenderableView.swift */; };
@@ -32,7 +33,8 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				4B2CAECD2CD9153B00178F62 /* MoltenVK.xcframework in Embed Frameworks */,
+				4B988915301584040005AB61 /* libvulkan_kosmickrisp.dylib in Embed Frameworks */,
+				4B643A4530157D3D0024EF86 /* libvulkan.1.4.350.dylib in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -40,11 +42,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		4B158F832CD90BDB0051A6BC /* MoltenVK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = MoltenVK.xcframework; path = ../../../../foreign/MoltenVK/Package/Debug/MoltenVK/dynamic/MoltenVK.xcframework; sourceTree = "<group>"; };
 		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
+		4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.4.350.dylib; path = lib/libvulkan.1.4.350.dylib; sourceTree = "<group>"; };
 		4B696EED231BD4E000C2417C /* AudioUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioUnit.framework; path = System/Library/Frameworks/AudioUnit.framework; sourceTree = SDKROOT; };
 		4B696EEF231BDB3200C2417C /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		4B696EF1231BDB4900C2417C /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan_kosmickrisp.dylib; path = lib/libvulkan_kosmickrisp.dylib; sourceTree = "<group>"; };
 		4BAF7A1321B2554B0006BE24 /* peridot-cradle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "peridot-cradle.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4BAF7A1821B2554E0006BE24 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4BAF7A1B21B2554E0006BE24 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
@@ -72,8 +75,8 @@
 				4BB1536027DC9E5A00A214E0 /* libpegamelib.a in Frameworks */,
 				4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */,
 				4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */,
-				4B2CAECC2CD9153B00178F62 /* MoltenVK.xcframework in Frameworks */,
 				4BC8ED2321B3F51600FB4AF9 /* IOSurface.framework in Frameworks */,
+				4B643A4430157D3D0024EF86 /* libvulkan.1.4.350.dylib in Frameworks */,
 				4BC8ED2121B3F50B00FB4AF9 /* IOKit.framework in Frameworks */,
 				4BC8ED1F21B3F4EC00FB4AF9 /* Metal.framework in Frameworks */,
 				4BC8ED1D21B3F4C900FB4AF9 /* libc++.tbd in Frameworks */,
@@ -120,8 +123,7 @@
 		4BAF7A3321B3C7380006BE24 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				4BDF05062E9B7D290001ABD8 /* libktx.4.4.0.dylib */,
-				4B158F832CD90BDB0051A6BC /* MoltenVK.xcframework */,
+				4BBC28023014F77200821C40 /* PeridotCLIRef-VulkanSDK */,
 				4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */,
 				4B696EF1231BDB4900C2417C /* CoreAudio.framework */,
 				4B696EEF231BDB3200C2417C /* AudioToolbox.framework */,
@@ -136,6 +138,16 @@
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		4BBC28023014F77200821C40 /* PeridotCLIRef-VulkanSDK */ = {
+			isa = PBXGroup;
+			children = (
+				4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */,
+				4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */,
+			);
+			name = "PeridotCLIRef-VulkanSDK";
+			path = ../../../../../VulkanSDK/1.4.350.1/macOS;
+			sourceTree = SOURCE_ROOT;
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -147,6 +159,7 @@
 				4BAF7A1021B2554B0006BE24 /* Frameworks */,
 				4BAF7A1121B2554B0006BE24 /* Resources */,
 				4B2CAECE2CD9153B00178F62 /* Embed Frameworks */,
+				4B643A4230157D110024EF86 /* Generate symlinks for Versioned libvulkan */,
 			);
 			buildRules = (
 			);
@@ -203,6 +216,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4B643A4230157D110024EF86 /* Generate symlinks for Versioned libvulkan */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate symlinks for Versioned libvulkan";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "TARGET_VERSIONED_LIB_NAME=libvulkan.1.4.350.dylib\n\ncd $BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH\nln -s ./$TARGET_VERSIONED_LIB_NAME libvulkan.1.dylib\nln -s ./$TARGET_VERSIONED_LIB_NAME libvulkan.dylib\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4BAF7A0F21B2554B0006BE24 /* Sources */ = {
@@ -354,10 +389,7 @@
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(VULKAN_SDK)/Frameworks",
-					"$(VULKAN_SDK)/../MoltenVK",
-				);
+				FRAMEWORK_SEARCH_PATHS = "$(VULKAN_SDK)/Frameworks";
 				INFOPLIST_FILE = "peridot-cradle/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -367,6 +399,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(PROJECT_DIR)/rlibs",
 					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(VULKAN_SDK)/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				ONLY_ACTIVE_ARCH = NO;
@@ -389,10 +422,7 @@
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				DEVELOPMENT_TEAM = "";
-				FRAMEWORK_SEARCH_PATHS = (
-					"$(VULKAN_SDK)/Frameworks",
-					"$(VULKAN_SDK)/../MoltenVK",
-				);
+				FRAMEWORK_SEARCH_PATHS = "$(VULKAN_SDK)/Frameworks";
 				INFOPLIST_FILE = "peridot-cradle/Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -402,6 +432,7 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(PROJECT_DIR)/rlibs",
 					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(VULKAN_SDK)/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				ONLY_ACTIVE_ARCH = NO;

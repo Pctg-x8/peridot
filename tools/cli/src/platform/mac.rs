@@ -165,6 +165,21 @@ fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, id
             pbxproj::Value::Single(Cow::Borrowed(identifier)),
         );
     }
+    // rewrite path of VulkanSDK group
+    for t in pbxproj.objects.iter_mut() {
+        match t.1 {
+            pbxproj::PBXObject::Group(g) => {
+                if g.name
+                    .as_ref()
+                    .is_some_and(|x| x == "PeridotCLIRef-VulkanSDK")
+                {
+                    g.path = Some(Cow::Borrowed(&system_vk_sdk_path));
+                    g.source_tree = "<absolute>".into();
+                }
+            }
+            _ => (),
+        }
+    }
 
     // search extra-libs and import to link
     let extra_libs_dir = options.userlib.join("extra-libs");

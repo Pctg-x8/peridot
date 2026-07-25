@@ -31,6 +31,7 @@
       common-deps = pkgs: [
         pkgs.rustup
         # for building cdeps
+        pkgs.cmake
         pkgs.python3
         # required libs for building engine
         pkgs.vulkan-loader
@@ -73,7 +74,6 @@
                 pkgs.freetype
                 pkgs.fontconfig
                 # building cdeps(explicit compiler for linux)
-                pkgs.cmake
                 pkgs.ninja
                 pkgs.pkg-config
                 pkgs.clang

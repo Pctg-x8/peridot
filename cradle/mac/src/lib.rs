@@ -159,7 +159,7 @@ impl peridot::NativeLinker for NativeLink {
     type Presenter = Presenter;
 
     fn instance_extensions(&self) -> Vec<&CStr> {
-        vec![c"VK_KHR_surface", c"VK_MVK_macos_surface"]
+        vec![c"VK_KHR_surface", c"VK_EXT_metal_surface"]
     }
     fn device_extensions(&self) -> Vec<&CStr> {
         vec![c"VK_KHR_swapchain"]
