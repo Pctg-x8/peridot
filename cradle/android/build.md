@@ -5,6 +5,7 @@ How to build Peridot for Android deployment
 
 - cargo-ndk
   - `cargo install cargo-ndk` でインストールする
+  - peridot-cliは2.x系が前提
 
 ## 環境変数
 

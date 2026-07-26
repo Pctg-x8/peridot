@@ -35,6 +35,10 @@ done
 mkdir -p $OUT_DIRECTORY || true
 rm -rf $OUT_DIRECTORY/*
 
+# Copy builtin assets
+mkdir -p $OUT_DIRECTORY/builtin-assets
+rsync -auz --progress $SCRIPT_PATH/builtin-assets $OUT_DIRECTORY/ --exclude *.csh --exclude Makefile
+
 # Copy cradles
 mkdir -p $OUT_DIRECTORY/cradle/windows
 rsync -auz --progress $SCRIPT_PATH/cradle/windows $OUT_DIRECTORY/cradle/ --exclude target --exclude userlib.rs --exclude Cargo.toml --exclude Cargo.lock
@@ -53,23 +57,20 @@ echo "Rewriting Cargo Manifests......"
 echo "Peridot Branch = $PERIDOT_BRANCH"
 for f in $OUT_DIRECTORY/cradle/**/Cargo.template.toml; do
     echo "rewriting peridot deps in $f..."
-    sed -i.o -e "s/peridot = { path = \"..\\/..\" }/peridot = { git = \"https:\\/\\/github.com\\/Pctg-x8\\/peridot\", branch = \"${PERIDOT_BRANCH//\/\\\/}\" }/g" $f
+    sed -i.o -e "s/peridot = { path = \"..\\/..\\/base\" }/peridot = { git = \"https:\\/\\/github.com\\/Pctg-x8\\/peridot\", branch = \"${PERIDOT_BRANCH//\/\\\/}\" }/g" $f
     rm $f.o
 done
-
-# Copy scripts
-cp $SCRIPT_PATH/build.ps1 $OUT_DIRECTORY
-cp $SCRIPT_PATH/build.sh $OUT_DIRECTORY
 
 # Select prefer gfind(from findutils)
 if type gfind > /dev/null 2>&1; then FIND=gfind; else FIND=find; fi
 
 # Copy tools(for *nix)
 mkdir -p $OUT_DIRECTORY/tools
-for f in $($FIND $SCRIPT_PATH/target/release -name "peridot-*" -type f -perm /a+x); do
+for f in $($FIND $SCRIPT_PATH/tools/target/release -name "peridot-*" -type f -perm /a+x -maxdepth 1); do
     echo "tool detected: $f"
     cp $f $OUT_DIRECTORY/tools/
 done
+cp $SCRIPT_PATH/tools/target/release/peridot $OUT_DIRECTORY/tools/
 
 # Compress(if required)
 if [ $COMPRESS -ne 0 ]; then zip -r "$OUT_DIRECTORY.zip" $OUT_DIRECTORY; fi

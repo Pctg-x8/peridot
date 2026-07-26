@@ -1,0 +1,22 @@
+[package]
+name = "peridot-sprite-atlas"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+with-asset-processing = ["dep:peridot-asset-processing"]
+with-loader-impl = ["dep:peridot"]
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+peridot-asset-processing = { path = "../asset-processing", optional = true }
+image = "0.25"
+ktx = { path = "../../thirdparty/ktx" }
+bedrock.workspace = true
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot = { path = "../../base", optional = true }
+peridot-math = { path = "../../modules/math" }
+
+[lints]
+workspace = true

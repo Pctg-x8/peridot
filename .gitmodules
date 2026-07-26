@@ -1,0 +1,12 @@
+[submodule "thirdparty/ktx/source-repo"]
+	path = thirdparty/ktx/source-repo
+    url = https://github.com/KhronosGroup/KTX-Software
+    ignore = dirty
+[submodule "thirdparty/slang/source-repo"]
+	path = thirdparty/slang/source-repo
+    url = https://github.com/shader-slang/slang
+    ignore = dirty
+[submodule "thirdparty/spirv-tools/source-repo"]
+	path = thirdparty/spirv-tools/source-repo
+    url = https://github.com/KhronosGroup/SPIRV-Tools
+    ignore = dirty

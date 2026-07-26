@@ -2,9 +2,19 @@ target/
 **/*.rs.bk
 *.lock
 .vscode/
-android-build
+.zed/
+.DS_Store
+android-build/
 **/*.pvp
+**/*.pss
+**/*.spv
+**/*.prcc
 
 ## other artifacts
 peridot-sdk/
 peridot-sdk.zip
+built/
+
+## hidden locals
+local/
+.local/
