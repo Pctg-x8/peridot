@@ -11,6 +11,7 @@
 		4B643A4430157D3D0024EF86 /* libvulkan.1.4.350.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; };
 		4B643A4530157D3D0024EF86 /* libvulkan.1.4.350.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B696EED231BD4E000C2417C /* AudioUnit.framework */; };
+		4B979FC930158835002CF562 /* vulkan in Resources */ = {isa = PBXBuildFile; fileRef = 4B979FC830158835002CF562 /* vulkan */; };
 		4B988915301584040005AB61 /* libvulkan_kosmickrisp.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1821B2554E0006BE24 /* Assets.xcassets */; };
 		4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1A21B2554E0006BE24 /* MainMenu.xib */; };
@@ -47,6 +48,7 @@
 		4B696EED231BD4E000C2417C /* AudioUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioUnit.framework; path = System/Library/Frameworks/AudioUnit.framework; sourceTree = SDKROOT; };
 		4B696EEF231BDB3200C2417C /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		4B696EF1231BDB4900C2417C /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		4B979FC830158835002CF562 /* vulkan */ = {isa = PBXFileReference; lastKnownFileType = folder; path = vulkan; sourceTree = "<group>"; };
 		4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan_kosmickrisp.dylib; path = lib/libvulkan_kosmickrisp.dylib; sourceTree = "<group>"; };
 		4BAF7A1321B2554B0006BE24 /* peridot-cradle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "peridot-cradle.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		4BAF7A1821B2554E0006BE24 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -86,9 +88,19 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		4B979FCB3015885E002CF562 /* extra-resources */ = {
+			isa = PBXGroup;
+			children = (
+				4B979FC830158835002CF562 /* vulkan */,
+			);
+			name = "extra-resources";
+			path = "extra-resources";
+			sourceTree = "<group>";
+		};
 		4BAF7A0A21B2554B0006BE24 = {
 			isa = PBXGroup;
 			children = (
+				4B979FCB3015885E002CF562 /* extra-resources */,
 				4B40D4B621DCFB5B00C1B31F /* assets.par */,
 				4BAF7A1521B2554B0006BE24 /* peridot-cradle */,
 				4BAF7A1421B2554B0006BE24 /* Products */,
@@ -209,6 +221,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B979FC930158835002CF562 /* vulkan in Resources */,
 				4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */,
 				4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */,
 				4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */,
