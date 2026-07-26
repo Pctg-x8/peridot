@@ -1,9 +1,7 @@
 //! Batched Operation Helpers
 
 use crate::mthelper::{DynamicMut, SharedRef};
-use bedrock::{self as br};
-use br::vk::VkBufferCopy;
-use br::{TypedVulkanStructure, VkHandle};
+use bedrock::{self as br, TypedVulkanStructure, VkHandle};
 use std::cmp::{Eq, Ord, Ordering, PartialEq, PartialOrd};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -207,11 +205,11 @@ impl TransferBatch2 {
         self.copy_buffers
             .entry(CopyBufferPair(Box::new(src.clone()), Box::new(dst)))
             .or_insert_with(Vec::new)
-            .push(br::vk::VkBufferCopy {
+            .push(br::BufferCopy(br::vk::VkBufferCopy {
                 srcOffset: src_offset,
                 dstOffset: dst_offset,
                 size: byte_length,
-            });
+            }));
         self.src_transition_sets.insert((
             TransferrableBufferResourceCompareCell(Box::new(src)),
             src_offset..src_offset + byte_length,
@@ -445,11 +443,11 @@ impl<Device: br::Device> TransferBatch<Device> {
         self.copy_buffers
             .entry((ResourceKey(src.buffer), ResourceKey(dst.buffer)))
             .or_insert_with(Vec::new)
-            .push(VkBufferCopy {
+            .push(br::BufferCopy(br::vk::VkBufferCopy {
                 srcOffset: src.offset,
                 dstOffset: dst.offset,
                 size: bytes,
-            });
+            }));
     }
 
     /// Add copying operation between buffers.
@@ -577,14 +575,14 @@ impl<Device: br::Device> TransferBatch<Device> {
         let src_barriers_i = self.org_layout_src.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
                 &b.0,
-                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0,
                 l0.to(br::ImageLayout::TransferSrcOpt),
             )
         });
         let dst_barriers_i = self.org_layout_dst.iter().map(|(b, &l0)| {
             br::ImageMemoryBarrier::new(
                 &b.0,
-                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0,
                 l0.to(br::ImageLayout::TransferDestOpt),
             )
         });

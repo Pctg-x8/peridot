@@ -29,7 +29,11 @@ struct LocalImageView {
 impl Drop for LocalImageView {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -119,7 +123,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             e.graphics(),
             [
                 br::BufferCreateInfo::new(
-                    plane_mesh.byte_length(),
+                    plane_mesh.byte_length() as _,
                     br::BufferUsage::VERTEX_BUFFER.transfer_dest(),
                 ),
                 br::BufferCreateInfo::new_for_type::<UniformCameraParameters>(
@@ -308,7 +312,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let back_buffer_attachment = e
         .back_buffer_attachment_desc()
         .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store);
-    let color_outputs = [br::vk::VkAttachmentReference::new(
+    let color_outputs = [br::AttachmentReference::new(
         0,
         br::ImageLayout::ColorAttachmentOpt,
     )];
@@ -329,16 +333,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .map(|x| LocalImageView {
             handle: unsafe {
                 br::vkfn_wrapper::create_image_view(
-                    e.graphics().device().native_ptr(),
+                    e.graphics().device().as_transparent_ref(),
                     &br::ImageViewCreateInfo::new(
                         &x,
-                        br::vk::VkImageSubresourceRange {
-                            aspectMask: br::AspectMask::COLOR.bits(),
-                            baseMipLevel: 0,
-                            levelCount: 1,
-                            baseArrayLayer: 0,
-                            layerCount: 1,
-                        },
+                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                         br::vk::VK_IMAGE_VIEW_TYPE_2D,
                         e.back_buffer_format(),
                     ),
@@ -494,24 +492,28 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             .map(|&(s, ref e)| shader.on_stage(s, e))
                             .collect::<Vec<_>>(),
                         &br::PipelineVertexInputStateCreateInfo::new(
-                            &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
+                            &[br::VertexInputBindingDescription::per_vertex_typed::<
                                 peridot::VertexUV,
                             >(0)],
                             &[
-                                br::vk::VkVertexInputAttributeDescription {
-                                    binding: 0,
-                                    location: vertex_semantic_to_location
-                                        [&prc::VertexInputSemantic::Position(0)],
-                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                    offset: core::mem::offset_of!(peridot::VertexUV, pos) as _,
-                                },
-                                br::vk::VkVertexInputAttributeDescription {
-                                    binding: 0,
-                                    location: vertex_semantic_to_location
-                                        [&prc::VertexInputSemantic::Texcoord(0)],
-                                    format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                    offset: core::mem::offset_of!(peridot::VertexUV, uv) as _,
-                                },
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        binding: 0,
+                                        location: vertex_semantic_to_location
+                                            [&prc::VertexInputSemantic::Position(0)],
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                        offset: core::mem::offset_of!(peridot::VertexUV, pos) as _,
+                                    },
+                                ),
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        binding: 0,
+                                        location: vertex_semantic_to_location
+                                            [&prc::VertexInputSemantic::Texcoord(0)],
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                        offset: core::mem::offset_of!(peridot::VertexUV, uv) as _,
+                                    },
+                                ),
                             ],
                         ),
                         &br::PipelineInputAssemblyStateCreateInfo::new(
@@ -595,14 +597,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             ]),
         ));
         // TODO: Material Parameter
-        descriptor_writes.extend(
-            br::DescriptorPointer::new(descriptor_mat.into(), 0).write_continuous_bindings([
-                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
-                    &image_view,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                )]),
-            ]),
-        );
+        descriptor_writes.extend(descriptor_mat.binding_at(0).write_continuous_bindings([
+            br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
+                &image_view,
+                br::ImageLayout::ShaderReadOnlyOpt,
+            )]),
+        ]));
         e.graphics()
             .device()
             .update_descriptor_sets(&descriptor_writes, &[]);
@@ -681,16 +681,14 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             .map(|x| LocalImageView {
                                 handle: unsafe {
                                     br::vkfn_wrapper::create_image_view(
-                                        e.graphics().device().native_ptr(),
+                                        e.graphics().device().as_transparent_ref(),
                                         &br::ImageViewCreateInfo::new(
                                             &x,
-                                            br::vk::VkImageSubresourceRange {
-                                                aspectMask: br::AspectMask::COLOR.bits(),
-                                                baseMipLevel: 0,
-                                                levelCount: 1,
-                                                baseArrayLayer: 0,
-                                                layerCount: 1,
-                                            },
+                                            br::ImageSubresourceRange::new(
+                                                br::AspectMask::COLOR,
+                                                0..1,
+                                                0..1,
+                                            ),
                                             br::vk::VK_IMAGE_VIEW_TYPE_2D,
                                             e.back_buffer_format(),
                                         ),
@@ -776,16 +774,14 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     .map(|x| LocalImageView {
                         handle: unsafe {
                             br::vkfn_wrapper::create_image_view(
-                                e.graphics().device().native_ptr(),
+                                e.graphics().device().as_transparent_ref(),
                                 &br::ImageViewCreateInfo::new(
                                     &x,
-                                    br::vk::VkImageSubresourceRange {
-                                        aspectMask: br::AspectMask::COLOR.bits(),
-                                        baseMipLevel: 0,
-                                        levelCount: 1,
-                                        baseArrayLayer: 0,
-                                        layerCount: 1,
-                                    },
+                                    br::ImageSubresourceRange::new(
+                                        br::AspectMask::COLOR,
+                                        0..1,
+                                        0..1,
+                                    ),
                                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
                                     e.back_buffer_format(),
                                 ),

@@ -46,13 +46,13 @@ impl Drop for MainFramebuffer {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_framebuffer(
-                self.gfx_device.native_ptr(),
-                self.framebuffer,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.framebuffer),
                 None,
             );
             br::vkfn_wrapper::destroy_image_view(
-                self.gfx_device.native_ptr(),
-                self.swapchain_image_view,
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.swapchain_image_view),
                 None,
             );
         }
@@ -74,17 +74,11 @@ impl MainFramebuffer {
         let bb_size = e.back_buffer_size();
         let swapchain_image_view = unsafe {
             br::vkfn_wrapper::create_image_view(
-                e.graphics().device().native_ptr(),
+                e.graphics().device().as_transparent_ref(),
                 &br::ImageViewCreateInfo::new(
                     &e.back_buffer(swapchain_buffer_index)
                         .expect("no back buffer?"),
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::COLOR.bits(),
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
                     e.back_buffer_format(),
                 ),
@@ -95,7 +89,7 @@ impl MainFramebuffer {
 
         let framebuffer = unsafe {
             br::vkfn_wrapper::create_framebuffer(
-                e.graphics().device().native_ptr(),
+                e.graphics().device().as_transparent_ref(),
                 &br::FramebufferCreateInfo::new(
                     render_pass,
                     &[br::VkHandleRef::dangling(swapchain_image_view)],
@@ -126,7 +120,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             &[e.back_buffer_attachment_desc()
                 .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
             &[br::SubpassDescription::new().color_attachments(
-                &[br::vk::VkAttachmentReference::new(
+                &[br::AttachmentReference::new(
                     0,
                     br::ImageLayout::ColorAttachmentOpt,
                 )],
@@ -202,26 +196,34 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     shaders.pipeline_fragment_shader().expect("no fsh?"),
                 ],
                 &br::PipelineVertexInputStateCreateInfo::new(
-                    &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<
+                    &[br::VertexInputBindingDescription::per_vertex_typed::<
                         peridot::VertexUV2D,
                     >(0)],
                     &[
-                        br::vk::VkVertexInputAttributeDescription {
-                            binding: 0,
-                            location: shaders
-                                .resolve_input_semantic_location(VertexInputSemantic::Position(0))
-                                .expect("no position input?"),
-                            format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                            offset: core::mem::offset_of!(peridot::VertexUV2D, pos) as _,
-                        },
-                        br::vk::VkVertexInputAttributeDescription {
-                            binding: 0,
-                            location: shaders
-                                .resolve_input_semantic_location(VertexInputSemantic::Texcoord(0))
-                                .expect("no texcoord input?"),
-                            format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                            offset: core::mem::offset_of!(peridot::VertexUV2D, uv) as _,
-                        },
+                        br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                binding: 0,
+                                location: shaders
+                                    .resolve_input_semantic_location(VertexInputSemantic::Position(
+                                        0,
+                                    ))
+                                    .expect("no position input?"),
+                                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                                offset: core::mem::offset_of!(peridot::VertexUV2D, pos) as _,
+                            },
+                        ),
+                        br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                binding: 0,
+                                location: shaders
+                                    .resolve_input_semantic_location(VertexInputSemantic::Texcoord(
+                                        0,
+                                    ))
+                                    .expect("no texcoord input?"),
+                                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                                offset: core::mem::offset_of!(peridot::VertexUV2D, uv) as _,
+                            },
+                        ),
                     ],
                 ),
                 &br::PipelineInputAssemblyStateCreateInfo::new(
@@ -282,10 +284,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let mut uniform_mut_buffer: RangedBuffer<_> = memory_manager
         .allocate_upload_buffer(
             e.graphics(),
-            br::BufferCreateInfo::new(
-                core::mem::size_of::<UniformValues>(),
-                br::BufferUsage::TRANSFER_SRC,
-            ),
+            br::BufferCreateInfo::new_for_type::<UniformValues>(br::BufferUsage::TRANSFER_SRC),
         )
         .expect("Failed to allocate mutable buffer")
         .into();
@@ -365,17 +364,19 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     e.graphics().device().update_descriptor_sets(
         &[
-            br::DescriptorPointer::new(descriptor_obj.into(), 0).write(
-                br::DescriptorContents::UniformBuffer(vec![
+            descriptor_obj
+                .binding_at(0)
+                .write(br::DescriptorContents::UniformBuffer(vec![
                     uniform_buffer.make_descriptor_buffer_ref()
-                ]),
-            ),
-            br::DescriptorPointer::new(descriptor_tex.into(), 0).write(
-                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
-                    &main_image_view,
-                    br::ImageLayout::ShaderReadOnlyOpt,
-                )]),
-            ),
+                ])),
+            descriptor_tex
+                .binding_at(0)
+                .write(br::DescriptorContents::CombinedImageSampler(vec![
+                    br::DescriptorImageInfo::new(
+                        &main_image_view,
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    ),
+                ])),
         ],
         &[],
     );

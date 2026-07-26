@@ -28,12 +28,14 @@ impl SurfaceInfo {
             .unwrap_or(&pres_modes[0]);
 
         let caps = device.surface_capabilities(obj)?;
-        let available_composite_alpha =
-            if (caps.supportedCompositeAlpha & br::vk::VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) != 0 {
-                br::CompositeAlphaFlags::INHERIT
-            } else {
-                br::CompositeAlphaFlags::OPAQUE
-            };
+        let available_composite_alpha = if caps
+            .supported_composite_alpha()
+            .has_any(br::CompositeAlphaFlags::INHERIT)
+        {
+            br::CompositeAlphaFlags::INHERIT
+        } else {
+            br::CompositeAlphaFlags::OPAQUE
+        };
 
         Ok(Self {
             fmt,

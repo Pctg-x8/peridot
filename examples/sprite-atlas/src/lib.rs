@@ -53,7 +53,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             &[
                 e.back_buffer_attachment_desc()
                     .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
-                br::vk::VkAttachmentDescription::new(
+                br::AttachmentDescription::new(
                     DEPTH_BUFFER_FORMAT,
                     br::ImageLayout::Undefined,
                     br::ImageLayout::DepthStencilAttachmentOpt,
@@ -62,13 +62,13 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             ],
             &[br::SubpassDescription::new()
                 .color_attachments(
-                    &[br::vk::VkAttachmentReference::new(
+                    &[br::AttachmentReference::new(
                         0,
                         br::ImageLayout::ColorAttachmentOpt,
                     )],
                     &[],
                 )
-                .depth_stencil_attachment(&br::vk::VkAttachmentReference::new(
+                .depth_stencil_attachment(&br::AttachmentReference::new(
                     1,
                     br::ImageLayout::DepthStencilAttachmentOpt,
                 ))],
@@ -200,20 +200,20 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                     render_pass.subpass(0),
                     &shader_stage_with_entry_names.iter().map(|&(s, ref e)| shader_module.on_stage(s, e)).collect::<Vec<_>>(),
                     &br::PipelineVertexInputStateCreateInfo::new(
-                        &[br::vk::VkVertexInputBindingDescription::per_vertex_typed::<peridot::VertexUV>(0)],
+                        &[br::VertexInputBindingDescription::per_vertex_typed::<peridot::VertexUV>(0)],
                         &[
-                            br::VertexInputAttributeDescription {
+                            br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                                 binding: 0,
                                 location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Position(0)],
                                 format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
                                 offset: core::mem::offset_of!(peridot::VertexUV, pos) as _
-                            },
-                            br::VertexInputAttributeDescription {
+                            }),
+                            br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                                 binding: 0,
                                 location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Texcoord(0)],
                                 format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
                                 offset: core::mem::offset_of!(peridot::VertexUV, uv) as _
-                            }
+                            })
                         ]
                     ),
                     &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleStrip),
@@ -236,7 +236,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                             },
                     ),
                     &br::PipelineColorBlendStateCreateInfo::new(&[
-                        br::vk::VkPipelineColorBlendAttachmentState::PREMULTIPLIED
+                        br::PipelineColorBlendAttachmentState::PREMULTIPLIED
                     ])
                 ).set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new().enable_alpha_to_coverage())
                 .set_depth_stencil_state(&br::PipelineDepthStencilStateCreateInfo::new().config_depth(Some(br::CompareOp::Less), true))
@@ -304,7 +304,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         .allocate_upload_buffer(
             e.graphics(),
             br::BufferCreateInfo::new(
-                mesh_vertices_size + core::mem::size_of::<BufferInitContent>(),
+                (mesh_vertices_size + core::mem::size_of::<BufferInitContent>()) as _,
                 br::BufferUsage::TRANSFER_SRC,
             ),
         )
@@ -372,14 +372,14 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             srcAccessMask: 0,
             dstAccessMask: br::AccessFlags::TRANSFER.write
         }], &[], &[
-            br::ImageMemoryBarrier::new(sprite_atlas_image_view.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1), br::ImageLayout::TransferDestOpt.from_undefined())
+            br::ImageMemoryBarrier::new(sprite_atlas_image_view.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0, br::ImageLayout::TransferDestOpt.from_undefined())
         ])
         .copy_buffer(&upload_buffer, &fixed_device_buffer, &[
-            br::BufferCopy {
+            br::BufferCopy(br::vk::VkBufferCopy {
                 srcOffset: 0,
                 dstOffset: mesh_vertex_offset,
                 size: mesh_vertices_size as _
-            },
+            }),
             br::BufferCopy::copy_data::<peridot_rendering_configuration::UniformCameraParameters>(
                 (mesh_vertices_size + core::mem::offset_of!(BufferInitContent, camera_parameters)) as _,
                 camera_parameters_offset
@@ -392,20 +392,20 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 bufferImageHeight: atlas_height,
                 imageOffset: br::Offset3D { x: 0, y: 0, z: 0 },
                 imageExtent: br::Extent3D { width: atlas_width, height: atlas_height, depth: 1 },
-                imageSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1)
+                imageSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1).0
             }
         ])
         .copy_buffer(&instance_staging_buffer, &instance_buffer, &[
-            br::BufferCopy {
+            br::BufferCopy(br::vk::VkBufferCopy {
                 srcOffset: instance_staging_offset_object_parameter,
                 dstOffset: instance_offset_object_parameter,
                 size: (core::mem::size_of::<peridot_rendering_configuration::UniformObjectParameters>() * 1024) as _
-            },
-            br::BufferCopy {
+            }),
+            br::BufferCopy(br::vk::VkBufferCopy {
                 srcOffset: instance_staging_offset_material_props,
                 dstOffset: instance_offset_material_props,
                 size: (core::mem::size_of::<peridot::math::Vector4F32>() * 1024) as _
-            }
+            })
         ]).pipeline_barrier(
             br::PipelineStageFlags::TRANSFER,
             br::PipelineStageFlags::VERTEX_INPUT | br::PipelineStageFlags::VERTEX_SHADER | br::PipelineStageFlags::FRAGMENT_SHADER,
@@ -418,7 +418,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                     dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::UNIFORM_READ | br::AccessFlags::SHADER.read
                 }
             ], &[], &[
-                br::ImageMemoryBarrier::new(sprite_atlas_image_view.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1), br::ImageLayout::TransferDestOpt.to(br::ImageLayout::ShaderReadOnlyOpt))]
+                br::ImageMemoryBarrier::new(sprite_atlas_image_view.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0, br::ImageLayout::TransferDestOpt.to(br::ImageLayout::ShaderReadOnlyOpt))]
         )
     }).expect("setup command error");
 
@@ -442,7 +442,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         .map(|x| LocalImageView {
             handle: unsafe {
                 br::vkfn_wrapper::create_image_view(
-                    e.graphics().device().native_ptr(),
+                    e.graphics().device().as_transparent_ref(),
                     &br::ImageViewCreateInfo::new(
                         &x,
                         br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
@@ -479,10 +479,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         .expect("sampler create");
     let mut dp = br::DescriptorPoolObject::new(
         e.graphics().device().clone(),
-        &br::DescriptorPoolCreateInfo::new(
-            3,
-            &descriptor_sizes,
-        ),
+        &br::DescriptorPoolCreateInfo::new(3, &descriptor_sizes),
     )
     .expect("descriptor pool create");
     let [
@@ -566,18 +563,18 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             &instance_staging_buffer,
             &instance_buffer,
             &[
-                br::BufferCopy {
+                br::BufferCopy(br::vk::VkBufferCopy {
                     srcOffset: instance_staging_offset_object_parameter,
                     dstOffset: instance_offset_object_parameter,
                     size: (core::mem::size_of::<
                         peridot_rendering_configuration::UniformObjectParameters,
                     >() * 1024) as _,
-                },
-                br::BufferCopy {
+                }),
+                br::BufferCopy(br::vk::VkBufferCopy {
                     srcOffset: instance_staging_offset_material_props,
                     dstOffset: instance_offset_material_props,
                     size: (core::mem::size_of::<peridot::math::Vector4F32>() * 1024) as _,
-                },
+                }),
             ],
         )
         .pipeline_barrier(
@@ -732,7 +729,11 @@ struct LocalImageView {
 impl Drop for LocalImageView {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }

@@ -288,7 +288,7 @@ impl<R: br::Image> RangedImage<R> {
     }
 
     pub fn barrier(&self, trans: br::LayoutTransition) -> br::ImageMemoryBarrier {
-        br::ImageMemoryBarrier::new(&self.0, self.1.clone(), trans)
+        br::ImageMemoryBarrier::new(&self.0, self.1 .0.clone(), trans)
     }
 
     pub fn barrier3(

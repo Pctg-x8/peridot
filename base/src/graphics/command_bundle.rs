@@ -97,7 +97,11 @@ unsafe impl<Device: br::Device + Send> Send for CommandBundle<Device> {}
 impl<Device: br::Device> Drop for CommandBundle<Device> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_command_pool(self.device.native_ptr(), self.pool, None);
+            br::vkfn_wrapper::destroy_command_pool(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pool),
+                None,
+            );
         }
     }
 }
@@ -107,17 +111,15 @@ impl CommandBundle<VulkanGfx> {
             CBSubmissionType::Graphics => g.graphics_queue.family,
             CBSubmissionType::Transfer => g.graphics_queue.family,
         };
-        let cp = unsafe {
-            br::vkfn_wrapper::create_command_pool(
-                g.gfx_device.0.device,
-                &br::CommandPoolCreateInfo::new(qf),
-                None,
-            )?
-        };
+        let cp = br::vkfn_wrapper::create_command_pool(
+            g.gfx_device.native_device_ref(),
+            &br::CommandPoolCreateInfo::new(qf),
+            None,
+        )?;
         let mut buffers = Vec::with_capacity(count);
         match unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
-                g.gfx_device.0.device,
+                g.gfx_device.native_device_ref(),
                 &br::CommandBufferAllocateInfo::new(
                     &mut br::VkHandleRefMut::dangling(cp),
                     count as _,
@@ -129,7 +131,11 @@ impl CommandBundle<VulkanGfx> {
             Ok(_) => (),
             Err(e) => {
                 unsafe {
-                    br::vkfn_wrapper::destroy_command_pool(g.gfx_device.0.device, cp, None);
+                    br::vkfn_wrapper::destroy_command_pool(
+                        g.gfx_device.native_device_ref(),
+                        br::VkHandleRefMut::dangling(cp),
+                        None,
+                    );
                 }
 
                 return Err(e);
@@ -154,8 +160,8 @@ impl<Device: br::Device> CommandBundle<Device> {
     pub unsafe fn reset(&mut self) -> br::Result<()> {
         unsafe {
             br::vkfn_wrapper::reset_command_pool(
-                self.device.native_ptr(),
-                self.pool,
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pool),
                 br::CommandPoolResetFlags::RELEASE_RESOURCES,
             )
         }

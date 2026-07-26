@@ -15,8 +15,8 @@ use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct PvpContainer {
-    pub vertex_bindings: Vec<br::vk::VkVertexInputBindingDescription>,
-    pub vertex_attributes: Vec<br::vk::VkVertexInputAttributeDescription>,
+    pub vertex_bindings: Vec<br::VertexInputBindingDescription>,
+    pub vertex_attributes: Vec<br::VertexInputAttributeDescription>,
     pub vertex_shader: Vec<u32>,
     pub fragment_shader: Option<Vec<u32>>,
 }
@@ -35,7 +35,9 @@ impl PartialEq for PvpContainer {
             .iter()
             .zip(other.vertex_bindings.iter())
             .all(|(a, b)| {
-                a.binding == b.binding && a.inputRate == b.inputRate && a.stride == b.stride
+                a.0.binding == b.0.binding
+                    && a.0.inputRate == b.0.inputRate
+                    && a.0.stride == b.0.stride
             })
         {
             return false;
@@ -46,10 +48,10 @@ impl PartialEq for PvpContainer {
             .iter()
             .zip(other.vertex_attributes.iter())
             .all(|(a, b)| {
-                a.binding == b.binding
-                    && a.location == b.location
-                    && a.format == b.format
-                    && a.offset == b.offset
+                a.0.binding == b.0.binding
+                    && a.0.location == b.0.location
+                    && a.0.format == b.0.format
+                    && a.0.offset == b.0.offset
             })
         {
             return false;
@@ -238,9 +240,7 @@ impl<R: peridot_native_io::RandomReadBlobAsync> PvpContainerReaderAsync<R> {
         })
     }
 
-    pub async fn read_vertex_bindings(
-        &self,
-    ) -> IOResult<Vec<br::vk::VkVertexInputBindingDescription>> {
+    pub async fn read_vertex_bindings(&self) -> IOResult<Vec<br::VertexInputBindingDescription>> {
         Ok(
             Vec::binary_deserialize_at_async(&self.reader, self.vb_offset)
                 .await?
@@ -250,7 +250,7 @@ impl<R: peridot_native_io::RandomReadBlobAsync> PvpContainerReaderAsync<R> {
 
     pub async fn read_vertex_attributes(
         &self,
-    ) -> IOResult<Vec<br::vk::VkVertexInputAttributeDescription>> {
+    ) -> IOResult<Vec<br::VertexInputAttributeDescription>> {
         Ok(
             Vec::binary_deserialize_at_async(&self.reader, self.va_offset)
                 .await?
@@ -334,25 +334,25 @@ impl<R: BufRead + Seek> PvpContainerReader<R> {
         })
     }
 
-    pub fn read_vertex_bindings(
-        &mut self,
-    ) -> IOResult<Vec<br::vk::VkVertexInputBindingDescription>> {
+    pub fn read_vertex_bindings(&mut self) -> IOResult<Vec<br::VertexInputBindingDescription>> {
         self.reader.seek(SeekFrom::Start(self.vb_offset))?;
         Vec::<_>::binary_unserialize(&mut self.reader)
     }
-    pub fn read_vertex_attributes(
-        &mut self,
-    ) -> IOResult<Vec<br::vk::VkVertexInputAttributeDescription>> {
+
+    pub fn read_vertex_attributes(&mut self) -> IOResult<Vec<br::VertexInputAttributeDescription>> {
         self.reader.seek(SeekFrom::Start(self.va_offset))?;
         Vec::<_>::binary_unserialize(&mut self.reader)
     }
+
     pub fn read_vertex_shader(&mut self) -> IOResult<Vec<u32>> {
         self.reader.seek(SeekFrom::Start(self.vsh_offset))?;
         SpvBinary::binary_unserialize(&mut self.reader).map(|x| x.0)
     }
+
     pub fn is_fragment_stage_provided(&mut self) -> bool {
         self.fsh_offset.is_some()
     }
+
     pub fn read_fragment_shader(&mut self) -> IOResult<Option<Vec<u32>>> {
         let Some(o) = self.fsh_offset else {
             return Ok(None);
@@ -399,17 +399,17 @@ trait AsyncBinarySerializeVkStructures {
     where
         Self: Sized;
 }
-impl BinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
+impl BinarySerializeVkStructures for br::VertexInputBindingDescription {
     fn binary_serialize<W: Write>(&self, sink: &mut W) -> IOResult<usize> {
-        VariableUInt(self.inputRate as _)
+        VariableUInt(self.0.inputRate as _)
             .write(sink)
             .and_then(|w0| {
-                VariableUInt(self.binding as _)
+                VariableUInt(self.0.binding as _)
                     .write(sink)
                     .map(move |w1| w1 + w0)
             })
             .and_then(|w0| {
-                VariableUInt(self.stride as _)
+                VariableUInt(self.0.stride as _)
                     .write(sink)
                     .map(move |w1| w1 + w0)
             })
@@ -422,14 +422,14 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
         let VariableUInt(binding) = VariableUInt::read(source)?;
         let VariableUInt(stride) = VariableUInt::read(source)?;
 
-        Ok(br::vk::VkVertexInputBindingDescription {
+        Ok(Self(br::vk::VkVertexInputBindingDescription {
             inputRate: input_rate as _,
             binding: binding as _,
             stride: stride as _,
-        })
+        }))
     }
 }
-impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputBindingDescription {
+impl AsyncBinarySerializeVkStructures for br::VertexInputBindingDescription {
     // fn binary_serialize_async<'s>(
     //     &'s self,
     //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
@@ -463,32 +463,32 @@ impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputBindingDescriptio
             read_size += l;
 
             Ok((
-                Self {
+                Self(br::vk::VkVertexInputBindingDescription {
                     inputRate: input_rate as _,
                     binding: binding as _,
                     stride: stride as _,
-                },
+                }),
                 read_size,
             ))
         }
     }
 }
-impl BinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
+impl BinarySerializeVkStructures for br::VertexInputAttributeDescription {
     fn binary_serialize<W: Write>(&self, sink: &mut W) -> IOResult<usize> {
-        VariableUInt(self.location as _)
+        VariableUInt(self.0.location as _)
             .write(sink)
             .and_then(|w0| {
-                VariableUInt(self.binding as _)
+                VariableUInt(self.0.binding as _)
                     .write(sink)
                     .map(move |w1| w1 + w0)
             })
             .and_then(|w0| {
-                VariableUInt(self.offset as _)
+                VariableUInt(self.0.offset as _)
                     .write(sink)
                     .map(move |w1| w1 + w0)
             })
             .and_then(|w0| {
-                VariableUInt(self.format as _)
+                VariableUInt(self.0.format as _)
                     .write(sink)
                     .map(move |w1| w1 + w0)
             })
@@ -502,15 +502,15 @@ impl BinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
         let VariableUInt(offset) = VariableUInt::read(source)?;
         let VariableUInt(format) = VariableUInt::read(source)?;
 
-        Ok(br::vk::VkVertexInputAttributeDescription {
+        Ok(Self(br::vk::VkVertexInputAttributeDescription {
             location: location as _,
             binding: binding as _,
             offset: offset as _,
             format: format as _,
-        })
+        }))
     }
 }
-impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescription {
+impl AsyncBinarySerializeVkStructures for br::VertexInputAttributeDescription {
     // fn binary_serialize_async<'s>(
     //     &'s self,
     //     sink: &'s mut (impl async_std::io::Write + Unpin + ?Sized),
@@ -548,12 +548,12 @@ impl AsyncBinarySerializeVkStructures for br::vk::VkVertexInputAttributeDescript
             read_size += l;
 
             Ok((
-                Self {
+                Self(br::vk::VkVertexInputAttributeDescription {
                     location: location as _,
                     binding: binding as _,
                     offset: offset as _,
                     format: format as _,
-                },
+                }),
                 read_size,
             ))
         }

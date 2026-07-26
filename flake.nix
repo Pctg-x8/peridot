@@ -6,11 +6,16 @@
   };
   outputs =
     { nixpkgs, ... }:
-    let
-      target-systems = [
+    let target-systems = [
         "x86_64-linux"
         "aarch64-darwin"
       ];
+      NDK_PLATFORM_TARGET = "35";
+      android-composition = pkgs: pkgs.androidenv.composeAndroidPackages {
+        platformVersions = [NDK_PLATFORM_TARGET];
+        abiVersions = ["arm64-v8a"];
+        includeNDK = true;
+      };
       build-tools =
         pkgs:
         pkgs.writeShellApplication {
@@ -27,10 +32,7 @@
         pkgs.rustup
         # for building cdeps
         pkgs.cmake
-        pkgs.ninja
-        pkgs.pkg-config
-        pkgs.clang
-        pkgs.llvmPackages.libclang
+        pkgs.python3
         # required libs for building engine
         pkgs.vulkan-loader
         # required for some asset processing
@@ -41,6 +43,9 @@
         (build-tools pkgs)
         # debugging
         pkgs.vulkan-validation-layers
+        # android
+        (android-composition pkgs).androidsdk
+        pkgs.cargo-ndk
       ];
       native-deps = pkgs: [ pkgs.pkg-config ];
       shell-set-common-env-vars = ''
@@ -53,11 +58,11 @@
       '';
       libclang-path = pkgs: "${pkgs.llvmPackages.libclang.lib}/lib";
     in
-    builtins.foldl' (a: b: a // b) { } (
+    { devShells = builtins.foldl' (a: b: a // b) { } (
       map (
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs { inherit system; config.allowUnfree = true; config.android_sdk.accept_license = true; };
           platform-deps =
             if system == "x86_64-linux" then
               [
@@ -66,10 +71,17 @@
                 pkgs.wayland
                 pkgs.pulseaudio
                 pkgs.pipewire
+                pkgs.freetype
+                pkgs.fontconfig
+                # building cdeps(explicit compiler for linux)
+                pkgs.ninja
+                pkgs.pkg-config
+                pkgs.clang
+                pkgs.llvmPackages.libclang
               ]
             else
               [ ];
-          LIBCLANG_PATH = libclang-path pkgs;
+          LIBCLANG_PATH = if system == "x86_64-linux" then libclang-path pkgs else "";
 
           fishPrehook = pkgs.writeScriptBin "startup" ''
             # prepend devenv prompt
@@ -82,18 +94,24 @@
               __peridot_fish_prompt_org
             end
           '';
+          # android vars
+          ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
+          ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
+          mksh = if system == "x86_64-linux" then pkgs.mkShell else pkgs.mkShellNoCC;
         in
         {
-          devShells."${system}" = {
-            default = pkgs.mkShell {
+          "${system}" = {
+            default = mksh {
               buildInputs = common-deps pkgs ++ platform-deps;
               nativeBuildInputs = native-deps pkgs;
               shellHook = shell-set-common-env-vars;
 
               # このへんはないとエラーになる
               inherit LIBCLANG_PATH;
+              # android
+              inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
-            fish = pkgs.mkShell {
+            fish = mksh {
               buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
               nativeBuildInputs = native-deps pkgs;
               shellHook = ''
@@ -104,9 +122,11 @@
 
               # このへんはないとエラーになる
               inherit LIBCLANG_PATH;
+              # android
+              inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
           };
         }
       ) target-systems
-    );
+    ); };
 }

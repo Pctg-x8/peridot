@@ -89,6 +89,9 @@ pub fn build(
 fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, identifier: &str) {
     ctx.print_step("Building app bundle...");
 
+    let system_vk_sdk_path =
+        std::path::PathBuf::from(std::env::var_os("VULKAN_SDK").expect("VULKAN_SDK not set"));
+
     let xcode_project_dir_path = ctx.cradle_directory.join("peridot-cradle");
     let xcode_project_template_dir_path = ctx.cradle_directory.join("peridot-cradle.template");
 
@@ -123,6 +126,24 @@ fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, id
     )
     .expect("Failed to move built library");
 
+    // generate icd files for bundled app
+    let source_path = system_vk_sdk_path.join("share/vulkan/icd.d/libkosmickrisp_icd.json");
+    let target_path =
+        xcode_project_dir_path.join("extra-resources/vulkan/icd.d/libkosmickrisp_icd.json");
+    let mut icd_data: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(source_path).expect("Failed to read icd file"),
+    )
+    .expect("Failed to parse icd data");
+    icd_data["ICD"]["library_path"] =
+        serde_json::json!("../../../Frameworks/libvulkan_kosmickrisp.dylib");
+    std::fs::create_dir_all(target_path.parent().expect("no parent path?"))
+        .expect("Failed to create icd directory");
+    std::fs::write(
+        target_path,
+        serde_json::to_string(&icd_data).expect("Failed to serialize icd data"),
+    )
+    .expect("Failed to write icd file");
+
     // tweak pbxproj
     let pbxproj_path = xcode_project_dir_path.join("peridot-cradle.xcodeproj/project.pbxproj");
     let pbxproj_content = std::fs::read_to_string(&pbxproj_path).expect("Failed to read pbxproj");
@@ -133,7 +154,7 @@ fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, id
     )
     .expect("Failed to decode to PBXProjectFile");
 
-    let system_vk_sdk_path = std::env::var("VULKAN_SDK").expect("VULKAN_SDK not set");
+    let system_vk_sdk_path_str = system_vk_sdk_path.display().to_string();
     let mut build_configuration_ids = Vec::new();
     for t in pbxproj.root_project().targets.iter() {
         match t.entity(&pbxproj).expect("no target entity found") {
@@ -158,12 +179,27 @@ fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, id
 
         bc.build_settings.insert(
             "VULKAN_SDK",
-            pbxproj::Value::Single(Cow::Borrowed(&system_vk_sdk_path)),
+            pbxproj::Value::Single(Cow::Borrowed(&system_vk_sdk_path_str)),
         );
         bc.build_settings.insert(
             "PRODUCT_BUNDLE_IDENTIFIER",
             pbxproj::Value::Single(Cow::Borrowed(identifier)),
         );
+    }
+    // rewrite path of VulkanSDK group
+    for t in pbxproj.objects.iter_mut() {
+        match t.1 {
+            pbxproj::PBXObject::Group(g) => {
+                if g.name
+                    .as_ref()
+                    .is_some_and(|x| x == "PeridotCLIRef-VulkanSDK")
+                {
+                    g.path = Some(Cow::Borrowed(&system_vk_sdk_path_str));
+                    g.source_tree = "<absolute>".into();
+                }
+            }
+            _ => (),
+        }
     }
 
     // search extra-libs and import to link

@@ -28,8 +28,8 @@ impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_surface(
-                self.gfx_device.instance().native_ptr(),
-                self.handle,
+                self.gfx_device.instance().as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
                 None,
             );
         }
@@ -159,7 +159,7 @@ impl peridot::NativeLinker for NativeLink {
     type Presenter = Presenter;
 
     fn instance_extensions(&self) -> Vec<&CStr> {
-        vec![c"VK_KHR_surface", c"VK_MVK_macos_surface"]
+        vec![c"VK_KHR_surface", c"VK_EXT_metal_surface"]
     }
     fn device_extensions(&self) -> Vec<&CStr> {
         vec![c"VK_KHR_swapchain"]
