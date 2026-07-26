@@ -81,7 +81,7 @@ impl<Image: br::Image> Texture2D<Image> {
         ));
 
         let handle =
-            unsafe { br::vkfn_wrapper::create_image(g.gfx_device.0.device, &idesc, None)? };
+            br::vkfn_wrapper::create_image(g.gfx_device.native_device_ref(), &idesc, None)?;
         Ok((
             UnboundedStandaloneImage {
                 handle,
@@ -287,7 +287,11 @@ pub struct DeviceWorkingTexture2D<Image: br::Image> {
 impl<Image: br::Image> Drop for DeviceWorkingTexture2D<Image> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.under.device_handle(), self.view, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.under.device_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.view),
+                None,
+            );
         }
     }
 }
@@ -327,7 +331,11 @@ pub struct DeviceWorkingTexture3D<Image: br::Image> {
 impl<Image: br::Image> Drop for DeviceWorkingTexture3D<Image> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.under.device_handle(), self.view, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.under.device_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.view),
+                None,
+            );
         }
     }
 }
@@ -373,7 +381,11 @@ pub struct DeviceWorkingCubeTexture<Image: br::Image> {
 impl<Image: br::Image> Drop for DeviceWorkingCubeTexture<Image> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.under.device_handle(), self.view, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.under.device_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.view),
+                None,
+            );
         }
     }
 }
@@ -503,10 +515,8 @@ impl DeviceWorkingTextureAllocator<'_> {
         let mut images =
             Vec::with_capacity(self.planes.len() + self.cube.len() + self.volumes.len());
         for d in self.planes {
-            let handle =
-                unsafe { br::vkfn_wrapper::create_image(g.gfx_device.0.device, &d, None)? };
             images.push(UnboundedStandaloneImage {
-                handle,
+                handle: br::vkfn_wrapper::create_image(g.gfx_device.native_device_ref(), &d, None)?,
                 format: d.as_ref().format,
                 size: d.as_ref().extent,
                 image_type: br::vk::VK_IMAGE_VIEW_TYPE_2D,
@@ -514,10 +524,8 @@ impl DeviceWorkingTextureAllocator<'_> {
             });
         }
         for d in self.cube {
-            let handle =
-                unsafe { br::vkfn_wrapper::create_image(g.gfx_device.0.device, &d, None)? };
             images.push(UnboundedStandaloneImage {
-                handle,
+                handle: br::vkfn_wrapper::create_image(g.gfx_device.native_device_ref(), &d, None)?,
                 format: d.as_ref().format,
                 size: d.as_ref().extent,
                 image_type: br::vk::VK_IMAGE_VIEW_TYPE_CUBE,
@@ -525,10 +533,8 @@ impl DeviceWorkingTextureAllocator<'_> {
             });
         }
         for d in self.volumes {
-            let handle =
-                unsafe { br::vkfn_wrapper::create_image(g.gfx_device.0.device, &d, None)? };
             images.push(UnboundedStandaloneImage {
-                handle,
+                handle: br::vkfn_wrapper::create_image(g.gfx_device.native_device_ref(), &d, None)?,
                 format: d.as_ref().format,
                 size: d.as_ref().extent,
                 image_type: br::vk::VK_IMAGE_VIEW_TYPE_3D,
@@ -553,16 +559,10 @@ impl DeviceWorkingTextureAllocator<'_> {
                     let res = res.unwrap_image();
                     let view_handle = unsafe {
                         br::vkfn_wrapper::create_image_view(
-                            g.gfx_device.0.device,
+                            g.gfx_device.native_device_ref(),
                             &br::ImageViewCreateInfo::new(
                                 &res,
-                                br::vk::VkImageSubresourceRange {
-                                    aspectMask: br::AspectMask::COLOR.bits(),
-                                    baseMipLevel: 0,
-                                    levelCount: 1,
-                                    baseArrayLayer: 0,
-                                    layerCount: 1,
-                                },
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                                 res.dimension(),
                                 br::Image::format(&res),
                             ),
@@ -586,16 +586,10 @@ impl DeviceWorkingTextureAllocator<'_> {
                     let res = res.unwrap_image();
                     let view_handle = unsafe {
                         br::vkfn_wrapper::create_image_view(
-                            g.gfx_device.0.device,
+                            g.gfx_device.native_device_ref(),
                             &br::ImageViewCreateInfo::new(
                                 &res,
-                                br::vk::VkImageSubresourceRange {
-                                    aspectMask: br::AspectMask::COLOR.bits(),
-                                    baseMipLevel: 0,
-                                    levelCount: 1,
-                                    baseArrayLayer: 0,
-                                    layerCount: 1,
-                                },
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                                 res.dimension(),
                                 br::Image::format(&res),
                             ),
@@ -619,16 +613,10 @@ impl DeviceWorkingTextureAllocator<'_> {
                     let res = res.unwrap_image();
                     let view_handle = unsafe {
                         br::vkfn_wrapper::create_image_view(
-                            g.gfx_device.0.device,
+                            g.gfx_device.native_device_ref(),
                             &br::ImageViewCreateInfo::new(
                                 &res,
-                                br::vk::VkImageSubresourceRange {
-                                    aspectMask: br::AspectMask::COLOR.bits(),
-                                    baseMipLevel: 0,
-                                    levelCount: 1,
-                                    baseArrayLayer: 0,
-                                    layerCount: 1,
-                                },
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                                 res.dimension(),
                                 br::Image::format(&res),
                             ),

@@ -1,5 +1,5 @@
 use crate::mthelper::{SharedRef, SharedWeakRef};
-use bedrock::{self as br, ResolverInterface};
+use bedrock::{self as br};
 use br::{Instance, PhysicalDevice};
 use std::{
     collections::HashSet,
@@ -67,21 +67,21 @@ impl<'s> VulkanExtension<'s> {
     pub const DEBUG_REPORT_EXT: Self = Self::new(c"VK_EXT_debug_report");
     pub const DEBUG_UTILS_EXT: Self = Self::new(c"VK_EXT_debug_utils");
     pub const GET_PHYSICAL_DEVICE_PROPERTIES2_KHR: Self =
-        Self::new(c"VK_KHR_get_physical_device_properties2").promoted(br::Version::new(0, 1, 1, 0));
+        Self::new(c"VK_KHR_get_physical_device_properties2").promoted(br::Version::new(1, 1, 0));
     pub const DEDICATED_ALLOCATION_KHR: Self =
-        Self::new(c"VK_KHR_dedicated_allocation").promoted(br::Version::new(0, 1, 1, 0));
+        Self::new(c"VK_KHR_dedicated_allocation").promoted(br::Version::new(1, 1, 0));
     pub const GET_MEMORY_REQUIREMENTS2_KHR: Self =
-        Self::new(c"VK_KHR_get_memory_requirements2").promoted(br::Version::new(0, 1, 1, 0));
+        Self::new(c"VK_KHR_get_memory_requirements2").promoted(br::Version::new(1, 1, 0));
     pub const BIND_MEMORY2_KHR: Self =
-        Self::new(c"VK_KHR_bind_memory2").promoted(br::Version::new(0, 1, 1, 0));
+        Self::new(c"VK_KHR_bind_memory2").promoted(br::Version::new(1, 1, 0));
     pub const SYNCHRONIZATION2_KHR: Self =
-        Self::new(c"VK_KHR_synchronization2").promoted(br::Version::new(0, 1, 3, 0));
+        Self::new(c"VK_KHR_synchronization2").promoted(br::Version::new(1, 3, 0));
     pub const CREATE_RENDERPASS2_KHR: Self =
-        Self::new(c"VK_KHR_create_renderpass2").promoted(br::Version::new(0, 1, 2, 0));
+        Self::new(c"VK_KHR_create_renderpass2").promoted(br::Version::new(1, 2, 0));
     pub const MULTIVIEW_KHR: Self =
-        Self::new(c"VK_KHR_multiview").promoted(br::Version::new(0, 1, 1, 0));
+        Self::new(c"VK_KHR_multiview").promoted(br::Version::new(1, 1, 0));
     pub const MAINTENANCE2_KHR: Self =
-        Self::new(c"VK_KHR_maintenance2").promoted(br::Version::new(0, 1, 1, 0));
+        Self::new(c"VK_KHR_maintenance2").promoted(br::Version::new(1, 1, 0));
 }
 
 pub(crate) struct VulkanGfxInner {
@@ -110,12 +110,12 @@ unsafe impl Send for VulkanGfxInner {}
 impl Drop for VulkanGfxInner {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn::destroy_device(self.device, core::ptr::null());
+            br::vkfn_wrapper::destroy_device(br::VkHandleRefMut::dangling(self.device), None);
             #[cfg(feature = "debug")]
             if let Some((inst, destroy_fn)) = self.debug_instance.take() {
                 (destroy_fn.0)(self.instance, inst, core::ptr::null());
             }
-            br::vkfn::destroy_instance(self.instance, core::ptr::null());
+            br::vkfn_wrapper::destroy_instance(br::VkHandleRefMut::dangling(self.instance), None);
         }
     }
 }
@@ -124,7 +124,7 @@ impl Drop for VulkanGfxInner {
 pub struct VulkanGfx(pub(crate) SharedRef<VulkanGfxInner>);
 impl VulkanGfx {
     const ENGINE_NAME: &'static core::ffi::CStr = c"Interlude2:Peridot";
-    const ENGINE_VERSION: br::Version = br::Version::new(0, 0, 1, 0);
+    const ENGINE_VERSION: br::Version = br::Version::new(0, 1, 0);
 
     pub(crate) fn new(
         app_name: &str,
@@ -137,7 +137,7 @@ impl VulkanGfx {
             Ok(x) => x,
             Err(e) => {
                 tracing::warn!(cause = ?e, "Failed to get vulkan version. falling back to v1.0.0");
-                br::Version::new(0, 1, 0, 0)
+                br::Version::new(1, 0, 0)
             }
         };
         tracing::info!("System Vulkan Version: v{vk_version}");
@@ -151,7 +151,7 @@ impl VulkanGfx {
             VulkanExtension::DEBUG_REPORT_EXT.name, // 古い環境向け
         ]);
 
-        if vk_version < br::Version::new(0, 1, 1, 0) {
+        if vk_version < br::Version::new(1, 1, 0) {
             optional_instance_extensions
                 .extend([VulkanExtension::GET_PHYSICAL_DEVICE_PROPERTIES2_KHR.name]);
             optional_device_extensions.extend([
@@ -162,17 +162,17 @@ impl VulkanGfx {
                 VulkanExtension::BIND_MEMORY2_KHR.name,
             ]);
         }
-        if vk_version < br::Version::new(0, 1, 2, 0) {
+        if vk_version < br::Version::new(1, 2, 0) {
             optional_device_extensions.push(VulkanExtension::CREATE_RENDERPASS2_KHR.name);
         }
-        if vk_version < br::Version::new(0, 1, 3, 0) {
+        if vk_version < br::Version::new(1, 3, 0) {
             optional_device_extensions.push(VulkanExtension::SYNCHRONIZATION2_KHR.name);
         }
         optional_instance_extensions.sort();
         optional_device_extensions.sort();
 
         let mut validation_layer_available = false;
-        match br::instance_extension_properties_cstr_alloc(None) {
+        match br::instance_extension_properties_alloc(None) {
             Ok(xs) => {
                 for x in xs {
                     let name_cstr = match x.extensionName.as_cstr() {
@@ -208,7 +208,7 @@ impl VulkanGfx {
             }
         }
 
-        match br::enumerate_layer_properties_alloc() {
+        match br::instance_layer_properties_alloc() {
             Ok(xs) => {
                 for l in xs {
                     let name_cstr = match l.layerName.as_cstr() {
@@ -220,14 +220,14 @@ impl VulkanGfx {
                     };
 
                     tracing::info!(
-                        target: "Peridot DeviceDiag",
+                        target: "peridot::diag",
                         name = ?name_cstr,
                         spec_version = l.specVersion,
                         impl_version = l.implementationVersion,
                         "Vk Instance Layer"
                     );
                     let _span = tracing::info_span!(
-                        target: "Peridot DeviceDiag",
+                        target: "peridot::diag",
                         "Vk Instance Layer",
                         name = ?name_cstr,
                         spec_version = l.specVersion,
@@ -240,7 +240,7 @@ impl VulkanGfx {
                         validation_layer_available = true;
                     }
 
-                    match br::instance_extension_properties_cstr_alloc(Some(name_cstr)) {
+                    match br::instance_extension_properties_alloc(Some(name_cstr)) {
                         Ok(xs) => {
                             for x in xs {
                                 let ext_name_cstr = match x.extensionName.as_cstr() {
@@ -252,19 +252,11 @@ impl VulkanGfx {
                                 };
 
                                 tracing::info!(
-                                    target: "Peridot DeviceDiag",
+                                    target: "peridot::diag",
                                     name = ?ext_name_cstr,
                                     version = x.specVersion,
                                     "Vk Instance Layer Extension"
                                 );
-                                let _span = tracing::info_span!(
-                                    target: "Peridot DeviceDiag",
-                                    "Vk Instance Layer Extension",
-                                    layer_name = ?name_cstr,
-                                    name = ?ext_name_cstr,
-                                    version = x.specVersion
-                                );
-                                let _span = _span.enter();
 
                                 if let Ok(n) =
                                     optional_instance_extensions.binary_search(&ext_name_cstr)
@@ -357,7 +349,7 @@ impl VulkanGfx {
                 Some(x) => x,
             },
         };
-        match adapter.enumerate_extension_properties(None) {
+        match adapter.enumerate_extension_properties_alloc(None) {
             Ok(xs) => {
                 for d in xs {
                     let name_cstr = match d.extensionName.as_cstr() {
@@ -369,18 +361,11 @@ impl VulkanGfx {
                     };
 
                     tracing::info!(
-                        target: "Peridot DeviceDiag",
+                        target: "peridot::diag",
                         name = ?name_cstr,
                         version = d.specVersion,
                         "Vk Device Extension"
                     );
-                    let _span = tracing::info_span!(
-                        target: "Peridot DeviceDiag",
-                        "Vk Device Extension",
-                        name = ?name_cstr,
-                        version = d.specVersion
-                    );
-                    let _span = _span.enter();
 
                     if let Ok(n) = optional_device_extensions.binary_search(&name_cstr) {
                         // available!
@@ -417,14 +402,14 @@ impl VulkanGfx {
             Standard(br::vk::VkPhysicalDeviceFeatures),
             Extendable(br::PhysicalDeviceFeatures2<'r>),
         }
-        let mut sync2 = if vk_version >= br::Version::new(0, 1, 3, 0)
+        let mut sync2 = if vk_version >= br::Version::new(1, 3, 0)
             || device_extensions.contains(&VulkanExtension::SYNCHRONIZATION2_KHR.name)
         {
             Some(br::PhysicalDeviceSynchronization2Features::new(true))
         } else {
             None
         };
-        let features = if vk_version >= br::Version::new(0, 1, 1, 0)
+        let features = if vk_version >= br::Version::new(1, 1, 0)
             || instance_extensions
                 .contains(&VulkanExtension::GET_PHYSICAL_DEVICE_PROPERTIES2_KHR.name)
         {
@@ -464,25 +449,29 @@ impl VulkanGfx {
             .collect::<HashSet<_>>();
 
         #[cfg(feature = "debug")]
-        let set_object_name_fn =
-            if enabled_extension_names.contains(VulkanExtension::DEBUG_UTILS_EXT.name) {
-                Some(unsafe {
-                    br::VkHandle::native_ptr(&instance)
-                        .load_function_unconstrainted::<br::vk::PFN_vkSetDebugUtilsObjectNameEXT>()
-                })
-            } else {
-                None
-            };
+        let set_object_name_fn = if enabled_extension_names
+            .contains(VulkanExtension::DEBUG_UTILS_EXT.name)
+        {
+            Some(unsafe {
+                br::vk::load_function_unconstrainted::<br::vk::PFN_vkSetDebugUtilsObjectNameEXT>(
+                    &br::InstanceResolverImpl(br::VkHandle::native_ptr(&instance)),
+                )
+            })
+        } else {
+            None
+        };
 
         Self(SharedRef::new(VulkanGfxInner {
             #[cfg(feature = "debug")]
-            debug_instance: debug_instance.map(|x| (
-                x.unmanage().0,
-                unsafe {
-                    br::VkHandle::native_ptr(&instance)
-                        .load_function_unconstrainted::<br::vk::PFN_vkDestroyDebugUtilsMessengerEXT>()
-                }
-            )),
+            debug_instance: debug_instance.map(|x| {
+                (x.unmanage().0, unsafe {
+                    br::vk::load_function_unconstrainted::<
+                        br::vk::PFN_vkDestroyDebugUtilsMessengerEXT,
+                    >(&br::InstanceResolverImpl(br::VkHandle::native_ptr(
+                        &instance,
+                    )))
+                })
+            }),
             #[cfg(feature = "debug")]
             set_object_name_fn,
             enabled_extension_names,
@@ -505,6 +494,16 @@ impl VulkanGfx {
         VulkanGfxWeak(SharedRef::downgrade(&self.0))
     }
 
+    #[inline(always)]
+    fn adapter_ref<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkPhysicalDevice> {
+        unsafe { br::VkHandleRef::dangling(self.0.adapter) }
+    }
+
+    #[inline(always)]
+    pub(crate) fn native_device_ref<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkDevice> {
+        unsafe { br::VkHandleRef::dangling(self.0.device) }
+    }
+
     pub fn adapter_available_features(&self) -> &br::PhysicalDeviceFeatures {
         self.0
             .cached_adapter_properties
@@ -512,10 +511,8 @@ impl VulkanGfx {
             .get_or_init(|| {
                 let mut h = core::mem::MaybeUninit::uninit();
 
-                unsafe {
-                    br::vkfn_wrapper::get_physical_device_features(self.0.adapter, &mut h);
-                    h.assume_init()
-                }
+                br::vkfn_wrapper::get_physical_device_features(self.adapter_ref(), &mut h);
+                unsafe { h.assume_init() }
             })
     }
 
@@ -527,10 +524,8 @@ impl VulkanGfx {
             .get_or_init(|| {
                 let mut h = core::mem::MaybeUninit::uninit();
 
-                unsafe {
-                    br::vkfn_wrapper::get_physical_device_properties(self.0.adapter, &mut h);
-                    h.assume_init()
-                }
+                br::vkfn_wrapper::get_physical_device_properties(self.adapter_ref(), &mut h);
+                unsafe { h.assume_init() }
             })
             .limits
     }
@@ -542,10 +537,8 @@ impl VulkanGfx {
             .get_or_init(|| {
                 let mut h = core::mem::MaybeUninit::uninit();
 
-                unsafe {
-                    br::vkfn_wrapper::get_physical_device_memory_properties(self.0.adapter, &mut h);
-                    h.assume_init()
-                }
+                br::vkfn_wrapper::get_physical_device_memory_properties(self.adapter_ref(), &mut h);
+                unsafe { h.assume_init() }
             })
     }
 
@@ -555,9 +548,9 @@ impl VulkanGfx {
     ) -> br::Result<bool> {
         unsafe {
             br::vkfn_wrapper::get_physical_device_surface_support(
-                self.0.adapter,
+                self.adapter_ref(),
                 self.0.graphics_queue_family_index,
-                surface.native_ptr(),
+                surface.as_transparent_ref(),
             )
         }
     }
@@ -569,8 +562,8 @@ impl VulkanGfx {
         let mut sink = core::mem::MaybeUninit::uninit();
         unsafe {
             br::vkfn_wrapper::get_physical_device_surface_capabilities(
-                self.0.adapter,
-                surface.native_ptr(),
+                self.adapter_ref(),
+                surface.as_transparent_ref(),
                 &mut sink,
             )?;
         }
@@ -584,8 +577,8 @@ impl VulkanGfx {
     ) -> br::Result<Vec<br::SurfaceFormat>> {
         let x = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_format_count(
-                self.0.adapter,
-                surface.native_ptr(),
+                self.adapter_ref(),
+                surface.as_transparent_ref(),
             )?
         };
         if x == 0 {
@@ -594,14 +587,17 @@ impl VulkanGfx {
         }
 
         let mut sink = Vec::with_capacity(x as _);
-        unsafe {
+        let r = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_formats(
-                self.0.adapter,
-                surface.native_ptr(),
+                self.adapter_ref(),
+                surface.as_transparent_ref(),
                 sink.spare_capacity_mut(),
-            )?;
-            sink.set_len(sink.capacity());
-        }
+            )?
+        };
+        assert!(!r.is_incomplete);
+        unsafe {
+            sink.set_len(r.result as _);
+        };
 
         Ok(sink)
     }
@@ -612,8 +608,8 @@ impl VulkanGfx {
     ) -> br::Result<Vec<br::PresentMode>> {
         let x = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_mode_count(
-                self.0.adapter,
-                surface.native_ptr(),
+                self.adapter_ref(),
+                surface.as_transparent_ref(),
             )?
         };
         if x == 0 {
@@ -622,14 +618,17 @@ impl VulkanGfx {
         }
 
         let mut sink = Vec::with_capacity(x as _);
-        unsafe {
+        let r = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
-                self.0.adapter,
-                surface.native_ptr(),
+                self.adapter_ref(),
+                surface.as_transparent_ref(),
                 sink.spare_capacity_mut(),
-            )?;
-            sink.set_len(sink.capacity());
-        }
+            )?
+        };
+        assert!(!r.is_incomplete);
+        unsafe {
+            sink.set_len(r.result as _);
+        };
 
         Ok(sink)
     }
@@ -679,18 +678,19 @@ impl VulkanGfx {
             return Ok(());
         };
 
-        unsafe {
+        br::error::translate_vk_result(unsafe {
             (f.0)(
                 self.0.device,
                 &br::DebugUtilsObjectNameInfo::new_raw(
                     object_type,
                     handle.raw_handle_value(),
                     Some(name),
-                ) as *const _ as _,
+                )
+                .into_raw(),
             )
-            .into_result()
-            .map(drop)
-        }
+        })?;
+
+        Ok(())
     }
 
     /// Sets an object's name for debugging.
@@ -721,54 +721,22 @@ impl VulkanGfx {
             return Ok(());
         };
 
-        unsafe {
+        br::error::translate_vk_result(unsafe {
             (f.0)(
                 self.0.device,
-                &br::DebugUtilsObjectNameInfo::new(object, Some(name)) as *const _ as _,
+                &br::DebugUtilsObjectNameInfo::new(object, Some(name)).into_raw(),
             )
-            .into_result()
-            .map(drop)
-        }
+        })?;
+
+        Ok(())
     }
 
     /// # Safety
     ///
-    /// This function is just calling underlying raw api [`bedrock::device::VkDevice::load_function_unconstrainted`].
+    /// This function is just calling underlying raw api [`bedrock::vk::load_function_unconstrainted`].
     #[inline]
-    pub unsafe fn load_function<F: br::PFN>(&self) -> F {
-        unsafe { self.0.device.load_function_unconstrainted::<F>() }
-    }
-
-    #[inline]
-    pub fn get_buffer_memory_requirements2_fn(
-        &self,
-    ) -> &br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
-        self.0
-            .get_buffer_memory_requirements2_fn
-            .get_or_init(|| unsafe { self.load_function() })
-    }
-
-    #[inline]
-    pub fn get_image_memory_requirements2_fn(
-        &self,
-    ) -> &br::vk::PFN_vkGetImageMemoryRequirements2KHR {
-        self.0
-            .get_image_memory_requirements2_fn
-            .get_or_init(|| unsafe { self.load_function() })
-    }
-
-    #[inline]
-    pub fn bind_buffer_memory2_fn(&self) -> &br::vk::PFN_vkBindBufferMemory2KHR {
-        self.0
-            .bind_buffer_memory2_fn
-            .get_or_init(|| unsafe { self.load_function() })
-    }
-
-    #[inline]
-    pub fn bind_image_memory2_fn(&self) -> &br::vk::PFN_vkBindImageMemory2KHR {
-        self.0
-            .bind_image_memory2_fn
-            .get_or_init(|| unsafe { self.load_function() })
+    pub unsafe fn load_function<F: br::vk::PFN>(&self) -> F {
+        unsafe { br::vk::load_function_unconstrainted(&br::DeviceResolverImpl(self.0.device)) }
     }
 }
 impl br::VkHandle for VulkanGfx {
@@ -787,25 +755,41 @@ impl br::InstanceChild for VulkanGfx {
 }
 impl br::Device for VulkanGfx {}
 impl br::DeviceBindMemory2Extension for VulkanGfx {
-    fn bind_buffer_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindBufferMemory2KHR {
-        todo!("vkBindBufferMemory2KHR resolve")
+    #[inline]
+    fn bind_buffer_memory2_khr_fn(&self) -> br::vk::PFN_vkBindBufferMemory2KHR {
+        *self
+            .0
+            .bind_buffer_memory2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
-    fn bind_image_memory2_khr_fn(&self) -> bedrock::vk::PFN_vkBindImageMemory2KHR {
-        todo!("vkBindImageMemory2KHR resolve")
+    #[inline]
+    fn bind_image_memory2_khr_fn(&self) -> br::vk::PFN_vkBindImageMemory2KHR {
+        *self
+            .0
+            .bind_image_memory2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 }
 impl br::DeviceGetMemoryRequirements2Extension for VulkanGfx {
+    #[inline]
     fn get_buffer_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetBufferMemoryRequirements2KHR {
-        todo!("vkGetBufferMemoryRequirements2KHR resolve");
+        *self
+            .0
+            .get_buffer_memory_requirements2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
+    #[inline]
     fn get_image_memory_requirements_2_khr_fn(
         &self,
     ) -> br::vk::PFN_vkGetImageMemoryRequirements2KHR {
-        todo!("vkGetImageMemoryRequirements2KHR resolve");
+        *self
+            .0
+            .get_image_memory_requirements2_fn
+            .get_or_init(|| unsafe { self.load_function() })
     }
 
     fn get_image_sparse_memory_requirements_2_khr_fn(
@@ -815,11 +799,11 @@ impl br::DeviceGetMemoryRequirements2Extension for VulkanGfx {
     }
 }
 impl br::DeviceSynchronization2Extension for VulkanGfx {
-    fn cmd_pipeline_barrier_2_khr_fn(&self) -> bedrock::vk::PFN_vkCmdPipelineBarrier2KHR {
+    fn cmd_pipeline_barrier_2_khr_fn(&self) -> br::vk::PFN_vkCmdPipelineBarrier2KHR {
         todo!("vkCmdPipelineBarrier2KHR resolve")
     }
 
-    fn queue_submit2_khr_fn(&self) -> bedrock::vk::PFN_vkQueueSubmit2KHR {
+    fn queue_submit2_khr_fn(&self) -> br::vk::PFN_vkQueueSubmit2KHR {
         todo!("vkQueueSubmit2KHR resolve")
     }
 }
@@ -853,7 +837,11 @@ unsafe impl Send for LocalOnetimeSubmitCommandBuffer<'_> {}
 impl Drop for LocalOnetimeSubmitCommandBuffer<'_> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::free_command_buffers(self.device.0.device, *self.pool, &[self.buffer])
+            br::vkfn_wrapper::free_command_buffers(
+                self.device.native_device_ref(),
+                br::VkHandleRefMut::dangling(*self.pool),
+                &[br::VkHandleRefMut::dangling(self.buffer)],
+            )
         }
     }
 }
@@ -872,8 +860,8 @@ impl Drop for Graphics {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_command_pool(
-                self.gfx_device.0.device,
-                self.cp_onetime_submit,
+                self.gfx_device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.cp_onetime_submit),
                 None,
             );
         }
@@ -895,23 +883,18 @@ impl Graphics {
             features,
         );
         let graphics_queue = QueueSet {
-            q: unsafe {
-                br::vkfn_wrapper::get_device_queue(
-                    gfx_device.0.device,
-                    gfx_device.0.graphics_queue_family_index,
-                    0,
-                )
-            },
+            q: br::vkfn_wrapper::get_device_queue(
+                gfx_device.native_device_ref(),
+                gfx_device.0.graphics_queue_family_index,
+                0,
+            ),
             family: gfx_device.0.graphics_queue_family_index,
         };
-        let cp_onetime_submit = match unsafe {
-            br::vkfn_wrapper::create_command_pool(
-                gfx_device.0.device,
-                &br::CommandPoolCreateInfo::new(gfx_device.0.graphics_queue_family_index)
-                    .transient(),
-                None,
-            )
-        } {
+        let cp_onetime_submit = match br::vkfn_wrapper::create_command_pool(
+            gfx_device.native_device_ref(),
+            &br::CommandPoolCreateInfo::new(gfx_device.0.graphics_queue_family_index).transient(),
+            None,
+        ) {
             Ok(x) => x,
             Err(e) => {
                 tracing::error!(cause = ?e, "Failed to create onetime submit command pool");
@@ -932,8 +915,8 @@ impl Graphics {
         &self.gfx_device
     }
 
-    pub fn adapter_raw(&self) -> br::vk::VkPhysicalDevice {
-        self.gfx_device.0.adapter
+    pub fn native_adapter_ref<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkPhysicalDevice> {
+        unsafe { br::VkHandleRef::dangling(self.gfx_device.0.adapter) }
     }
 
     /// Submits any commands as transient commands.
@@ -944,7 +927,7 @@ impl Graphics {
         let mut buffers = [core::mem::MaybeUninit::uninit()];
         unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
-                self.gfx_device.0.device,
+                self.gfx_device.native_device_ref(),
                 &br::CommandBufferAllocateInfo::new(
                     &mut br::VkHandleRefMut::dangling(self.cp_onetime_submit),
                     1,
@@ -960,7 +943,7 @@ impl Graphics {
         };
         unsafe {
             br::vkfn_wrapper::begin_command_buffer(
-                cb.buffer,
+                br::VkHandleRefMut::dangling(cb.buffer),
                 &br::CommandBufferBeginInfo::new().onetime_submit(),
             )?
         }
@@ -968,19 +951,19 @@ impl Graphics {
             br::VkHandleRefMut::dangling(cb.buffer)
         }))
         .end()?;
-        unsafe {
-            br::vkfn_wrapper::queue_submit(
-                br::VkHandleRefMut::dangling(self.graphics_queue.q),
-                &[br::SubmitInfo::new_array(
-                    &[],
-                    &[],
-                    &[br::VkHandleRef::dangling(cb.buffer)],
-                    &[],
-                )],
-                None,
-            )?;
-            br::vkfn_wrapper::queue_wait_idle(self.graphics_queue.q)?;
-        }
+        br::vkfn_wrapper::queue_submit(
+            unsafe { br::VkHandleRefMut::dangling(self.graphics_queue.q) },
+            &[br::SubmitInfo::new_array(
+                &[],
+                &[],
+                &[unsafe { br::VkHandleRef::dangling(cb.buffer) }],
+                &[],
+            )],
+            None,
+        )?;
+        br::vkfn_wrapper::queue_wait_idle(unsafe {
+            br::VkHandleRefMut::dangling(self.graphics_queue.q)
+        })?;
 
         Ok(())
     }
@@ -1006,7 +989,7 @@ impl Graphics {
         &'s self,
         generator: impl for<'a> FnOnce(br::CmdRecord<'a>) -> br::CmdRecord<'a>,
     ) -> br::Result<impl core::future::Future<Output = br::Result<()>> + 's> {
-        use bedrock::VkHandleMut;
+        use bedrock::{VkHandle, VkHandleMut};
 
         struct StandaloneFence {
             handle: br::vk::VkFence,
@@ -1018,8 +1001,8 @@ impl Graphics {
             fn drop(&mut self) {
                 unsafe {
                     br::vkfn_wrapper::destroy_fence(
-                        br::VkHandle::native_ptr(&self.device),
-                        self.handle,
+                        self.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(self.handle),
                         None,
                     );
                 }
@@ -1040,7 +1023,10 @@ impl Graphics {
         impl AwaitableFence for StandaloneFence {
             fn is_ready(&self) -> bedrock::Result<bool> {
                 let r = unsafe {
-                    br::vkfn_wrapper::get_fence_status(self.device.0.device, self.handle)?
+                    br::vkfn_wrapper::get_fence_status(
+                        self.device.native_device_ref(),
+                        br::VkHandleRef::dangling(self.handle),
+                    )?
                 };
 
                 Ok(r == br::vk::VK_SUCCESS)
@@ -1058,33 +1044,33 @@ impl Graphics {
             fn drop(&mut self) {
                 unsafe {
                     // CommandPoolのDestroyでCommandBufferもfreeしてくれるらしい
-                    br::vkfn_wrapper::destroy_command_pool(self.device.0.device, self.pool, None);
+                    br::vkfn_wrapper::destroy_command_pool(
+                        self.device.native_device_ref(),
+                        br::VkHandleRefMut::dangling(self.pool),
+                        None,
+                    );
                 }
             }
         }
 
         let mut fence = StandaloneFence {
-            handle: unsafe {
-                br::vkfn_wrapper::create_fence(
-                    self.gfx_device.0.device,
-                    &br::FenceCreateInfo::new(0),
-                    None,
-                )?
-            },
+            handle: br::vkfn_wrapper::create_fence(
+                self.gfx_device.native_device_ref(),
+                &br::FenceCreateInfo::new(0),
+                None,
+            )?,
             device: self.gfx_device.clone(),
         };
 
-        let pool = unsafe {
-            br::vkfn_wrapper::create_command_pool(
-                self.gfx_device.0.device,
-                &br::CommandPoolCreateInfo::new(self.graphics_queue.family).transient(),
-                None,
-            )?
-        };
+        let pool = br::vkfn_wrapper::create_command_pool(
+            self.gfx_device.native_device_ref(),
+            &br::CommandPoolCreateInfo::new(self.graphics_queue.family).transient(),
+            None,
+        )?;
         let mut cb = [core::mem::MaybeUninit::uninit()];
         if let Err(e) = unsafe {
             br::vkfn_wrapper::allocate_command_buffers(
-                self.gfx_device.0.device,
+                self.gfx_device.native_device_ref(),
                 &br::CommandBufferAllocateInfo::new(
                     &mut br::VkHandleRefMut::dangling(pool),
                     1,
@@ -1094,7 +1080,11 @@ impl Graphics {
             )
         } {
             unsafe {
-                br::vkfn_wrapper::destroy_command_pool(self.gfx_device.0.device, pool, None);
+                br::vkfn_wrapper::destroy_command_pool(
+                    self.gfx_device.native_device_ref(),
+                    br::VkHandleRefMut::dangling(pool),
+                    None,
+                );
             }
 
             return Err(e);
@@ -1106,7 +1096,7 @@ impl Graphics {
         };
         unsafe {
             br::vkfn_wrapper::begin_command_buffer(
-                cb.buffer,
+                br::VkHandleRefMut::dangling(cb.buffer),
                 &br::CommandBufferBeginInfo::new().onetime_submit(),
             )?
         };
@@ -1171,7 +1161,7 @@ impl Graphics {
     }
 
     pub fn wait_operations(&mut self) -> br::Result<()> {
-        unsafe { br::vkfn_wrapper::device_wait_idle(self.gfx_device.0.device) }
+        unsafe { br::vkfn_wrapper::device_wait_idle(self.gfx_device.native_device_ref()) }
     }
 }
 /// Adapter Property exports
@@ -1190,7 +1180,7 @@ impl Graphics {
 }
 
 #[derive(Clone)]
-pub struct MemoryType(u32, br::vk::VkMemoryType);
+pub struct MemoryType(u32, br::MemoryType);
 impl MemoryType {
     pub const fn index(&self) -> u32 {
         self.0
@@ -1205,7 +1195,7 @@ impl MemoryType {
     }
 
     pub const fn has_property_flags(&self, other: br::MemoryPropertyFlags) -> bool {
-        (self.1.propertyFlags & other.bits()) != 0
+        self.1.property_flags().has_all(other)
     }
 
     pub const fn is_device_local(&self) -> bool {
@@ -1241,7 +1231,7 @@ impl std::fmt::Debug for MemoryType {
             flags.push("COHERENT");
         }
 
-        if (self.1.propertyFlags & br::vk::VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 {
+        if (self.1.property_flags().bits() & br::vk::VK_MEMORY_PROPERTY_PROTECTED_BIT) != 0 {
             flags.push("PROTECTED");
         }
         if self.has_property_flags(br::MemoryPropertyFlags::LAZILY_ALLOCATED) {
@@ -1253,7 +1243,7 @@ impl std::fmt::Debug for MemoryType {
             "{}: [{}] in heap #{}",
             self.index(),
             flags.join("/"),
-            self.1.heapIndex
+            self.1.heap_index()
         )
     }
 }
@@ -1316,7 +1306,7 @@ impl MemoryTypeManager {
 
     fn diagnose_heaps(p: &impl br::PhysicalDevice) {
         for (n, h) in p.memory_properties().heaps().iter().enumerate() {
-            let (mut nb, mut unit) = (h.size as f32, "bytes");
+            let (mut nb, mut unit) = (h.size() as f32, "bytes");
             if nb >= 10000.0 {
                 nb /= 1024.0;
                 unit = "KB";
@@ -1333,23 +1323,23 @@ impl MemoryTypeManager {
                 nb /= 1024.0;
                 unit = "TB";
             }
-            let is_device_local = (h.flags & br::vk::VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0;
+            let is_device_local = h.flags().has_any(br::MemoryHeapFlags::DEVICE_LOCAL);
 
             tracing::info!(
-                target: "Peridot MemDiag (Heap)",
+                target: "peridot::diag",
                 index = n,
                 is_device_local,
-                "{nb} {unit}",
+                "Heap Memory {nb} {unit}",
             );
         }
     }
 
     fn diagnose_types(&self) {
         for mt in &self.device_memory_types {
-            tracing::info!(target: "Peridot MemDiag (Type)", ?mt, "Device Memory Type");
+            tracing::info!(target: "peridot::diag", ?mt, "Device Memory Type");
         }
         for mt in &self.host_memory_types {
-            tracing::info!(target: "Peridot MemDiag (Type)", ?mt, "Host Visible Memory Type");
+            tracing::info!(target: "peridot::diag", ?mt, "Host Visible Memory Type");
         }
     }
 }

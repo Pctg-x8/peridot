@@ -42,6 +42,27 @@ impl PlatformAssetLoader {
             builtin_asset_basedir: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH")),
         }
     }
+
+    #[tracing::instrument(skip(self), ret(level = tracing::Level::DEBUG))]
+    fn resolve_asset_realpath(&self, path: &str, ext: &str) -> PathBuf {
+        #[allow(unused_mut)]
+        let mut path_segments = path.split('.').peekable();
+
+        #[cfg(feature = "IterationBuild")]
+        if path_segments.peek().map_or(false, |&s| s == "builtin") {
+            let _ = path_segments.next();
+
+            let mut p = self.builtin_asset_basedir.clone();
+            p.extend(path_segments);
+            p.set_extension(ext);
+            return p;
+        }
+
+        let mut apath = self.basedir.clone();
+        apath.extend(path_segments);
+        apath.set_extension(ext);
+        apath
+    }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type AssetBlob<'a> = peridot::native_io::linux::NativeFileBlobRandomReader;
@@ -51,14 +72,9 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     >;
 
     fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
-        #[allow(unused_mut)]
-        let mut path_segments = path.split('.').peekable();
-
-        let mut apath = self.basedir.clone();
-        apath.extend(path_segments);
-        apath.set_extension(ext);
-
-        peridot::native_io::linux::NativeFileBlobRandomReader::open(apath)
+        peridot::native_io::linux::NativeFileBlobRandomReader::open(
+            self.resolve_asset_realpath(path, ext),
+        )
     }
 
     fn get_async<'a>(
@@ -67,14 +83,9 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         ext: &str,
     ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
         async move {
-            #[allow(unused_mut)]
-            let mut path_segments = path.split('.').peekable();
-
-            let mut apath = self.basedir.clone();
-            apath.extend(path_segments);
-            apath.set_extension(ext);
-
-            peridot::native_io::linux::NativeFileAsyncBlobRandomReader::open(apath)
+            peridot::native_io::linux::NativeFileAsyncBlobRandomReader::open(
+                self.resolve_asset_realpath(path, ext),
+            )
         }
     }
 

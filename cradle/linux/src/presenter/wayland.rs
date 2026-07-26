@@ -457,8 +457,8 @@ impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_surface(
-                self.device.instance().native_ptr(),
-                self.handle,
+                self.device.instance().as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
                 None,
             );
         }
@@ -486,9 +486,9 @@ impl Presenter {
 
         if !unsafe {
             br::vkfn_wrapper::get_physical_device_wayland_presentation_support(
-                g.adapter_raw(),
+                g.native_adapter_ref(),
                 renderer_queue_family,
-                wlock.con.as_raw() as _,
+                wlock.con.as_raw().cast(),
             )
         } {
             panic!("Vulkan Presentation is not supported!");
@@ -496,8 +496,8 @@ impl Presenter {
         let so = Surface {
             handle: unsafe {
                 br::WaylandSurfaceCreateInfo::new(
-                    wlock.con.as_raw() as _,
-                    wlock.surface.as_ptr() as _,
+                    wlock.con.as_raw().cast(),
+                    wlock.surface.as_ptr().cast(),
                 )
                 .execute(g.device().instance(), None)
                 .expect("Failed to create surface object")

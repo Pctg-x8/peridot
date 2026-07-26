@@ -45,8 +45,8 @@ impl Drop for Surface {
     fn drop(&mut self) {
         unsafe {
             br::vkfn_wrapper::destroy_surface(
-                self.device.instance().native_ptr(),
-                self.handle,
+                self.device.instance().as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
                 None,
             );
         }
@@ -70,19 +70,20 @@ pub struct Presenter {
 #[cfg(not(feature = "transparent"))]
 impl Presenter {
     pub fn new(g: &peridot::Graphics, window: Arc<RwLock<ThreadsafeWindowOps>>) -> Self {
-        if unsafe {
-            !br::vkfn_wrapper::get_physical_device_win32_presentation_support(
-                g.adapter_raw(),
-                g.graphics_queue_family_index(),
-            )
-        } {
+        if !br::vkfn_wrapper::get_physical_device_win32_presentation_support(
+            g.native_adapter_ref(),
+            g.graphics_queue_family_index(),
+        ) {
             panic!("WindowSubsystem does not support Vulkan Rendering");
         }
         let s = Surface {
             handle: unsafe {
-                br::Win32SurfaceCreateInfo::new(super::module_handle(), window.read().0)
-                    .execute(g.device().instance(), None)
-                    .expect("Failed to create Surface")
+                br::Win32SurfaceCreateInfo::new(
+                    core::mem::transmute(super::module_handle()),
+                    core::mem::transmute(window.read().0),
+                )
+                .execute(g.device().instance(), None)
+                .expect("Failed to create Surface")
             },
             device: g.device().clone(),
         };
@@ -238,8 +239,16 @@ struct InteropBackbufferResource {
 impl Drop for InteropBackbufferResource {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image(self.device.native_ptr(), self.image, None);
-            br::vkfn_wrapper::free_memory(self.device.native_ptr(), self.memory, None);
+            br::vkfn_wrapper::destroy_image(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.image),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.memory),
+                None,
+            );
         }
     }
 }
@@ -276,37 +285,37 @@ impl InteropBackbufferResource {
                 )
                 .expect("Failed to create SharedHandle from D3D12")
         });
-        let exportable = br::vk::VkExternalMemoryImageCreateInfoKHR::new(
+        let exportable = br::ExternalMemoryImageCreateInfo::new(
             br::ExternalMemoryHandleTypeWin32::D3D12Resource as _,
         );
-        let image = unsafe {
-            br::vkfn_wrapper::create_image(
-                g.device().native_ptr(),
-                &br::ImageCreateInfo::new(size, format)
-                    .with_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
-                    .with_next(&exportable),
-                None,
-            )
-            .expect("Failed to create Interop Image")
-        };
+        let image = br::vkfn_wrapper::create_image(
+            g.device().as_transparent_ref(),
+            &br::ImageCreateInfo::new(size, format)
+                .with_usage(br::ImageUsageFlags::COLOR_ATTACHMENT)
+                .with_next(&exportable),
+            None,
+        )
+        .expect("Failed to create Interop Image");
         let image_mreq = unsafe {
-            br::vkfn_wrapper::get_image_memory_requirements(g.device().native_ptr(), image)
+            br::vkfn_wrapper::get_image_memory_requirements(
+                g.device().as_transparent_ref(),
+                br::VkHandleRef::dangling(image),
+            )
         };
         let handle_import_props = {
             let mut sink = br::vk::VkMemoryWin32HandlePropertiesKHR::uninit_sink();
 
-            unsafe {
+            br::error::translate_vk_result(unsafe {
                 (memory_property_fn.0)(
                     g.device().native_ptr(),
                     br::ExternalMemoryHandleTypeWin32::D3D12Resource as _,
-                    shared_handle.handle(),
+                    core::mem::transmute(shared_handle.handle()),
                     sink.as_mut_ptr(),
                 )
-                .into_result()
-                .expect("Failed to query Handle Memory Properties");
+            })
+            .expect("Failed to query Handle Memory Properties");
 
-                sink.assume_init()
-            }
+            unsafe { sink.assume_init() }
         };
         let memory_type_index = g
             .device()
@@ -316,11 +325,11 @@ impl InteropBackbufferResource {
             .expect("Failed to find matching memory type for importing");
         let memory = unsafe {
             br::vkfn_wrapper::allocate_memory(
-                g.device().native_ptr(),
+                g.device().as_transparent_ref(),
                 &br::MemoryAllocateInfo::new(1, memory_type_index).with_next(
                     &br::ImportMemoryWin32HandleInfo::new(
                         br::ExternalMemoryHandleTypeWin32::D3D12Resource,
-                        shared_handle.handle(),
+                        core::mem::transmute(shared_handle.handle()),
                         Some(&hname),
                     ),
                 ),
@@ -330,7 +339,11 @@ impl InteropBackbufferResource {
         };
         unsafe {
             g.device()
-                .bind_image_raw(image, memory, 0)
+                .bind_image_raw(
+                    br::VkHandleRefMut::dangling(image),
+                    br::VkHandleRef::dangling(memory),
+                    0,
+                )
                 .expect("Failed to bind image backing memory");
         }
 
@@ -537,21 +550,21 @@ impl Presenter {
                 )
                 .expect("Failed to create Shared Handle for Render Completion Fence")
         });
-        unsafe {
+        br::error::translate_vk_result(unsafe {
             (g.device()
                 .load_function::<br::vk::PFN_vkImportSemaphoreWin32HandleKHR>()
                 .0)(
                 g.device().native_ptr(),
                 &br::ImportSemaphoreWin32HandleInfo::by_handle(
                     &present_order,
-                    br::ExternalSemaphoreHandleTypeWin32::D3DFence
-                        .with_handle(render_completion_fence_handle.handle()),
+                    br::ExternalSemaphoreHandleTypeWin32::D3DFence.with_handle(
+                        core::mem::transmute(render_completion_fence_handle.handle()),
+                    ),
                 )
                 .into_raw(),
             )
-            .into_result()
-            .expect("Failed to import Render Completion Fence")
-        };
+        })
+        .expect("Failed to import Render Completion Fence");
         let present_completion_event =
             ThreadsafeEvent::new(false, true).expect("Failed to create Present Completion Event");
 

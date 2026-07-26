@@ -41,7 +41,11 @@ pub struct StandaloneImageView {
 impl Drop for StandaloneImageView {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_image_view(self.gfx_device.native_ptr(), self.handle, None);
+            br::vkfn_wrapper::destroy_image_view(
+                self.gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -59,7 +63,7 @@ impl StandaloneImageView {
     ) -> br::Result<Self> {
         Ok(Self {
             handle: unsafe {
-                br::vkfn_wrapper::create_image_view(device.native_ptr(), create_info, None)?
+                br::vkfn_wrapper::create_image_view(device.as_transparent_ref(), create_info, None)?
             },
             gfx_device: device.clone(),
         })
@@ -238,7 +242,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let attachments = [
         e.back_buffer_attachment_desc()
             .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store),
-        br::vk::VkAttachmentDescription::new(
+        br::AttachmentDescription::new(
             e.back_buffer_format(),
             br::ImageLayout::ColorAttachmentOpt,
             br::ImageLayout::ColorAttachmentOpt,
@@ -246,11 +250,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
         .samples(msaa_count),
     ];
-    let color_outputs = [br::vk::VkAttachmentReference::new(
+    let color_outputs = [br::AttachmentReference::new(
         1,
         br::ImageLayout::ColorAttachmentOpt,
     )];
-    let color_resolves = [br::vk::VkAttachmentReference::new(
+    let color_resolves = [br::AttachmentReference::new(
         0,
         br::ImageLayout::ColorAttachmentOpt,
     )];
@@ -292,13 +296,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 e.graphics().device(),
                 &br::ImageViewCreateInfo::new(
                     &x,
-                    br::vk::VkImageSubresourceRange {
-                        aspectMask: br::AspectMask::COLOR.bits(),
-                        baseMipLevel: 0,
-                        levelCount: 1,
-                        baseArrayLayer: 0,
-                        layerCount: 1,
-                    },
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
                     e.back_buffer_format(),
                 ),
@@ -373,7 +371,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             e.graphics().device().clone(),
             &br::PipelineLayoutCreateInfo::new(
                 &[dsl.as_transparent_ref()],
-                &[br::vk::VkPushConstantRange::new(
+                &[br::PushConstantRange::new(
                     br::vk::VK_SHADER_STAGE_VERTEX_BIT,
                     0..4 * 4,
                 )],
@@ -388,8 +386,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         let viewport_state = br::PipelineViewportStateCreateInfo::new_array(&vp, &sc);
 
         let spc_map = &[
-            br::vk::VkSpecializationMapEntry::for_type::<f32>(0, 0),
-            br::vk::VkSpecializationMapEntry::for_type::<f32>(1, 4),
+            br::SpecializationMapEntry::for_type::<f32>(0, 0),
+            br::SpecializationMapEntry::for_type::<f32>(1, 4),
         ];
         let vsh_parameters = unsafe {
             br::SpecializationInfo::from_binary(
@@ -632,13 +630,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                             e.graphics().device(),
                             &br::ImageViewCreateInfo::new(
                                 &x,
-                                br::vk::VkImageSubresourceRange {
-                                    aspectMask: br::AspectMask::COLOR.bits(),
-                                    baseMipLevel: 0,
-                                    levelCount: 1,
-                                    baseArrayLayer: 0,
-                                    layerCount: 1,
-                                },
+                                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                                 br::vk::VK_IMAGE_VIEW_TYPE_2D,
                                 e.back_buffer_format(),
                             ),

@@ -16,7 +16,11 @@ pub(crate) struct SharedMemoryBlockInner {
 impl Drop for SharedMemoryBlockInner {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::free_memory(self.device.0.device, self.handle, None);
+            br::vkfn_wrapper::free_memory(
+                self.device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -105,12 +109,15 @@ impl MemoryBadgetEntry {
         match self {
             Self::Buffer(b) => unsafe {
                 br::vkfn_wrapper::get_buffer_memory_requirements(
-                    gfx_device.0.device,
-                    b.native_ptr(),
+                    gfx_device.native_device_ref(),
+                    b.as_transparent_ref(),
                 )
             },
             Self::Image(r) => unsafe {
-                br::vkfn_wrapper::get_image_memory_requirements(gfx_device.0.device, r.native_ptr())
+                br::vkfn_wrapper::get_image_memory_requirements(
+                    gfx_device.native_device_ref(),
+                    r.as_transparent_ref(),
+                )
             },
         }
     }
@@ -177,13 +184,11 @@ impl<'g> MemoryBadget<'g> {
         tracing::info!(target: "peridot", "Allocating Device Memory: {} bytes in 0x{mt:x}(?0x{:x})",
             self.total_size, self.memory_type_bitmask);
         let mem = SharedMemoryBlock(make_shared_mutable_ref(SharedMemoryBlockInner {
-            handle: unsafe {
-                br::vkfn_wrapper::allocate_memory(
-                    self.g.gfx_device.0.device,
-                    &br::MemoryAllocateInfo::new(self.total_size, mt),
-                    None,
-                )?
-            },
+            handle: br::vkfn_wrapper::allocate_memory(
+                self.g.gfx_device.native_device_ref(),
+                &br::MemoryAllocateInfo::new(self.total_size, mt),
+                None,
+            )?,
             device: self.g.gfx_device.clone(),
         }));
 
@@ -219,13 +224,11 @@ impl<'g> MemoryBadget<'g> {
         tracing::info!(target: "peridot", "Allocating Uploading Memory: {} bytes in 0x{:x}(?0x{:x})",
             self.total_size, mt.index(), self.memory_type_bitmask);
         let mem = SharedMemoryBlock(make_shared_mutable_ref(SharedMemoryBlockInner {
-            handle: unsafe {
-                br::vkfn_wrapper::allocate_memory(
-                    self.g.gfx_device.0.device,
-                    &br::MemoryAllocateInfo::new(self.total_size, mt.index()),
-                    None,
-                )?
-            },
+            handle: br::vkfn_wrapper::allocate_memory(
+                self.g.gfx_device.native_device_ref(),
+                &br::MemoryAllocateInfo::new(self.total_size, mt.index()),
+                None,
+            )?,
             device: self.g.gfx_device.clone(),
         }));
 

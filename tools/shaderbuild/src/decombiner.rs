@@ -917,19 +917,19 @@ impl<'s> CombinedShader<'s> {
             }
         }
     }
-    pub fn emit_vertex_bindings(&self) -> Vec<br::vk::VkVertexInputBindingDescription> {
+    pub fn emit_vertex_bindings(&self) -> Vec<br::VertexInputBindingDescription> {
         self.vertex_input
             .iter()
-            .map(
-                |&(binding, ref blk)| br::vk::VkVertexInputBindingDescription {
+            .map(|&(binding, ref blk)| {
+                br::VertexInputBindingDescription(br::vk::VkVertexInputBindingDescription {
                     binding: binding as _,
                     inputRate: blk.rate,
                     stride: blk.packed_size() as _,
-                },
-            )
+                })
+            })
             .collect()
     }
-    pub fn emit_vertex_attributes(&self) -> Vec<br::vk::VkVertexInputAttributeDescription> {
+    pub fn emit_vertex_attributes(&self) -> Vec<br::VertexInputAttributeDescription> {
         let mut attrs = Vec::new();
         let mut location_offs = 0;
         for &(binding, ref blk) in self.vertex_input.iter() {
@@ -937,102 +937,120 @@ impl<'s> CombinedShader<'s> {
             for (loc_offs, &Variable { type_str, .. }) in blk.vars.iter().enumerate() {
                 match type_str {
                     "vec4" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding = align2(
                             offs_in_binding + size_of::<[f32; 4]>(),
                             align_of::<[f32; 4]>(),
                         );
                     }
                     "vec3" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R32G32B32_SFLOAT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R32G32B32_SFLOAT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding = align2(
                             offs_in_binding + size_of::<[f32; 3]>(),
                             align_of::<[f32; 3]>(),
                         );
                     }
                     "vec2" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R32G32_SFLOAT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R32G32_SFLOAT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding = align2(
                             offs_in_binding + size_of::<[f32; 2]>(),
                             align_of::<[f32; 2]>(),
                         );
                     }
                     "float" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R32_SFLOAT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R32_SFLOAT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding =
                             align2(offs_in_binding + size_of::<f32>(), align_of::<f32>());
                     }
                     "uint" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R32_UINT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R32_UINT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding =
                             align2(offs_in_binding + size_of::<u32>(), align_of::<u32>());
                     }
                     "int" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R32_SINT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R32_SINT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding =
                             align2(offs_in_binding + size_of::<i32>(), align_of::<i32>());
                     }
                     "ivec4" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R32G32B32A32_SINT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R32G32B32A32_SINT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding = align2(
                             offs_in_binding + size_of::<[i32; 4]>(),
                             align_of::<[i32; 4]>(),
                         );
                     }
                     "i8vec4" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R8G8B8A8_SINT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R8G8B8A8_SINT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding = align2(
                             offs_in_binding + size_of::<[i8; 4]>(),
                             align_of::<[i8; 4]>(),
                         );
                     }
                     "u8vec4" => {
-                        attrs.push(br::vk::VkVertexInputAttributeDescription {
-                            location: (location_offs + loc_offs) as _,
-                            binding: binding as _,
-                            format: br::vk::VK_FORMAT_R8G8B8A8_UINT,
-                            offset: offs_in_binding as _,
-                        });
+                        attrs.push(br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: (location_offs + loc_offs) as _,
+                                binding: binding as _,
+                                format: br::vk::VK_FORMAT_R8G8B8A8_UINT,
+                                offset: offs_in_binding as _,
+                            },
+                        ));
                         offs_in_binding = align2(
                             offs_in_binding + size_of::<[u8; 4]>(),
                             align_of::<[u8; 4]>(),

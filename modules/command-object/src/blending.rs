@@ -97,35 +97,39 @@ impl ColorAttachmentBlending {
         }
     }
 
-    pub const fn into_vk(self) -> br::vk::VkPipelineColorBlendAttachmentState {
+    pub const fn into_vk(self) -> br::PipelineColorBlendAttachmentState {
         match self {
-            Self::Disabled => br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: false as _,
-                srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
-                dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
-                colorBlendOp: br::vk::VK_BLEND_OP_ADD as _,
-                srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
-                dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
-                alphaBlendOp: br::vk::VK_BLEND_OP_ADD as _,
-                colorWriteMask: br::vk::VK_COLOR_COMPONENT_A_BIT
-                    | br::vk::VK_COLOR_COMPONENT_B_BIT
-                    | br::vk::VK_COLOR_COMPONENT_G_BIT
-                    | br::vk::VK_COLOR_COMPONENT_R_BIT,
-            },
+            Self::Disabled => {
+                br::PipelineColorBlendAttachmentState(br::vk::VkPipelineColorBlendAttachmentState {
+                    blendEnable: false as _,
+                    srcColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                    dstColorBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                    colorBlendOp: br::vk::VK_BLEND_OP_ADD as _,
+                    srcAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                    dstAlphaBlendFactor: br::vk::VK_BLEND_FACTOR_ONE as _,
+                    alphaBlendOp: br::vk::VK_BLEND_OP_ADD as _,
+                    colorWriteMask: br::vk::VK_COLOR_COMPONENT_A_BIT
+                        | br::vk::VK_COLOR_COMPONENT_B_BIT
+                        | br::vk::VK_COLOR_COMPONENT_G_BIT
+                        | br::vk::VK_COLOR_COMPONENT_R_BIT,
+                })
+            }
             Self::Enabled {
                 color,
                 alpha,
                 color_write_mask,
-            } => br::vk::VkPipelineColorBlendAttachmentState {
-                blendEnable: true as _,
-                srcColorBlendFactor: color.src_factor as _,
-                dstColorBlendFactor: color.dst_factor as _,
-                colorBlendOp: color.op as _,
-                srcAlphaBlendFactor: alpha.src_factor as _,
-                dstAlphaBlendFactor: alpha.dst_factor as _,
-                alphaBlendOp: alpha.op as _,
-                colorWriteMask: color_write_mask,
-            },
+            } => {
+                br::PipelineColorBlendAttachmentState(br::vk::VkPipelineColorBlendAttachmentState {
+                    blendEnable: true as _,
+                    srcColorBlendFactor: color.src_factor as _,
+                    dstColorBlendFactor: color.dst_factor as _,
+                    colorBlendOp: color.op as _,
+                    srcAlphaBlendFactor: alpha.src_factor as _,
+                    dstAlphaBlendFactor: alpha.dst_factor as _,
+                    alphaBlendOp: alpha.op as _,
+                    colorWriteMask: color_write_mask,
+                })
+            }
         }
     }
 }

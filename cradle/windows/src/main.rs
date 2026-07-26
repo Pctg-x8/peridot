@@ -141,7 +141,7 @@ async fn main() {
     let w = unsafe {
         CreateWindowExA(
             wsex,
-            windows::core::PCSTR(std::mem::transmute(wcatom as usize)),
+            windows::core::PCSTR(core::ptr::without_provenance(wcatom as _)),
             windows::core::PCSTR(wname_c.as_ptr() as _),
             style,
             CW_USEDEFAULT,

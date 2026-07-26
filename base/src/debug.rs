@@ -224,7 +224,7 @@ fn vk_log(
     let msg = match unsafe { CStr::from_ptr(callback_data.pMessage).to_str() } {
         Ok(x) => x,
         Err(e) => {
-            warn!({ cause = ?e }, "(message has illegal character)");
+            warn!(cause = %e, "(message has illegal character)");
             return VK_FALSE;
         }
     };

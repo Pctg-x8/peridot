@@ -11,5 +11,7 @@ pub fn emit_link_args() {
     )
     .unwrap();
 
-    println!("cargo::rustc-link-arg={ld_args}");
+    for a in ld_args.split(' ') {
+        println!("cargo::rustc-link-arg={a}");
+    }
 }

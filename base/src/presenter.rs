@@ -39,7 +39,11 @@ struct IntegratedSwapchainObjectCore<Surface> {
 impl<Surface> Drop for IntegratedSwapchainObjectCore<Surface> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_swapchain(self.device.0.device, self.handle, None);
+            br::vkfn_wrapper::destroy_swapchain(
+                self.device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
         }
     }
 }
@@ -64,7 +68,11 @@ impl<Surface> IntegratedSwapchainObjectCore<Surface> {
         let handle = unsafe { core::ptr::read(&self.handle) };
         let device = unsafe { core::ptr::read(&self.device) };
         unsafe {
-            br::vkfn_wrapper::destroy_swapchain(device.0.device, handle, None);
+            br::vkfn_wrapper::destroy_swapchain(
+                device.native_device_ref(),
+                br::VkHandleRefMut::dangling(handle),
+                None,
+            );
         }
         core::mem::forget(self);
 
@@ -104,49 +112,49 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
                 std::process::abort();
             }
         };
-        let ew = if si.currentExtent.width == 0xffff_ffff {
+        let ew = if si.0.currentExtent.width == 0xffff_ffff {
             default_extent.0
         } else {
-            si.currentExtent.width
+            si.0.currentExtent.width
         };
-        let eh = if si.currentExtent.height == 0xffff_ffff {
+        let eh = if si.0.currentExtent.height == 0xffff_ffff {
             default_extent.1
         } else {
-            si.currentExtent.height
+            si.0.currentExtent.height
         };
-        let ew = ew.clamp(si.minImageExtent.width, si.maxImageExtent.width);
-        let eh = eh.clamp(si.minImageExtent.height, si.maxImageExtent.height);
+        let ew = ew.clamp(si.0.minImageExtent.width, si.0.maxImageExtent.width);
+        let eh = eh.clamp(si.0.minImageExtent.height, si.0.maxImageExtent.height);
         let ext = br::Extent2D {
             width: ew,
             height: eh,
         };
-        let buffer_count = if si.maxImageCount > 0 {
-            2.clamp(si.minImageCount, si.maxImageCount)
+        let buffer_count = if si.0.maxImageCount > 0 {
+            2.clamp(si.0.minImageCount, si.0.maxImageCount)
         } else {
-            2.max(si.minImageCount)
+            2.max(si.0.minImageCount)
         };
-        let pre_transform =
-            if (si.supportedTransforms & br::vk::VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0 {
-                br::SurfaceTransformFlags::IDENTITY
-            } else {
-                br::SurfaceTransformFlags::INHERIT
-            };
-        let chain = unsafe {
-            br::vkfn_wrapper::create_swapchain(
-                g.gfx_device.0.device,
-                &br::SwapchainCreateInfo::new(
-                    &surface,
-                    buffer_count,
-                    surface_info.fmt,
-                    ext,
-                    br::ImageUsageFlags::COLOR_ATTACHMENT,
-                )
-                .present_mode(surface_info.pres_mode)
-                .composite_alpha(surface_info.available_composite_alpha)
-                .pre_transform(pre_transform),
-                None,
+        let pre_transform = if si
+            .supported_transforms()
+            .has_any(br::SurfaceTransformFlags::IDENTITY)
+        {
+            br::SurfaceTransformFlags::IDENTITY
+        } else {
+            br::SurfaceTransformFlags::INHERIT
+        };
+        let chain = br::vkfn_wrapper::create_swapchain(
+            g.gfx_device.native_device_ref(),
+            &br::SwapchainCreateInfo::new(
+                &surface,
+                buffer_count,
+                surface_info.fmt,
+                ext,
+                br::ImageUsageFlags::COLOR_ATTACHMENT,
             )
-        };
+            .present_mode(surface_info.pres_mode)
+            .composite_alpha(surface_info.available_composite_alpha)
+            .pre_transform(pre_transform),
+            None,
+        );
         let chain = SharedRef::new(IntegratedSwapchainObjectCore {
             surface,
             handle: match chain {
@@ -163,7 +171,10 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
             .dbg_set_object_name(&chain, c"[Peridot.DefaultPresenter] Swapchain");
 
         let n = match unsafe {
-            br::vkfn_wrapper::get_swapchain_image_count(g.gfx_device.0.device, chain.handle)
+            br::vkfn_wrapper::get_swapchain_image_count(
+                g.gfx_device.native_device_ref(),
+                br::VkHandleRef::dangling(chain.handle),
+            )
         } {
             Ok(x) => x,
             Err(e) => {
@@ -174,8 +185,8 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchainOb
         let mut back_buffer_image_handles = Vec::with_capacity(n as _);
         if let Err(e) = unsafe {
             br::vkfn_wrapper::get_swapchain_images(
-                g.gfx_device.0.device,
-                chain.handle,
+                g.gfx_device.native_device_ref(),
+                br::VkHandleRef::dangling(chain.handle),
                 back_buffer_image_handles.spare_capacity_mut(),
             )
         } {
@@ -285,15 +296,19 @@ pub struct IntegratedSwapchain<Surface: br::VkHandle<Handle = br::vk::VkSurfaceK
 impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> Drop for IntegratedSwapchain<Surface> {
     fn drop(&mut self) {
         unsafe {
-            br::vkfn_wrapper::destroy_semaphore(self.gfx_device.0.device, self.present_order, None);
             br::vkfn_wrapper::destroy_semaphore(
-                self.gfx_device.0.device,
-                self.buffer_ready_order,
+                self.gfx_device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.present_order),
                 None,
             );
             br::vkfn_wrapper::destroy_semaphore(
-                self.gfx_device.0.device,
-                self.rendering_order,
+                self.gfx_device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.buffer_ready_order),
+                None,
+            );
+            br::vkfn_wrapper::destroy_semaphore(
+                self.gfx_device.native_device_ref(),
+                br::VkHandleRefMut::dangling(self.rendering_order),
                 None,
             );
         }
@@ -313,27 +328,21 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
             }
         };
 
-        let rendering_order = unsafe {
-            br::vkfn_wrapper::create_semaphore(
-                g.gfx_device.0.device,
-                &br::SemaphoreCreateInfo::new(),
-                None,
-            )
-        };
-        let buffer_ready_order = unsafe {
-            br::vkfn_wrapper::create_semaphore(
-                g.gfx_device.0.device,
-                &br::SemaphoreCreateInfo::new(),
-                None,
-            )
-        };
-        let present_order = unsafe {
-            br::vkfn_wrapper::create_semaphore(
-                g.gfx_device.0.device,
-                &br::SemaphoreCreateInfo::new(),
-                None,
-            )
-        };
+        let rendering_order = br::vkfn_wrapper::create_semaphore(
+            g.gfx_device.native_device_ref(),
+            &br::SemaphoreCreateInfo::new(),
+            None,
+        );
+        let buffer_ready_order = br::vkfn_wrapper::create_semaphore(
+            g.gfx_device.native_device_ref(),
+            &br::SemaphoreCreateInfo::new(),
+            None,
+        );
+        let present_order = br::vkfn_wrapper::create_semaphore(
+            g.gfx_device.native_device_ref(),
+            &br::SemaphoreCreateInfo::new(),
+            None,
+        );
         let (rendering_order, buffer_ready_order, present_order) = match (
             rendering_order,
             buffer_ready_order,
@@ -465,7 +474,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
     pub fn acquire_next_back_buffer_index(&mut self) -> br::Result<u32> {
         unsafe {
             br::vkfn_wrapper::acquire_next_image(
-                self.gfx_device.0.device,
+                self.gfx_device.native_device_ref(),
                 br::VkHandleRefMut::dangling(self.swapchain.get_mut().core.handle),
                 u64::MAX,
                 Some(br::VkHandleRefMut::dangling(self.rendering_order)),
@@ -529,7 +538,7 @@ impl<Surface: br::VkHandle<Handle = br::vk::VkSurfaceKHR>> IntegratedSwapchain<S
 
         unsafe {
             br::vkfn_wrapper::queue_present(
-                g.graphics_queue.q,
+                br::VkHandleRefMut::dangling(g.graphics_queue.q),
                 &br::PresentInfo::new(
                     &[br::VkHandleRef::dangling(self.present_order)],
                     &[br::VkHandleRef::dangling(self.swapchain.get().core.handle)],

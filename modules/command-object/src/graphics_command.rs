@@ -255,11 +255,11 @@ impl<S: br::VkHandle<Handle = br::vk::VkBuffer>, D: br::VkHandle<Handle = br::vk
     }
 
     pub fn with_range(mut self, src_offset: u64, dest_offset: u64, size: usize) -> Self {
-        self.2.push(br::vk::VkBufferCopy {
+        self.2.push(br::BufferCopy(br::vk::VkBufferCopy {
             srcOffset: src_offset,
             dstOffset: dest_offset,
             size: size as _,
-        });
+        }));
         self
     }
 
