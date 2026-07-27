@@ -543,6 +543,14 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
         self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSLeftArrowFunctionKey)!)
     }
     
+    override func moveUp(_ sender: Any?) {
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSUpArrowFunctionKey)!)
+    }
+    
+    override func moveDown(_ sender: Any?) {
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSDownArrowFunctionKey)!)
+    }
+    
     override func scrollToBeginningOfDocument(_ sender: Any?) {
         self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar(NSHomeFunctionKey)!)
     }
@@ -565,6 +573,18 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
     
     override func moveLeftAndModifySelection(_ sender: Any?) {
         self.windowLinkCallbacks?.notifyKeyDown(0, .shift, Unicode.Scalar(NSLeftArrowFunctionKey)!)
+    }
+    
+    override func moveUpAndModifySelection(_ sender: Any?) {
+        self.windowLinkCallbacks?.notifyKeyDown(0, .shift, Unicode.Scalar(NSUpArrowFunctionKey)!)
+    }
+    
+    override func moveDownAndModifySelection(_ sender: Any?) {
+        self.windowLinkCallbacks?.notifyKeyDown(0, .shift, Unicode.Scalar(NSDownArrowFunctionKey)!)
+    }
+    
+    override func insertNewline(_ sender: Any?) {
+        self.windowLinkCallbacks?.notifyKeyDown(0, NSEvent.ModifierFlags(), Unicode.Scalar("\r"))
     }
     
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {

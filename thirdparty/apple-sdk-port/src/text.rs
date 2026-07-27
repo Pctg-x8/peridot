@@ -394,6 +394,11 @@ impl Object for Line {
 }
 impl Line {
     #[inline(always)]
+    pub fn string_range(&self) -> Range {
+        unsafe { CTLineGetStringRange(&self.0) }
+    }
+
+    #[inline(always)]
     pub fn glyph_runs(&self) -> &Array<Run> {
         unsafe { &*CTLineGetGlyphRuns(&self.0).cast::<Array<Run>>() }
     }
@@ -430,6 +435,21 @@ impl Line {
         match unsafe { CTLineGetStringIndexForPosition(&self.0, pos) } {
             v if v == kCFNotFound => None,
             v => Some(v),
+        }
+    }
+
+    #[inline(always)]
+    pub fn offset_for_string_index(
+        &self,
+        index: CFIndex,
+        secondary_offset: Option<&mut core::mem::MaybeUninit<CGFloat>>,
+    ) -> CGFloat {
+        unsafe {
+            CTLineGetOffsetForStringIndex(
+                &self.0,
+                index,
+                secondary_offset.map_or(core::ptr::null_mut(), core::mem::MaybeUninit::as_mut_ptr),
+            )
         }
     }
 }
@@ -476,6 +496,25 @@ impl Framesetter {
     pub fn from_attributed_string(s: &AttributedString) -> Option<Owned<Self>> {
         unsafe {
             Owned::from_ptr(CTFramesetterCreateWithAttributedString(s as *const _ as _) as *mut Self)
+        }
+    }
+
+    #[inline(always)]
+    pub fn suggest_frame_size_with_constraints(
+        &self,
+        string_range: Range,
+        frame_attributes: Option<&Dictionary<String, dyn Object>>,
+        constraints: CGSize,
+        fit_range: Option<&mut core::mem::MaybeUninit<Range>>,
+    ) -> CGSize {
+        unsafe {
+            CTFramesetterSuggestFrameSizeWithConstraints(
+                &self.0,
+                string_range,
+                frame_attributes.map_or(core::ptr::null(), |x| x as *const _ as _),
+                constraints,
+                fit_range.map_or(core::ptr::null_mut(), core::mem::MaybeUninit::as_mut_ptr),
+            )
         }
     }
 

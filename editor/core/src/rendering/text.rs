@@ -502,6 +502,8 @@ pub struct TextLayout {
     height: f32,
     #[cfg(target_os = "macos")]
     frame: apple_sdk_port::Owned<apple_sdk_port::text::Frame>,
+    #[cfg(target_os = "macos")]
+    frame_size: apple_sdk_port::raw::CGSize,
     #[cfg(windows)]
     layout: windows::Win32::Graphics::DirectWrite::IDWriteTextLayout,
 }
@@ -1125,8 +1127,23 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         str.end_editing();
         #[cfg(target_os = "macos")]
-        let frame = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
-            .expect("Framesetter.create")
+        let framesetter = apple_sdk_port::text::Framesetter::from_attributed_string(&str)
+            .expect("Framesetter.create");
+        #[cfg(target_os = "macos")]
+        let frame_size = framesetter.suggest_frame_size_with_constraints(
+            apple_sdk_port::foundation::Range {
+                location: 0,
+                length: 0,
+            },
+            None,
+            apple_sdk_port::raw::CGSize {
+                width: f64::MAX,
+                height: f64::MAX,
+            },
+            None,
+        );
+        #[cfg(target_os = "macos")]
+        let frame = framesetter
             .create_frame(
                 apple_sdk_port::foundation::Range {
                     location: 0,
@@ -1135,10 +1152,7 @@ impl TextLayout {
                 &apple_sdk_port::graphics::Path::new_rect(
                     apple_sdk_port::raw::CGRect {
                         origin: apple_sdk_port::raw::CGPoint { x: 0.0, y: 0.0 },
-                        size: apple_sdk_port::raw::CGSize {
-                            width: f64::MAX,
-                            height: f64::MAX,
-                        },
+                        size: frame_size.clone(),
                     },
                     None,
                 ),
@@ -1269,6 +1283,8 @@ impl TextLayout {
             height: line_y_offset + final_line_height,
             #[cfg(target_os = "macos")]
             frame,
+            #[cfg(target_os = "macos")]
+            frame_size,
             #[cfg(windows)]
             layout,
         }
@@ -1420,9 +1436,24 @@ impl TextLayout {
         #[cfg(target_os = "macos")]
         tracing::debug!(line_count = lines.len(), "frameset lines");
         #[cfg(target_os = "macos")]
+        let line_origins = {
+            let mut sink = Vec::with_capacity(lines.len() as _);
+            self.frame.line_origins(0, sink.spare_capacity_mut());
+            unsafe {
+                sink.set_len(lines.len() as _);
+            }
+            sink
+        };
+        #[cfg(target_os = "macos")]
         let mut height = 0.0f32;
         #[cfg(target_os = "macos")]
-        for l in lines.iter() {
+        for (l, lo) in lines.iter().zip(line_origins.iter()) {
+            // y座標が逆（+yが上）なので補正する
+            let mut ascender = core::mem::MaybeUninit::uninit();
+            l.typographic_bounds(Some(&mut ascender), None, None);
+            let render_y_offset =
+                (self.frame_size.height - (lo.y + unsafe { ascender.assume_init() })) as f32;
+
             let runs = l.glyph_runs();
             tracing::debug!(count = runs.len(), "glyph runs");
             let mut baseline_pos: apple_sdk_port::raw::CGFloat = 0.0;
@@ -1519,10 +1550,12 @@ impl TextLayout {
                         (bounding_rect.size.height as f32 * render_scale).ceil() as _,
                     );
                     boxes.push(GlyphPlacementBox {
-                        left: ((pos.x + bounding_rect.origin.x) as f32 + x_shift) * render_scale,
-                        top: (baseline_pos + pos.y
-                            - (bounding_rect.size.height + bounding_rect.origin.y))
-                            as f32
+                        left: ((lo.x + pos.x + bounding_rect.origin.x) as f32 + x_shift)
+                            * render_scale,
+                        top: (render_y_offset
+                            + (baseline_pos + pos.y
+                                - (bounding_rect.size.height + bounding_rect.origin.y))
+                                as f32)
                             * render_scale,
                         tex_left: r.left,
                         tex_top: r.top,
@@ -2014,23 +2047,7 @@ impl TextLayout {
         return unsafe { metrics.assume_init_ref() }.height;
 
         #[cfg(target_os = "macos")]
-        if self.frame.lines().len() == 0 {
-            // no lines(empty string)
-            return 0.0;
-        }
-
-        // TODO: multi-line consideration
-        #[cfg(target_os = "macos")]
-        let mut ascender = core::mem::MaybeUninit::uninit();
-        #[cfg(target_os = "macos")]
-        let mut descender = core::mem::MaybeUninit::uninit();
-        #[cfg(target_os = "macos")]
-        let l = &self.frame.lines()[0];
-        #[cfg(target_os = "macos")]
-        l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
-
-        #[cfg(target_os = "macos")]
-        return unsafe { (ascender.assume_init() + descender.assume_init()) as f32 };
+        return self.frame_size.height as _;
     }
 
     #[tracing::instrument(skip(font_set))]
@@ -2125,7 +2142,44 @@ impl TextLayout {
 
         #[cfg(target_os = "macos")]
         {
-            unimplemented!()
+            // からの行が生成されないようにnbspをくっつけておく
+            let mut text = text.to_owned();
+            text += "\u{a0}";
+            let layout = Self::new_single(
+                &text,
+                font,
+                font_set,
+                CompositeRectTextHorizontalAlignment::Start,
+                None,
+            );
+
+            let lines = layout.frame.lines();
+            let mut line_origins = Vec::with_capacity(1);
+            layout
+                .frame
+                .line_origins(lines.len() - 1, line_origins.spare_capacity_mut());
+            unsafe {
+                line_origins.set_len(1);
+            }
+
+            tracing::debug!(?text, line_count = lines.len());
+
+            let last_line = &lines[lines.len() - 1];
+            let last_line_origin = &line_origins[0];
+            let mut ascent = core::mem::MaybeUninit::uninit();
+            let mut descent = core::mem::MaybeUninit::uninit();
+            last_line.typographic_bounds(Some(&mut ascent), Some(&mut descent), None);
+            let ascent = unsafe { ascent.assume_init() };
+            let line_height = ascent + unsafe { descent.assume_init() };
+            let last_offset =
+                last_line.offset_for_string_index((text.chars().count() - 1) as _, None);
+            return Rect::from_lt_size(
+                Point::new_logical(
+                    (last_line_origin.x + last_offset) as _,
+                    (layout.frame_size.height - (last_line_origin.y + ascent)) as _,
+                ),
+                Size::new_logical(0.0, line_height as _),
+            );
         }
     }
 
@@ -2265,7 +2319,46 @@ impl TextLayout {
 
         #[cfg(target_os = "macos")]
         {
-            unimplemented!()
+            let start_char_index = text[..range.start].chars().count();
+            let char_count = text[range.clone()].chars().count();
+            let end_char_index = start_char_index + char_count;
+
+            let lines = layout.frame.lines();
+            let mut line_origins = Vec::with_capacity(lines.len() as _);
+            layout
+                .frame
+                .line_origins(0, line_origins.spare_capacity_mut());
+            unsafe {
+                line_origins.set_len(lines.len() as _);
+            }
+            let mut rects = Vec::new();
+            for (l, origin) in lines.iter().zip(line_origins.iter()) {
+                let sr = l.string_range();
+                let overlapping_range = sr.location.max(start_char_index as i64)
+                    ..(sr.location + sr.length).min(end_char_index as i64);
+                if overlapping_range.is_empty() {
+                    // not overlapping
+                    continue;
+                }
+
+                let mut ascent = core::mem::MaybeUninit::uninit();
+                let mut descent = core::mem::MaybeUninit::uninit();
+                l.typographic_bounds(Some(&mut ascent), Some(&mut descent), None);
+                let ascent = unsafe { ascent.assume_init() };
+                let descent = unsafe { descent.assume_init() };
+                let line_height = ascent + descent;
+                let o1 = l.offset_for_string_index(start_char_index as _, None);
+                let o2 = l.offset_for_string_index(end_char_index as _, None);
+                rects.push(Rect::from_lt_size(
+                    Point::new_logical(
+                        (origin.x + o1) as _,
+                        (layout.frame_size.height - (origin.y + ascent)) as _,
+                    ),
+                    Size::new_logical((o2 - o1) as _, line_height as _),
+                ));
+            }
+
+            return rects;
         }
     }
 
@@ -2532,16 +2625,69 @@ impl TextLayout {
         }
 
         #[cfg(target_os = "macos")]
-        if layout.frame.lines().len() == 0 {
-            // no lines(empty string)
-            return 0;
-        }
-        #[cfg(target_os = "macos")]
-        match layout.frame.lines()[0]
-            .string_index_for_position(apple_sdk_port::raw::CGPoint { x: x as _, y: 0.0 })
         {
-            Some(x) => text.chars().take(x as _).map(|x| x.len_utf8()).sum(),
-            None => text.len() - 1,
+            // CoreGraphicsの座標系が+Y上なので補正
+            let p = apple_sdk_port::raw::CGPoint {
+                x: x as _,
+                y: (layout.frame_size.height - y as f64).clamp(0.0, layout.frame_size.height),
+            };
+
+            let lines = layout.frame.lines();
+            let mut line_origins = Vec::with_capacity(lines.len() as _);
+            layout
+                .frame
+                .line_origins(0, line_origins.spare_capacity_mut());
+            unsafe {
+                line_origins.set_len(lines.len() as _);
+            }
+
+            for (l, origin) in lines.iter().zip(line_origins.iter()) {
+                let mut ascender = core::mem::MaybeUninit::uninit();
+                let mut descender = core::mem::MaybeUninit::uninit();
+                l.typographic_bounds(Some(&mut ascender), Some(&mut descender), None);
+                let ascender = unsafe { ascender.assume_init() };
+                let descender = unsafe { descender.assume_init() };
+
+                let line_top = origin.y + ascender;
+                let line_bottom = origin.y - descender;
+                if line_top < p.y || p.y < line_bottom {
+                    // not hit on this line
+                    continue;
+                }
+
+                tracing::debug!(?p, ?origin, "hittest: test");
+                if let Some(c) = l.string_index_for_position(apple_sdk_port::raw::CGPoint {
+                    x: p.x - origin.x,
+                    y: p.y - origin.y,
+                }) {
+                    tracing::debug!(?p, c, "hittest: hit");
+                    // hit on the line
+                    let line_prefix_bytes = text
+                        .chars()
+                        .take(l.string_range().location as _)
+                        .map(char::len_utf8)
+                        .sum::<usize>();
+                    // CoreTextのCTLineは末尾の改行文字を自身に含むらしいのでそれを除いたバイト数を返す
+                    let mut total_byte_count = 0;
+                    let mut trailing_control_byte_count = 0;
+                    for c in text[line_prefix_bytes..]
+                        .chars()
+                        .take((c - l.string_range().location) as _)
+                    {
+                        trailing_control_byte_count = if c.is_control() {
+                            trailing_control_byte_count + c.len_utf8()
+                        } else {
+                            0
+                        };
+                        total_byte_count += c.len_utf8();
+                    }
+
+                    return line_prefix_bytes + total_byte_count - trailing_control_byte_count;
+                }
+            }
+
+            // no hit found
+            return text.len();
         }
     }
 }

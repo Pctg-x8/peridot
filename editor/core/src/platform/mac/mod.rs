@@ -813,6 +813,20 @@ impl WindowDispatcher {
                 code: KeyInputCode::Backspace,
                 modifier,
             }),
+            self::bridge::NS_UP_ARROW_FUNCTION_KEY => {
+                this.event_dispatcher.dispatch(Event::KeyDown {
+                    window: WindowHandle(window),
+                    code: KeyInputCode::UpArrow,
+                    modifier,
+                })
+            }
+            self::bridge::NS_DOWN_ARROW_FUNCTION_KEY => {
+                this.event_dispatcher.dispatch(Event::KeyDown {
+                    window: WindowHandle(window),
+                    code: KeyInputCode::DownArrow,
+                    modifier,
+                })
+            }
             self::bridge::NS_LEFT_ARROW_FUNCTION_KEY => {
                 this.event_dispatcher.dispatch(Event::KeyDown {
                     window: WindowHandle(window),
@@ -923,6 +937,16 @@ impl WindowDispatcher {
             '\x08' => Event::KeyUp {
                 window: WindowHandle(window),
                 code: KeyInputCode::Backspace,
+                modifier,
+            },
+            self::bridge::NS_UP_ARROW_FUNCTION_KEY => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::UpArrow,
+                modifier,
+            },
+            self::bridge::NS_DOWN_ARROW_FUNCTION_KEY => Event::KeyUp {
+                window: WindowHandle(window),
+                code: KeyInputCode::DownArrow,
                 modifier,
             },
             self::bridge::NS_LEFT_ARROW_FUNCTION_KEY => Event::KeyUp {

@@ -292,6 +292,8 @@ pub const NSEVENT_MODIFIER_FLAG_OPTION: u32 = 1 << 19;
 pub const NSEVENT_MODIFIER_FLAG_COMMAND: u32 = 1 << 20;
 
 // https://developer.apple.com/documentation/appkit/function-key-unicode-values
+pub const NS_UP_ARROW_FUNCTION_KEY: char = '\u{f700}';
+pub const NS_DOWN_ARROW_FUNCTION_KEY: char = '\u{f701}';
 pub const NS_LEFT_ARROW_FUNCTION_KEY: char = '\u{f702}';
 pub const NS_RIGHT_ARROW_FUNCTION_KEY: char = '\u{f703}';
 pub const NS_DELETE_FUNCTION_KEY: char = '\u{f728}';

@@ -3115,6 +3115,7 @@ impl MultilineTextInputEventHandler {
             FontID::UIDefault,
             system_link.font_set(),
         );
+        tracing::debug!(?cr, "cursor rect");
 
         let mut text_scroll_occured = false;
         let cursor_rect = composite_tree.get_mut(self.ct_cursor);
@@ -3260,7 +3261,7 @@ impl MultilineTextInputEventHandler {
                 ],
                 has_bitmap: true,
                 composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                    0.0, 0.0, 0.0, 0.5,
+                    0.25, 0.5, 1.0, 0.5,
                 ])),
                 ..Default::default()
             });
