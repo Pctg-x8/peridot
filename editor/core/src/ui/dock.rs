@@ -466,6 +466,7 @@ impl<'a, 'h> RedockingContext<'a, 'h> {
                 keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
                 current_sec: self.view_init_ctx.mount_context.current_sec,
             },
+            view_registry: self.view_init_ctx.view_registry,
         }
     }
 }

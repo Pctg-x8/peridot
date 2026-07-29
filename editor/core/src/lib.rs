@@ -13,7 +13,8 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,
@@ -53,8 +54,9 @@ use crate::{
         MountTarget, NumericInputView, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView,
         Popup, PopupID, PopupManager, Positioning, RawMountTarget, ScrollContainer,
         SimpleButtonConstantEventHandler, SimpleButtonEventHandler, SimpleButtonView,
-        TeardownContext, TextInputView, ViewEventHandler, ViewIdentifier, ViewInitContext,
-        ViewRegistry, ViewUpdateContext,
+        TeardownContext, TextInputView, ViewEventHandler, ViewFeedbackHandler,
+        ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext, ViewRegistry,
+        ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -2893,6 +2895,10 @@ impl ObjectTreePanePresenter {
         });
         ctx.ht_manager
             .set_action_handler(eh.ht_context_menu_receiver, &eh);
+        ctx.view_registry
+            .subscribe_feedback::<ViewFeedbackPerformAtomic>(&eh);
+        ctx.view_registry
+            .subscribe_feedback::<ViewFeedbackObjectTreeChanged>(&eh);
 
         Self { eh }
     }
@@ -2917,6 +2923,11 @@ impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
+        ctx.view_registry
+            .unsubscribe_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
+        ctx.view_registry
+            .unsubscribe_feedback::<ViewFeedbackObjectTreeChanged>(&self.eh);
+
         ctx.mount_context
             .ht_manager
             .free(self.eh.ht_context_menu_receiver)
@@ -2980,6 +2991,16 @@ impl HitTestTreeActionHandler for ObjectTreePaneEventHandler {
         }
 
         EventContinueControl::empty()
+    }
+}
+impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandler {
+    fn accept_feedback(&self, _feedback: &ViewFeedbackPerformAtomic) {
+        tracing::debug!("vf: perform atomic")
+    }
+}
+impl ViewFeedbackHandler<ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventHandler {
+    fn accept_feedback(&self, _feedback: &ViewFeedbackObjectTreeChanged) {
+        tracing::debug!("vf: object tree changed");
     }
 }
 
@@ -3063,6 +3084,168 @@ impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
+pub enum ViewFeedback {
+    ObjectTreeChanged(ViewFeedbackObjectTreeChanged),
+}
+
+#[derive(Clone)]
+pub struct ViewFeedbackObjectTreeChanged;
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectID(NonZeroUsize);
+impl ObjectID {
+    const fn from_array_index(v: usize) -> Self {
+        Self(unsafe { NonZeroUsize::new_unchecked(v.checked_add(1).expect("too many objects!")) })
+    }
+
+    const fn into_array_index(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
+pub enum ObjectLocation {
+    Root,
+    Child(ObjectID),
+}
+
+pub struct Object {
+    parent: Option<ObjectID>,
+    children: Vec<ObjectID>,
+    name: String,
+}
+
+/// Logical Application Model
+pub struct Application {
+    objects: Vec<Object>,
+    free_object_indices: BTreeSet<usize>,
+    root_objects: Vec<ObjectID>,
+}
+impl Application {
+    pub fn new() -> Self {
+        Self {
+            objects: Vec::new(),
+            free_object_indices: BTreeSet::new(),
+            root_objects: Vec::new(),
+        }
+    }
+
+    fn alloc_object(&mut self, name: String) -> ObjectID {
+        if let Some(index) = self.free_object_indices.pop_first() {
+            self.objects[index].name = name;
+            self.root_objects.push(ObjectID::from_array_index(index));
+            return ObjectID::from_array_index(index);
+        }
+
+        let index = self.objects.len();
+        self.objects.push(Object {
+            parent: None,
+            children: Vec::new(),
+            name,
+        });
+        self.root_objects.push(ObjectID::from_array_index(index));
+        ObjectID::from_array_index(index)
+    }
+
+    fn free_object(&mut self, id: ObjectID) {
+        // detach from registry
+        match self.objects[id.into_array_index()].parent.take() {
+            Some(parent) => {
+                self.objects[parent.into_array_index()]
+                    .children
+                    .retain(|&oid| oid != id);
+            }
+            None => {
+                self.root_objects.retain(|&oid| oid != id);
+            }
+        }
+
+        self.free_object_indices.insert(id.into_array_index());
+
+        // reset
+        self.objects[id.into_array_index()].name = String::new();
+        self.objects[id.into_array_index()].children = Vec::new();
+        self.objects[id.into_array_index()].parent = None;
+
+        // TODO: compactionの頻度を減らすかはあとで検討
+        self.compaction_objects();
+    }
+
+    fn compaction_objects(&mut self) {
+        // objectsのうしろにいるfreeを解放
+        while self.free_object_indices.remove(&(self.objects.len() - 1)) {
+            self.objects.pop();
+        }
+
+        self.objects.shrink_to_fit();
+    }
+
+    pub fn object_create(
+        &mut self,
+        name: String,
+        vf_queue: &mut VecDeque<ViewFeedback>,
+    ) -> ObjectID {
+        let id = self.alloc_object(name);
+        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
+            ViewFeedbackObjectTreeChanged,
+        ));
+        id
+    }
+
+    pub fn object_destroy(&mut self, id: ObjectID, vf_queue: &mut VecDeque<ViewFeedback>) {
+        self.free_object(id);
+        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
+            ViewFeedbackObjectTreeChanged,
+        ));
+    }
+
+    pub fn object_set_parent(
+        &mut self,
+        id: ObjectID,
+        parent: ObjectID,
+        vf_queue: &mut VecDeque<ViewFeedback>,
+    ) {
+        match self.objects[id.into_array_index()].parent.replace(parent) {
+            None => {
+                // detach from root
+                self.root_objects.retain(|&oid| oid != id);
+            }
+            Some(old_parent) if old_parent == parent => {
+                // already linked
+                return;
+            }
+            Some(old_parent) => {
+                // detach from old parent
+                self.objects[old_parent.into_array_index()]
+                    .children
+                    .retain(|&oid| oid != id);
+            }
+        }
+
+        self.objects[parent.into_array_index()].children.push(id);
+
+        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
+            ViewFeedbackObjectTreeChanged,
+        ));
+    }
+
+    pub fn object_detach_parent(&mut self, child: ObjectID, vf_queue: &mut VecDeque<ViewFeedback>) {
+        let Some(parent) = self.objects[child.into_array_index()].parent.take() else {
+            // already on root
+            return;
+        };
+
+        self.objects[parent.into_array_index()]
+            .children
+            .retain(|&id| id != child);
+        self.root_objects.push(parent);
+
+        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
+            ViewFeedbackObjectTreeChanged,
+        ));
+    }
+}
+
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     header: ui::window_header::View,
@@ -3118,6 +3301,8 @@ async fn run<'sys>(
 ) {
     tracing::info!("app start");
     crate::perf_begin!(perf = INITIALIZE);
+
+    let mut application = Application::new();
 
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
@@ -4504,9 +4689,10 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
 
+                let mut vf_queue = VecDeque::new();
                 match id {
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
-                        tracing::trace!("TODO: Object Create -> Cube");
+                        application.object_create("New Cube".into(), &mut vf_queue);
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
                         tracing::trace!("TODO: Object Create -> Sphere");
@@ -4522,6 +4708,14 @@ async fn run<'sys>(
                     }
                     _ => (),
                 }
+
+                for f in vf_queue {
+                    match f {
+                        ViewFeedback::ObjectTreeChanged(o) => view_registry.dispatch_feedback(o),
+                    }
+                }
+
+                view_registry.perform_atomic();
             }
             Event::DropdownMenuSelectItem { id, receiver } => {
                 let mut should_commit_ct = false;
