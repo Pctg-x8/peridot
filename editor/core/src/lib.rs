@@ -13,6 +13,7 @@ use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 use std::{
+    cell::RefCell,
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -54,9 +55,9 @@ use crate::{
         MountTarget, NumericInputView, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView,
         Popup, PopupID, PopupManager, Positioning, RawMountTarget, ScrollContainer,
         SimpleButtonConstantEventHandler, SimpleButtonEventHandler, SimpleButtonView,
-        TeardownContext, TextInputView, ViewEventHandler, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext, ViewRegistry,
-        ViewUpdateContext,
+        TeardownContext, TextInputView, ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler,
+        ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier, ViewInitContext,
+        ViewRegistry, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -2884,6 +2885,16 @@ impl ObjectTreePanePresenter {
     const ID: &str = internal_pane_identifier!("ObjectTree");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            relative_size_adjustment: [1.0, 1.0],
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
+
         let ht_context_menu_receiver = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
@@ -2891,14 +2902,19 @@ impl ObjectTreePanePresenter {
         });
 
         let eh = Rc::new(ObjectTreePaneEventHandler {
+            ct_root,
+            ht_root,
             ht_context_menu_receiver,
+            object_tree_changed: Cell::new(false),
+            row_views: RefCell::new(Vec::new()),
         });
         ctx.ht_manager
             .set_action_handler(eh.ht_context_menu_receiver, &eh);
-        ctx.view_registry
-            .subscribe_feedback::<ViewFeedbackPerformAtomic>(&eh);
-        ctx.view_registry
-            .subscribe_feedback::<ViewFeedbackObjectTreeChanged>(&eh);
+        ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
+        ctx.subscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&eh);
+
+        ctx.ht_manager
+            .add_child(eh.ht_root, eh.ht_context_menu_receiver);
 
         Self { eh }
     }
@@ -2913,24 +2929,22 @@ impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
     }
 
     fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-        ctx.ht_manager
-            .add_child(target.ht_root(), self.eh.ht_context_menu_receiver);
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
     }
 
     fn unmount(&self, ctx: &mut MountContext) {
-        ctx.ht_manager
-            .remove_child(self.eh.ht_context_menu_receiver);
+        ctx.composite_tree.remove_child(self.eh.ct_root);
+        ctx.ht_manager.remove_child(self.eh.ht_root);
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        ctx.view_registry
-            .unsubscribe_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
-        ctx.view_registry
-            .unsubscribe_feedback::<ViewFeedbackObjectTreeChanged>(&self.eh);
+        ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
+        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&self.eh);
 
-        ctx.mount_context
-            .ht_manager
-            .free(self.eh.ht_context_menu_receiver)
+        ctx.mount_context.composite_tree.free_all(self.eh.ct_root);
+        ctx.mount_context.ht_manager.free_all(self.eh.ht_root)
     }
 }
 
@@ -2941,7 +2955,11 @@ pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 4;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
 
 struct ObjectTreePaneEventHandler {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
     ht_context_menu_receiver: HitTestTreeRef,
+    object_tree_changed: Cell<bool>,
+    row_views: RefCell<Vec<ObjectTreeObjectRowView>>,
 }
 impl HitTestTreeActionHandler for ObjectTreePaneEventHandler {
     fn on_click(
@@ -2994,13 +3012,151 @@ impl HitTestTreeActionHandler for ObjectTreePaneEventHandler {
     }
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandler {
-    fn accept_feedback(&self, _feedback: &ViewFeedbackPerformAtomic) {
-        tracing::debug!("vf: perform atomic")
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &ViewFeedbackPerformAtomic,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        let object_tree_changed = self.object_tree_changed.replace(false);
+        if object_tree_changed {
+            let mut row_views = self.row_views.borrow_mut();
+            for x in row_views.drain(..) {
+                x.unmount(&mut context.view_init_context);
+                x.teardown(&mut context.view_init_context.make_teardown_context());
+            }
+            for (n, &x) in context.application.root_objects.iter().enumerate() {
+                let o = context.application.object(x);
+                let rv = ObjectTreeObjectRowView::new(
+                    &mut context.view_init_context,
+                    o.name.clone(),
+                    n as f32 * ObjectTreeObjectRowView::ITEM_HEIGHT,
+                );
+                rv.mount(
+                    &mut context.view_init_context,
+                    &RawMountTarget {
+                        ht_root: self.ht_root,
+                        ct_root: self.ct_root,
+                    },
+                );
+                row_views.push(rv);
+            }
+        }
     }
 }
 impl ViewFeedbackHandler<ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventHandler {
-    fn accept_feedback(&self, _feedback: &ViewFeedbackObjectTreeChanged) {
-        tracing::debug!("vf: object tree changed");
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &ViewFeedbackObjectTreeChanged,
+        _context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        self.object_tree_changed.set(true);
+    }
+}
+
+struct ObjectTreeObjectRowView {
+    eh: Rc<ObjectTreeObjectRowEventHandler>,
+}
+impl ObjectTreeObjectRowView {
+    const ITEM_HEIGHT: f32 = 20.0;
+
+    fn new(ctx: &mut ViewInitContext, init_label: String, init_y: f32) -> Self {
+        let ct_root = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(init_y)],
+            size: [
+                AnimatableFloat::Value(0.0),
+                AnimatableFloat::Value(Self::ITEM_HEIGHT),
+            ],
+            relative_size_adjustment: [1.0, 0.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: init_label,
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+            top: init_y,
+            height: Self::ITEM_HEIGHT,
+            width_adjustment_factor: 1.0,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        let eh = Rc::new(ObjectTreeObjectRowEventHandler { ct_root, ht_root });
+        ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
+
+        Self { eh }
+    }
+
+    fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree
+            .add_child(target.ct_root(), self.eh.ct_root);
+        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    }
+
+    fn unmount(&self, ctx: &mut MountContext) {
+        ctx.composite_tree.remove_child(self.eh.ct_root);
+        ctx.ht_manager.remove_child(self.eh.ht_root);
+    }
+
+    fn teardown(self, ctx: &mut TeardownContext) {
+        ctx.mount_context.composite_tree.free_all(self.eh.ct_root);
+        ctx.mount_context.ht_manager.free_all(self.eh.ht_root);
+    }
+}
+
+struct ObjectTreeObjectRowEventHandler {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.25],
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.25],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
     }
 }
 
@@ -3180,6 +3336,10 @@ impl Application {
         self.objects.shrink_to_fit();
     }
 
+    pub fn object(&self, id: ObjectID) -> &Object {
+        &self.objects[id.into_array_index()]
+    }
+
     pub fn object_create(
         &mut self,
         name: String,
@@ -3309,6 +3469,7 @@ async fn run<'sys>(
     let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
     let mut pointer_input_manager = PointerInputManager::new();
     let mut view_registry = ViewRegistry::new();
+    let mut view_feedback_registry = ViewFeedbackRegistry::new();
     let mut dock_store = ui::dock::DockStore::new();
     let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
     let mut popup_manager = PopupManager::new();
@@ -3376,6 +3537,7 @@ async fn run<'sys>(
         &mut delayed_render_messages,
     );
 
+    let mut view_feedback_registry_delayed_ops = VecDeque::new();
     let mut view_init_ctx = ViewInitContext {
         mount_context: MountContext {
             composite_tree: &mut composite_tree,
@@ -3384,6 +3546,7 @@ async fn run<'sys>(
             keyboard_focus_registry: &mut keyboard_focus_registry,
         },
         view_registry: &mut view_registry,
+        view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
         ui_scale_factor: main_window.ui_scale_factor(),
         system_link: &system_link,
         main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -3608,6 +3771,7 @@ async fn run<'sys>(
                         ))
                         .apply();
 
+                    let mut view_feedback_registry_delayed_ops = VecDeque::new();
                     let mut view_init_ctx = ViewInitContext {
                         mount_context: MountContext {
                             composite_tree,
@@ -3616,6 +3780,8 @@ async fn run<'sys>(
                             keyboard_focus_registry,
                         },
                         view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                         ui_scale_factor: w.ui_scale_factor(),
                         system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -3676,6 +3842,8 @@ async fn run<'sys>(
                             },
                         ),
                     }));
+
+                    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
                 },
             );
             sub_windows.insert(new_window);
@@ -3687,6 +3855,7 @@ async fn run<'sys>(
     for msg in delayed_render_messages.drain(..) {
         system_link.rt_sender().send(msg).expect("rt_sender.send");
     }
+    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
 
     // initial push test
     let mut preview_state =
@@ -4292,6 +4461,7 @@ async fn run<'sys>(
                 target_window,
                 message,
             } => {
+                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 let opened_id = popup_manager.open(
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -4301,6 +4471,8 @@ async fn run<'sys>(
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
                         view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                         ui_scale_factor: target_window.ui_scale_factor(),
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -4321,6 +4493,7 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
             }
             Event::PopupClose { id } => {
                 if popup_manager.close(
@@ -4352,6 +4525,7 @@ async fn run<'sys>(
                 surface_pos,
                 view_constructor,
             } => {
+                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 custom_view_flyout_session = Some(CustomViewFlyoutSession::new(
                     parent,
                     surface_pos,
@@ -4364,18 +4538,23 @@ async fn run<'sys>(
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
                         view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                         ui_scale_factor: parent.ui_scale_factor(),
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
                     &mut delayed_render_messages,
                 ));
+
+                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
             }
             Event::MenuOpen {
                 parent,
                 items,
                 surface_pos,
             } => {
+                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
@@ -4389,6 +4568,8 @@ async fn run<'sys>(
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
                         view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                         ui_scale_factor: 1.0, // updated later
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -4399,6 +4580,7 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
             }
             Event::MenuReopen {
                 parent,
@@ -4414,6 +4596,7 @@ async fn run<'sys>(
                     );
                 }
 
+                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
@@ -4427,6 +4610,8 @@ async fn run<'sys>(
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
                         view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                         ui_scale_factor: 1.0, // updated later
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -4437,6 +4622,7 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
             }
             Event::DropdownMenuOpen {
                 parent,
@@ -4445,6 +4631,7 @@ async fn run<'sys>(
                 items,
                 selection_receiver,
             } => {
+                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 current_active_dropdown_menu_session = Some(DropdownMenuSession::new(
                     selection_receiver,
                     parent,
@@ -4457,6 +4644,8 @@ async fn run<'sys>(
                             keyboard_focus_registry: &mut keyboard_focus_registry,
                         },
                         view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                         ui_scale_factor: 1.0, // updated later
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -4469,6 +4658,7 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
             }
             Event::MenuCloseAll => {
                 if let Some(c) = current_active_menu_session.take() {
@@ -4562,6 +4752,7 @@ async fn run<'sys>(
                     .unreserve_delayed_action();
 
                 if let Some(c) = current_active_menu_session.as_mut() {
+                    let mut view_feedback_registry_delayed_ops = VecDeque::new();
                     c.perform_delayed_action(
                         &system_link,
                         &mut ViewInitContext {
@@ -4572,6 +4763,8 @@ async fn run<'sys>(
                                 keyboard_focus_registry: &mut keyboard_focus_registry,
                             },
                             view_registry: &mut view_registry,
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
                             ui_scale_factor: 1.0, // updated later
                             system_link: &system_link,
                             main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -4582,6 +4775,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
                 }
             }
             Event::MenuPointerDown {
@@ -4709,13 +4903,54 @@ async fn run<'sys>(
                     _ => (),
                 }
 
+                let mut view_feedback_registry_delayed_ops = VecDeque::new();
+                let init_time = global_time_base.elapsed().as_secs_f32();
                 for f in vf_queue {
                     match f {
-                        ViewFeedback::ObjectTreeChanged(o) => view_registry.dispatch_feedback(o),
+                        ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                            o,
+                            &mut ViewFeedbackContext {
+                                application: &application,
+                                view_init_context: ViewInitContext {
+                                    mount_context: MountContext {
+                                        composite_tree: &mut composite_tree,
+                                        ht_manager: &mut ht_manager,
+                                        current_sec: init_time,
+                                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                                    },
+                                    view_registry: &mut view_registry,
+                                    view_feedback_subscription_delayed_ops:
+                                        &mut view_feedback_registry_delayed_ops,
+                                    ui_scale_factor: 1.0, // TODO: これどうするか......
+                                    system_link: &system_link,
+                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                },
+                            },
+                        ),
                     }
                 }
 
-                view_registry.perform_atomic();
+                view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                    application: &application,
+                    view_init_context: ViewInitContext {
+                        mount_context: MountContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            current_sec: init_time,
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                        },
+                        view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
+                        ui_scale_factor: 1.0, // TODO: これどうするか......
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                    },
+                });
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
             }
             Event::DropdownMenuSelectItem { id, receiver } => {
                 let mut should_commit_ct = false;
@@ -4821,6 +5056,7 @@ async fn run<'sys>(
 
                     tracing::debug!(?client_pos_in_dest, "dock confirm");
 
+                    let mut view_feedback_registry_delayed_ops = VecDeque::new();
                     let mut source_window = state.source_window;
                     let source_dock = state.source_dock;
                     let tab_index = state.tab_index;
@@ -4842,6 +5078,8 @@ async fn run<'sys>(
                                     keyboard_focus_registry: &mut keyboard_focus_registry,
                                 },
                                 view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
                                 ui_scale_factor: 1.0, // updated later
                                 system_link: &system_link,
                                 main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -4909,6 +5147,8 @@ async fn run<'sys>(
                                         keyboard_focus_registry,
                                     },
                                     view_registry: &mut view_registry,
+                                    view_feedback_subscription_delayed_ops:
+                                        &mut view_feedback_registry_delayed_ops,
                                     ui_scale_factor: w.ui_scale_factor(),
                                     system_link,
                                     main_thread_texture_id_issuer: &mut texture_id_issuer,
@@ -4955,6 +5195,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
                 }
             }
             Event::Sync(SyncEvent::NewPresentID { id }) => {

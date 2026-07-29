@@ -467,6 +467,9 @@ impl<'a, 'h> RedockingContext<'a, 'h> {
                 current_sec: self.view_init_ctx.mount_context.current_sec,
             },
             view_registry: self.view_init_ctx.view_registry,
+            view_feedback_subscription_delayed_ops: self
+                .view_init_ctx
+                .view_feedback_subscription_delayed_ops,
         }
     }
 }
