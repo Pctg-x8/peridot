@@ -2875,9 +2875,27 @@ impl ui::dock::PaneContentPresenter for TimelinePanePresenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
-struct ObjectTreePanePresenter {}
+struct ObjectTreePanePresenter {
+    eh: Rc<ObjectTreePaneEventHandler>,
+}
 impl ObjectTreePanePresenter {
     const ID: &str = internal_pane_identifier!("ObjectTree");
+
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let ht_context_menu_receiver = ctx.ht_manager.create(HitTestTreeData {
+            width_adjustment_factor: 1.0,
+            height_adjustment_factor: 1.0,
+            ..Default::default()
+        });
+
+        let eh = Rc::new(ObjectTreePaneEventHandler {
+            ht_context_menu_receiver,
+        });
+        ctx.ht_manager
+            .set_action_handler(eh.ht_context_menu_receiver, &eh);
+
+        Self { eh }
+    }
 }
 impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
     fn id(&self) -> String {
@@ -2888,11 +2906,81 @@ impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
         "Object Tree".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+        ctx.ht_manager
+            .add_child(target.ht_root(), self.eh.ht_context_menu_receiver);
+    }
 
-    fn unmount(&self, ctx: &mut MountContext) {}
+    fn unmount(&self, ctx: &mut MountContext) {
+        ctx.ht_manager
+            .remove_child(self.eh.ht_context_menu_receiver);
+    }
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        ctx.mount_context
+            .ht_manager
+            .free(self.eh.ht_context_menu_receiver)
+    }
+}
+
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 1;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 2;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 3;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
+
+struct ObjectTreePaneEventHandler {
+    ht_context_menu_receiver: HitTestTreeRef,
+}
+impl HitTestTreeActionHandler for ObjectTreePaneEventHandler {
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        if args.button == PointerButton::Secondary {
+            context.system_link.dispatch_event(Event::MenuOpen {
+                parent: context
+                    .ht_manager
+                    .query_root_window(self.ht_context_menu_receiver)
+                    .expect("not mounted"),
+                items: vec![
+                    MenuItem::Heading {
+                        label: "Create Object".into(),
+                    },
+                    MenuItem::Command {
+                        label: "Cube".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
+                    },
+                    MenuItem::Command {
+                        label: "Sphere".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
+                    },
+                    MenuItem::Command {
+                        label: "Cylinder".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER,
+                    },
+                    MenuItem::Command {
+                        label: "Capsule".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE,
+                    },
+                    MenuItem::SubMenu {
+                        label: "Special".into(),
+                        items: vec![MenuItem::Command {
+                            label: "Terrain".into(),
+                            command_id: MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN,
+                        }],
+                    },
+                ],
+                surface_pos: args.client_pos,
+            });
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        EventContinueControl::empty()
+    }
 }
 
 struct InspectorPanePresenter {}
@@ -3297,7 +3385,9 @@ async fn run<'sys>(
                     UIKitPreviewPanePresenter::ID => {
                         Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
                     }
-                    ObjectTreePanePresenter::ID => Box::new(ObjectTreePanePresenter {}),
+                    ObjectTreePanePresenter::ID => {
+                        Box::new(ObjectTreePanePresenter::new(view_init_ctx))
+                    }
                     InspectorPanePresenter::ID => Box::new(InspectorPanePresenter {}),
                     AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
                     ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
@@ -3373,7 +3463,7 @@ async fn run<'sys>(
                                             Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
                                         }
                                         ObjectTreePanePresenter::ID => {
-                                            Box::new(ObjectTreePanePresenter {})
+                                            Box::new(ObjectTreePanePresenter::new(view_init_ctx))
                                         }
                                         InspectorPanePresenter::ID => {
                                             Box::new(InspectorPanePresenter {})
@@ -4412,6 +4502,25 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                }
+
+                match id {
+                    MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
+                        tracing::trace!("TODO: Object Create -> Cube");
+                    }
+                    MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
+                        tracing::trace!("TODO: Object Create -> Sphere");
+                    }
+                    MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
+                        tracing::trace!("TODO: Object Create -> Cylinder");
+                    }
+                    MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
+                        tracing::trace!("TODO: Object Create -> Capsule");
+                    }
+                    MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
+                        tracing::trace!("TODO: Object Create -> Special -> Terrain");
+                    }
+                    _ => (),
                 }
             }
             Event::DropdownMenuSelectItem { id, receiver } => {
