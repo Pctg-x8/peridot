@@ -1,6 +1,6 @@
 use bedrock::{self as br, ImageChild, MemoryBound, VkHandle};
 
-use crate::graphics::VulkanDevice;
+use crate::graphics::Graphics;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasRect {
@@ -55,7 +55,7 @@ impl TextureAtlas {
     pub const MULTISAMPLE_LEVEL: u32 = 4;
     const SPACING: u32 = 1;
 
-    pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
+    pub unsafe fn drop(&mut self, gfx: &Graphics) {
         unsafe {
             br::vkfn_wrapper::destroy_image_view(
                 gfx.as_transparent_ref(),
@@ -75,7 +75,7 @@ impl TextureAtlas {
         }
     }
 
-    pub fn new(gfx: &VulkanDevice) -> Self {
+    pub fn new(gfx: &Graphics) -> Self {
         let size = br::Extent2D::spread1(4096);
 
         let mut res = br::ImageObject::new(
@@ -197,7 +197,7 @@ impl ColorTextureAtlas {
     const SPACING: u32 = 1;
     const FORMAT: br::Format = br::vk::VK_FORMAT_R8G8B8A8_UNORM;
 
-    pub unsafe fn drop(&mut self, gfx: &VulkanDevice) {
+    pub unsafe fn drop(&mut self, gfx: &Graphics) {
         unsafe {
             br::vkfn_wrapper::destroy_image_view(
                 gfx.as_transparent_ref(),
@@ -217,7 +217,7 @@ impl ColorTextureAtlas {
         }
     }
 
-    pub fn new(gfx: &VulkanDevice) -> Self {
+    pub fn new(gfx: &Graphics) -> Self {
         let size = br::Extent2D::spread1(Self::INIT_SIZE);
 
         let mut res = br::ImageObject::new(

@@ -13,9 +13,9 @@ use bedrock::{
 use crate::{
     FlyoutSurfaceHandle, SyncEvent, SyncEventBus, WindowHandle,
     graphics::{
-        BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, IA_STATE_TRISTRIP, MS_STATE_EMPTY,
-        RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanDevice,
-        VulkanSurface, VulkanSwapchain,
+        BLEND_STATE_SINGLE_NONE, Graphics, IA_STATE_TRILIST, IA_STATE_TRISTRIP, MS_STATE_EMPTY,
+        RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanSurface,
+        VulkanSwapchain,
     },
     rendering::{
         atlas::{AtlasRect, ColorTextureAtlas, TextureAtlas},
@@ -139,7 +139,7 @@ crate::perf_section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 pub const PREVIEW_COMPOSITE: CustomRenderToken = CustomRenderToken(0);
 
 pub struct RenderThread<'main> {
-    pub vk_device: &'main VulkanDevice<'main>,
+    pub gfx: &'main Graphics<'main>,
     pub shutdown_signal: &'main AtomicBool,
     pub renderer_sync: &'main Mutex<RendererSync>,
     pub global_time_base: &'main std::time::Instant,
@@ -159,9 +159,7 @@ impl<'main> RenderThread<'main> {
 
         crate::perf_begin!(perf = INITIALIZATION);
 
-        let mut render_queue = self
-            .vk_device
-            .queue(self.vk_device.present_queue_family_index(), 0);
+        let mut render_queue = self.gfx.queue(self.gfx.present_queue_family_index(), 0);
 
         #[cfg(windows)]
         let d3d12_present_fence: windows::Win32::Graphics::Direct3D12::ID3D12Fence = unsafe {
@@ -180,13 +178,13 @@ impl<'main> RenderThread<'main> {
         };
 
         let mut composite_tree = CompositeTreeRender::new();
-        let composite_shared_buffers = CompositeSharedBuffers::new(self.vk_device);
+        let composite_shared_buffers = CompositeSharedBuffers::new(self.gfx);
         let vg_render_formats = GlyphAtlasRenderingFormats {
             color: br::vk::VK_FORMAT_R8_UNORM,
             stencil: br::vk::VK_FORMAT_S8_UINT,
         };
         let glyph_atlas_manager_common_resources =
-            GlyphAtlasManagerCommonResources::new(self.vk_device, &vg_render_formats);
+            GlyphAtlasManagerCommonResources::new(self.gfx, &vg_render_formats);
         struct GlyphAtlasDataPerDpi<'d> {
             manager: MaskTextureAtlasManager<'d>,
             color_manager: ColorTextureAtlasManager<'d>,
@@ -235,12 +233,12 @@ impl<'main> RenderThread<'main> {
         let mut shader_textures = HashMap::<TextureID, ShaderTexture>::new();
 
         let mut shared_update_cp = br::CommandPoolObject::new(
-            self.vk_device,
-            &br::CommandPoolCreateInfo::new(self.vk_device.present_queue_family_index()),
+            self.gfx,
+            &br::CommandPoolCreateInfo::new(self.gfx.present_queue_family_index()),
         )
         .expect("shared_update_cp.create");
         let [mut shared_update_commands] = br::CommandBufferObject::alloc_array(
-            self.vk_device,
+            self.gfx,
             &br::CommandBufferFixedCountAllocateInfo::new(
                 &mut shared_update_cp,
                 br::CommandBufferLevel::Primary,
@@ -260,7 +258,7 @@ impl<'main> RenderThread<'main> {
             .push(SyncEvent::NewPresentID { id: present_id });
 
         let mut preview_rt_buffer = preview::PreviewRenderTargetBuffer::new(
-            self.vk_device,
+            self.gfx,
             self.preview_state
                 .lock()
                 .expect("poisoned")
@@ -269,23 +267,23 @@ impl<'main> RenderThread<'main> {
                 .to_vk(),
         );
         let mut preview_renderer = preview::Renderer::new(
-            self.vk_device,
+            self.gfx,
             &preview_rt_buffer,
             &self.preview_state.lock().expect("poisoned"),
-            self.vk_device.present_queue_family_index(),
+            self.gfx.present_queue_family_index(),
             &mut render_queue,
         );
 
         let dep_semaphore_preview_update =
-            br::SemaphoreObject::new(self.vk_device, &br::SemaphoreCreateInfo::new())
+            br::SemaphoreObject::new(self.gfx, &br::SemaphoreCreateInfo::new())
                 .expect("dep_semaphore_preview_update.create");
         let dep_semaphore_preview =
-            br::SemaphoreObject::new(self.vk_device, &br::SemaphoreCreateInfo::new())
+            br::SemaphoreObject::new(self.gfx, &br::SemaphoreCreateInfo::new())
                 .expect("dep_semaphore_preview.create");
-        let linear_sampler = br::SamplerObject::new(self.vk_device, &br::SamplerCreateInfo::new())
+        let linear_sampler = br::SamplerObject::new(self.gfx, &br::SamplerCreateInfo::new())
             .expect("linear_sampler.create");
         let mut preview_composite = preview::Composite::new(
-            self.vk_device,
+            self.gfx,
             preview_rt_buffer.as_image_view(),
             &linear_sampler,
             // あとで正しいものが設定されるので一旦ダミーで作る
@@ -330,7 +328,7 @@ impl<'main> RenderThread<'main> {
                         windows.insert(
                             wd.key,
                             WindowRenderer::new(
-                                self.vk_device,
+                                self.gfx,
                                 &composite_shared_buffers,
                                 wd,
                                 init_scale,
@@ -375,7 +373,7 @@ impl<'main> RenderThread<'main> {
                         context_menus.insert(
                             create_data.w,
                             ContextMenuRenderer::new(
-                                self.vk_device,
+                                self.gfx,
                                 &composite_shared_buffers,
                                 create_data,
                                 init_scale,
@@ -421,7 +419,7 @@ impl<'main> RenderThread<'main> {
 
             // TODO: 必要なら後で最適化する
             crate::perf_begin!(perf = UPDATE_GRADIENT);
-            composite_tree.update_gradients(self.vk_device, &composite_shared_buffers);
+            composite_tree.update_gradients(self.gfx, &composite_shared_buffers);
             unsafe {
                 shared_update_cp
                     .reset(br::CommandPoolResetFlags::EMPTY)
@@ -484,8 +482,7 @@ impl<'main> RenderThread<'main> {
                 for x in context_menus.values_mut() {
                     x.validate_swapchain(&mut descriptor_writes, self.event_bus);
                 }
-                self.vk_device
-                    .update_descriptor_sets(&descriptor_writes, &[]);
+                self.gfx.update_descriptor_sets(&descriptor_writes, &[]);
 
                 any_swapchain_invalidated = false;
             }
@@ -581,8 +578,7 @@ impl<'main> RenderThread<'main> {
                         new_atlas_mgr.color_manager.atlas().as_image_view(),
                         &mut descriptor_writes,
                     );
-                    self.vk_device
-                        .update_descriptor_sets(&descriptor_writes, &[]);
+                    self.gfx.update_descriptor_sets(&descriptor_writes, &[]);
                 }
 
                 let glyph_atlas_mgr = glyph_atlas_per_scale
@@ -675,7 +671,7 @@ impl<'main> RenderThread<'main> {
                         crate::perf_scope!(VALIDATE_PREVIEW_RENDERING);
                         let mut committed_state = self.preview_state.lock().expect("poisoned");
                         let resource_recreated = preview_rt_buffer.validate(
-                            self.vk_device,
+                            self.gfx,
                             committed_state
                                 .viewport_size
                                 .to_pixels_ceil(render_scale.value())
@@ -687,7 +683,7 @@ impl<'main> RenderThread<'main> {
                             preview_composite.force_invalidate_descriptor_set_state();
                         }
                         preview_composite.validate(
-                            self.vk_device,
+                            self.gfx,
                             &preview_rt_buffer,
                             ctx.rt_size,
                             ctx.active_render_pass,
@@ -786,8 +782,7 @@ impl<'main> RenderThread<'main> {
                         new_atlas_mgr.color_manager.atlas().as_image_view(),
                         &mut descriptor_writes,
                     );
-                    self.vk_device
-                        .update_descriptor_sets(&descriptor_writes, &[]);
+                    self.gfx.update_descriptor_sets(&descriptor_writes, &[]);
                 }
 
                 let glyph_atlas_mgr = glyph_atlas_per_scale
@@ -936,7 +931,7 @@ impl<'main> RenderThread<'main> {
                     x.color_manager.perform_render(
                         &x.shader_texture_rasterize_requests,
                         s.value(),
-                        self.vk_device,
+                        self.gfx,
                         &mut render_queue,
                     );
                     x.shader_texture_rasterize_requests.clear();
@@ -947,8 +942,8 @@ impl<'main> RenderThread<'main> {
                 // preview may still updating on main thread...
                 if let Ok(mut st) = self.preview_state.try_lock() {
                     crate::perf_scope!(UPDATE_PREVIEW);
-                    preview_renderer.update(self.vk_device, &mut st);
-                    preview_renderer.validate(self.vk_device, &preview_rt_buffer, &mut st);
+                    preview_renderer.update(self.gfx, &mut st);
+                    preview_renderer.validate(self.gfx, &preview_rt_buffer, &mut st);
                 }
             }
 
@@ -1106,7 +1101,7 @@ impl<'main> RenderThread<'main> {
         }
 
         unsafe {
-            self.vk_device.wait().expect("device wait");
+            self.gfx.wait().expect("device wait");
         }
         #[cfg(windows)]
         if let Err(e) =
@@ -1116,10 +1111,10 @@ impl<'main> RenderThread<'main> {
         }
 
         unsafe {
-            preview_composite.drop(self.vk_device);
-            preview_renderer.drop(self.vk_device);
-            preview_rt_buffer.drop(self.vk_device);
-            composite_shared_buffers.drop(self.vk_device);
+            preview_composite.drop(self.gfx);
+            preview_renderer.drop(self.gfx);
+            preview_rt_buffer.drop(self.gfx);
+            composite_shared_buffers.drop(self.gfx);
         }
 
         tracing::info!("RenderThread terminated");
@@ -1128,7 +1123,7 @@ impl<'main> RenderThread<'main> {
 
 #[cfg(windows)]
 struct CompositionSwapchainBuffer<'d> {
-    vk_device: &'d VulkanDevice<'d>,
+    vk_device: &'d Graphics<'d>,
     d3d12_resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
     shared_handle: windows::Win32::Foundation::HANDLE,
     vk_device_memory: br::vk::VkDeviceMemory,
@@ -1158,20 +1153,20 @@ impl<'d> Drop for CompositionSwapchainBuffer<'d> {
 struct ContextMenuRenderer<'d> {
     w: FlyoutSurfaceHandle,
     active_scale: SafeF32,
-    vk_device: &'d VulkanDevice<'d>,
+    vk_device: &'d Graphics<'d>,
     composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
     last_composite_render_data: CompositeRenderingData,
-    update_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
-    update_cb: br::CommandBufferObject<&'d VulkanDevice<'d>>,
-    update_completion_fence: br::FenceObject<&'d VulkanDevice<'d>>,
-    update_completion_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
+    update_cp: br::CommandPoolObject<&'d Graphics<'d>>,
+    update_cb: br::CommandBufferObject<&'d Graphics<'d>>,
+    update_completion_fence: br::FenceObject<&'d Graphics<'d>>,
+    update_completion_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
     updating: bool,
-    render_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
-    render_cb: Vec<br::CommandBufferObject<&'d VulkanDevice<'d>>>,
+    render_cp: br::CommandPoolObject<&'d Graphics<'d>>,
+    render_cb: Vec<br::CommandBufferObject<&'d Graphics<'d>>>,
     render_cb_invalid: bool,
-    present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
-    backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
+    present_ready_semaphores: Vec<br::SemaphoreObject<&'d Graphics<'d>>>,
+    backbuffer_ready_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
     swapchain_invalidated: bool,
     #[cfg(not(windows))]
     swapchain: VulkanSwapchain<'d, 'd>,
@@ -1186,7 +1181,7 @@ struct ContextMenuRenderer<'d> {
 }
 impl<'d> ContextMenuRenderer<'d> {
     fn new(
-        device: &'d VulkanDevice<'d>,
+        device: &'d Graphics<'d>,
         shared_buffers: &CompositeSharedBuffers,
         create_data: NewContextMenuData,
         init_scale: SafeF32,
@@ -1673,7 +1668,7 @@ impl<'d> ContextMenuRenderer<'d> {
         .expect("update_cb.end");
     }
 
-    pub fn submit_update_commands(&mut self, device_queue: &mut br::QueueObject<&'d VulkanDevice>) {
+    pub fn submit_update_commands(&mut self, device_queue: &mut br::QueueObject<&'d Graphics>) {
         self.wait_for_last_update_completion();
         self.repopulate_update_commands();
 
@@ -1720,29 +1715,29 @@ struct WindowRenderer<'d> {
     w: crate::WindowHandle,
     active_scale: SafeF32,
     latest_ui_scale_changes: *const Mutex<Option<f32>>,
-    vk_device: &'d VulkanDevice<'d>,
+    vk_device: &'d Graphics<'d>,
     swapchain_invalidated: bool,
     composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
     corner_cutout_renderer: Option<CornerCutoutRenderer<'d, 'd>>,
     last_composite_render_data: CompositeRenderingData,
-    update_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
-    update_cb: br::CommandBufferObject<&'d VulkanDevice<'d>>,
-    update_completion_fence: br::FenceObject<&'d VulkanDevice<'d>>,
-    update_completion_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
+    update_cp: br::CommandPoolObject<&'d Graphics<'d>>,
+    update_cb: br::CommandBufferObject<&'d Graphics<'d>>,
+    update_completion_fence: br::FenceObject<&'d Graphics<'d>>,
+    update_completion_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
     updating: bool,
-    render_cp: br::CommandPoolObject<&'d VulkanDevice<'d>>,
-    render_cb: Vec<br::CommandBufferObject<&'d VulkanDevice<'d>>>,
+    render_cp: br::CommandPoolObject<&'d Graphics<'d>>,
+    render_cb: Vec<br::CommandBufferObject<&'d Graphics<'d>>>,
     render_cb_invalid: bool,
     render_requires_preview_composition: bool,
-    present_ready_semaphores: Vec<br::SemaphoreObject<&'d VulkanDevice<'d>>>,
-    backbuffer_ready_semaphore: br::SemaphoreObject<&'d VulkanDevice<'d>>,
+    present_ready_semaphores: Vec<br::SemaphoreObject<&'d Graphics<'d>>>,
+    backbuffer_ready_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
     swapchain: VulkanSwapchain<'d, 'd>,
     surface: VulkanSurface<'d, 'd>,
 }
 impl<'d> WindowRenderer<'d> {
     fn new(
-        device: &'d VulkanDevice<'d>,
+        device: &'d Graphics<'d>,
         shared_buffers: &CompositeSharedBuffers,
         create_data: NewWindowData,
         init_scale: SafeF32,
@@ -2131,7 +2126,7 @@ impl<'d> WindowRenderer<'d> {
         .expect("update_cb.end");
     }
 
-    pub fn submit_update_commands(&mut self, device_queue: &mut br::QueueObject<&'d VulkanDevice>) {
+    pub fn submit_update_commands(&mut self, device_queue: &mut br::QueueObject<&'d Graphics>) {
         self.wait_for_last_update_completion();
         self.repopulate_update_commands();
 
@@ -2196,16 +2191,16 @@ pub struct GlyphAtlasRenderingFormats {
 }
 
 pub struct GlyphAtlasManagerCommonResources<'d> {
-    device: &'d VulkanDevice<'d>,
-    fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
-    curve_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
-    vec_tri_fill_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
-    fill_tri_white_shader_module: br::ShaderModuleObject<&'d VulkanDevice<'d>>,
-    render_pass: br::RenderPassObject<&'d VulkanDevice<'d>>,
-    pipeline_layout: br::PipelineLayoutObject<&'d VulkanDevice<'d>>,
+    device: &'d Graphics<'d>,
+    fill_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
+    curve_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
+    vec_tri_fill_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
+    fill_tri_white_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
+    render_pass: br::RenderPassObject<&'d Graphics<'d>>,
+    pipeline_layout: br::PipelineLayoutObject<&'d Graphics<'d>>,
 }
 impl<'d> GlyphAtlasManagerCommonResources<'d> {
-    pub fn new(vk_device: &'d VulkanDevice, formats: &GlyphAtlasRenderingFormats) -> Self {
+    pub fn new(vk_device: &'d Graphics, formats: &GlyphAtlasRenderingFormats) -> Self {
         let fill_shader_module = vk_device.require_shader("vg-fill.spv");
         let curve_shader_module = vk_device.require_shader("vg-curve.spv");
         let vec_tri_fill_shader_module = vk_device.require_shader("vec-tri-fill.spv");
@@ -2296,14 +2291,14 @@ struct CornerCutoutPushConstants {
 }
 
 struct CornerCutoutRenderer<'d, 'fs> {
-    _shader: br::ShaderModuleObject<&'d VulkanDevice<'fs>>,
-    pipeline_layout: br::PipelineLayoutObject<&'d VulkanDevice<'fs>>,
-    pipeline: br::PipelineObject<&'d VulkanDevice<'fs>>,
-    pipeline_cont: br::PipelineObject<&'d VulkanDevice<'fs>>,
+    _shader: br::ShaderModuleObject<&'d Graphics<'fs>>,
+    pipeline_layout: br::PipelineLayoutObject<&'d Graphics<'fs>>,
+    pipeline: br::PipelineObject<&'d Graphics<'fs>>,
+    pipeline_cont: br::PipelineObject<&'d Graphics<'fs>>,
 }
 impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
     fn new(
-        device: &'d VulkanDevice<'fs>,
+        device: &'d Graphics<'fs>,
         rendered_pass: br::SubpassRef<impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized>,
         rendered_pass_cont: br::SubpassRef<
             impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized,
@@ -2390,14 +2385,14 @@ impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
 }
 
 pub struct MaskTextureAtlasManager<'d> {
-    device: &'d VulkanDevice<'d>,
+    device: &'d Graphics<'d>,
     atlas: TextureAtlas,
     acquired_glyph_rects: HashMap<(usize, u16), AtlasRect>,
     rounded_fill_rects_by_radius: HashMap<SafeF32, AtlasRect>,
-    triangle_fans_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
-    curve_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
-    colorize_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
-    fill_tri_white_pipeline: br::PipelineObject<&'d VulkanDevice<'d>>,
+    triangle_fans_pipeline: br::PipelineObject<&'d Graphics<'d>>,
+    curve_pipeline: br::PipelineObject<&'d Graphics<'d>>,
+    colorize_pipeline: br::PipelineObject<&'d Graphics<'d>>,
+    fill_tri_white_pipeline: br::PipelineObject<&'d Graphics<'d>>,
 }
 impl Drop for MaskTextureAtlasManager<'_> {
     fn drop(&mut self) {
@@ -3128,7 +3123,7 @@ impl<'d> MaskTextureAtlasManager<'d> {
 }
 
 pub struct ColorTextureAtlasManager<'d> {
-    device: &'d VulkanDevice<'d>,
+    device: &'d Graphics<'d>,
     atlas: ColorTextureAtlas,
 }
 impl Drop for ColorTextureAtlasManager<'_> {
@@ -3243,7 +3238,7 @@ impl<'d> ColorTextureAtlasManager<'d> {
         &self,
         shader_texture_rasterize_requests: &[(AtlasRect, ShaderTexture)],
         render_scale: f32,
-        vk_device: &VulkanDevice,
+        vk_device: &Graphics,
         render_worker_queue: &mut (impl br::QueueMut + ?Sized),
     ) {
         #[derive(SpecializationConstants)]

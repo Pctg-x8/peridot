@@ -25,7 +25,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[cfg(feature = "wayland")]
 use crate::uikit::MenuItemLayout;
 use crate::{
-    graphics::VulkanDevice,
+    graphics::Graphics,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
@@ -123,7 +123,7 @@ pub fn launch() {
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
     let root_font_set = FontSet::new();
-    let vk_device = VulkanDevice::new(&fs);
+    let vk_device = Graphics::init(&fs);
     #[cfg(windows)]
     assert!(
         vk_device.presentation_support(),
@@ -198,7 +198,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
     fs: &'sys FileSystem,
-    vk_device: &'sys VulkanDevice,
+    vk_device: &'sys Graphics,
     rt_sender: RenderMessageSender,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     root_font_set: FontSet,
@@ -344,7 +344,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
-            vk_device,
+            gfx: vk_device,
             shutdown_signal: &shutdown,
             renderer_sync,
             global_time_base,
@@ -5393,7 +5393,7 @@ pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
 
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {
-    vk_device: *const VulkanDevice<'sys>,
+    vk_device: *const Graphics<'sys>,
     rt_sender: RenderMessageSender,
     font_set: *const FontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,

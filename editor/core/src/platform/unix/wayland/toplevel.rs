@@ -8,7 +8,7 @@ use peridot_tp_wayland::{self as wl, ProxyObject};
 
 use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
-    graphics::{VulkanDevice, VulkanSurface},
+    graphics::{Graphics, VulkanSurface},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
@@ -669,7 +669,7 @@ impl NativeWindow {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
         deco_pixbuf: Option<&DecorationPixbuf>,
-        vk_device: &VulkanDevice,
+        gfx: &Graphics,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
         // TODO: displaying surface at specific rectangle
@@ -870,12 +870,12 @@ impl NativeWindow {
         delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
             key: Handle::from_mut(&mut surface),
             vk_surface: NewWindowVulkanSurface(
-                VulkanSurface::new(vk_device, unsafe {
+                VulkanSurface::new(gfx, unsafe {
                     br::WaylandSurfaceCreateInfo::new(
                         dpsv.dp.as_raw().cast(),
                         surface.as_raw().cast(),
                     )
-                    .execute(vk_device.instance(), None)
+                    .execute(gfx.instance(), None)
                     .expect("vk_surface.create")
                 })
                 .unbound()

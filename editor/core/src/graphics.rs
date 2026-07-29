@@ -35,7 +35,8 @@ pub const BLEND_STATE_SINGLE_PREMULTIPLIED: &br::PipelineColorBlendStateCreateIn
 pub const MS_STATE_EMPTY: &br::PipelineMultisampleStateCreateInfo =
     &br::PipelineMultisampleStateCreateInfo::new();
 
-pub struct VulkanDevice<'fs> {
+/// Graphics Manager
+pub struct Graphics<'fs> {
     fs: &'fs FileSystem,
     native: br::vk::VkDevice,
     adapter: br::vk::VkPhysicalDevice,
@@ -53,9 +54,9 @@ pub struct VulkanDevice<'fs> {
     #[cfg(windows)]
     fp_get_memory_win32_handle_properties: br::vk::PFN_vkGetMemoryWin32HandlePropertiesKHR,
 }
-unsafe impl Sync for VulkanDevice<'_> {}
-unsafe impl Send for VulkanDevice<'_> {}
-impl Drop for VulkanDevice<'_> {
+unsafe impl Sync for Graphics<'_> {}
+unsafe impl Send for Graphics<'_> {}
+impl Drop for Graphics<'_> {
     fn drop(&mut self) {
         // writeback pipeline cache for next launch
         self.writeback_pipeline_cache();
@@ -70,7 +71,7 @@ impl Drop for VulkanDevice<'_> {
         }
     }
 }
-impl br::VkHandle for VulkanDevice<'_> {
+impl br::VkHandle for Graphics<'_> {
     type Handle = br::vk::VkDevice;
 
     #[inline(always)]
@@ -78,16 +79,16 @@ impl br::VkHandle for VulkanDevice<'_> {
         self.native
     }
 }
-impl br::InstanceChild for VulkanDevice<'_> {
+impl br::InstanceChild for Graphics<'_> {
     type ConcreteInstance = br::InstanceObject;
 
     fn instance(&self) -> &Self::ConcreteInstance {
         &self.parent
     }
 }
-impl br::Device for VulkanDevice<'_> {}
+impl br::Device for Graphics<'_> {}
 #[cfg(windows)]
-impl br::DeviceExternalMemoryWin32Extension for VulkanDevice<'_> {
+impl br::DeviceExternalMemoryWin32Extension for Graphics<'_> {
     #[inline(always)]
     fn get_memory_win32_handle_khr_fn(&self) -> br::vk::PFN_vkGetMemoryWin32HandleKHR {
         unimplemented!("not planned to use")
@@ -100,7 +101,7 @@ impl br::DeviceExternalMemoryWin32Extension for VulkanDevice<'_> {
         self.fp_get_memory_win32_handle_properties
     }
 }
-impl br::DeviceCreateRenderPass2Extension for VulkanDevice<'_> {
+impl br::DeviceCreateRenderPass2Extension for Graphics<'_> {
     #[inline(always)]
     fn create_render_pass_2_khr_fn(&self) -> br::vk::PFN_vkCreateRenderPass2KHR {
         self.fp_create_render_pass2
@@ -121,8 +122,8 @@ impl br::DeviceCreateRenderPass2Extension for VulkanDevice<'_> {
         unimplemented!("not planned to use")
     }
 }
-impl<'fs> VulkanDevice<'fs> {
-    pub fn new(fs: &'fs FileSystem) -> Self {
+impl<'fs> Graphics<'fs> {
+    pub fn init(fs: &'fs FileSystem) -> Self {
         let api_version = match br::instance_version() {
             Ok(v) => {
                 tracing::info!(version = %v, "Vulkan");
@@ -678,7 +679,7 @@ impl<'fs> VulkanDevice<'fs> {
     }
 }
 
-pub struct VulkanDeviceAdapterRef<'d, 'fs>(br::vk::VkPhysicalDevice, &'d VulkanDevice<'fs>);
+pub struct VulkanDeviceAdapterRef<'d, 'fs>(br::vk::VkPhysicalDevice, &'d Graphics<'fs>);
 unsafe impl Sync for VulkanDeviceAdapterRef<'_, '_> {}
 unsafe impl Send for VulkanDeviceAdapterRef<'_, '_> {}
 impl br::VkHandle for VulkanDeviceAdapterRef<'_, '_> {
@@ -690,7 +691,7 @@ impl br::VkHandle for VulkanDeviceAdapterRef<'_, '_> {
     }
 }
 impl<'fs> br::InstanceChild for VulkanDeviceAdapterRef<'_, 'fs> {
-    type ConcreteInstance = <VulkanDevice<'fs> as br::InstanceChild>::ConcreteInstance;
+    type ConcreteInstance = <Graphics<'fs> as br::InstanceChild>::ConcreteInstance;
 
     #[inline(always)]
     fn instance(&self) -> &Self::ConcreteInstance {
@@ -700,7 +701,7 @@ impl<'fs> br::InstanceChild for VulkanDeviceAdapterRef<'_, 'fs> {
 impl br::PhysicalDevice for VulkanDeviceAdapterRef<'_, '_> {}
 
 pub struct VulkanSwapchain<'d, 'fs> {
-    device: &'d VulkanDevice<'fs>,
+    device: &'d Graphics<'fs>,
     handle: br::vk::VkSwapchainKHR,
     ext: br::Extent2D,
     images: Vec<br::vk::VkImage>,
@@ -745,7 +746,7 @@ impl br::DeviceChildHandle for VulkanSwapchain<'_, '_> {
     }
 }
 impl<'fs> br::DeviceChild for VulkanSwapchain<'_, 'fs> {
-    type ConcreteDevice = VulkanDevice<'fs>;
+    type ConcreteDevice = Graphics<'fs>;
 
     #[inline(always)]
     fn device(&self) -> &Self::ConcreteDevice {
@@ -762,20 +763,20 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         surface: &VulkanSurface<'d, 'fs>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) -> Self {
-        let ext = surface.unbound.compute_real_extent(query_window_extent);
+        let ext = surface.compute_real_extent(query_window_extent);
 
         tracing::trace!(?ext, "swapchain.create");
         let o = br::SwapchainWithSurfaceBuilder::new(
             surface,
-            surface.unbound.image_count(),
-            surface.unbound.selected_format,
+            surface.image_count(),
+            surface.selected_format,
             ext,
             Self::IMAGE_USAGE_FLAGS,
         )
-        .present_mode(surface.unbound.selected_present_mode)
+        .present_mode(surface.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)
-        .composite_alpha(surface.unbound.selected_composite_alpha)
-        .create(surface.device)
+        .composite_alpha(surface.selected_composite_alpha)
+        .create(surface.0)
         .expect("swapchain create");
         let image_count = o.image_count().expect("swapchain.get_image_count");
         let mut images = Vec::with_capacity(image_count as _);
@@ -790,12 +791,12 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
             .iter()
             .map(|b| unsafe {
                 br::vkfn_wrapper::create_image_view(
-                    surface.device.as_transparent_ref(),
+                    surface.0.as_transparent_ref(),
                     &br::ImageViewCreateInfo::new(
                         br::VkHandleRef::from_raw_ref(b),
                         br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                         br::vk::VK_IMAGE_VIEW_TYPE_2D,
-                        surface.unbound.selected_format.format,
+                        surface.selected_format.format,
                     ),
                     None,
                 )
@@ -830,19 +831,19 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
         }
         self.images.clear();
 
-        self.ext = surface.unbound.compute_real_extent(query_window_extent);
+        self.ext = surface.compute_real_extent(query_window_extent);
 
         tracing::trace!(ext = ?self.ext, "swapchain.recreate");
         let o = br::SwapchainWithSurfaceBuilder::new(
             surface,
-            surface.unbound.image_count(),
-            surface.unbound.selected_format,
+            surface.image_count(),
+            surface.selected_format,
             self.ext,
             Self::IMAGE_USAGE_FLAGS,
         )
-        .present_mode(surface.unbound.selected_present_mode)
+        .present_mode(surface.selected_present_mode)
         .pre_transform(br::SurfaceTransformFlags::IDENTITY)
-        .composite_alpha(surface.unbound.selected_composite_alpha)
+        .composite_alpha(surface.selected_composite_alpha)
         .enable_clip()
         .old_swapchain(br::VkHandleRef::from_raw_ref(&self.handle))
         .create(self.device)
@@ -870,7 +871,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
                     br::VkHandleRef::from_raw_ref(b),
                     br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
                     br::vk::VK_IMAGE_VIEW_TYPE_2D,
-                    surface.unbound.selected_format.format,
+                    surface.selected_format.format,
                 ),
                 None,
             )
@@ -927,14 +928,8 @@ impl UnboundVulkanSurface {
         }
     }
 
-    pub const unsafe fn bound<'d, 'fs>(
-        self,
-        device: &'d VulkanDevice<'fs>,
-    ) -> VulkanSurface<'d, 'fs> {
-        VulkanSurface {
-            device,
-            unbound: self,
-        }
+    pub const unsafe fn bound<'d, 'fs>(self, gfx: &'d Graphics<'fs>) -> VulkanSurface<'d, 'fs> {
+        VulkanSurface(gfx, self)
     }
 
     pub unsafe fn refresh_caps(
@@ -1000,15 +995,20 @@ impl UnboundVulkanSurface {
     }
 }
 
-pub struct VulkanSurface<'d, 'fs> {
-    device: &'d VulkanDevice<'fs>,
-    unbound: UnboundVulkanSurface,
+pub struct VulkanSurface<'d, 'fs>(&'d Graphics<'fs>, UnboundVulkanSurface);
+impl core::ops::Deref for VulkanSurface<'_, '_> {
+    type Target = UnboundVulkanSurface;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.1
+    }
 }
 impl Drop for VulkanSurface<'_, '_> {
     #[inline(always)]
     fn drop(&mut self) {
         unsafe {
-            self.unbound.drop(self.device.instance());
+            self.1.drop(self.0.instance());
         }
     }
 }
@@ -1017,26 +1017,26 @@ impl br::VkHandle for VulkanSurface<'_, '_> {
 
     #[inline(always)]
     fn native_ptr(&self) -> Self::Handle {
-        self.unbound.handle
+        self.1.handle
     }
 }
 unsafe impl Sync for VulkanSurface<'_, '_> {}
 unsafe impl Send for VulkanSurface<'_, '_> {}
 impl<'fs> br::InstanceChild for VulkanSurface<'_, 'fs> {
-    type ConcreteInstance = <VulkanDevice<'fs> as br::InstanceChild>::ConcreteInstance;
+    type ConcreteInstance = <Graphics<'fs> as br::InstanceChild>::ConcreteInstance;
 
     #[inline(always)]
     fn instance(&self) -> &Self::ConcreteInstance {
-        self.device.instance()
+        self.0.instance()
     }
 }
 impl br::Surface for VulkanSurface<'_, '_> {}
 impl<'d, 'fs> VulkanSurface<'d, 'fs> {
-    pub fn new(device: &'d VulkanDevice<'fs>, handle: br::vk::VkSurfaceKHR) -> Self {
+    pub fn new(gfx: &'d Graphics<'fs>, handle: br::vk::VkSurfaceKHR) -> Self {
         match unsafe {
             br::vkfn_wrapper::get_physical_device_surface_support(
-                device.primary_adapter_ref().as_transparent_ref(),
-                device.present_queue_family_index(),
+                gfx.primary_adapter_ref().as_transparent_ref(),
+                gfx.present_queue_family_index(),
                 br::VkHandleRef::dangling(handle),
             )
         } {
@@ -1049,7 +1049,7 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
 
         let present_mode_count = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_mode_count(
-                device.primary_adapter_ref().as_transparent_ref(),
+                gfx.primary_adapter_ref().as_transparent_ref(),
                 br::VkHandleRef::dangling(handle),
             )
             .expect("vk.surface.get_present_mode_count")
@@ -1057,7 +1057,7 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
         let mut present_modes = Vec::with_capacity(present_mode_count as _);
         let r = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_present_modes(
-                device.primary_adapter_ref().as_transparent_ref(),
+                gfx.primary_adapter_ref().as_transparent_ref(),
                 br::VkHandleRef::dangling(handle),
                 present_modes.spare_capacity_mut(),
             )
@@ -1070,7 +1070,7 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
 
         let format_count = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_format_count(
-                device.primary_adapter_ref().as_transparent_ref(),
+                gfx.primary_adapter_ref().as_transparent_ref(),
                 br::VkHandleRef::dangling(handle),
             )
             .expect("vk.surface.get_format_count")
@@ -1078,7 +1078,7 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
         let mut formats = Vec::with_capacity(format_count as _);
         let r = unsafe {
             br::vkfn_wrapper::get_physical_device_surface_formats(
-                device.primary_adapter_ref().as_transparent_ref(),
+                gfx.primary_adapter_ref().as_transparent_ref(),
                 br::VkHandleRef::dangling(handle),
                 formats.spare_capacity_mut(),
             )
@@ -1092,7 +1092,7 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
         let mut caps = core::mem::MaybeUninit::uninit();
         unsafe {
             br::vkfn_wrapper::get_physical_device_surface_capabilities(
-                device.primary_adapter_ref().as_transparent_ref(),
+                gfx.primary_adapter_ref().as_transparent_ref(),
                 br::VkHandleRef::dangling(handle),
                 &mut caps,
             )
@@ -1100,9 +1100,9 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
         }
         let caps = unsafe { caps.assume_init() };
 
-        Self {
-            device,
-            unbound: UnboundVulkanSurface {
+        Self(
+            gfx,
+            UnboundVulkanSurface {
                 handle,
                 selected_format: formats
                     .iter()
@@ -1128,27 +1128,26 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
                 },
                 caps,
             },
-        }
+        )
     }
 
-    pub const fn unbound(self) -> (&'d VulkanDevice<'fs>, UnboundVulkanSurface) {
-        let device = unsafe { core::ptr::read(&self.device) };
-        let unbound = unsafe { core::ptr::read(&self.unbound) };
+    pub const fn unbound(self) -> (&'d Graphics<'fs>, UnboundVulkanSurface) {
+        let gfx = unsafe { core::ptr::read(&self.0) };
+        let unbound = unsafe { core::ptr::read(&self.1) };
         core::mem::forget(self);
 
-        (device, unbound)
+        (gfx, unbound)
     }
 
     #[inline(always)]
     pub fn refresh_caps(&mut self) {
         unsafe {
-            self.unbound
-                .refresh_caps(&self.device.primary_adapter_ref());
+            self.1.refresh_caps(&self.0.primary_adapter_ref());
         }
     }
 
     #[inline(always)]
     pub const fn format(&self) -> br::Format {
-        self.unbound.format()
+        self.1.format()
     }
 }

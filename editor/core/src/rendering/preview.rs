@@ -14,7 +14,7 @@ use crate::{
     graphics::{
         BLEND_STATE_SINGLE_NONE, BLEND_STATE_SINGLE_PREMULTIPLIED, IA_STATE_TRILIST,
         IA_STATE_TRISTRIP, MS_STATE_EMPTY, RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY,
-        VulkanDevice,
+        Graphics,
     },
     rendering::composite::CustomRenderContext,
     utils::{
@@ -32,7 +32,7 @@ pub struct PreviewRenderTargetBuffer {
     size: br::Extent2D,
 }
 impl PreviewRenderTargetBuffer {
-    pub unsafe fn drop(self, device: &VulkanDevice) {
+    pub unsafe fn drop(self, device: &Graphics) {
         drop(unsafe {
             br::ImageViewObject::manage(
                 self.depth_view,
@@ -66,7 +66,7 @@ impl PreviewRenderTargetBuffer {
     pub const COLOR_FORMAT: br::Format = br::vk::VK_FORMAT_R8G8B8A8_UNORM;
     pub const DEPTH_FORMAT: br::Format = br::vk::VK_FORMAT_D24_UNORM_S8_UINT;
 
-    pub fn new(device: &VulkanDevice, init_size: br::Extent2D) -> Self {
+    pub fn new(device: &Graphics, init_size: br::Extent2D) -> Self {
         let mut image = br::ImageObject::new(
             device,
             &br::ImageCreateInfo::new(init_size, Self::COLOR_FORMAT)
@@ -144,7 +144,7 @@ impl PreviewRenderTargetBuffer {
         }
     }
 
-    pub fn validate(&mut self, device: &VulkanDevice, active_size: br::Extent2D) -> bool {
+    pub fn validate(&mut self, device: &Graphics, active_size: br::Extent2D) -> bool {
         let mut resource_recreated = false;
         if self.size != active_size {
             drop(unsafe {
@@ -351,7 +351,7 @@ struct ScratchStagingBuffer {
     unused_top: usize,
 }
 impl ScratchStagingBuffer {
-    unsafe fn drop(self, device: &VulkanDevice) {
+    unsafe fn drop(self, device: &Graphics) {
         unsafe {
             br::vkfn_wrapper::unmap_memory(
                 device.as_transparent_ref(),
@@ -365,7 +365,7 @@ impl ScratchStagingBuffer {
 
     const INIT_SIZE: br::DeviceSize = 1024 * 1024;
 
-    fn new(device: &VulkanDevice) -> Self {
+    fn new(device: &Graphics) -> Self {
         let mut buffer = br::BufferObject::new(
             device,
             &br::BufferCreateInfo::new(Self::INIT_SIZE, br::BufferUsage::TRANSFER_SRC),
@@ -421,7 +421,7 @@ impl ScratchStagingBuffer {
         r
     }
 
-    fn ops_before_copy(&self, device: &VulkanDevice) {
+    fn ops_before_copy(&self, device: &Graphics) {
         if self.should_flush {
             unsafe {
                 device
@@ -483,13 +483,13 @@ struct DynamicBufferPage {
     buffer: br::vk::VkBuffer,
 }
 impl DynamicBufferPage {
-    unsafe fn drop(self, device: &VulkanDevice) {
+    unsafe fn drop(self, device: &Graphics) {
         drop(unsafe { br::DeviceMemoryObject::manage(self.device_memory, device) });
         drop(unsafe { br::BufferObject::manage(self.buffer, device) });
     }
 
     fn new(
-        device: &VulkanDevice,
+        device: &Graphics,
         usage: br::BufferUsage,
         dbg_name: &'static str,
         dbg_identifier: usize,
@@ -742,7 +742,7 @@ struct DynamicBuffer {
     dbg_name: &'static str,
 }
 impl DynamicBuffer {
-    unsafe fn drop(self, device: &VulkanDevice) {
+    unsafe fn drop(self, device: &Graphics) {
         for p in self.page_pools {
             unsafe {
                 Rc::try_unwrap(p)
@@ -763,7 +763,7 @@ impl DynamicBuffer {
 
     fn alloc(
         &mut self,
-        device: &VulkanDevice,
+        device: &Graphics,
         size: br::DeviceSize,
         mut on_create_page: impl FnMut(usize, &br::VkHandleRef<br::vk::VkBuffer>),
     ) -> DynamicBufferPointer {
@@ -891,7 +891,7 @@ pub struct Renderer {
     valid: bool,
 }
 impl Renderer {
-    pub unsafe fn drop(mut self, device: &VulkanDevice) {
+    pub unsafe fn drop(mut self, device: &Graphics) {
         self.user_renders.clear();
         self.user_meshes.clear();
 
@@ -947,7 +947,7 @@ impl Renderer {
     }
 
     pub fn new(
-        device: &VulkanDevice,
+        device: &Graphics,
         init_rt: &PreviewRenderTargetBuffer,
         init_state: &CommittedState,
         work_queue_family_index: u32,
@@ -1652,7 +1652,7 @@ impl Renderer {
         }
     }
 
-    pub fn update(&mut self, device: &VulkanDevice, committed_state: &mut CommittedState) {
+    pub fn update(&mut self, device: &Graphics, committed_state: &mut CommittedState) {
         self.scratch_staging.reset();
 
         for m in committed_state.pushed_meshes.drain(..) {
@@ -1782,7 +1782,7 @@ impl Renderer {
 
     pub fn validate(
         &mut self,
-        device: &VulkanDevice,
+        device: &Graphics,
         active_rt: &PreviewRenderTargetBuffer,
         committed_state: &mut CommittedState,
     ) {
@@ -2492,7 +2492,7 @@ pub struct Composite {
     valid: bool,
 }
 impl Composite {
-    pub unsafe fn drop(self, vk_device: &VulkanDevice) {
+    pub unsafe fn drop(self, vk_device: &Graphics) {
         if self.valid {
             drop(unsafe { br::PipelineObject::manage(self.pipeline.assume_init(), vk_device) });
         }
@@ -2506,7 +2506,7 @@ impl Composite {
     }
 
     pub fn new(
-        vk_device: &VulkanDevice,
+        vk_device: &Graphics,
         init_render_tex: &(impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
         smp: &(impl br::VkHandle<Handle = br::vk::VkSampler> + ?Sized),
         target_pass: br::SubpassRef<impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized>,
@@ -2581,7 +2581,7 @@ impl Composite {
 
     pub fn validate(
         &mut self,
-        device: &VulkanDevice,
+        device: &Graphics,
         content_rt: &PreviewRenderTargetBuffer,
         new_rt_size: br::Extent2D,
         new_target_render_pass_handle: br::vk::VkRenderPass,

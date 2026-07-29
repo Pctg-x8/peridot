@@ -11,7 +11,7 @@ use peridot_tp_xkbcommon as xkbcommon;
 use crate::{
     Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent,
     WindowGeometryState, WindowType,
-    graphics::VulkanDevice,
+    graphics::Graphics,
     input::{
         KeyInputCode, KeyboardFocusTokenRegistry, ModifierKey,
         hittest::{CursorShape, HitTestTreeManager, PointerButton},
@@ -126,7 +126,7 @@ impl DisplayServerContext {
         self.dp.cancel_read();
     }
 
-    pub fn check_for_vk(&self, device: &VulkanDevice) -> bool {
+    pub fn check_for_vk(&self, device: &Graphics) -> bool {
         device.presentation_support(&self.dp)
     }
 
