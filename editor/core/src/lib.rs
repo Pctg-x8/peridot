@@ -3128,7 +3128,7 @@ impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
             .begin_mod_chain(self.ct_root)
             .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
-                to_value: [1.0, 1.0, 1.0, 0.25],
+                to_value: [1.0, 1.0, 1.0, 0.125],
                 sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
                 event_on_complete: None,
@@ -3148,7 +3148,7 @@ impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
             .composite_tree
             .begin_mod_chain(self.ct_root)
             .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.25],
+                from_value: [1.0, 1.0, 1.0, 0.125],
                 to_value: [1.0, 1.0, 1.0, 0.0],
                 sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
                 curve: AnimationCurve::Linear,
@@ -4889,16 +4889,16 @@ async fn run<'sys>(
                         application.object_create("New Cube".into(), &mut vf_queue);
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
-                        tracing::trace!("TODO: Object Create -> Sphere");
+                        application.object_create("New Sphere".into(), &mut vf_queue);
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
-                        tracing::trace!("TODO: Object Create -> Cylinder");
+                        application.object_create("New Cylinder".into(), &mut vf_queue);
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
-                        tracing::trace!("TODO: Object Create -> Capsule");
+                        application.object_create("New Capsule".into(), &mut vf_queue);
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
-                        tracing::trace!("TODO: Object Create -> Special -> Terrain");
+                        application.object_create("New Terrain".into(), &mut vf_queue);
                     }
                     _ => (),
                 }
