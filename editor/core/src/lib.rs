@@ -51,13 +51,13 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView, MountContext,
-        MountTarget, NumericInputView, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView,
-        Popup, PopupID, PopupManager, Positioning, RawMountTarget, ScrollContainer,
-        SimpleButtonConstantEventHandler, SimpleButtonEventHandler, SimpleButtonView,
-        TeardownContext, TextInputView, ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier, ViewInitContext,
-        ViewRegistry, ViewUpdateContext,
+        CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
+        MountContext, MountTarget, NumericInputView, OverlayPopupBasicFrameView,
+        OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
+        ScrollContainer, SimpleButtonConstantEventHandler, SimpleButtonEventHandler,
+        SimpleButtonView, TeardownContext, TextInputView, ViewEventHandler, ViewFeedbackContext,
+        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier,
+        ViewInitContext, ViewRegistry, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -3280,6 +3280,76 @@ impl ObjectTreeObjectRowEventHandler {
     }
 }
 
+pub enum ViewElementSize {
+    Automatic,
+    Fixed(Size<LogicalUnit>),
+}
+
+pub struct ViewPlacement {
+    pub location: Point<LogicalUnit>,
+    pub size: ViewElementSize,
+}
+
+pub struct StaticTextView {
+    ct: CompositeTreeRef,
+}
+impl StaticTextView {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        content: String,
+        font: FontID,
+        init_placement: ViewPlacement,
+    ) -> Self {
+        let size = match init_placement.size {
+            ViewElementSize::Fixed(s) => s,
+            ViewElementSize::Automatic => TextLayout::new_single(
+                &content,
+                font,
+                ctx.system_link.font_set(),
+                CompositeRectTextHorizontalAlignment::Start,
+                None,
+            )
+            .size(),
+        };
+
+        let ct = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [
+                AnimatableFloat::Value(init_placement.location.x),
+                AnimatableFloat::Value(init_placement.location.y),
+            ],
+            size: [
+                AnimatableFloat::Value(size.width),
+                AnimatableFloat::Value(size.height),
+            ],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content,
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    font_id: font,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        Self { ct }
+    }
+
+    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
+        ctx.composite_tree.add_child(target.ct_root(), self.ct);
+    }
+
+    pub fn unmount(&self, ctx: &mut MountContext) {
+        ctx.composite_tree.remove_child(self.ct);
+    }
+
+    pub fn teardown(self, ctx: &mut TeardownContext) {
+        ctx.mount_context.composite_tree.free(self.ct);
+    }
+}
+
 struct InspectorPanePresenter {
     eh: Rc<InspectorPaneEventHandler>,
 }
@@ -3320,11 +3390,190 @@ impl InspectorPanePresenter {
             ..Default::default()
         });
 
+        let items_container_view = ScrollContainer::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(0.0, 8.0 + 12.0 + 12.0),
+                Size::new_logical(128.0, 128.0),
+            ),
+        );
+
+        let transform_position_label = StaticTextView::new(
+            ctx,
+            "POSITION".into(),
+            FontID::UIFormLiftedLabel,
+            ViewPlacement {
+                location: Point::new_logical(8.0, 8.0),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        transform_position_label.mount(ctx, &items_container_view);
+        let local_position_x_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0, 8.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_position_x_input_view.mount(ctx, &items_container_view);
+        let local_position_y_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0 + 40.0, 8.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_position_y_input_view.mount(ctx, &items_container_view);
+        let local_position_z_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_position_z_input_view.mount(ctx, &items_container_view);
+
+        let label = StaticTextView::new(
+            ctx,
+            "ROTATION".into(),
+            FontID::UIFormLiftedLabel,
+            ViewPlacement {
+                location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.mount(ctx, &items_container_view);
+        let local_rotation_x_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_rotation_x_input_view.mount(ctx, &items_container_view);
+        let local_rotation_y_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_rotation_y_input_view.mount(ctx, &items_container_view);
+        let local_rotation_z_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_rotation_z_input_view.mount(ctx, &items_container_view);
+
+        let label = StaticTextView::new(
+            ctx,
+            "SCALE".into(),
+            FontID::UIFormLiftedLabel,
+            ViewPlacement {
+                location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.mount(ctx, &items_container_view);
+        let local_scale_x_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_scale_x_input_view.mount(ctx, &items_container_view);
+        let local_scale_y_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_scale_y_input_view.mount(ctx, &items_container_view);
+        let local_scale_z_input_view = NumericInputView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
+                Size::new_logical(32.0, 16.0),
+            ),
+        );
+        local_scale_z_input_view.mount(ctx, &items_container_view);
+
+        let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
+        let render_checkbox = CheckboxView::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0, render_section_top),
+                Size::new_logical(20.0, 20.0),
+            ),
+        );
+        render_checkbox.mount(ctx, &items_container_view);
+        let section_label = StaticTextView::new(
+            ctx,
+            "Render".into(),
+            FontID::UIDefault,
+            ViewPlacement {
+                location: Point::new_logical(8.0 + 24.0, render_section_top),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        section_label.mount(ctx, &items_container_view);
+
+        let label = StaticTextView::new(
+            ctx,
+            "SHAPE".into(),
+            FontID::UIFormLiftedLabel,
+            ViewPlacement {
+                location: Point::new_logical(8.0, render_section_top + 24.0),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.mount(ctx, &items_container_view);
+        let shape_selector = uikit::dropdown_box::View::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(8.0, render_section_top + 24.0 + 12.0),
+                Size::new_logical(128.0, 24.0),
+            ),
+            vec![
+                "Cube".into(),
+                "Sphere".into(),
+                "Cylinder".into(),
+                "Capsule".into(),
+            ],
+        );
+        shape_selector.mount(ctx, &items_container_view);
+
+        items_container_view.set_content_size(
+            Size::new_logical(128.0 + 16.0, render_section_top + 24.0 + 12.0 + 24.0),
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+        );
+
         let eh = Rc::new(InspectorPaneEventHandler {
             object_selection_changed: Cell::new(false),
+            items_container_mounted: Cell::new(false),
             root_container_view,
             ct_selected_object_label,
             ct_selected_object_name_label,
+            items_container_view,
+            numeric_input_views: vec![
+                local_position_x_input_view,
+                local_position_y_input_view,
+                local_position_z_input_view,
+                local_rotation_x_input_view,
+                local_rotation_y_input_view,
+                local_rotation_z_input_view,
+                local_scale_x_input_view,
+                local_scale_y_input_view,
+                local_scale_z_input_view,
+            ],
+            checkboxes: vec![render_checkbox],
+            dropdowns: vec![shape_selector],
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
@@ -3377,14 +3626,24 @@ impl ui::dock::PaneContentPresenter for InspectorPanePresenter {
         self.eh
             .root_container_view
             .resize(*new_size, composite_tree, ht_manager);
+        self.eh.items_container_view.resize(
+            Size::new_logical(new_size.width, new_size.height - 8.0 - 12.0 - 12.0),
+            composite_tree,
+            ht_manager,
+        );
     }
 }
 
 struct InspectorPaneEventHandler {
     object_selection_changed: Cell<bool>,
+    items_container_mounted: Cell<bool>,
     root_container_view: ScrollContainer,
     ct_selected_object_label: CompositeTreeRef,
     ct_selected_object_name_label: CompositeTreeRef,
+    items_container_view: ScrollContainer,
+    numeric_input_views: Vec<NumericInputView>,
+    checkboxes: Vec<CheckboxView>,
+    dropdowns: Vec<uikit::dropdown_box::View>,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandler {
     fn accept_feedback<'a, 'h>(
@@ -3418,6 +3677,11 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandle
                         context.view_init_context.mount_context.composite_tree,
                         context.view_init_context.mount_context.ht_manager,
                     );
+
+                    if self.items_container_mounted.replace(false) {
+                        self.items_container_view
+                            .unmount(&mut context.view_init_context);
+                    }
                 }
                 1 => {
                     let id = *unsafe {
@@ -3456,6 +3720,11 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandle
                         context.view_init_context.mount_context.composite_tree,
                         context.view_init_context.mount_context.ht_manager,
                     );
+
+                    if !self.items_container_mounted.replace(true) {
+                        self.items_container_view
+                            .mount(&mut context.view_init_context, &self.root_container_view);
+                    }
                 }
                 _ => {
                     context
@@ -3479,6 +3748,11 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandle
                         context.view_init_context.mount_context.composite_tree,
                         context.view_init_context.mount_context.ht_manager,
                     );
+
+                    if self.items_container_mounted.replace(false) {
+                        self.items_container_view
+                            .unmount(&mut context.view_init_context);
+                    }
                 }
             }
         }
@@ -3487,8 +3761,8 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandle
 impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for InspectorPaneEventHandler {
     fn accept_feedback<'a, 'h>(
         &self,
-        feedback: &ViewFeedbackObjectSelectionChanged,
-        context: &mut ViewFeedbackContext<'a, 'h>,
+        _feedback: &ViewFeedbackObjectSelectionChanged,
+        _context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         self.object_selection_changed.set(true);
     }
@@ -3591,15 +3865,44 @@ impl ObjectID {
     }
 }
 
-pub enum ObjectLocation {
-    Root,
-    Child(ObjectID),
+pub enum ObjectRenderShape {
+    Cube,
+    Sphere,
+    Cylinder,
+    Capsule,
 }
 
 pub struct Object {
     parent: Option<ObjectID>,
     children: Vec<ObjectID>,
     name: String,
+    local_position: peridot_math::Vector3F32,
+    local_rotation_euler: peridot_math::Vector3F32,
+    local_scale: peridot_math::Vector3F32,
+    world_matrix: peridot_math::Matrix4F32,
+    render_enabled: bool,
+    render_shape: ObjectRenderShape,
+}
+impl Object {
+    fn new(name: String) -> Self {
+        Self {
+            parent: None,
+            children: Vec::new(),
+            name,
+            local_position: peridot_math::Vector3(0.0, 0.0, 0.0),
+            local_rotation_euler: peridot_math::Vector3(0.0, 0.0, 0.0),
+            local_scale: peridot_math::Vector3(1.0, 1.0, 1.0),
+            world_matrix: peridot_math::Matrix4F32::ONE,
+            render_enabled: false,
+            render_shape: ObjectRenderShape::Cube,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.name = String::new();
+        self.children = Vec::new();
+        self.parent = None;
+    }
 }
 
 /// Logical Application Model
@@ -3619,19 +3922,15 @@ impl Application {
         }
     }
 
-    fn alloc_object(&mut self, name: String) -> ObjectID {
+    fn alloc_object(&mut self, o: Object) -> ObjectID {
         if let Some(index) = self.free_object_indices.pop_first() {
-            self.objects[index].name = name;
+            self.objects[index] = o;
             self.root_objects.push(ObjectID::from_array_index(index));
             return ObjectID::from_array_index(index);
         }
 
         let index = self.objects.len();
-        self.objects.push(Object {
-            parent: None,
-            children: Vec::new(),
-            name,
-        });
+        self.objects.push(o);
         self.root_objects.push(ObjectID::from_array_index(index));
         ObjectID::from_array_index(index)
     }
@@ -3650,11 +3949,7 @@ impl Application {
         }
 
         self.free_object_indices.insert(id.into_array_index());
-
-        // reset
-        self.objects[id.into_array_index()].name = String::new();
-        self.objects[id.into_array_index()].children = Vec::new();
-        self.objects[id.into_array_index()].parent = None;
+        self.objects[id.into_array_index()].reset();
 
         // TODO: compactionの頻度を減らすかはあとで検討
         self.compaction_objects();
@@ -3679,19 +3974,19 @@ impl Application {
 }
 pub struct ApplicationMutation<'a> {
     state: &'a mut Application,
-    pending_view_feedbacks: &'a mut VecDeque<ViewFeedback>,
+    view_feedbacks: &'a mut VecDeque<ViewFeedback>,
 }
 impl ApplicationMutation<'_> {
     pub fn object_create(&mut self, name: String) -> ObjectID {
-        let id = self.state.alloc_object(name);
-        self.pending_view_feedbacks
+        let id = self.state.alloc_object(Object::new(name));
+        self.view_feedbacks
             .push_back(ViewFeedback::object_tree_changed());
         id
     }
 
     pub fn object_destroy(&mut self, id: ObjectID) {
         self.state.free_object(id);
-        self.pending_view_feedbacks
+        self.view_feedbacks
             .push_back(ViewFeedback::object_tree_changed());
     }
 
@@ -3719,7 +4014,7 @@ impl ApplicationMutation<'_> {
         self.state.objects[parent.into_array_index()]
             .children
             .push(id);
-        self.pending_view_feedbacks
+        self.view_feedbacks
             .push_back(ViewFeedback::object_tree_changed());
     }
 
@@ -3734,7 +4029,7 @@ impl ApplicationMutation<'_> {
             .retain(|&id| id != child);
         self.state.root_objects.push(parent);
 
-        self.pending_view_feedbacks
+        self.view_feedbacks
             .push_back(ViewFeedback::object_tree_changed());
     }
 
@@ -3753,7 +4048,7 @@ impl ApplicationMutation<'_> {
 
         self.state.selected_objects.clear();
         self.state.selected_objects.insert(id);
-        self.pending_view_feedbacks
+        self.view_feedbacks
             .push_back(ViewFeedback::object_selection_changed());
     }
 
@@ -3763,7 +4058,7 @@ impl ApplicationMutation<'_> {
             self.state.selected_objects.remove(&id);
         }
 
-        self.pending_view_feedbacks
+        self.view_feedbacks
             .push_back(ViewFeedback::object_selection_changed());
     }
 
@@ -3774,7 +4069,7 @@ impl ApplicationMutation<'_> {
         }
 
         self.state.selected_objects.clear();
-        self.pending_view_feedbacks
+        self.view_feedbacks
             .push_back(ViewFeedback::object_selection_changed());
     }
 }
@@ -4425,7 +4720,7 @@ async fn run<'sys>(
                     ht_manager: &ht_manager,
                     application: ApplicationMutation {
                         state: &mut application,
-                        pending_view_feedbacks: &mut view_feedback_store,
+                        view_feedbacks: &mut view_feedback_store,
                     },
                 };
 
@@ -4571,7 +4866,7 @@ async fn run<'sys>(
                     ht_manager: &ht_manager,
                     application: ApplicationMutation {
                         state: &mut application,
-                        pending_view_feedbacks: &mut view_feedback_store,
+                        view_feedbacks: &mut view_feedback_store,
                     },
                 };
                 let mgr = window.keyboard_focus_state_mut();
@@ -4759,7 +5054,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     button,
@@ -4858,7 +5153,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     window.ht_root(),
@@ -4954,7 +5249,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                 );
@@ -5046,7 +5341,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     button,
@@ -5136,7 +5431,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                 );
@@ -5221,7 +5516,7 @@ async fn run<'sys>(
                     ht_manager: &ht_manager,
                     application: ApplicationMutation {
                         state: &mut application,
-                        pending_view_feedbacks: &mut view_feedback_store,
+                        view_feedbacks: &mut view_feedback_store,
                     },
                 });
 
@@ -5310,7 +5605,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                 );
@@ -5409,7 +5704,7 @@ async fn run<'sys>(
                             ht_manager: &ht_manager,
                             application: ApplicationMutation {
                                 state: &mut application,
-                                pending_view_feedbacks: &mut view_feedback_store,
+                                view_feedbacks: &mut view_feedback_store,
                             },
                         },
                         &keyboard_focus_registry,
@@ -5506,7 +5801,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     &keyboard_focus_registry,
@@ -5598,7 +5893,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     &keyboard_focus_registry,
@@ -5690,7 +5985,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     &keyboard_focus_registry,
@@ -5782,7 +6077,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     &keyboard_focus_registry,
@@ -5891,7 +6186,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     &keyboard_focus_registry,
@@ -6268,7 +6563,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     button,
@@ -6367,7 +6662,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     target.ht_root(),
@@ -6463,7 +6758,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                     button,
@@ -6553,7 +6848,7 @@ async fn run<'sys>(
                         ht_manager: &ht_manager,
                         application: ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         },
                     },
                 );
@@ -6658,35 +6953,35 @@ async fn run<'sys>(
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
                         ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         }
                         .object_create("New Cube".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
                         ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         }
                         .object_create("New Sphere".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
                         ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         }
                         .object_create("New Cylinder".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
                         ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         }
                         .object_create("New Capsule".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
                         ApplicationMutation {
                             state: &mut application,
-                            pending_view_feedbacks: &mut view_feedback_store,
+                            view_feedbacks: &mut view_feedback_store,
                         }
                         .object_create("New Terrain".into());
                     }

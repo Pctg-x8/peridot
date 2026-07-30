@@ -53,6 +53,7 @@ pub enum FontID {
     #[default]
     UIDefault,
     UITitleProjectName,
+    UIFormLiftedLabel,
 }
 
 #[cfg(feature = "freetype")]
@@ -94,10 +95,14 @@ pub struct FontSet {
     ui_default: FaceSet,
     #[cfg(feature = "freetype")]
     ui_title_project_name: FaceSet,
+    #[cfg(feature = "freetype")]
+    ui_form_lifted_label: FaceSet,
     #[cfg(feature = "harfbuzz")]
     ui_default_shaping: FaceShapingSet,
     #[cfg(feature = "harfbuzz")]
     ui_title_project_name_shaping: FaceShapingSet,
+    #[cfg(feature = "harfbuzz")]
+    ui_form_lifted_label_shaping: FaceShapingSet,
     #[cfg(feature = "freetype")]
     _ft_lib: FreeType,
     #[cfg(windows)]
@@ -279,6 +284,22 @@ impl FontSet {
                 face
             })
             .collect::<Vec<_>>();
+        let ui_form_lifted_label = ui_common_font_data
+            .iter()
+            .map(|&(f, ix)| {
+                let face = unsafe {
+                    ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
+                        .expect("FreeType.new_face.ui_form_lifted_label")
+                };
+                if let Err(e) =
+                    unsafe { ft::set_char_size(face, 0, 8.0f32.to_f26dot6_lossy(), 0, 72) }
+                {
+                    tracing::error!(reason = %e, "FreeType.set_char_size.ui_form_lifted_label");
+                }
+
+                face
+            })
+            .collect::<Vec<_>>();
 
         #[cfg(feature = "harfbuzz")]
         let ui_default_shaping = ui_default
@@ -300,6 +321,16 @@ impl FontSet {
                 .expect("hb_ft_font_create_referenced.ui_title_project_name")
             })
             .collect::<Vec<_>>();
+        #[cfg(feature = "harfbuzz")]
+        let ui_form_lifted_label_shaping = ui_form_lifted_label
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe {
+                    peridot_tp_harfbuzz::ffi::hb_ft_font_create_referenced(f)
+                })
+                .expect("hb_ft_font_create_referenced.ui_form_lifted_label")
+            })
+            .collect::<Vec<_>>();
 
         Self {
             _ft_lib: ft_lib,
@@ -307,11 +338,17 @@ impl FontSet {
             ui_title_project_name: FaceSet {
                 faces: ui_title_project_name,
             },
+            ui_form_lifted_label: FaceSet {
+                faces: ui_form_lifted_label,
+            },
             ui_default_shaping: FaceShapingSet {
                 faces: ui_default_shaping,
             },
             ui_title_project_name_shaping: FaceShapingSet {
                 faces: ui_title_project_name_shaping,
+            },
+            ui_form_lifted_label_shaping: FaceShapingSet {
+                faces: ui_form_lifted_label_shaping,
             },
         }
     }
@@ -341,6 +378,7 @@ impl FontSet {
         match category {
             FontID::UIDefault => &self.ui_default,
             FontID::UITitleProjectName => &self.ui_title_project_name,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
         }
     }
 
@@ -350,6 +388,7 @@ impl FontSet {
         match category {
             FontID::UIDefault => &self.ui_default_shaping,
             FontID::UITitleProjectName => &self.ui_title_project_name_shaping,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label_shaping,
         }
     }
 
@@ -1965,6 +2004,17 @@ impl TextLayout {
         }
 
         boxes
+    }
+
+    pub fn size(&self) -> Size<LogicalUnit> {
+        #[cfg(feature = "harfbuzz")]
+        Size::new_logical(
+            self.lines
+                .iter()
+                .map(|x| x.width_with_trailing_whitespace)
+                .fold(0.0, f32::max),
+            self.height,
+        )
     }
 
     pub fn visual_width(&self, font_set: &FontSet) -> f32 {
