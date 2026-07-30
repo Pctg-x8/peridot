@@ -6,7 +6,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SystemLink,
+    Application, ApplicationMutation, Event, LogicFiberEventDispatcher, SystemLink,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
@@ -1842,9 +1842,9 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 }
 
 pub trait NumericInputViewBackingStore {
-    fn display_value(&self, requester: ViewIdentifier) -> String;
-    fn set_delta(&self, sender: ViewIdentifier, delta: f32);
-    fn set_from_string(&self, sender: ViewIdentifier, input: &str);
+    fn display_value(&self, requester: ViewIdentifier, app: &Application) -> String;
+    fn set_delta(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, delta: f32);
+    fn set_from_string(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, input: &str);
 }
 
 pub struct NumericInputView {
@@ -1900,12 +1900,35 @@ impl NumericInputView {
                     .value
                     .upgrade()
                     .expect("NumericInputView has defunct")
-                    .display_value(self.eh.id),
+                    .display_value(self.eh.id, ctx.application),
             ),
             ctx.mount_context.composite_tree,
             ctx.system_link,
             ctx.mount_context.ht_manager,
             ctx.current_sec,
+        );
+    }
+
+    pub fn revalidate<E>(
+        &self,
+        application: &Application,
+        composite_tree: &mut CompositeTree<E>,
+        system_link: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        current_sec: f32,
+    ) {
+        self.eh.raw.eh.update_views(
+            self.eh.raw.set_content(
+                self.eh
+                    .value
+                    .upgrade()
+                    .expect("NumericInputView has defunct")
+                    .display_value(self.eh.id, application),
+            ),
+            composite_tree,
+            system_link,
+            ht_manager,
+            current_sec,
         );
     }
 
@@ -1947,16 +1970,28 @@ impl ViewEventHandler for NumericInputViewEventHandler {
 }
 impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
-        self.confirm_direct_input(context.system_link, context.ht_manager);
+        self.confirm_direct_input(
+            context.system_link,
+            context.ht_manager,
+            &mut context.application,
+        );
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         if code == KeyInputCode::Enter {
             // 確定or入力開始
             if self.key_input_enabled.get() {
-                self.confirm_direct_input(context.system_link, context.ht_manager);
+                self.confirm_direct_input(
+                    context.system_link,
+                    context.ht_manager,
+                    &mut context.application,
+                );
             } else {
-                self.begin_direct_input(context.system_link, context.ht_manager);
+                self.begin_direct_input(
+                    context.system_link,
+                    context.ht_manager,
+                    &context.application,
+                );
             }
 
             return;
@@ -1964,7 +1999,11 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
 
         if code == KeyInputCode::Esc {
             // 入力キャンセル
-            self.cancel_direct_input(context.system_link, context.ht_manager);
+            self.cancel_direct_input(
+                context.system_link,
+                context.ht_manager,
+                &context.application,
+            );
             return;
         }
 
@@ -2020,13 +2059,14 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
     ) -> EventContinueControl {
         let value = self.value.upgrade().expect("NumericInputView has defunct");
         let new_drag_accum_delta = self.drag_accum_delta.get() + args.delta.y;
-        value.set_delta(self.id, -args.delta.y);
+        value.set_delta(self.id, &mut context.application, -args.delta.y);
         // let new_value = self.drag_base_value.get() - (new_drag_accum_delta * 0.5).round() as i64;
         // self.value.set(new_value);
         self.drag_accum_delta.set(new_drag_accum_delta);
 
         self.raw.eh.update_views(
-            self.raw.set_content(value.display_value(self.id)),
+            self.raw
+                .set_content(value.display_value(self.id, &context.application)),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2068,10 +2108,10 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         }
 
         let value = self.value.upgrade().expect("NumericInputView has defunct");
-        value.set_delta(self.id, args.amount);
-        // let new_value = self.apply_delta(args.amount.round() as _);
+        value.set_delta(self.id, &mut context.application, args.amount);
         self.raw.eh.update_views(
-            self.raw.set_content(value.display_value(self.id)),
+            self.raw
+                .set_content(value.display_value(self.id, &context.application)),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2090,12 +2130,21 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.begin_direct_input(context.system_link, context.ht_manager);
+        self.begin_direct_input(
+            context.system_link,
+            context.ht_manager,
+            &context.application,
+        );
         EventContinueControl::STOP_PROPAGATION
     }
 }
 impl NumericInputViewEventHandler {
-    fn begin_direct_input(&self, syslink: &SystemLink, ht_manager: &HitTestTreeManager) {
+    fn begin_direct_input(
+        &self,
+        syslink: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        application: &Application,
+    ) {
         if self.key_input_enabled.replace(true) {
             // already enabled
             return;
@@ -2106,7 +2155,7 @@ impl NumericInputViewEventHandler {
             self.value
                 .upgrade()
                 .expect("NumericInputView has defunct")
-                .display_value(self.id),
+                .display_value(self.id, application),
         );
         self.raw
             .eh
@@ -2115,7 +2164,12 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    fn confirm_direct_input(&self, syslink: &SystemLink, ht_manager: &HitTestTreeManager) {
+    fn confirm_direct_input(
+        &self,
+        syslink: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        application: &mut ApplicationMutation,
+    ) {
         if !self.key_input_enabled.replace(false) {
             // already disabled
             return;
@@ -2130,19 +2184,26 @@ impl NumericInputViewEventHandler {
         //     .parse::<i64>()
         //     .unwrap_or(current_value);
         // self.value.set(new_value);
-        value.set_from_string(self.id, &content);
+        value.set_from_string(self.id, application, &content);
         drop(content);
 
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.raw.eh.release_focus(ht_manager);
-        update_mask |= self.raw.set_content(value.display_value(self.id));
+        update_mask |= self
+            .raw
+            .set_content(value.display_value(self.id, application));
         update_mask |= self.raw.eh.move_cursor(0);
 
         self.raw.eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
-    fn cancel_direct_input(&self, syslink: &SystemLink, ht_manager: &HitTestTreeManager) {
+    fn cancel_direct_input(
+        &self,
+        syslink: &SystemLink,
+        ht_manager: &HitTestTreeManager,
+        application: &Application,
+    ) {
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.raw.eh.release_focus(ht_manager);
         // キャンセル時はもとにもどす
@@ -2150,7 +2211,7 @@ impl NumericInputViewEventHandler {
             self.value
                 .upgrade()
                 .expect("NumericInputView has defunct")
-                .display_value(self.id),
+                .display_value(self.id, application),
         );
         update_mask |= self.raw.eh.move_cursor(0);
 

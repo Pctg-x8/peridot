@@ -33,6 +33,7 @@ pub struct ViewInitContext<'a, 'h> {
     pub system_link: &'a SystemLink<'a>,
     pub ui_scale_factor: f32,
     pub main_thread_texture_id_issuer: &'a mut MainThreadTextureIDIssuer,
+    pub application: &'a Application,
 }
 impl<'a, 'h> core::ops::Deref for ViewInitContext<'a, 'h> {
     type Target = MountContext<'a, 'h>;
@@ -77,6 +78,7 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             ui_scale_factor: self.ui_scale_factor,
             system_link: self.system_link,
             main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
+            application: self.application,
         }
     }
 
