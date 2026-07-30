@@ -749,11 +749,13 @@ pub enum Event {
         window: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
+        key_modifier: ModifierKey,
     },
     PointerMove {
         pointer_id: PointerID,
         window: WindowHandle,
         client_pos: Point<PointerInputUnit>,
+        key_modifier: ModifierKey,
     },
     PointerMoveRelative {
         pointer_id: PointerID,
@@ -764,6 +766,7 @@ pub enum Event {
         window: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
+        key_modifier: ModifierKey,
     },
     PointerLeaveWindow {
         window: WindowHandle,
@@ -870,16 +873,19 @@ pub enum Event {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
         button: PointerButton,
+        key_modifier: ModifierKey,
     },
     MenuPointerMove {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
         client_pos: Point<PointerInputUnit>,
+        key_modifier: ModifierKey,
     },
     MenuPointerUp {
         pointer_id: PointerID,
         target: FlyoutSurfaceHandle,
         button: PointerButton,
+        key_modifier: ModifierKey,
     },
     MenuPointerLeave {
         pointer_id: PointerID,
@@ -2906,12 +2912,14 @@ impl ObjectTreePanePresenter {
             ht_root,
             ht_context_menu_receiver,
             object_tree_changed: Cell::new(false),
+            object_selection_changed: Cell::new(false),
             row_views: RefCell::new(Vec::new()),
         });
         ctx.ht_manager
             .set_action_handler(eh.ht_context_menu_receiver, &eh);
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&eh);
+        ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
 
         ctx.ht_manager
             .add_child(eh.ht_root, eh.ht_context_menu_receiver);
@@ -2942,6 +2950,7 @@ impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
         ctx.unsubscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&self.eh);
+        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&self.eh);
 
         ctx.mount_context.composite_tree.free_all(self.eh.ct_root);
         ctx.mount_context.ht_manager.free_all(self.eh.ht_root)
@@ -2959,6 +2968,7 @@ struct ObjectTreePaneEventHandler {
     ht_root: HitTestTreeRef,
     ht_context_menu_receiver: HitTestTreeRef,
     object_tree_changed: Cell<bool>,
+    object_selection_changed: Cell<bool>,
     row_views: RefCell<Vec<ObjectTreeObjectRowView>>,
 }
 impl HitTestTreeActionHandler for ObjectTreePaneEventHandler {
@@ -3018,6 +3028,8 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         let object_tree_changed = self.object_tree_changed.replace(false);
+        let object_selection_changed = self.object_selection_changed.replace(false);
+
         if object_tree_changed {
             let mut row_views = self.row_views.borrow_mut();
             for x in row_views.drain(..) {
@@ -3028,8 +3040,10 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                 let o = context.application.object(x);
                 let rv = ObjectTreeObjectRowView::new(
                     &mut context.view_init_context,
+                    x,
                     o.name.clone(),
                     n as f32 * ObjectTreeObjectRowView::ITEM_HEIGHT,
+                    context.application.object_is_selected(x),
                 );
                 rv.mount(
                     &mut context.view_init_context,
@@ -3039,6 +3053,16 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                     },
                 );
                 row_views.push(rv);
+            }
+        }
+
+        if object_selection_changed {
+            for x in self.row_views.borrow().iter() {
+                x.eh.update_selected(
+                    context.application.object_is_selected(x.eh.assigned_object),
+                    context.view_init_context.mount_context.composite_tree,
+                    context.view_init_context.current_sec,
+                );
             }
         }
     }
@@ -3052,6 +3076,15 @@ impl ViewFeedbackHandler<ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventH
         self.object_tree_changed.set(true);
     }
 }
+impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectTreePaneEventHandler {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &ViewFeedbackObjectSelectionChanged,
+        _context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        self.object_selection_changed.set(true);
+    }
+}
 
 struct ObjectTreeObjectRowView {
     eh: Rc<ObjectTreeObjectRowEventHandler>,
@@ -3059,7 +3092,13 @@ struct ObjectTreeObjectRowView {
 impl ObjectTreeObjectRowView {
     const ITEM_HEIGHT: f32 = 20.0;
 
-    fn new(ctx: &mut ViewInitContext, init_label: String, init_y: f32) -> Self {
+    fn new(
+        ctx: &mut ViewInitContext,
+        assigned_object: ObjectID,
+        init_label: String,
+        init_y: f32,
+        init_selected: bool,
+    ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(init_y)],
@@ -3069,7 +3108,19 @@ impl ObjectTreeObjectRowView {
             ],
             relative_size_adjustment: [1.0, 0.0],
             has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                0.0,
+                0.25,
+                1.0,
+                if init_selected { 1.0 } else { 0.0 },
+            ])),
+            ..Default::default()
+        });
+        let ct_label_hover = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            relative_size_adjustment: [1.0, 1.0],
+            has_bitmap: true,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
             text: Some(CompositeRectText {
                 runs: vec![CompositeRectTextRun {
                     content: init_label,
@@ -3089,8 +3140,16 @@ impl ObjectTreeObjectRowView {
             ..Default::default()
         });
 
-        let eh = Rc::new(ObjectTreeObjectRowEventHandler { ct_root, ht_root });
+        let eh = Rc::new(ObjectTreeObjectRowEventHandler {
+            assigned_object,
+            selection_lit: Cell::new(init_selected),
+            ct_root,
+            ct_label_hover,
+            ht_root,
+        });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
+
+        ctx.composite_tree.add_child(eh.ct_root, eh.ct_label_hover);
 
         Self { eh }
     }
@@ -3113,7 +3172,10 @@ impl ObjectTreeObjectRowView {
 }
 
 struct ObjectTreeObjectRowEventHandler {
+    assigned_object: ObjectID,
+    selection_lit: Cell<bool>,
     ct_root: CompositeTreeRef,
+    ct_label_hover: CompositeTreeRef,
     ht_root: HitTestTreeRef,
 }
 impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
@@ -3125,7 +3187,7 @@ impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
     ) -> EventContinueControl {
         context
             .composite_tree
-            .begin_mod_chain(self.ct_root)
+            .begin_mod_chain(self.ct_label_hover)
             .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.0],
                 to_value: [1.0, 1.0, 1.0, 0.125],
@@ -3146,7 +3208,7 @@ impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
     ) -> EventContinueControl {
         context
             .composite_tree
-            .begin_mod_chain(self.ct_root)
+            .begin_mod_chain(self.ct_label_hover)
             .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
                 from_value: [1.0, 1.0, 1.0, 0.125],
                 to_value: [1.0, 1.0, 1.0, 0.0],
@@ -3158,11 +3220,131 @@ impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
 
         EventContinueControl::STOP_PROPAGATION
     }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        if args.button == PointerButton::Primary {
+            if args.key_modifier.contains(ModifierKey::CONTROL) {
+                context
+                    .application
+                    .toggle_object_selection_additive(self.assigned_object);
+            } else {
+                context.application.select_object(self.assigned_object);
+            }
+
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        EventContinueControl::empty()
+    }
+}
+impl ObjectTreeObjectRowEventHandler {
+    fn update_selected<E>(
+        &self,
+        selected: bool,
+        composite_tree: &mut CompositeTree<E>,
+        current_sec: f32,
+    ) {
+        if self.selection_lit.replace(selected) == selected {
+            // not changed
+            return;
+        }
+
+        if selected {
+            composite_tree
+                .begin_mod_chain(self.ct_root)
+                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                    from_value: [0.0, 0.25, 1.0, 0.0],
+                    to_value: [0.0, 0.25, 1.0, 1.0],
+                    curve: AnimationCurve::EASE_OUT,
+                    event_on_complete: None,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
+                }))
+                .apply();
+        } else {
+            composite_tree
+                .begin_mod_chain(self.ct_root)
+                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                    from_value: [0.0, 0.25, 1.0, 1.0],
+                    to_value: [0.0, 0.25, 1.0, 0.0],
+                    curve: AnimationCurve::EASE_OUT,
+                    event_on_complete: None,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
+                }))
+                .apply();
+        }
+    }
 }
 
-struct InspectorPanePresenter {}
+struct InspectorPanePresenter {
+    eh: Rc<InspectorPaneEventHandler>,
+}
 impl InspectorPanePresenter {
     const ID: &str = internal_pane_identifier!("Inspector");
+
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        let root_container_view = ScrollContainer::new(
+            ctx,
+            Rect::from_lt_size(
+                Point::new_logical(0.0, 0.0),
+                Size::new_logical(128.0, 128.0),
+            ),
+        );
+        let ct_selected_object_label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(8.0)],
+            size: [AnimatableFloat::Value(-16.0), AnimatableFloat::Value(12.0)],
+            relative_size_adjustment: [1.0, 0.0],
+            text: Some(CompositeRectText {
+                runs: vec![CompositeRectTextRun {
+                    content: "No selection".into(),
+                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let ct_selected_object_name_label = ctx.composite_tree.create(CompositeRect {
+            scale_factor: CompositeRectScaleFactor::UI,
+            offset: [
+                AnimatableFloat::Value(8.0),
+                AnimatableFloat::Value(8.0 + 12.0),
+            ],
+            size: [AnimatableFloat::Value(-16.0), AnimatableFloat::Value(12.0)],
+            relative_size_adjustment: [1.0, 0.0],
+            ..Default::default()
+        });
+
+        let eh = Rc::new(InspectorPaneEventHandler {
+            object_selection_changed: Cell::new(false),
+            root_container_view,
+            ct_selected_object_label,
+            ct_selected_object_name_label,
+        });
+        ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
+        ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
+
+        ctx.composite_tree.add_child(
+            eh.root_container_view.ct_root(),
+            eh.ct_selected_object_label,
+        );
+        ctx.composite_tree.add_child(
+            eh.root_container_view.ct_root(),
+            eh.ct_selected_object_name_label,
+        );
+        eh.root_container_view.set_content_size(
+            Size::new_logical(128.0, 8.0 + 12.0),
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+        );
+
+        Self { eh }
+    }
 }
 impl ui::dock::PaneContentPresenter for InspectorPanePresenter {
     fn id(&self) -> String {
@@ -3173,11 +3355,143 @@ impl ui::dock::PaneContentPresenter for InspectorPanePresenter {
         "Inspector".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
+    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+        self.eh.root_container_view.mount(ctx, target);
+    }
 
-    fn unmount(&self, ctx: &mut MountContext) {}
+    fn unmount(&self, ctx: &mut MountContext) {
+        self.eh.root_container_view.unmount(ctx);
+    }
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
+        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&self.eh);
+    }
+
+    fn resize(
+        &self,
+        new_size: &Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        self.eh
+            .root_container_view
+            .resize(*new_size, composite_tree, ht_manager);
+    }
+}
+
+struct InspectorPaneEventHandler {
+    object_selection_changed: Cell<bool>,
+    root_container_view: ScrollContainer,
+    ct_selected_object_label: CompositeTreeRef,
+    ct_selected_object_name_label: CompositeTreeRef,
+}
+impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandler {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &ViewFeedbackPerformAtomic,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        let object_selection_changed = self.object_selection_changed.replace(false);
+
+        if object_selection_changed {
+            match context.application.selected_objects.len() {
+                0 => {
+                    context
+                        .view_init_context
+                        .composite_tree
+                        .begin_mod_chain(self.ct_selected_object_label)
+                        .text_run(CompositeRectTextRun {
+                            content: "No selection".into(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        })
+                        .apply();
+                    context
+                        .view_init_context
+                        .composite_tree
+                        .begin_mod_chain(self.ct_selected_object_name_label)
+                        .rm_text()
+                        .apply();
+                    self.root_container_view.set_content_size(
+                        Size::new_logical(128.0, 8.0 + 12.0),
+                        context.view_init_context.mount_context.composite_tree,
+                        context.view_init_context.mount_context.ht_manager,
+                    );
+                }
+                1 => {
+                    let id = *unsafe {
+                        context
+                            .application
+                            .selected_objects
+                            .iter()
+                            .next()
+                            .unwrap_unchecked()
+                    };
+                    context
+                        .view_init_context
+                        .composite_tree
+                        .begin_mod_chain(self.ct_selected_object_label)
+                        .text_run(CompositeRectTextRun {
+                            content: format!("Object {id}"),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        })
+                        .apply();
+                    context
+                        .view_init_context
+                        .composite_tree
+                        .begin_mod_chain(self.ct_selected_object_name_label)
+                        .text(CompositeRectText {
+                            runs: vec![CompositeRectTextRun {
+                                content: format!("Name: {}", context.application.object(id).name),
+                                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        })
+                        .apply();
+                    self.root_container_view.set_content_size(
+                        Size::new_logical(128.0, 8.0 + 12.0 + 12.0),
+                        context.view_init_context.mount_context.composite_tree,
+                        context.view_init_context.mount_context.ht_manager,
+                    );
+                }
+                _ => {
+                    context
+                        .view_init_context
+                        .composite_tree
+                        .begin_mod_chain(self.ct_selected_object_label)
+                        .text_run(CompositeRectTextRun {
+                            content: "Multiple selection".into(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        })
+                        .apply();
+                    context
+                        .view_init_context
+                        .composite_tree
+                        .begin_mod_chain(self.ct_selected_object_name_label)
+                        .rm_text()
+                        .apply();
+                    self.root_container_view.set_content_size(
+                        Size::new_logical(128.0, 8.0 + 12.0),
+                        context.view_init_context.mount_context.composite_tree,
+                        context.view_init_context.mount_context.ht_manager,
+                    );
+                }
+            }
+        }
+    }
+}
+impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for InspectorPaneEventHandler {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        feedback: &ViewFeedbackObjectSelectionChanged,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        self.object_selection_changed.set(true);
+    }
 }
 
 struct AssetExplorerPanePresenter {}
@@ -3242,14 +3556,31 @@ impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
 
 pub enum ViewFeedback {
     ObjectTreeChanged(ViewFeedbackObjectTreeChanged),
+    ObjectSelectionChanged(ViewFeedbackObjectSelectionChanged),
+}
+impl ViewFeedback {
+    pub const fn object_tree_changed() -> Self {
+        Self::ObjectTreeChanged(ViewFeedbackObjectTreeChanged)
+    }
+
+    pub const fn object_selection_changed() -> Self {
+        Self::ObjectSelectionChanged(ViewFeedbackObjectSelectionChanged)
+    }
 }
 
 #[derive(Clone)]
 pub struct ViewFeedbackObjectTreeChanged;
 
+pub struct ViewFeedbackObjectSelectionChanged;
+
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ObjectID(NonZeroUsize);
+impl core::fmt::Display for ObjectID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0.get())
+    }
+}
 impl ObjectID {
     const fn from_array_index(v: usize) -> Self {
         Self(unsafe { NonZeroUsize::new_unchecked(v.checked_add(1).expect("too many objects!")) })
@@ -3276,6 +3607,7 @@ pub struct Application {
     objects: Vec<Object>,
     free_object_indices: BTreeSet<usize>,
     root_objects: Vec<ObjectID>,
+    selected_objects: HashSet<ObjectID>,
 }
 impl Application {
     pub fn new() -> Self {
@@ -3283,6 +3615,7 @@ impl Application {
             objects: Vec::new(),
             free_object_indices: BTreeSet::new(),
             root_objects: Vec::new(),
+            selected_objects: HashSet::new(),
         }
     }
 
@@ -3340,35 +3673,36 @@ impl Application {
         &self.objects[id.into_array_index()]
     }
 
-    pub fn object_create(
-        &mut self,
-        name: String,
-        vf_queue: &mut VecDeque<ViewFeedback>,
-    ) -> ObjectID {
-        let id = self.alloc_object(name);
-        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
-            ViewFeedbackObjectTreeChanged,
-        ));
+    pub fn object_is_selected(&self, id: ObjectID) -> bool {
+        self.selected_objects.contains(&id)
+    }
+}
+pub struct ApplicationMutation<'a> {
+    state: &'a mut Application,
+    pending_view_feedbacks: &'a mut VecDeque<ViewFeedback>,
+}
+impl ApplicationMutation<'_> {
+    pub fn object_create(&mut self, name: String) -> ObjectID {
+        let id = self.state.alloc_object(name);
+        self.pending_view_feedbacks
+            .push_back(ViewFeedback::object_tree_changed());
         id
     }
 
-    pub fn object_destroy(&mut self, id: ObjectID, vf_queue: &mut VecDeque<ViewFeedback>) {
-        self.free_object(id);
-        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
-            ViewFeedbackObjectTreeChanged,
-        ));
+    pub fn object_destroy(&mut self, id: ObjectID) {
+        self.state.free_object(id);
+        self.pending_view_feedbacks
+            .push_back(ViewFeedback::object_tree_changed());
     }
 
-    pub fn object_set_parent(
-        &mut self,
-        id: ObjectID,
-        parent: ObjectID,
-        vf_queue: &mut VecDeque<ViewFeedback>,
-    ) {
-        match self.objects[id.into_array_index()].parent.replace(parent) {
+    pub fn object_set_parent(&mut self, id: ObjectID, parent: ObjectID) {
+        match self.state.objects[id.into_array_index()]
+            .parent
+            .replace(parent)
+        {
             None => {
                 // detach from root
-                self.root_objects.retain(|&oid| oid != id);
+                self.state.root_objects.retain(|&oid| oid != id);
             }
             Some(old_parent) if old_parent == parent => {
                 // already linked
@@ -3376,33 +3710,72 @@ impl Application {
             }
             Some(old_parent) => {
                 // detach from old parent
-                self.objects[old_parent.into_array_index()]
+                self.state.objects[old_parent.into_array_index()]
                     .children
                     .retain(|&oid| oid != id);
             }
         }
 
-        self.objects[parent.into_array_index()].children.push(id);
-
-        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
-            ViewFeedbackObjectTreeChanged,
-        ));
+        self.state.objects[parent.into_array_index()]
+            .children
+            .push(id);
+        self.pending_view_feedbacks
+            .push_back(ViewFeedback::object_tree_changed());
     }
 
-    pub fn object_detach_parent(&mut self, child: ObjectID, vf_queue: &mut VecDeque<ViewFeedback>) {
-        let Some(parent) = self.objects[child.into_array_index()].parent.take() else {
+    pub fn object_detach_parent(&mut self, child: ObjectID) {
+        let Some(parent) = self.state.objects[child.into_array_index()].parent.take() else {
             // already on root
             return;
         };
 
-        self.objects[parent.into_array_index()]
+        self.state.objects[parent.into_array_index()]
             .children
             .retain(|&id| id != child);
-        self.root_objects.push(parent);
+        self.state.root_objects.push(parent);
 
-        vf_queue.push_back(ViewFeedback::ObjectTreeChanged(
-            ViewFeedbackObjectTreeChanged,
-        ));
+        self.pending_view_feedbacks
+            .push_back(ViewFeedback::object_tree_changed());
+    }
+
+    pub fn select_object(&mut self, id: ObjectID) {
+        if self.state.selected_objects.len() == 1
+            && self
+                .state
+                .selected_objects
+                .iter()
+                .next()
+                .is_some_and(|&x| x == id)
+        {
+            // already selected
+            return;
+        }
+
+        self.state.selected_objects.clear();
+        self.state.selected_objects.insert(id);
+        self.pending_view_feedbacks
+            .push_back(ViewFeedback::object_selection_changed());
+    }
+
+    pub fn toggle_object_selection_additive(&mut self, id: ObjectID) {
+        if !self.state.selected_objects.insert(id) {
+            // selecting
+            self.state.selected_objects.remove(&id);
+        }
+
+        self.pending_view_feedbacks
+            .push_back(ViewFeedback::object_selection_changed());
+    }
+
+    pub fn clear_selection(&mut self) {
+        if self.state.selected_objects.is_empty() {
+            // already cleared
+            return;
+        }
+
+        self.state.selected_objects.clear();
+        self.pending_view_feedbacks
+            .push_back(ViewFeedback::object_selection_changed());
     }
 }
 
@@ -3463,6 +3836,8 @@ async fn run<'sys>(
     crate::perf_begin!(perf = INITIALIZE);
 
     let mut application = Application::new();
+    let mut view_feedback_store = VecDeque::new();
+    let mut view_feedback_registry_delayed_ops = VecDeque::new();
 
     let mut composite_tree = CompositeTree::new();
     let mut ht_manager = HitTestTreeManager::new();
@@ -3537,7 +3912,6 @@ async fn run<'sys>(
         &mut delayed_render_messages,
     );
 
-    let mut view_feedback_registry_delayed_ops = VecDeque::new();
     let mut view_init_ctx = ViewInitContext {
         mount_context: MountContext {
             composite_tree: &mut composite_tree,
@@ -3736,7 +4110,9 @@ async fn run<'sys>(
                     ObjectTreePanePresenter::ID => {
                         Box::new(ObjectTreePanePresenter::new(view_init_ctx))
                     }
-                    InspectorPanePresenter::ID => Box::new(InspectorPanePresenter {}),
+                    InspectorPanePresenter::ID => {
+                        Box::new(InspectorPanePresenter::new(view_init_ctx))
+                    }
                     AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
                     ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
                     TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
@@ -3817,7 +4193,7 @@ async fn run<'sys>(
                                             Box::new(ObjectTreePanePresenter::new(view_init_ctx))
                                         }
                                         InspectorPanePresenter::ID => {
-                                            Box::new(InspectorPanePresenter {})
+                                            Box::new(InspectorPanePresenter::new(view_init_ctx))
                                         }
                                         AssetExplorerPanePresenter::ID => {
                                             Box::new(AssetExplorerPanePresenter {})
@@ -3842,8 +4218,6 @@ async fn run<'sys>(
                             },
                         ),
                     }));
-
-                    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
                 },
             );
             sub_windows.insert(new_window);
@@ -3855,7 +4229,7 @@ async fn run<'sys>(
     for msg in delayed_render_messages.drain(..) {
         system_link.rt_sender().send(msg).expect("rt_sender.send");
     }
-    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
 
     // initial push test
     let mut preview_state =
@@ -4049,6 +4423,10 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    application: ApplicationMutation {
+                        state: &mut application,
+                        pending_view_feedbacks: &mut view_feedback_store,
+                    },
                 };
 
                 for &ht in wd.screen_reposition_interests.iter() {
@@ -4095,8 +4473,77 @@ async fn run<'sys>(
                     );
                 }
 
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::WindowRescaleUI { window, new_scale } => {
                 popup_manager.rescale(window, new_scale, &mut composite_tree);
@@ -4122,6 +4569,10 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    application: ApplicationMutation {
+                        state: &mut application,
+                        pending_view_feedbacks: &mut view_feedback_store,
+                    },
                 };
                 let mgr = window.keyboard_focus_state_mut();
 
@@ -4151,8 +4602,76 @@ async fn run<'sys>(
                     );
                 }
 
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::WindowActivatingStateChanged { window, activated } => {
                 if !activated {
@@ -4182,6 +4701,7 @@ async fn run<'sys>(
                 window,
                 pointer_id,
                 button,
+                key_modifier,
             } => {
                 // #[cfg(target_os = "macos")]
                 // drag_preview_popover.bind_position_base_window_link(window);
@@ -4237,34 +4757,183 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     button,
+                    key_modifier,
                     window.ht_root(),
                     &mut keyboard_focus_registry,
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PointerMove {
                 pointer_id,
                 window,
                 client_pos,
+                key_modifier,
             } => {
                 pointer_input_manager.handle_mouse_move(
                     NativeDesktopSurface::Window(window),
                     pointer_id,
                     client_pos,
+                    key_modifier,
                     &ht_manager,
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     window.ht_root(),
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
 
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
@@ -4283,15 +4952,89 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PointerUp {
                 window,
                 pointer_id,
                 button,
+                key_modifier,
             } => {
                 pointer_input_manager.handle_mouse_up(
                     pointer_id,
@@ -4301,14 +5044,88 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     button,
+                    key_modifier,
                     window.ht_root(),
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
-            Event::PointerLeaveWindow { pointer_id, .. } => {
+            Event::PointerLeaveWindow { window, pointer_id } => {
                 pointer_input_manager.handle_mouse_leave(
                     pointer_id,
                     &ht_manager,
@@ -4317,11 +5134,83 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                 );
 
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PointerHover => {
                 system_link.kill_pointer_hovering_timeout();
@@ -4330,10 +5219,82 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    application: ApplicationMutation {
+                        state: &mut application,
+                        pending_view_feedbacks: &mut view_feedback_store,
+                    },
                 });
 
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::ScrollWheel {
                 amount,
@@ -4347,11 +5308,83 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                 );
 
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::KeyDown {
                 mut window,
@@ -4374,11 +5407,88 @@ async fn run<'sys>(
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                             system_link: &mut system_link,
                             ht_manager: &ht_manager,
+                            application: ApplicationMutation {
+                                state: &mut application,
+                                pending_view_feedbacks: &mut view_feedback_store,
+                            },
                         },
                         &keyboard_focus_registry,
                     );
+
+                    if !view_feedback_store.is_empty() {
+                        let fb_time = global_time_base.elapsed().as_secs_f32();
+                        for x in view_feedback_store.drain(..) {
+                            match x {
+                                ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry
+                                    .dispatch(
+                                        o,
+                                        &mut ViewFeedbackContext {
+                                            application: &application,
+                                            view_init_context: ViewInitContext {
+                                                mount_context: MountContext {
+                                                    composite_tree: &mut composite_tree,
+                                                    ht_manager: &mut ht_manager,
+                                                    current_sec: fb_time,
+                                                    keyboard_focus_registry:
+                                                        &mut keyboard_focus_registry,
+                                                },
+                                                view_registry: &mut view_registry,
+                                                view_feedback_subscription_delayed_ops:
+                                                    &mut view_feedback_registry_delayed_ops,
+                                                ui_scale_factor: window.ui_scale_factor(),
+                                                system_link: &system_link,
+                                                main_thread_texture_id_issuer:
+                                                    &mut texture_id_issuer,
+                                            },
+                                        },
+                                    ),
+                                ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                    .dispatch(
+                                        o,
+                                        &mut ViewFeedbackContext {
+                                            application: &application,
+                                            view_init_context: ViewInitContext {
+                                                mount_context: MountContext {
+                                                    composite_tree: &mut composite_tree,
+                                                    ht_manager: &mut ht_manager,
+                                                    current_sec: fb_time,
+                                                    keyboard_focus_registry:
+                                                        &mut keyboard_focus_registry,
+                                                },
+                                                view_registry: &mut view_registry,
+                                                view_feedback_subscription_delayed_ops:
+                                                    &mut view_feedback_registry_delayed_ops,
+                                                ui_scale_factor: window.ui_scale_factor(),
+                                                system_link: &system_link,
+                                                main_thread_texture_id_issuer:
+                                                    &mut texture_id_issuer,
+                                            },
+                                        },
+                                    ),
+                            }
+
+                            view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                                application: &application,
+                                view_init_context: ViewInitContext {
+                                    mount_context: MountContext {
+                                        composite_tree: &mut composite_tree,
+                                        ht_manager: &mut ht_manager,
+                                        current_sec: fb_time,
+                                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                                    },
+                                    view_registry: &mut view_registry,
+                                    view_feedback_subscription_delayed_ops:
+                                        &mut view_feedback_registry_delayed_ops,
+                                    ui_scale_factor: window.ui_scale_factor(),
+                                    system_link: &system_link,
+                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                },
+                            });
+                        }
+                    }
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
             Event::KeyDown {
@@ -4394,11 +5504,84 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     &keyboard_focus_registry,
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::KeyUp {
                 window,
@@ -4413,11 +5596,84 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     &keyboard_focus_registry,
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::KeyChar {
                 window,
@@ -4432,11 +5688,84 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     &keyboard_focus_registry,
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::IMEStateChanges {
                 window,
@@ -4451,11 +5780,84 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     &keyboard_focus_registry,
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: window.ui_scale_factor(),
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: window.ui_scale_factor(),
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: window.ui_scale_factor(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::OpenAlertDialog {
                 target_window,
@@ -4487,13 +5889,85 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     &keyboard_focus_registry,
                 );
 
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PopupClose { id } => {
                 if popup_manager.close(
@@ -4547,7 +6021,7 @@ async fn run<'sys>(
                     &mut delayed_render_messages,
                 ));
 
-                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuOpen {
                 parent,
@@ -4580,7 +6054,7 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuReopen {
                 parent,
@@ -4622,7 +6096,7 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::DropdownMenuOpen {
                 parent,
@@ -4658,7 +6132,7 @@ async fn run<'sys>(
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuCloseAll => {
                 if let Some(c) = current_active_menu_session.take() {
@@ -4775,13 +6249,14 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
             Event::MenuPointerDown {
                 pointer_id,
                 target,
                 button,
+                key_modifier,
             } => {
                 pointer_input_manager.handle_mouse_down(
                     pointer_id,
@@ -4791,34 +6266,183 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     button,
+                    key_modifier,
                     target.ht_root(),
                     &mut keyboard_focus_registry,
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuPointerMove {
                 pointer_id,
                 target,
                 client_pos,
+                key_modifier,
             } => {
                 pointer_input_manager.handle_mouse_move(
                     NativeDesktopSurface::ContextMenu(target),
                     pointer_id,
                     client_pos,
+                    key_modifier,
                     &ht_manager,
                     &mut InputEventContext {
                         composite_tree: &mut composite_tree,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     target.ht_root(),
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
 
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
@@ -4827,6 +6451,7 @@ async fn run<'sys>(
                 pointer_id,
                 target,
                 button,
+                key_modifier,
             } => {
                 pointer_input_manager.handle_mouse_up(
                     pointer_id,
@@ -4836,12 +6461,86 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                     button,
+                    key_modifier,
                     target.ht_root(),
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuPointerLeave { pointer_id, .. } => {
                 pointer_input_manager.handle_mouse_leave(
@@ -4852,11 +6551,83 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        application: ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        },
                     },
                 );
 
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                    },
+                                },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            },
+                        });
+                    }
+                }
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuSelectCommand { id } => {
                 tracing::debug!(id, "ContextMenuSelectCommand");
@@ -4883,74 +6654,116 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
 
-                let mut vf_queue = VecDeque::new();
                 match id {
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
-                        application.object_create("New Cube".into(), &mut vf_queue);
+                        ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Cube".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
-                        application.object_create("New Sphere".into(), &mut vf_queue);
+                        ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Sphere".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
-                        application.object_create("New Cylinder".into(), &mut vf_queue);
+                        ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Cylinder".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
-                        application.object_create("New Capsule".into(), &mut vf_queue);
+                        ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Capsule".into());
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
-                        application.object_create("New Terrain".into(), &mut vf_queue);
+                        ApplicationMutation {
+                            state: &mut application,
+                            pending_view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Terrain".into());
                     }
                     _ => (),
                 }
 
-                let mut view_feedback_registry_delayed_ops = VecDeque::new();
-                let init_time = global_time_base.elapsed().as_secs_f32();
-                for f in vf_queue {
-                    match f {
-                        ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
-                            o,
-                            &mut ViewFeedbackContext {
-                                application: &application,
-                                view_init_context: ViewInitContext {
-                                    mount_context: MountContext {
-                                        composite_tree: &mut composite_tree,
-                                        ht_manager: &mut ht_manager,
-                                        current_sec: init_time,
-                                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                if !view_feedback_store.is_empty() {
+                    let fb_time = global_time_base.elapsed().as_secs_f32();
+                    for x in view_feedback_store.drain(..) {
+                        match x {
+                            ViewFeedback::ObjectTreeChanged(o) => view_feedback_registry.dispatch(
+                                o,
+                                &mut ViewFeedbackContext {
+                                    application: &application,
+                                    view_init_context: ViewInitContext {
+                                        mount_context: MountContext {
+                                            composite_tree: &mut composite_tree,
+                                            ht_manager: &mut ht_manager,
+                                            current_sec: fb_time,
+                                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                                        },
+                                        view_registry: &mut view_registry,
+                                        view_feedback_subscription_delayed_ops:
+                                            &mut view_feedback_registry_delayed_ops,
+                                        ui_scale_factor: 1.0, // TODO: これどうするか...
+                                        system_link: &system_link,
+                                        main_thread_texture_id_issuer: &mut texture_id_issuer,
                                     },
-                                    view_registry: &mut view_registry,
-                                    view_feedback_subscription_delayed_ops:
-                                        &mut view_feedback_registry_delayed_ops,
-                                    ui_scale_factor: 1.0, // TODO: これどうするか......
-                                    system_link: &system_link,
-                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
                                 },
+                            ),
+                            ViewFeedback::ObjectSelectionChanged(o) => view_feedback_registry
+                                .dispatch(
+                                    o,
+                                    &mut ViewFeedbackContext {
+                                        application: &application,
+                                        view_init_context: ViewInitContext {
+                                            mount_context: MountContext {
+                                                composite_tree: &mut composite_tree,
+                                                ht_manager: &mut ht_manager,
+                                                current_sec: fb_time,
+                                                keyboard_focus_registry:
+                                                    &mut keyboard_focus_registry,
+                                            },
+                                            view_registry: &mut view_registry,
+                                            view_feedback_subscription_delayed_ops:
+                                                &mut view_feedback_registry_delayed_ops,
+                                            ui_scale_factor: 1.0, // TODO: これどうするか...
+                                            system_link: &system_link,
+                                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                        },
+                                    },
+                                ),
+                        }
+
+                        view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
+                            application: &application,
+                            view_init_context: ViewInitContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut composite_tree,
+                                    ht_manager: &mut ht_manager,
+                                    current_sec: fb_time,
+                                    keyboard_focus_registry: &mut keyboard_focus_registry,
+                                },
+                                view_registry: &mut view_registry,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
+                                ui_scale_factor: 1.0, // TODO: これどうするか...
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
                             },
-                        ),
+                        });
                     }
                 }
 
-                view_feedback_registry.perform_atomic(&mut ViewFeedbackContext {
-                    application: &application,
-                    view_init_context: ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: init_time,
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_registry: &mut view_registry,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        ui_scale_factor: 1.0, // TODO: これどうするか......
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                    },
-                });
-
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::DropdownMenuSelectItem { id, receiver } => {
                 let mut should_commit_ct = false;
@@ -5195,7 +7008,7 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    view_feedback_registry.perform_delayed(view_feedback_registry_delayed_ops);
+                    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
             Event::Sync(SyncEvent::NewPresentID { id }) => {

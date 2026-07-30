@@ -13,8 +13,8 @@ use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
 
 use crate::{
     graphics::{
-        BLEND_STATE_SINGLE_NONE, IA_STATE_TRILIST, MS_STATE_EMPTY,
-        RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY, Graphics,
+        BLEND_STATE_SINGLE_NONE, Graphics, IA_STATE_TRILIST, MS_STATE_EMPTY,
+        RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY,
     },
     rendering::{
         ColorTextureAtlasManager, MaskTextureAtlasManager, TextureID,
@@ -876,6 +876,7 @@ pub struct CompositeRectModificationChain<'r, Event> {
     target: *mut CompositeRect<Event>,
     r: CompositeTreeRef,
     dirty: bool,
+    text_layout_dirty: bool,
 }
 impl<'r, Event> Drop for CompositeRectModificationChain<'r, Event> {
     #[inline(always)]
@@ -887,6 +888,9 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
     pub fn apply(self) {
         if self.dirty {
             self.storage.mark_dirty(self.r);
+        }
+        if self.text_layout_dirty {
+            self.storage.mark_text_layout_dirty(self.r);
         }
 
         core::mem::forget(self);
@@ -1113,6 +1117,41 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
     pub fn corner_radius(mut self, v: CornerRadius) -> Self {
         unsafe { &mut *self.target }.corner_radius = v;
         self.dirty = true;
+        self
+    }
+
+    pub fn rm_text(mut self) -> Self {
+        unsafe { &mut *self.target }.text = None;
+        self.dirty = true;
+        self
+    }
+
+    pub fn text(mut self, t: CompositeRectText<Event>) -> Self {
+        unsafe { &mut *self.target }.text = Some(t);
+        self.dirty = true;
+        self.text_layout_dirty = true;
+        self
+    }
+
+    pub fn text_runs(mut self, xs: Vec<CompositeRectTextRun<Event>>) -> Self {
+        let Some(ref mut t) = unsafe { &mut *self.target }.text else {
+            return self;
+        };
+
+        t.runs = xs;
+        self.dirty = true;
+        self.text_layout_dirty = true;
+        self
+    }
+
+    pub fn text_run(mut self, xs: CompositeRectTextRun<Event>) -> Self {
+        let Some(ref mut t) = unsafe { &mut *self.target }.text else {
+            return self;
+        };
+
+        t.runs = vec![xs];
+        self.dirty = true;
+        self.text_layout_dirty = true;
         self
     }
 }
@@ -2039,11 +2078,7 @@ impl<Event> CompositeTreeRender<Event> {
         self.parameter_store.evaluate_all(current_sec);
     }
 
-    pub fn update_gradients(
-        &mut self,
-        gfx: &Graphics,
-        shared_buffers: &CompositeSharedBuffers,
-    ) {
+    pub fn update_gradients(&mut self, gfx: &Graphics, shared_buffers: &CompositeSharedBuffers) {
         let flush_required = shared_buffers.stg_mem_requires_flush;
         let r = shared_buffers.range_all();
         let gradient_ptr = MappedStagingMemory(
@@ -2646,6 +2681,7 @@ impl<Event> CompositeTree<Event> {
             storage: self,
             r,
             dirty: false,
+            text_layout_dirty: false,
         }
     }
 

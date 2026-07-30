@@ -561,6 +561,7 @@ pub struct PointerButtonActionArgs {
     pub pointer_id: PointerID,
     pub client_pos: Point<LogicalUnit>,
     pub client_size: Size<LogicalUnit>,
+    pub key_modifier: ModifierKey,
 }
 
 pub struct ScrollWheelActionArgs {

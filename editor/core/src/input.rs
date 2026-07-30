@@ -7,7 +7,8 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
+    Application, ApplicationMutation, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink,
+    WindowHandle,
     input::hittest::{
         CursorShape, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
@@ -29,6 +30,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub system_link: &'env mut SystemLink<'sys>,
     pub ht_manager: &'env HitTestTreeManager<'h>,
+    pub application: ApplicationMutation<'env>,
 }
 
 bitflags! {
@@ -407,6 +409,7 @@ impl PointerInputManager {
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         window_size: Size<PointerInputUnit>,
+        key_modifier: ModifierKey,
     ) {
         let mut needs_recompute_pointer_enter = false;
 
@@ -415,6 +418,7 @@ impl PointerInputManager {
             pointer_id,
             client_pos,
             client_size: window_size,
+            key_modifier,
         };
         match self.pointer_focus {
             PointerFocusState::Grabbing { target: ht_ref, .. } => {
@@ -615,6 +619,7 @@ impl PointerInputManager {
         surface: NativeDesktopSurface,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
+        key_modifier: ModifierKey,
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext<'env, 'sys, 'h>,
         ht_root: HitTestTreeRef,
@@ -639,6 +644,7 @@ impl PointerInputManager {
                     pointer_id,
                     client_pos,
                     client_size: ws,
+                    key_modifier,
                 },
                 surface,
                 pointer_id,
@@ -809,6 +815,7 @@ impl PointerInputManager {
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext<'env, 'sys, 'h>,
         button: PointerButton,
+        key_modifier: ModifierKey,
         ht_root: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
     ) {
@@ -830,6 +837,7 @@ impl PointerInputManager {
             pointer_id,
             client_pos,
             client_size: ws,
+            key_modifier,
         };
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref)
@@ -903,6 +911,7 @@ impl PointerInputManager {
         ht: &HitTestTreeManager,
         action_context: &mut InputEventContext<'env, 'sys, 'h>,
         button: PointerButton,
+        key_modifier: ModifierKey,
         ht_root: HitTestTreeRef,
     ) {
         let Some(&(entering_surface, client_pos)) = self.last_client_pointer_pos.get(&pointer_id)
@@ -923,6 +932,7 @@ impl PointerInputManager {
                 pointer_id,
                 client_pos,
                 ws,
+                key_modifier,
             );
         }
 
@@ -932,6 +942,7 @@ impl PointerInputManager {
             pointer_id,
             client_pos,
             client_size: ws,
+            key_modifier,
         };
         match self.pointer_focus {
             PointerFocusState::Grabbing { target: ht_ref, .. } => {
@@ -1031,6 +1042,7 @@ impl PointerInputManager {
                         pointer_id,
                         button,
                         client_pos,
+                        key_modifier,
                         action_context,
                         ht,
                         ht_root,
@@ -1042,6 +1054,7 @@ impl PointerInputManager {
                     pointer_id,
                     button,
                     client_pos,
+                    key_modifier,
                     action_context,
                     ht,
                     ht_root,
@@ -1059,6 +1072,7 @@ impl PointerInputManager {
         pointer_id: PointerID,
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
+        key_modifier: ModifierKey,
         action_context: &mut InputEventContext<'env, 'sys, 'h>,
         ht: &HitTestTreeManager,
         ht_root: HitTestTreeRef,
@@ -1076,6 +1090,7 @@ impl PointerInputManager {
             pointer_id,
             client_pos,
             client_size: surface_size,
+            key_modifier,
         };
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref)
@@ -1149,6 +1164,7 @@ impl PointerInputManager {
         pointer_id: PointerID,
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
+        key_modifier: ModifierKey,
         action_context: &mut InputEventContext<'env, 'sys, 'h>,
         ht: &HitTestTreeManager,
         ht_root: HitTestTreeRef,
@@ -1166,6 +1182,7 @@ impl PointerInputManager {
             pointer_id,
             client_pos,
             client_size: surface_size,
+            key_modifier,
         };
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref)

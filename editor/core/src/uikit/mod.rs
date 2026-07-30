@@ -84,56 +84,16 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         &mut self,
         handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
     ) {
-        let tyid = core::any::TypeId::of::<T>();
-        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
-            // optimize: specific handler array for PerformAtomic feedbacks
-            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::SubscribePerformAtomic(unsafe {
-                    Weak::from_raw(core::mem::transmute::<
-                        _,
-                        *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
-                    >(
-                        (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
-                    ))
-                }),
-            );
-        } else {
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::Subscribe(
-                    tyid,
-                    ViewFeedbackHandlerUntyped::from_typed(Rc::downgrade(handler) as _),
-                ),
-            );
-        }
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::subscribe(handler));
     }
 
     pub fn unsubscribe_view_feedback<T: 'static>(
         &mut self,
         handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
     ) {
-        let tyid = core::any::TypeId::of::<T>();
-        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
-            // optimize: specific handler array for PerformAtomic feedbacks
-            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::UnsubscribePerformAtomic(unsafe {
-                    Weak::from_raw(core::mem::transmute::<
-                        _,
-                        *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
-                    >(
-                        (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
-                    ))
-                }),
-            );
-        } else {
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::Unsubscribe(
-                    tyid,
-                    ViewFeedbackHandlerUntyped::from_typed(Rc::downgrade(handler) as _),
-                ),
-            );
-        }
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
     }
 }
 
@@ -166,56 +126,16 @@ impl<'a, 'h> TeardownContext<'a, 'h> {
         &mut self,
         handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
     ) {
-        let tyid = core::any::TypeId::of::<T>();
-        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
-            // optimize: specific handler array for PerformAtomic feedbacks
-            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::SubscribePerformAtomic(unsafe {
-                    Weak::from_raw(core::mem::transmute::<
-                        _,
-                        *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
-                    >(
-                        (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
-                    ))
-                }),
-            );
-        } else {
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::Subscribe(
-                    tyid,
-                    ViewFeedbackHandlerUntyped::from_typed(Rc::downgrade(handler) as _),
-                ),
-            );
-        }
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::subscribe(handler));
     }
 
     pub fn unsubscribe_view_feedback<T: 'static>(
         &mut self,
         handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
     ) {
-        let tyid = core::any::TypeId::of::<T>();
-        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
-            // optimize: specific handler array for PerformAtomic feedbacks
-            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::UnsubscribePerformAtomic(unsafe {
-                    Weak::from_raw(core::mem::transmute::<
-                        _,
-                        *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
-                    >(
-                        (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
-                    ))
-                }),
-            );
-        } else {
-            self.view_feedback_subscription_delayed_ops.push_back(
-                ViewFeedbackRegistryDelayedOps::Unsubscribe(
-                    tyid,
-                    ViewFeedbackHandlerUntyped::from_typed(Rc::downgrade(handler) as _),
-                ),
-            );
-        }
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
     }
 }
 
@@ -285,6 +205,49 @@ pub enum ViewFeedbackRegistryDelayedOps {
     UnsubscribePerformAtomic(Weak<dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>>),
     Unsubscribe(core::any::TypeId, ViewFeedbackHandlerUntyped),
 }
+impl ViewFeedbackRegistryDelayedOps {
+    fn subscribe<T: 'static>(handler: &Rc<impl ViewFeedbackHandler<T> + 'static>) -> Self {
+        let tyid = core::any::TypeId::of::<T>();
+        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
+            // optimize: specific handler array for PerformAtomic feedbacks
+            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
+            Self::SubscribePerformAtomic(unsafe {
+                Weak::from_raw(core::mem::transmute::<
+                    _,
+                    *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
+                >(
+                    (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
+                ))
+            })
+        } else {
+            Self::Subscribe(
+                tyid,
+                ViewFeedbackHandlerUntyped::from_typed(Rc::downgrade(handler) as _),
+            )
+        }
+    }
+
+    fn unsubscribe<T: 'static>(handler: &Rc<impl ViewFeedbackHandler<T> + 'static>) -> Self {
+        let tyid = core::any::TypeId::of::<T>();
+        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
+            // optimize: specific handler array for PerformAtomic feedbacks
+            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
+            Self::UnsubscribePerformAtomic(unsafe {
+                Weak::from_raw(core::mem::transmute::<
+                    _,
+                    *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
+                >(
+                    (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
+                ))
+            })
+        } else {
+            Self::Unsubscribe(
+                tyid,
+                ViewFeedbackHandlerUntyped::from_typed(Rc::downgrade(handler) as _),
+            )
+        }
+    }
+}
 
 pub struct ViewFeedbackRegistry {
     perform_atomic_feedback_receivers:
@@ -299,8 +262,8 @@ impl ViewFeedbackRegistry {
         }
     }
 
-    pub fn perform_delayed(&mut self, ops: VecDeque<ViewFeedbackRegistryDelayedOps>) {
-        for op in ops {
+    pub fn perform_delayed(&mut self, ops: &mut VecDeque<ViewFeedbackRegistryDelayedOps>) {
+        for op in ops.drain(..) {
             match op {
                 ViewFeedbackRegistryDelayedOps::SubscribePerformAtomic(weak) => {
                     self.perform_atomic_feedback_receivers.push(weak);
@@ -322,53 +285,6 @@ impl ViewFeedbackRegistry {
                         .retain(|h| !h.target.ptr_eq(&handler.target));
                 }
             }
-        }
-    }
-
-    pub fn subscribe<T: 'static>(&mut self, handler: &Rc<impl ViewFeedbackHandler<T> + 'static>) {
-        let tyid = core::any::TypeId::of::<T>();
-        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
-            // optimize: specific handler array for PerformAtomic feedbacks
-            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
-            self.perform_atomic_feedback_receivers.push(unsafe {
-                Weak::from_raw(core::mem::transmute::<
-                    _,
-                    *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
-                >(
-                    (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
-                ))
-            });
-        } else {
-            self.feedback_receivers
-                .entry(tyid)
-                .or_insert_with(Vec::new)
-                .push(ViewFeedbackHandlerUntyped::from_typed(
-                    Rc::downgrade(handler) as _,
-                ));
-        }
-    }
-
-    pub fn unsubscribe<T: 'static>(&mut self, handler: &Rc<impl ViewFeedbackHandler<T> + 'static>) {
-        let tyid = core::any::TypeId::of::<T>();
-        if tyid == core::any::TypeId::of::<ViewFeedbackPerformAtomic>() {
-            // optimize: specific handler array for PerformAtomic feedbacks
-            // TがViewFeedbackPerformAtomicとおなじなのは確認済みなのでゴリゴリ強制する
-            let target = unsafe {
-                Weak::from_raw(core::mem::transmute::<
-                    _,
-                    *const dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>,
-                >(
-                    (Rc::downgrade(handler) as Weak<dyn ViewFeedbackHandler<T>>).into_raw(),
-                ))
-            };
-            self.perform_atomic_feedback_receivers
-                .retain(|h| !h.ptr_eq(&target));
-        } else {
-            let target = ViewFeedbackHandlerUntyped::from_typed(Rc::downgrade(handler) as _);
-            self.feedback_receivers
-                .entry(tyid)
-                .or_insert_with(Vec::new)
-                .retain(|h| !h.target.ptr_eq(&target.target));
         }
     }
 

@@ -1013,6 +1013,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                     pointer_id: PointerID(pointer),
                     window: toplevel::Handle::from_mut(surface),
                     client_pos: state.pos,
+                    key_modifier: self
+                        .keyboard
+                        .as_ref()
+                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                 });
             }
             SurfaceStateTag::FlyoutSurface => {
@@ -1020,6 +1024,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                     pointer_id: PointerID(pointer),
                     target: flyout_surface::Handle(NonNull::from_mut(surface)),
                     client_pos: state.pos,
+                    key_modifier: self
+                        .keyboard
+                        .as_ref()
+                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                 });
             }
         }
@@ -1090,6 +1098,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                     pointer_id: PointerID(pointer),
                     window: toplevel::Handle(enter_state.surface),
                     client_pos: state.pos,
+                    key_modifier: self
+                        .keyboard
+                        .as_ref()
+                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                 });
             }
             SurfaceStateTag::FlyoutSurface => {
@@ -1097,6 +1109,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                     pointer_id: PointerID(pointer),
                     target: flyout_surface::Handle(enter_state.surface),
                     client_pos: state.pos,
+                    key_modifier: self
+                        .keyboard
+                        .as_ref()
+                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                 });
             }
         }
@@ -1147,6 +1163,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                         } else {
                             PointerButton::Secondary
                         },
+                        key_modifier: self
+                            .keyboard
+                            .as_ref()
+                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                     });
                 }
                 SurfaceStateTag::FlyoutSurface => {
@@ -1158,6 +1178,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                         } else {
                             PointerButton::Secondary
                         },
+                        key_modifier: self
+                            .keyboard
+                            .as_ref()
+                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                     });
                 }
             }
@@ -1181,6 +1205,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                         } else {
                             PointerButton::Secondary
                         },
+                        key_modifier: self
+                            .keyboard
+                            .as_ref()
+                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                     });
                 }
                 SurfaceStateTag::FlyoutSurface => {
@@ -1192,6 +1220,10 @@ impl wl::PointerEventListener for GlobalMessaging {
                         } else {
                             PointerButton::Secondary
                         },
+                        key_modifier: self
+                            .keyboard
+                            .as_ref()
+                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
                     });
                 }
             }
