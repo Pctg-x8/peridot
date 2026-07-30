@@ -1755,8 +1755,16 @@ impl wl::KeyboardEventListener for GlobalMessaging {
                 self.event_dispatcher.dispatch(Event::KeyDown {
                     window: toplevel::Handle(enter_state.surface),
                     modifier,
-                    code,
+                    code: code.clone(),
                 });
+
+                if let KeyInputCode::Character(ch) = code {
+                    self.event_dispatcher.dispatch(Event::KeyChar {
+                        window: toplevel::Handle(enter_state.surface),
+                        modifier,
+                        ch,
+                    });
+                }
             }
             wl::KeyboardKeyState::Released => {
                 self.event_dispatcher.dispatch(Event::KeyUp {
