@@ -1841,11 +1841,21 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
     }
 }
 
+pub trait NumericInputViewBackingStore {
+    fn display_value(&self, requester: ViewIdentifier) -> String;
+    fn set_delta(&self, sender: ViewIdentifier, delta: f32);
+    fn set_from_string(&self, sender: ViewIdentifier, input: &str);
+}
+
 pub struct NumericInputView {
     eh: Rc<NumericInputViewEventHandler>,
 }
 impl NumericInputView {
-    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
+    pub fn new(
+        ctx: &mut ViewInitContext,
+        rect: Rect<LogicalUnit>,
+        value: std::rc::Weak<impl NumericInputViewBackingStore + 'static>,
+    ) -> Self {
         let view_id = ctx.view_registry.alloc();
         let kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
@@ -1860,13 +1870,13 @@ impl NumericInputView {
         let raw = RawTextInputView::new(
             ctx,
             rect,
-            "0".into(),
+            String::new(),
             kf_token,
             RawTextInputViewCreateFlags::empty(),
             view_id,
         );
         let eh = Rc::new(NumericInputViewEventHandler {
-            value: Cell::new(0),
+            value: value as _,
             raw,
             id: view_id,
             token: kf_token,
@@ -1883,9 +1893,30 @@ impl NumericInputView {
         Self { eh }
     }
 
+    pub fn post_init(&self, ctx: &mut ViewInitContext) {
+        self.eh.raw.eh.update_views(
+            self.eh.raw.set_content(
+                self.eh
+                    .value
+                    .upgrade()
+                    .expect("NumericInputView has defunct")
+                    .display_value(self.eh.id),
+            ),
+            ctx.mount_context.composite_tree,
+            ctx.system_link,
+            ctx.mount_context.ht_manager,
+            ctx.current_sec,
+        );
+    }
+
     pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
         ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
         self.eh.raw.mount(ctx, parent);
+    }
+
+    #[inline(always)]
+    pub fn id(&self) -> ViewIdentifier {
+        self.eh.id
     }
 
     pub fn set_keyboard_focus_group(
@@ -1898,7 +1929,7 @@ impl NumericInputView {
 }
 
 struct NumericInputViewEventHandler {
-    value: Cell<i64>,
+    value: std::rc::Weak<dyn NumericInputViewBackingStore>,
     raw: RawTextInputView,
     id: ViewIdentifier,
     token: FocusTargetToken,
@@ -1975,7 +2006,7 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         self.dragging.set(true);
-        self.drag_base_value.set(self.value.get());
+        // self.drag_base_value.set(self.value.get());
         self.drag_accum_delta.set(0.0);
 
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
@@ -1987,13 +2018,15 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         context: &mut InputEventContext,
         args: &crate::input::hittest::GrabDeltaMoveActionArgs,
     ) -> EventContinueControl {
+        let value = self.value.upgrade().expect("NumericInputView has defunct");
         let new_drag_accum_delta = self.drag_accum_delta.get() + args.delta.y;
-        let new_value = self.drag_base_value.get() - (new_drag_accum_delta * 0.5).round() as i64;
-        self.value.set(new_value);
+        value.set_delta(self.id, -args.delta.y);
+        // let new_value = self.drag_base_value.get() - (new_drag_accum_delta * 0.5).round() as i64;
+        // self.value.set(new_value);
         self.drag_accum_delta.set(new_drag_accum_delta);
 
         self.raw.eh.update_views(
-            self.raw.set_content(new_value.to_string()),
+            self.raw.set_content(value.display_value(self.id)),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2034,9 +2067,11 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
             return args.make_empty_response();
         }
 
-        let new_value = self.apply_delta(args.amount.round() as _);
+        let value = self.value.upgrade().expect("NumericInputView has defunct");
+        value.set_delta(self.id, args.amount);
+        // let new_value = self.apply_delta(args.amount.round() as _);
         self.raw.eh.update_views(
-            self.raw.set_content(new_value.to_string()),
+            self.raw.set_content(value.display_value(self.id)),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2067,7 +2102,12 @@ impl NumericInputViewEventHandler {
         }
 
         // HitTestTreeへの変更がはいるので遅延させる(最初は全選択状態)
-        let update_mask = self.raw.set_content(self.value.get().to_string());
+        let update_mask = self.raw.set_content(
+            self.value
+                .upgrade()
+                .expect("NumericInputView has defunct")
+                .display_value(self.id),
+        );
         self.raw
             .eh
             .pending_update_mask
@@ -2081,19 +2121,21 @@ impl NumericInputViewEventHandler {
             return;
         }
 
-        let current_value = self.value.get();
+        let value = self.value.upgrade().expect("NumericInputView has defunct");
         let content = self.raw.content();
-        let new_value = content
-            .split_once('.')
-            .map_or(&**content, |x| x.0)
-            .parse::<i64>()
-            .unwrap_or(current_value);
-        self.value.set(new_value);
+        // let current_value = self.value.get();
+        // let new_value = content
+        //     .split_once('.')
+        //     .map_or(&**content, |x| x.0)
+        //     .parse::<i64>()
+        //     .unwrap_or(current_value);
+        // self.value.set(new_value);
+        value.set_from_string(self.id, &content);
         drop(content);
 
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.raw.eh.release_focus(ht_manager);
-        update_mask |= self.raw.set_content(new_value.to_string());
+        update_mask |= self.raw.set_content(value.display_value(self.id));
         update_mask |= self.raw.eh.move_cursor(0);
 
         self.raw.eh.pending_update_mask.set(update_mask);
@@ -2104,18 +2146,16 @@ impl NumericInputViewEventHandler {
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.raw.eh.release_focus(ht_manager);
         // キャンセル時はもとにもどす
-        update_mask |= self.raw.set_content(self.value.get().to_string());
+        update_mask |= self.raw.set_content(
+            self.value
+                .upgrade()
+                .expect("NumericInputView has defunct")
+                .display_value(self.id),
+        );
         update_mask |= self.raw.eh.move_cursor(0);
 
         self.raw.eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
-    }
-
-    fn apply_delta(&self, d: i64) -> i64 {
-        let new_value = self.value.get() + d;
-        self.value.set(new_value);
-
-        new_value
     }
 }
 

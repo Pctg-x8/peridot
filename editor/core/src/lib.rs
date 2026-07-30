@@ -52,12 +52,12 @@ use crate::{
     },
     uikit::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
-        MountContext, MountTarget, NumericInputView, OverlayPopupBasicFrameView,
-        OverlayPopupBasicMaskView, Popup, PopupID, PopupManager, Positioning, RawMountTarget,
-        ScrollContainer, SimpleButtonConstantEventHandler, SimpleButtonEventHandler,
-        SimpleButtonView, TeardownContext, TextInputView, ViewEventHandler, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier,
-        ViewInitContext, ViewRegistry, ViewUpdateContext,
+        MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore,
+        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, PopupManager,
+        Positioning, RawMountTarget, ScrollContainer, SimpleButtonConstantEventHandler,
+        SimpleButtonEventHandler, SimpleButtonView, TeardownContext, TextInputView,
+        ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
+        ViewFeedbackRegistry, ViewIdentifier, ViewInitContext, ViewRegistry, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -2403,6 +2403,31 @@ macro_rules! internal_pane_identifier {
     };
 }
 
+struct UIKitPreviewNumericInputValueStore(Cell<i64>);
+impl NumericInputViewBackingStore for UIKitPreviewNumericInputValueStore {
+    fn display_value(&self, _requester: ViewIdentifier) -> String {
+        self.0.get().to_string()
+    }
+
+    fn set_delta(&self, _sender: ViewIdentifier, delta: f32) {
+        self.0.update(|x| x + (delta * 0.5).round() as i64)
+    }
+
+    fn set_from_string(&self, _sender: ViewIdentifier, input: &str) {
+        let Some(new_value) = input
+            .split_once('.')
+            .map_or(input, |x| x.0)
+            .parse::<i64>()
+            .ok()
+        else {
+            // invalid input(hold current)
+            return;
+        };
+
+        self.0.set(new_value);
+    }
+}
+
 pub struct UIKitPreviewPanePresenter {
     scroll_container: ScrollContainer,
     test_alert_btn: SimpleButtonView,
@@ -2413,6 +2438,7 @@ pub struct UIKitPreviewPanePresenter {
     color_picker_backing_store: Rc<ColorPickerTestBackingStore>,
     color_picker: ColorPickerView,
     editable_color_button: EditableColorButtonView,
+    numeric_input_view_backing_store: Rc<UIKitPreviewNumericInputValueStore>,
     numeric_input_view: NumericInputView,
     dropdown_box: uikit::dropdown_box::View,
     toggle_button: uikit::ToggleButtonView,
@@ -2666,13 +2692,17 @@ impl UIKitPreviewPanePresenter {
             ctx.system_link.font_set(),
         );
 
+        let numeric_input_view_backing_store =
+            Rc::new(UIKitPreviewNumericInputValueStore(Cell::new(0)));
         let numeric_input_view = NumericInputView::new(
             ctx,
             Rect::from_lt_size(
                 Point::new_logical(16.0 + label_width, ytop - 2.0),
                 Size::new_logical(64.0, 20.0),
             ),
+            Rc::downgrade(&numeric_input_view_backing_store),
         );
+        numeric_input_view.post_init(ctx);
         numeric_input_view.mount(ctx, &scroll_container);
         // numeric_input_view.set_keyboard_focus_group(
         //     main_window.keyboard_focus_group(),
@@ -2821,6 +2851,7 @@ impl UIKitPreviewPanePresenter {
             color_picker_backing_store,
             color_picker,
             editable_color_button,
+            numeric_input_view_backing_store,
             numeric_input_view,
             dropdown_box,
             toggle_button,
@@ -3390,190 +3421,201 @@ impl InspectorPanePresenter {
             ..Default::default()
         });
 
-        let items_container_view = ScrollContainer::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(0.0, 8.0 + 12.0 + 12.0),
-                Size::new_logical(128.0, 128.0),
-            ),
-        );
+        let eh = Rc::new_cyclic(|eh| {
+            let items_container_view = ScrollContainer::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(0.0, 8.0 + 12.0 + 12.0),
+                    Size::new_logical(128.0, 128.0),
+                ),
+            );
 
-        let transform_position_label = StaticTextView::new(
-            ctx,
-            "POSITION".into(),
-            FontID::UIFormLiftedLabel,
-            ViewPlacement {
-                location: Point::new_logical(8.0, 8.0),
-                size: ViewElementSize::Automatic,
-            },
-        );
-        transform_position_label.mount(ctx, &items_container_view);
-        let local_position_x_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0, 8.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_position_x_input_view.mount(ctx, &items_container_view);
-        let local_position_y_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0 + 40.0, 8.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_position_y_input_view.mount(ctx, &items_container_view);
-        let local_position_z_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_position_z_input_view.mount(ctx, &items_container_view);
+            let transform_position_label = StaticTextView::new(
+                ctx,
+                "POSITION".into(),
+                FontID::UIFormLiftedLabel,
+                ViewPlacement {
+                    location: Point::new_logical(8.0, 8.0),
+                    size: ViewElementSize::Automatic,
+                },
+            );
+            transform_position_label.mount(ctx, &items_container_view);
+            let local_position_x_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0, 8.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_position_x_input_view.mount(ctx, &items_container_view);
+            let local_position_y_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0 + 40.0, 8.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_position_y_input_view.mount(ctx, &items_container_view);
+            let local_position_z_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_position_z_input_view.mount(ctx, &items_container_view);
 
-        let label = StaticTextView::new(
-            ctx,
-            "ROTATION".into(),
-            FontID::UIFormLiftedLabel,
-            ViewPlacement {
-                location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
-                size: ViewElementSize::Automatic,
-            },
-        );
-        label.mount(ctx, &items_container_view);
-        let local_rotation_x_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_rotation_x_input_view.mount(ctx, &items_container_view);
-        let local_rotation_y_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_rotation_y_input_view.mount(ctx, &items_container_view);
-        let local_rotation_z_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_rotation_z_input_view.mount(ctx, &items_container_view);
+            let label = StaticTextView::new(
+                ctx,
+                "ROTATION".into(),
+                FontID::UIFormLiftedLabel,
+                ViewPlacement {
+                    location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
+                    size: ViewElementSize::Automatic,
+                },
+            );
+            label.mount(ctx, &items_container_view);
+            let local_rotation_x_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_rotation_x_input_view.mount(ctx, &items_container_view);
+            let local_rotation_y_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_rotation_y_input_view.mount(ctx, &items_container_view);
+            let local_rotation_z_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_rotation_z_input_view.mount(ctx, &items_container_view);
 
-        let label = StaticTextView::new(
-            ctx,
-            "SCALE".into(),
-            FontID::UIFormLiftedLabel,
-            ViewPlacement {
-                location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
-                size: ViewElementSize::Automatic,
-            },
-        );
-        label.mount(ctx, &items_container_view);
-        let local_scale_x_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_scale_x_input_view.mount(ctx, &items_container_view);
-        let local_scale_y_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_scale_y_input_view.mount(ctx, &items_container_view);
-        let local_scale_z_input_view = NumericInputView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
-                Size::new_logical(32.0, 16.0),
-            ),
-        );
-        local_scale_z_input_view.mount(ctx, &items_container_view);
+            let label = StaticTextView::new(
+                ctx,
+                "SCALE".into(),
+                FontID::UIFormLiftedLabel,
+                ViewPlacement {
+                    location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
+                    size: ViewElementSize::Automatic,
+                },
+            );
+            label.mount(ctx, &items_container_view);
+            let local_scale_x_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_scale_x_input_view.mount(ctx, &items_container_view);
+            let local_scale_y_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_scale_y_input_view.mount(ctx, &items_container_view);
+            let local_scale_z_input_view = NumericInputView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
+                    Size::new_logical(32.0, 16.0),
+                ),
+                eh.clone(),
+            );
+            local_scale_z_input_view.mount(ctx, &items_container_view);
 
-        let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
-        let render_checkbox = CheckboxView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0, render_section_top),
-                Size::new_logical(20.0, 20.0),
-            ),
-        );
-        render_checkbox.mount(ctx, &items_container_view);
-        let section_label = StaticTextView::new(
-            ctx,
-            "Render".into(),
-            FontID::UIDefault,
-            ViewPlacement {
-                location: Point::new_logical(8.0 + 24.0, render_section_top),
-                size: ViewElementSize::Automatic,
-            },
-        );
-        section_label.mount(ctx, &items_container_view);
+            let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
+            let render_checkbox = CheckboxView::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0, render_section_top),
+                    Size::new_logical(20.0, 20.0),
+                ),
+            );
+            render_checkbox.mount(ctx, &items_container_view);
+            let section_label = StaticTextView::new(
+                ctx,
+                "Render".into(),
+                FontID::UIDefault,
+                ViewPlacement {
+                    location: Point::new_logical(8.0 + 24.0, render_section_top),
+                    size: ViewElementSize::Automatic,
+                },
+            );
+            section_label.mount(ctx, &items_container_view);
 
-        let label = StaticTextView::new(
-            ctx,
-            "SHAPE".into(),
-            FontID::UIFormLiftedLabel,
-            ViewPlacement {
-                location: Point::new_logical(8.0, render_section_top + 24.0),
-                size: ViewElementSize::Automatic,
-            },
-        );
-        label.mount(ctx, &items_container_view);
-        let shape_selector = uikit::dropdown_box::View::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0, render_section_top + 24.0 + 12.0),
-                Size::new_logical(128.0, 24.0),
-            ),
-            vec![
-                "Cube".into(),
-                "Sphere".into(),
-                "Cylinder".into(),
-                "Capsule".into(),
-            ],
-        );
-        shape_selector.mount(ctx, &items_container_view);
+            let label = StaticTextView::new(
+                ctx,
+                "SHAPE".into(),
+                FontID::UIFormLiftedLabel,
+                ViewPlacement {
+                    location: Point::new_logical(8.0, render_section_top + 24.0),
+                    size: ViewElementSize::Automatic,
+                },
+            );
+            label.mount(ctx, &items_container_view);
+            let shape_selector = uikit::dropdown_box::View::new(
+                ctx,
+                Rect::from_lt_size(
+                    Point::new_logical(8.0, render_section_top + 24.0 + 12.0),
+                    Size::new_logical(128.0, 24.0),
+                ),
+                vec![
+                    "Cube".into(),
+                    "Sphere".into(),
+                    "Cylinder".into(),
+                    "Capsule".into(),
+                ],
+            );
+            shape_selector.mount(ctx, &items_container_view);
 
-        items_container_view.set_content_size(
-            Size::new_logical(128.0 + 16.0, render_section_top + 24.0 + 12.0 + 24.0),
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
-        );
+            items_container_view.set_content_size(
+                Size::new_logical(128.0 + 16.0, render_section_top + 24.0 + 12.0 + 24.0),
+                ctx.mount_context.composite_tree,
+                ctx.mount_context.ht_manager,
+            );
 
-        let eh = Rc::new(InspectorPaneEventHandler {
-            object_selection_changed: Cell::new(false),
-            items_container_mounted: Cell::new(false),
-            root_container_view,
-            ct_selected_object_label,
-            ct_selected_object_name_label,
-            items_container_view,
-            numeric_input_views: vec![
-                local_position_x_input_view,
-                local_position_y_input_view,
-                local_position_z_input_view,
-                local_rotation_x_input_view,
-                local_rotation_y_input_view,
-                local_rotation_z_input_view,
-                local_scale_x_input_view,
-                local_scale_y_input_view,
-                local_scale_z_input_view,
-            ],
-            checkboxes: vec![render_checkbox],
-            dropdowns: vec![shape_selector],
+            InspectorPaneEventHandler {
+                object_selection_changed: Cell::new(false),
+                items_container_mounted: Cell::new(false),
+                root_container_view,
+                ct_selected_object_label,
+                ct_selected_object_name_label,
+                items_container_view,
+                numeric_input_views: vec![
+                    local_position_x_input_view,
+                    local_position_y_input_view,
+                    local_position_z_input_view,
+                    local_rotation_x_input_view,
+                    local_rotation_y_input_view,
+                    local_rotation_z_input_view,
+                    local_scale_x_input_view,
+                    local_scale_y_input_view,
+                    local_scale_z_input_view,
+                ],
+                checkboxes: vec![render_checkbox],
+                dropdowns: vec![shape_selector],
+            }
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
@@ -3591,6 +3633,10 @@ impl InspectorPanePresenter {
             ctx.mount_context.composite_tree,
             ctx.mount_context.ht_manager,
         );
+
+        for x in eh.numeric_input_views.iter() {
+            x.post_init(ctx);
+        }
 
         Self { eh }
     }
@@ -3766,6 +3812,15 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for InspectorPaneEv
     ) {
         self.object_selection_changed.set(true);
     }
+}
+impl NumericInputViewBackingStore for InspectorPaneEventHandler {
+    fn display_value(&self, requester: ViewIdentifier) -> String {
+        "0.0".into()
+    }
+
+    fn set_delta(&self, sender: ViewIdentifier, delta: f32) {}
+
+    fn set_from_string(&self, sender: ViewIdentifier, input: &str) {}
 }
 
 struct AssetExplorerPanePresenter {}

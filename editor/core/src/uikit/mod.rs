@@ -450,8 +450,8 @@ pub use self::menu::{
 
 mod text_input;
 pub use self::text_input::{
-    MultilineTextInputView, NumericInputView, RawTextInputView, RawTextInputViewCreateFlags,
-    TextInputView,
+    MultilineTextInputView, NumericInputView, NumericInputViewBackingStore, RawTextInputView,
+    RawTextInputViewCreateFlags, TextInputView,
 };
 
 mod scroll;
