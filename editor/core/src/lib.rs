@@ -3914,6 +3914,75 @@ impl NumericInputViewBackingStore for InspectorPaneEventHandler {
         application: &mut ApplicationMutation,
         input: &str,
     ) {
+        // TODO: multi-select
+        let Some(&selected) = application.selected_objects.iter().next() else {
+            return;
+        };
+
+        if sender == self.numeric_input_views[0].id() {
+            // pos x
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_position.0 = v);
+        } else if sender == self.numeric_input_views[1].id() {
+            // pos y
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_position.1 = v);
+        } else if sender == self.numeric_input_views[2].id() {
+            // pos z
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_position.2 = v);
+        } else if sender == self.numeric_input_views[3].id() {
+            // rotate x
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_rotation_euler.0 = v);
+        } else if sender == self.numeric_input_views[4].id() {
+            // rotate y
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_rotation_euler.1 = v);
+        } else if sender == self.numeric_input_views[5].id() {
+            // rotate z
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_rotation_euler.2 = v);
+        } else if sender == self.numeric_input_views[6].id() {
+            // scale x
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_scale.0 = v);
+        } else if sender == self.numeric_input_views[7].id() {
+            // scale y
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_scale.1 = v);
+        } else if sender == self.numeric_input_views[8].id() {
+            // scale z
+            let Some(v) = input.parse::<f32>().ok() else {
+                // invalid input
+                return;
+            };
+            application.object_modify_data(selected, |o| o.local_scale.2 = v);
+        }
     }
 }
 
