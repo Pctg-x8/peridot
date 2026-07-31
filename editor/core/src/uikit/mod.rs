@@ -16,7 +16,7 @@ use crate::{
         MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},
     },
-    uikit::dropdown_box::View,
+    utils::{LogicalUnit, Point, Size},
 };
 
 pub struct MountContext<'a, 'h> {
@@ -24,6 +24,14 @@ pub struct MountContext<'a, 'h> {
     pub ht_manager: &'a mut HitTestTreeManager<'h>,
     pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
+}
+
+pub struct RenderContext<'env, 'h> {
+    pub composite_tree: &'env mut CompositeTree<SyncEvent>,
+    pub ht_manager: &'env mut HitTestTreeManager<'h>,
+    pub keyboard_focus_registry: &'env mut KeyboardFocusTokenRegistry,
+    pub current_sec: f32,
+    pub system_link: &'env SystemLink<'env>,
 }
 
 pub struct ViewInitContext<'a, 'h> {
@@ -61,6 +69,16 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             view_registry: &mut self.view_registry,
             view_feedback_subscription_delayed_ops: &mut self
                 .view_feedback_subscription_delayed_ops,
+        }
+    }
+
+    pub const fn make_render_context<'env>(&'env mut self) -> RenderContext<'env, 'h> {
+        RenderContext {
+            composite_tree: &mut self.mount_context.composite_tree,
+            ht_manager: &mut self.mount_context.ht_manager,
+            keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
+            current_sec: self.mount_context.current_sec,
+            system_link: self.system_link,
         }
     }
 
@@ -429,12 +447,25 @@ impl ViewFeedbackHandlerUntyped {
     }
 }
 
+pub enum ViewElementSize {
+    Automatic,
+    Fixed(Size<LogicalUnit>),
+}
+
+pub struct ViewPlacement {
+    pub location: Point<LogicalUnit>,
+    pub size: ViewElementSize,
+}
+
 mod popup;
 pub use self::popup::{
     OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, PopupManager,
 };
 mod dialog;
 pub use self::dialog::*;
+
+mod label;
+pub use self::label::*;
 
 mod button;
 pub use self::button::{

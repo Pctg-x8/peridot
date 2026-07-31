@@ -55,9 +55,10 @@ use crate::{
         MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore,
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, PopupManager,
         Positioning, RawMountTarget, ScrollContainer, SimpleButtonConstantEventHandler,
-        SimpleButtonEventHandler, SimpleButtonView, TeardownContext, TextInputView,
-        ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
-        ViewFeedbackRegistry, ViewIdentifier, ViewInitContext, ViewRegistry, ViewUpdateContext,
+        SimpleButtonEventHandler, SimpleButtonView, StaticTextView, TeardownContext, TextInputView,
+        ViewElementSize, ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler,
+        ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier, ViewInitContext,
+        ViewPlacement, ViewRegistry, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -3321,76 +3322,6 @@ impl ObjectTreeObjectRowEventHandler {
     }
 }
 
-pub enum ViewElementSize {
-    Automatic,
-    Fixed(Size<LogicalUnit>),
-}
-
-pub struct ViewPlacement {
-    pub location: Point<LogicalUnit>,
-    pub size: ViewElementSize,
-}
-
-pub struct StaticTextView {
-    ct: CompositeTreeRef,
-}
-impl StaticTextView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        content: String,
-        font: FontID,
-        init_placement: ViewPlacement,
-    ) -> Self {
-        let size = match init_placement.size {
-            ViewElementSize::Fixed(s) => s,
-            ViewElementSize::Automatic => TextLayout::new_single(
-                &content,
-                font,
-                ctx.system_link.font_set(),
-                CompositeRectTextHorizontalAlignment::Start,
-                None,
-            )
-            .size(),
-        };
-
-        let ct = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(init_placement.location.x),
-                AnimatableFloat::Value(init_placement.location.y),
-            ],
-            size: [
-                AnimatableFloat::Value(size.width),
-                AnimatableFloat::Value(size.height),
-            ],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    font_id: font,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-
-        Self { ct }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct);
-    }
-
-    pub fn unmount(&self, ctx: &mut MountContext) {
-        ctx.composite_tree.remove_child(self.ct);
-    }
-
-    pub fn teardown(self, ctx: &mut TeardownContext) {
-        ctx.mount_context.composite_tree.free(self.ct);
-    }
-}
-
 struct InspectorPanePresenter {
     eh: Rc<InspectorPaneEventHandler>,
 }
@@ -3440,16 +3371,15 @@ impl InspectorPanePresenter {
                 ),
             );
 
-            let transform_position_label = StaticTextView::new(
-                ctx,
+            let mut label = StaticTextView::new(
                 "POSITION".into(),
-                FontID::UIFormLiftedLabel,
                 ViewPlacement {
                     location: Point::new_logical(8.0, 8.0),
                     size: ViewElementSize::Automatic,
                 },
             );
-            transform_position_label.mount(ctx, &items_container_view);
+            label.set_font(FontID::UIFormLiftedLabel);
+            label.render(&mut ctx.make_render_context(), &items_container_view);
             let local_position_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3478,16 +3408,15 @@ impl InspectorPanePresenter {
             );
             local_position_z_input_view.mount(ctx, &items_container_view);
 
-            let label = StaticTextView::new(
-                ctx,
+            let mut label = StaticTextView::new(
                 "ROTATION".into(),
-                FontID::UIFormLiftedLabel,
                 ViewPlacement {
                     location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
                     size: ViewElementSize::Automatic,
                 },
             );
-            label.mount(ctx, &items_container_view);
+            label.set_font(FontID::UIFormLiftedLabel);
+            label.render(&mut ctx.make_render_context(), &items_container_view);
             let local_rotation_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3516,16 +3445,15 @@ impl InspectorPanePresenter {
             );
             local_rotation_z_input_view.mount(ctx, &items_container_view);
 
-            let label = StaticTextView::new(
-                ctx,
+            let mut label = StaticTextView::new(
                 "SCALE".into(),
-                FontID::UIFormLiftedLabel,
                 ViewPlacement {
                     location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
                     size: ViewElementSize::Automatic,
                 },
             );
-            label.mount(ctx, &items_container_view);
+            label.set_font(FontID::UIFormLiftedLabel);
+            label.render(&mut ctx.make_render_context(), &items_container_view);
             let local_scale_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3563,27 +3491,24 @@ impl InspectorPanePresenter {
                 ),
             );
             render_checkbox.mount(ctx, &items_container_view);
-            let section_label = StaticTextView::new(
-                ctx,
+            let mut section_label = StaticTextView::new(
                 "Render".into(),
-                FontID::UIDefault,
                 ViewPlacement {
                     location: Point::new_logical(8.0 + 24.0, render_section_top),
                     size: ViewElementSize::Automatic,
                 },
             );
-            section_label.mount(ctx, &items_container_view);
+            section_label.render(&mut ctx.make_render_context(), &items_container_view);
 
-            let label = StaticTextView::new(
-                ctx,
+            let mut label = StaticTextView::new(
                 "SHAPE".into(),
-                FontID::UIFormLiftedLabel,
                 ViewPlacement {
                     location: Point::new_logical(8.0, render_section_top + 24.0),
                     size: ViewElementSize::Automatic,
                 },
             );
-            label.mount(ctx, &items_container_view);
+            label.set_font(FontID::UIFormLiftedLabel);
+            label.render(&mut ctx.make_render_context(), &items_container_view);
             let shape_selector = uikit::dropdown_box::View::new(
                 ctx,
                 Rect::from_lt_size(
