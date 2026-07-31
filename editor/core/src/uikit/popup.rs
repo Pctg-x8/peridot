@@ -11,7 +11,9 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
         FloatAnimationTemplate,
     },
-    uikit::{MountContext, MountTarget, RawMountTarget, ViewInitContext},
+    uikit::{
+        MountContext, MountTarget, RawMountTarget, RenderContext, TeardownContext, ViewInitContext,
+    },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
 
@@ -25,23 +27,31 @@ impl PopupID {
     }
 }
 
+/// ポップアップ共通ライフサイクル
 pub trait Popup {
-    fn mount(&self, ctx: &mut MountContext, parent: &RawMountTarget);
+    /// ポップアップViewがRenderされるときに呼ばれる
+    fn render(&mut self, ctx: &mut RenderContext, parent: &RawMountTarget);
+
     fn set_keyboard_focus_group(
         &self,
         group: KeyboardFocusGroupRef,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     );
+
+    /// UI Render Scaleが変わったときに呼ばれる
     #[allow(unused_variables)]
     fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {}
+
+    /// ポップアップが閉じられるときに呼ばれる
     fn close(
         &self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     );
-    fn unmount(&self, ctx: &mut MountContext);
-    fn terminate(&mut self, ctx: &mut MountContext);
+
+    /// ポップアップのクローズアニメーションが終わって、インスタンスが破棄されるときに呼ばれる
+    fn teardown(&mut self, ctx: &mut TeardownContext);
 }
 
 pub struct PopupManager {
@@ -63,8 +73,11 @@ impl PopupManager {
     ) -> PopupID {
         let id = PopupID::new();
         let popup_focus_group = ctx.keyboard_focus_registry.acquire_group();
-        let instance = ctor(id, ctx);
-        instance.mount(ctx, &RawMountTarget::from_typed(&window));
+        let mut instance = ctor(id, ctx);
+        instance.render(
+            &mut ctx.make_render_context(),
+            &RawMountTarget::from_typed(&window),
+        );
         instance.set_keyboard_focus_group(popup_focus_group, ctx.keyboard_focus_registry);
         self.instance_by_id
             .insert(id, (Box::new(instance), window, popup_focus_group));
@@ -101,12 +114,11 @@ impl PopupManager {
     }
 
     #[inline(always)]
-    pub fn unmount(&mut self, ctx: &mut MountContext, id: PopupID) -> bool {
+    pub fn teardown(&mut self, ctx: &mut TeardownContext, id: PopupID) -> bool {
         if let Some((mut instance, mut w, g)) = self.instance_by_id.remove(&id) {
             w.keyboard_focus_state_mut().pop_tab_stop_group();
-            instance.unmount(ctx);
-            ctx.keyboard_focus_registry.release_group(g);
-            instance.terminate(ctx);
+            ctx.mount_context.keyboard_focus_registry.release_group(g);
+            instance.teardown(ctx);
             true
         } else {
             false

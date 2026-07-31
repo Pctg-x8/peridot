@@ -33,6 +33,16 @@ pub struct RenderContext<'env, 'h> {
     pub current_sec: f32,
     pub system_link: &'env SystemLink<'env>,
 }
+impl<'h> RenderContext<'_, 'h> {
+    pub const fn make_mount_context<'env>(&'env mut self) -> MountContext<'env, 'h> {
+        MountContext {
+            composite_tree: self.composite_tree,
+            ht_manager: self.ht_manager,
+            keyboard_focus_registry: self.keyboard_focus_registry,
+            current_sec: self.current_sec,
+        }
+    }
+}
 
 pub struct ViewInitContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
@@ -447,13 +457,19 @@ impl ViewFeedbackHandlerUntyped {
     }
 }
 
+pub struct ViewLocation {
+    pub offset: Point<LogicalUnit>,
+    pub parent_anchor_x: f32,
+    pub parent_anchor_y: f32,
+}
+
 pub enum ViewElementSize {
     Automatic,
     Fixed(Size<LogicalUnit>),
 }
 
 pub struct ViewPlacement {
-    pub location: Point<LogicalUnit>,
+    pub location: ViewLocation,
     pub size: ViewElementSize,
 }
 

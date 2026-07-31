@@ -3,7 +3,7 @@ use crate::{
         composite::{
             AnimatableColor, AnimatableFloat, CompositeRect, CompositeRectScaleFactor,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeTreeRef,
+            CompositeRectTextVerticalAlignment, CompositeTreeRef,
         },
         text::{FontID, TextLayout},
     },
@@ -14,6 +14,9 @@ pub struct StaticTextView {
     content: String,
     font: FontID,
     placement: ViewPlacement,
+    allow_wrapping: bool,
+    horizontal_alignment: CompositeRectTextHorizontalAlignment,
+    vertical_alignment: CompositeRectTextVerticalAlignment,
     ct: Option<CompositeTreeRef>,
 }
 impl Drop for StaticTextView {
@@ -29,12 +32,27 @@ impl StaticTextView {
             content,
             font: FontID::UIDefault,
             placement: init_placement,
+            allow_wrapping: false,
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Start,
             ct: None,
         }
     }
 
     pub fn set_font(&mut self, font: FontID) {
         self.font = font;
+    }
+
+    pub fn allow_wrapping(&mut self) {
+        self.allow_wrapping = true;
+    }
+
+    pub fn set_horizontal_alignment(&mut self, alignment: CompositeRectTextHorizontalAlignment) {
+        self.horizontal_alignment = alignment;
+    }
+
+    pub fn set_vertical_alignment(&mut self, alignment: CompositeRectTextVerticalAlignment) {
+        self.vertical_alignment = alignment;
     }
 
     pub fn render(&mut self, ctx: &mut RenderContext, target: &(impl MountTarget + ?Sized)) {
@@ -57,8 +75,12 @@ impl StaticTextView {
                 let ct = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(self.placement.location.x),
-                        AnimatableFloat::Value(self.placement.location.y),
+                        AnimatableFloat::Value(self.placement.location.offset.x),
+                        AnimatableFloat::Value(self.placement.location.offset.y),
+                    ],
+                    relative_offset_adjustment: [
+                        self.placement.location.parent_anchor_x,
+                        self.placement.location.parent_anchor_y,
                     ],
                     size: [
                         AnimatableFloat::Value(size.width),
@@ -71,6 +93,9 @@ impl StaticTextView {
                             font_id: self.font,
                             ..Default::default()
                         }],
+                        allow_wrapping: self.allow_wrapping,
+                        horizontal_alignment: self.horizontal_alignment,
+                        vertical_alignment: self.vertical_alignment,
                         ..Default::default()
                     }),
                     ..Default::default()

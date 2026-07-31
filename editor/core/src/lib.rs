@@ -43,22 +43,21 @@ use crate::{
         ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
-            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
-            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
-            CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
-            GradientRef, TextureMappingMode, TextureType,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
+            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
+            CompositeTreeSyncBuffer, CornerRadius, Gradient, GradientRef, TextureMappingMode,
+            TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
-        MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore,
-        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, PopupManager,
-        Positioning, RawMountTarget, ScrollContainer, SimpleButtonConstantEventHandler,
-        SimpleButtonEventHandler, SimpleButtonView, StaticTextView, TeardownContext, TextInputView,
-        ViewElementSize, ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier, ViewInitContext,
-        ViewPlacement, ViewRegistry, ViewUpdateContext,
+        MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
+        PopupManager, Positioning, RawMountTarget, ScrollContainer, SimpleButtonEventHandler,
+        SimpleButtonView, StaticTextView, TeardownContext, TextInputView, ViewElementSize,
+        ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
+        ViewFeedbackRegistry, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement,
+        ViewRegistry, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -3374,7 +3373,11 @@ impl InspectorPanePresenter {
             let mut label = StaticTextView::new(
                 "POSITION".into(),
                 ViewPlacement {
-                    location: Point::new_logical(8.0, 8.0),
+                    location: ViewLocation {
+                        offset: Point::new_logical(8.0, 8.0),
+                        parent_anchor_x: 0.0,
+                        parent_anchor_y: 0.0,
+                    },
                     size: ViewElementSize::Automatic,
                 },
             );
@@ -3411,7 +3414,11 @@ impl InspectorPanePresenter {
             let mut label = StaticTextView::new(
                 "ROTATION".into(),
                 ViewPlacement {
-                    location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
+                    location: ViewLocation {
+                        offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
+                        parent_anchor_x: 0.0,
+                        parent_anchor_y: 0.0,
+                    },
                     size: ViewElementSize::Automatic,
                 },
             );
@@ -3448,7 +3455,11 @@ impl InspectorPanePresenter {
             let mut label = StaticTextView::new(
                 "SCALE".into(),
                 ViewPlacement {
-                    location: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
+                    location: ViewLocation {
+                        offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
+                        parent_anchor_x: 0.0,
+                        parent_anchor_y: 0.0,
+                    },
                     size: ViewElementSize::Automatic,
                 },
             );
@@ -3494,7 +3505,11 @@ impl InspectorPanePresenter {
             let mut section_label = StaticTextView::new(
                 "Render".into(),
                 ViewPlacement {
-                    location: Point::new_logical(8.0 + 24.0, render_section_top),
+                    location: ViewLocation {
+                        offset: Point::new_logical(8.0 + 24.0, render_section_top),
+                        parent_anchor_x: 0.0,
+                        parent_anchor_y: 0.0,
+                    },
                     size: ViewElementSize::Automatic,
                 },
             );
@@ -3503,7 +3518,11 @@ impl InspectorPanePresenter {
             let mut label = StaticTextView::new(
                 "SHAPE".into(),
                 ViewPlacement {
-                    location: Point::new_logical(8.0, render_section_top + 24.0),
+                    location: ViewLocation {
+                        offset: Point::new_logical(8.0, render_section_top + 24.0),
+                        parent_anchor_x: 0.0,
+                        parent_anchor_y: 0.0,
+                    },
                     size: ViewElementSize::Automatic,
                 },
             );
@@ -6117,12 +6136,17 @@ async fn run<'sys>(
                 }
             }
             Event::Sync(SyncEvent::PopupUnmount { id }) => {
-                if popup_manager.unmount(
-                    &mut MountContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                if popup_manager.teardown(
+                    &mut TeardownContext {
+                        mount_context: MountContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                        },
+                        view_registry: &mut view_registry,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     id,
                 ) {
