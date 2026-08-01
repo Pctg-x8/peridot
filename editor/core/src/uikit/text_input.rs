@@ -29,7 +29,10 @@ use crate::{
         MountContext, MountTarget, RenderContext, ViewEventHandler, ViewIdentifier,
         ViewInitContext, ViewUpdateContext,
     },
-    utils::{LogicalUnit, Point, Rect, SafeF32},
+    utils::{
+        LogicalUnit, Point, Rect, SafeF32,
+        text::{next_char_byte, prev_char_byte},
+    },
 };
 
 bitflags! {
@@ -721,80 +724,25 @@ impl RawTextInputViewEventHandler {
 
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            // UnicodeSegmentation+BudouX fallback
-            use unicode_segmentation::UnicodeSegmentation;
+            // generic fallback
 
-            let mut words = Vec::new();
             let content = self.content.borrow();
-            let mut chars = content.chars();
-            let mut is_budou_cluster = false;
-            let mut same_cluster_range = 0..0;
-            let mut cb = 0;
-            while let Some(c) = chars.next() {
-                let is_budou_cluster_c = crate::utils::is_budou_cluster_char(c);
-                if is_budou_cluster != is_budou_cluster_c {
-                    // breaking method boundary
-                    if !same_cluster_range.is_empty() {
-                        if !is_budou_cluster {
-                            words.extend(
-                                content[same_cluster_range.clone()]
-                                    .split_word_bounds()
-                                    .map(|x| x.to_owned()),
-                            )
-                        } else {
-                            words.extend(
-                                peridot_tp_budoux::parse(
-                                    &peridot_tp_budoux::embedded::ja_knbc::MODEL,
-                                    &content[same_cluster_range.clone()],
-                                )
-                                .into_iter()
-                                .map(|x| x.to_owned()),
-                            )
-                        }
-                    }
-
-                    is_budou_cluster = is_budou_cluster_c;
-                    same_cluster_range = cb..cb;
-                }
-
-                same_cluster_range.end += c.len_utf8();
-                cb += c.len_utf8();
-            }
-            if !same_cluster_range.is_empty() {
-                if !is_budou_cluster {
-                    words.extend(
-                        content[same_cluster_range.clone()]
-                            .split_word_bounds()
-                            .map(|x| x.to_owned()),
-                    )
-                } else {
-                    words.extend(
-                        peridot_tp_budoux::parse(
-                            &peridot_tp_budoux::embedded::ja_knbc::MODEL,
-                            &content[same_cluster_range.clone()],
-                        )
-                        .into_iter()
-                        .map(|x| x.to_owned()),
-                    )
-                }
-            }
-
+            let words = crate::utils::text::generic_word_segments(&content);
             tracing::debug!(?words, "double click");
 
             // TODO: LTR前提 最適化はあとで
-            let mut measure_range = 0..0;
-            let mut select_range = 0..content.len();
-            for w in words {
-                let starting_byte = measure_range.end;
-                measure_range.end += w.len();
-
-                select_range = starting_byte..measure_range.end;
-                if select_range.contains(&cursor_pos_bytes) {
-                    // ここで確定
-                    break;
-                }
-            }
-
+            let select_range = words
+                .into_iter()
+                // wordのbyte rangeを生成
+                .scan(0, |range_start, w| {
+                    let r = *range_start..(*range_start + w.len());
+                    *range_start += w.len();
+                    Some(r)
+                })
+                // cursor_pos_bytesを含むものを探す
+                .find(|r| r.contains(&cursor_pos_bytes))
+                // なければ全体
+                .unwrap_or(0..content.len());
             return self.select_range(select_range);
         }
     }
@@ -1042,10 +990,19 @@ impl RawTextInputViewEventHandler {
             self.update_focus(composite_tree, current_sec);
         }
 
-        if mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR) {
-            // どっちにも影響する
+        if Self::should_sync_selection_native(mask) {
             self.sync_selection_native();
         }
+    }
+
+    fn should_sync_selection_native(
+        #[allow(unused_variables)] mask: TextInputViewUpdateMask,
+    ) -> bool {
+        // どっちにも影響する
+        #[cfg(windows)]
+        return mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR);
+        #[cfg(not(windows))]
+        return false;
     }
 
     fn sync_selection_native(&self) {
@@ -1072,24 +1029,6 @@ impl RawTextInputViewEventHandler {
             selection_begin_acp.min(cursor_pos_acp) as _,
             selection_begin_acp.max(cursor_pos_acp) as _,
         );
-    }
-
-    fn compute_prev_char_pos_bytes(content: &str, current_pos_bytes: usize) -> usize {
-        let mut new_cursor_pos = current_pos_bytes.saturating_sub(1);
-        while new_cursor_pos > 0 && !content.is_char_boundary(new_cursor_pos) {
-            new_cursor_pos -= 1;
-        }
-
-        new_cursor_pos
-    }
-
-    fn compute_next_char_pos_bytes(content: &str, current_pos_bytes: usize) -> usize {
-        let mut new_cursor_pos = current_pos_bytes.saturating_add(1).min(content.len());
-        while new_cursor_pos < content.len() && !content.is_char_boundary(new_cursor_pos) {
-            new_cursor_pos += 1;
-        }
-
-        new_cursor_pos
     }
 
     #[inline(always)]
@@ -1164,7 +1103,7 @@ impl RawTextInputViewEventHandler {
 
     fn delete_prev_char(&self) -> TextInputViewUpdateMask {
         let remove_from = self.cursor_pos_bytes.get();
-        let remove_to = Self::compute_prev_char_pos_bytes(&*self.content.borrow(), remove_from);
+        let remove_to = prev_char_byte(&*self.content.borrow(), remove_from);
         if remove_from == remove_to {
             // no deletion
             return TextInputViewUpdateMask::empty();
@@ -1182,12 +1121,7 @@ impl RawTextInputViewEventHandler {
 
     fn delete_next_char(&self) -> TextInputViewUpdateMask {
         let remove_from = self.cursor_pos_bytes.get();
-        let remove_to = remove_from
-            + self.content.borrow()[remove_from..]
-                .chars()
-                .next()
-                .map_or(0, |x| x.len_utf8());
-
+        let remove_to = next_char_byte(&self.content.borrow(), remove_from);
         if remove_from == remove_to {
             // no deletion
             return TextInputViewUpdateMask::empty();
@@ -1233,8 +1167,7 @@ impl RawTextInputViewEventHandler {
             self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
         }
 
-        let new_cursor_pos =
-            Self::compute_prev_char_pos_bytes(&*self.content.borrow(), self.cursor_pos_bytes.get());
+        let new_cursor_pos = prev_char_byte(&*self.content.borrow(), self.cursor_pos_bytes.get());
 
         if with_selection {
             self.move_cursor_keep_selection(new_cursor_pos)
@@ -1249,8 +1182,7 @@ impl RawTextInputViewEventHandler {
             self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
         }
 
-        let new_cursor_pos =
-            Self::compute_next_char_pos_bytes(&*self.content.borrow(), self.cursor_pos_bytes.get());
+        let new_cursor_pos = next_char_byte(&*self.content.borrow(), self.cursor_pos_bytes.get());
 
         if with_selection {
             self.move_cursor_keep_selection(new_cursor_pos)

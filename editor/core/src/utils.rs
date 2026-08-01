@@ -6,6 +6,7 @@ mod bitops;
 pub use self::bitops::*;
 pub mod platform;
 pub mod range_helper;
+pub mod text;
 
 /// identity function
 #[inline(always)]
