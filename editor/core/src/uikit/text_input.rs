@@ -801,52 +801,48 @@ impl RawTextInputViewEventHandler {
 
     fn update_focus<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
         if self.has_focus.get() {
-            composite_tree.get_mut(self.ct_root).border = Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Animated {
+            composite_tree
+                .begin_mod_chain(self.ct_root)
+                .border_color(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.5],
                     to_value: [1.0, 1.0, 1.0, 1.0],
                     sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
-                },
-                ..Default::default()
-            });
-            composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(1.0);
+                })
+                .apply();
+            composite_tree
+                .begin_mod_chain(self.ct_cursor)
+                .opacity_imm(1.0)
+                .apply();
         } else {
-            composite_tree.get_mut(self.ct_root).border = Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Animated {
+            composite_tree
+                .begin_mod_chain(self.ct_root)
+                .border_color(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 1.0],
                     to_value: [1.0, 1.0, 1.0, 0.5],
 
                     sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
-                },
-                ..Default::default()
-            });
-            composite_tree.get_mut(self.ct_cursor).opacity = AnimatableFloat::Value(0.0);
+                })
+                .apply();
+            composite_tree
+                .begin_mod_chain(self.ct_cursor)
+                .opacity_imm(0.0)
+                .apply();
         }
-
-        composite_tree.mark_dirty(self.ct_root);
-        composite_tree.mark_dirty(self.ct_cursor);
     }
 
     fn update_text<E>(&self, composite_tree: &mut CompositeTree<E>) {
-        tracing::debug!("update text");
-        composite_tree.get_mut(self.ct_text).text = Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                font_id: FontID::UIDefault,
+        composite_tree
+            .begin_mod_chain(self.ct_text)
+            .text_run(CompositeRectTextRun {
                 content: self.content.borrow().clone(),
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                 ..Default::default()
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Start,
-            ..Default::default()
-        });
-        composite_tree.mark_text_layout_dirty(self.ct_text);
+            })
+            .apply();
     }
 
     fn update_cursor_position<E>(
@@ -921,8 +917,10 @@ impl RawTextInputViewEventHandler {
             self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
         if preedit_range.is_empty() {
             // no preedit
-            composite_tree.get_mut(self.ct_preedit_underline).opacity = AnimatableFloat::Value(0.0);
-            composite_tree.mark_dirty(self.ct_preedit_underline);
+            composite_tree
+                .begin_mod_chain(self.ct_preedit_underline)
+                .opacity_imm(0.0)
+                .apply();
             return;
         }
 
@@ -932,25 +930,27 @@ impl RawTextInputViewEventHandler {
             system_link.font_set(),
         );
         let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[preedit_range],
+            &self.content.borrow()[..preedit_range.end],
             FontID::UIDefault,
             system_link.font_set(),
         );
 
-        let underline_rect = composite_tree.get_mut(self.ct_preedit_underline);
-        underline_rect.offset[0] = AnimatableFloat::Value(o + self.content_h_offset.get());
-        underline_rect.size[0] = AnimatableFloat::Value(tw);
-        underline_rect.opacity = AnimatableFloat::Value(1.0);
-
-        composite_tree.mark_dirty(self.ct_preedit_underline);
+        composite_tree
+            .begin_mod_chain(self.ct_preedit_underline)
+            .x_imm(o + self.content_h_offset.get())
+            .width_imm(tw - o)
+            .opacity_imm(1.0)
+            .apply();
     }
 
     fn update_selection<E>(&self, composite_tree: &mut CompositeTree<E>, system_link: &SystemLink) {
         let selection_range = self.selection_range();
         if selection_range.is_empty() {
             // no selection
-            composite_tree.get_mut(self.ct_selection_bg).size[0] = AnimatableFloat::Value(0.0);
-            composite_tree.mark_dirty(self.ct_selection_bg);
+            composite_tree
+                .begin_mod_chain(self.ct_selection_bg)
+                .width_imm(0.0)
+                .apply();
             return;
         }
 
@@ -965,11 +965,11 @@ impl RawTextInputViewEventHandler {
             system_link.font_set(),
         );
 
-        let ct = composite_tree.get_mut(self.ct_selection_bg);
-        ct.offset[0] = AnimatableFloat::Value(o + self.content_h_offset.get());
-        ct.size[0] = AnimatableFloat::Value(tw - o);
-
-        composite_tree.mark_dirty(self.ct_selection_bg);
+        composite_tree
+            .begin_mod_chain(self.ct_selection_bg)
+            .x_imm(o + self.content_h_offset.get())
+            .width_imm(tw - o)
+            .apply();
     }
 
     #[tracing::instrument(skip(self, composite_tree, system_link, ht_manager))]

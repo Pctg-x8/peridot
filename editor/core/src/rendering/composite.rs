@@ -1120,6 +1120,21 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self
     }
 
+    pub fn border(mut self, v: Border<Event>) -> Self {
+        unsafe { &mut *self.target }.border = Some(v);
+        self.dirty = true;
+        self
+    }
+
+    pub fn border_color(mut self, v: AnimatableColor<Event>) -> Self {
+        unsafe { &mut *self.target }
+            .border
+            .get_or_insert_default()
+            .color = v;
+        self.dirty = true;
+        self
+    }
+
     pub fn rm_text(mut self) -> Self {
         unsafe { &mut *self.target }.text = None;
         self.dirty = true;
@@ -1134,25 +1149,17 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
     }
 
     pub fn text_runs(mut self, xs: Vec<CompositeRectTextRun<Event>>) -> Self {
-        let Some(ref mut t) = unsafe { &mut *self.target }.text else {
-            return self;
-        };
-
-        t.runs = xs;
+        unsafe { &mut *self.target }
+            .text
+            .get_or_insert_default()
+            .runs = xs;
         self.dirty = true;
         self.text_layout_dirty = true;
         self
     }
 
-    pub fn text_run(mut self, xs: CompositeRectTextRun<Event>) -> Self {
-        let Some(ref mut t) = unsafe { &mut *self.target }.text else {
-            return self;
-        };
-
-        t.runs = vec![xs];
-        self.dirty = true;
-        self.text_layout_dirty = true;
-        self
+    pub fn text_run(self, xs: CompositeRectTextRun<Event>) -> Self {
+        self.text_runs(vec![xs])
     }
 }
 
