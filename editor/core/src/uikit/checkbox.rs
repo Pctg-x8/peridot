@@ -14,14 +14,15 @@ use crate::{
         RenderMessageSender, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
-            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTreeRef, CornerRadius,
-            FloatAnimationTemplate, TextureMappingMode, TextureType,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTreeRef, CornerRadius, FloatAnimationTemplate, TextureMappingMode,
+            TextureType,
         },
-        text::FontID,
+        text::{FontID, TextLayout},
     },
-    uikit::{MountContext, MountTarget, ViewInitContext},
-    utils::{LogicalUnit, Rect, UnsafeMainThreadOnlyOnceCell, range_helper::range_from_len},
+    uikit::{MountTarget, RenderContext, TeardownContext, ViewElementSize, ViewPlacement},
+    utils::{Size, UnsafeMainThreadOnlyOnceCell, range_helper::range_from_len},
 };
 
 const CHECKMARK_ACTIVATE_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
@@ -80,99 +81,148 @@ static SHARED_CHECK_ICON: UnsafeMainThreadOnlyOnceCell<SharedCheckIcon> =
     UnsafeMainThreadOnlyOnceCell(OnceCell::new());
 
 pub struct ToggleButtonView {
-    eh: Rc<ToggleButtonEventHandler>,
+    entity: Option<Rc<ToggleButtonEventHandler>>,
+    placement: ViewPlacement,
+    label: String,
 }
 impl ToggleButtonView {
-    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>, label: String) -> Self {
-        let shared_res = SHARED_CHECK_ICON.0.get_or_init(|| {
-            SharedCheckIcon::new(
-                ctx.main_thread_texture_id_issuer,
-                ctx.system_link.rt_sender(),
-            )
-        });
-
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(rect.left),
-                AnimatableFloat::Value(rect.top),
-            ],
-            size: [
-                AnimatableFloat::Value(rect.width),
-                AnimatableFloat::Value(rect.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            border: Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Value([1.0; 4]),
-                ..Default::default()
-            }),
-            corner_radius: CornerRadius::all(8.0),
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: label,
-                    font_id: FontID::UIDefault,
-                    color: AnimatableColor::Value([1.0; 4]),
-                    ..Default::default()
-                }],
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                offset: [20.0, 0.0],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_check = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(6.0),
-                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
-            ],
-            relative_offset_adjustment: [0.0, 0.5],
-            size: [
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
-            ],
-            pivot: [0.5, 0.5],
-            has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(
-                AnimatableColor::Value([1.0; 4]),
-                CompositeTexture {
-                    id: shared_res.check_icon,
-                    r#type: TextureType::Mask,
-                    mapping: TextureMappingMode::Stretch,
-                    slice_borders: [0.0; 4],
-                },
-            ),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-            cursor_shape: CursorShape::Pointer,
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_check);
-
-        let eh = Rc::new(ToggleButtonEventHandler {
-            ct_root,
-            ct_check,
-            ht_root,
-            current: Cell::new(false),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        Self { eh }
+    pub fn new(placement: ViewPlacement, label: String) -> Self {
+        Self {
+            entity: None,
+            placement,
+            label,
+        }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        match self.entity {
+            Some(_) => {
+                // TODO: reflect changes
+            }
+            None => {
+                // first render
+                //
+                let shared_res = SHARED_CHECK_ICON.0.get_or_init(|| {
+                    SharedCheckIcon::new(
+                        ctx.main_thread_texture_id_issuer,
+                        ctx.system_link.rt_sender(),
+                    )
+                });
+
+                let size = match self.placement.size {
+                    ViewElementSize::Fixed(s) => s,
+                    ViewElementSize::Automatic => {
+                        let label_size = TextLayout::new_single(
+                            &self.label,
+                            FontID::UIDefault,
+                            ctx.system_link.font_set(),
+                            CompositeRectTextHorizontalAlignment::Start,
+                            None,
+                        )
+                        .size();
+
+                        // space for checkmark / rounding padding
+                        Size::new_logical(24.0 + label_size.width + 4.0, label_size.height + 8.0)
+                    }
+                };
+                let offset = self.placement.location.compute(&size);
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(offset.x),
+                        AnimatableFloat::Value(offset.y),
+                    ],
+                    relative_offset_adjustment: self.placement.location.parent_anchor,
+                    size: [
+                        AnimatableFloat::Value(size.width),
+                        AnimatableFloat::Value(size.height),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([1.0; 4]),
+                        ..Default::default()
+                    }),
+                    corner_radius: CornerRadius::all(8.0),
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            content: self.label.clone(),
+                            font_id: FontID::UIDefault,
+                            color: AnimatableColor::Value([1.0; 4]),
+                            ..Default::default()
+                        }],
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        offset: [20.0, 0.0],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_check = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(6.0),
+                        AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
+                    ],
+                    relative_offset_adjustment: [0.0, 0.5],
+                    size: [
+                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
+                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
+                    ],
+                    pivot: [0.5, 0.5],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::ColorTint(
+                        AnimatableColor::Value([1.0; 4]),
+                        CompositeTexture {
+                            id: shared_res.check_icon,
+                            r#type: TextureType::Mask,
+                            mapping: TextureMappingMode::Stretch,
+                            slice_borders: [0.0; 4],
+                        },
+                    ),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: offset.x,
+                    top: offset.y,
+                    left_adjustment_factor: self.placement.location.parent_anchor[0],
+                    top_adjustment_factor: self.placement.location.parent_anchor[1],
+                    width: size.width,
+                    height: size.height,
+                    cursor_shape: CursorShape::Pointer,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(ct_root, ct_check);
+
+                let eh = Rc::new(ToggleButtonEventHandler {
+                    ct_root,
+                    ct_check,
+                    ht_root,
+                    current: Cell::new(false),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+                ctx.composite_tree.add_child(parent.ct_root(), eh.ct_root);
+                ctx.ht_manager.add_child(parent.ht_root(), eh.ht_root);
+
+                self.entity = Some(eh);
+            }
+        }
+    }
+
+    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(e) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(e.ct_root);
+        ctx.mount_context.ht_manager.free_all(e.ht_root);
     }
 }
 
@@ -260,88 +310,123 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
 }
 
 pub struct CheckboxView {
-    eh: Rc<CheckboxEventHandler>,
+    entity: Option<Rc<CheckboxEventHandler>>,
+    placement: ViewPlacement,
 }
 impl CheckboxView {
-    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
-        let shared_res = SHARED_CHECK_ICON.0.get_or_init(|| {
-            SharedCheckIcon::new(
-                ctx.main_thread_texture_id_issuer,
-                ctx.system_link.rt_sender(),
-            )
-        });
-
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(rect.left),
-                AnimatableFloat::Value(rect.top),
-            ],
-            size: [
-                AnimatableFloat::Value(rect.width),
-                AnimatableFloat::Value(rect.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            border: Some(Border {
-                thickness: 0.5,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
-                ..Default::default()
-            }),
-            corner_radius: CornerRadius::all(2.0),
-            ..Default::default()
-        });
-        let ct_check = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.width * 0.5),
-                AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
-            ],
-            relative_offset_adjustment: [0.5, 0.5],
-            pivot: [0.5, 0.5],
-            size: [
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
-                AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(
-                AnimatableColor::Value([1.0; 4]),
-                CompositeTexture {
-                    id: shared_res.check_icon,
-                    r#type: TextureType::Mask,
-                    mapping: TextureMappingMode::Stretch,
-                    slice_borders: [0.0; 4],
-                },
-            ),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-            cursor_shape: CursorShape::Pointer,
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_check);
-
-        let eh = Rc::new(CheckboxEventHandler {
-            ct_root,
-            ct_check,
-            ht_root,
-            current: Cell::new(false),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        Self { eh }
+    pub fn new(placement: ViewPlacement) -> Self {
+        Self {
+            entity: None,
+            placement,
+        }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        match self.entity {
+            Some(_) => {
+                // TODO: reflect changes
+            }
+            None => {
+                // first render
+                let shared_res = SHARED_CHECK_ICON.0.get_or_init(|| {
+                    SharedCheckIcon::new(
+                        ctx.main_thread_texture_id_issuer,
+                        ctx.system_link.rt_sender(),
+                    )
+                });
+
+                let size = match self.placement.size {
+                    ViewElementSize::Fixed(s) => s,
+                    // preferred default
+                    ViewElementSize::Automatic => Size::new_logical(16.0, 16.0),
+                };
+                let offset = self.placement.location.compute(&size);
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(offset.x),
+                        AnimatableFloat::Value(offset.y),
+                    ],
+                    relative_offset_adjustment: self.placement.location.parent_anchor,
+                    size: [
+                        AnimatableFloat::Value(size.width),
+                        AnimatableFloat::Value(size.height),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    border: Some(Border {
+                        thickness: 0.5,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+                        ..Default::default()
+                    }),
+                    corner_radius: CornerRadius::all(2.0),
+                    ..Default::default()
+                });
+                let ct_check = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.width * 0.5),
+                        AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
+                    ],
+                    relative_offset_adjustment: [0.5, 0.5],
+                    pivot: [0.5, 0.5],
+                    size: [
+                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
+                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::ColorTint(
+                        AnimatableColor::Value([1.0; 4]),
+                        CompositeTexture {
+                            id: shared_res.check_icon,
+                            r#type: TextureType::Mask,
+                            mapping: TextureMappingMode::Stretch,
+                            slice_borders: [0.0; 4],
+                        },
+                    ),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: offset.x,
+                    top: offset.y,
+                    left_adjustment_factor: self.placement.location.parent_anchor[0],
+                    top_adjustment_factor: self.placement.location.parent_anchor[1],
+                    width: size.width,
+                    height: size.height,
+                    cursor_shape: CursorShape::Pointer,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(ct_root, ct_check);
+
+                let eh = Rc::new(CheckboxEventHandler {
+                    ct_root,
+                    ct_check,
+                    ht_root,
+                    current: Cell::new(false),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+                ctx.composite_tree.add_child(parent.ct_root(), eh.ct_root);
+                ctx.ht_manager.add_child(parent.ht_root(), eh.ht_root);
+
+                self.entity = Some(eh);
+            }
+        }
+    }
+
+    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(e) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(e.ct_root);
+        ctx.mount_context.ht_manager.free_all(e.ht_root);
     }
 }
 

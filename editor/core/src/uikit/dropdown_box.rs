@@ -21,8 +21,11 @@ use crate::{
         },
         text::{FontID, FontSet, TextLayout},
     },
-    uikit::{MountContext, MountTarget, ViewInitContext},
-    utils::{LogicalUnit, Point, Rect, SafeF32, UnsafeMainThreadOnlyOnceCell},
+    uikit::{
+        MountContext, MountTarget, RenderContext, TeardownContext, ViewElementSize,
+        ViewInitContext, ViewPlacement,
+    },
+    utils::{Point, SafeF32, Size, UnsafeMainThreadOnlyOnceCell},
 };
 
 const ARROW_PRESS_Y_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
@@ -62,125 +65,182 @@ static SHARED_RESOURCES: UnsafeMainThreadOnlyOnceCell<SharedResources> =
     UnsafeMainThreadOnlyOnceCell(core::cell::OnceCell::new());
 
 pub struct View {
-    eh: Rc<EventHandler>,
-    ct_text_clip: CompositeTreeRef,
+    entity: Option<Rc<EventHandler>>,
+    placement: ViewPlacement,
+    items: Vec<String>,
 }
 impl View {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        placement: Rect<LogicalUnit>,
-        items: Vec<String>,
-    ) -> Self {
-        let shared_res = SHARED_RESOURCES.0.get_or_init(|| {
-            SharedResources::new(
-                ctx.main_thread_texture_id_issuer,
-                ctx.system_link.rt_sender(),
-            )
-        });
-
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(placement.left),
-                AnimatableFloat::Value(placement.top),
-            ],
-            size: [
-                AnimatableFloat::Value(placement.width),
-                AnimatableFloat::Value(placement.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            corner_radius: CornerRadius::all(4.0),
-            border: Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            size: [AnimatableFloat::Value(-12.0), AnimatableFloat::Value(0.0)],
-            clip_child: Some(ClipConfig {
-                left_softness: SafeF32::ZERO,
-                right_softness: unsafe { SafeF32::new_unchecked(12.0) },
-                top_softness: SafeF32::ZERO,
-                bottom_softness: SafeF32::ZERO,
-            }),
-            ..Default::default()
-        });
-        let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: if items.is_empty() {
-                        ""
-                    } else {
-                        items[0].as_str()
-                    }
-                    .into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                offset: [4.0, 0.0],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_down_arrow = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
-            relative_offset_adjustment: [1.0, 0.5],
-            size: [
-                AnimatableFloat::Value(SharedResources::DOWN_ARROW.width),
-                AnimatableFloat::Value(SharedResources::DOWN_ARROW.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(
-                AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                CompositeTexture {
-                    id: shared_res.down_arrow_tex,
-                    r#type: TextureType::Mask,
-                    mapping: TextureMappingMode::Stretch,
-                    slice_borders: [0.0; 4],
-                },
-            ),
-            ..Default::default()
-        });
-        ctx.composite_tree.add_child(ct_text_clip, ct_text);
-        ctx.composite_tree.add_child(ct_root, ct_text_clip);
-        ctx.composite_tree.add_child(ct_root, ct_down_arrow);
-
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: placement.left,
-            top: placement.top,
-            width: placement.width,
-            height: placement.height,
-            ..Default::default()
-        });
-
-        let eh = Rc::new_cyclic(|w| EventHandler {
-            this_weakref: w.clone(),
-            ct_root,
-            ct_text,
-            ct_down_arrow,
-            ht_root,
+    pub fn new(placement: ViewPlacement, items: Vec<String>) -> Self {
+        Self {
+            entity: None,
+            placement,
             items,
-            current_selected: core::cell::Cell::new(0),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        Self { eh, ct_text_clip }
+        }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        match self.entity {
+            Some(_) => {
+                // TODO: reflect changes
+            }
+            None => {
+                // first render
+                let shared_res = SHARED_RESOURCES.0.get_or_init(|| {
+                    SharedResources::new(
+                        ctx.main_thread_texture_id_issuer,
+                        ctx.system_link.rt_sender(),
+                    )
+                });
+
+                let size = match self.placement.size {
+                    ViewElementSize::Fixed(s) => s,
+                    ViewElementSize::Automatic => {
+                        let content_size = self
+                            .items
+                            .iter()
+                            .map(|t| {
+                                TextLayout::new_single(
+                                    t,
+                                    FontID::UIDefault,
+                                    ctx.system_link.font_set(),
+                                    CompositeRectTextHorizontalAlignment::Start,
+                                    None,
+                                )
+                                .size()
+                            })
+                            .fold(Size::new_logical(8.0, 24.0), |a, b| {
+                                Size::new_logical(a.width.max(b.width), a.height.max(b.height))
+                            });
+
+                        // space for arrow icon
+                        Size::new_logical(content_size.width + 24.0, content_size.height)
+                    }
+                };
+                let offset = Point::new_logical(
+                    self.placement.location.offset.x
+                        - size.width * self.placement.location.anchor[0],
+                    self.placement.location.offset.y
+                        - size.height * self.placement.location.anchor[1],
+                );
+                let relative_offset = self.placement.location.parent_anchor.clone();
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(offset.x),
+                        AnimatableFloat::Value(offset.y),
+                    ],
+                    relative_offset_adjustment: relative_offset.clone(),
+                    size: [
+                        AnimatableFloat::Value(size.width),
+                        AnimatableFloat::Value(size.height),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    corner_radius: CornerRadius::all(4.0),
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_text_clip = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_size_adjustment: [1.0, 1.0],
+                    size: [AnimatableFloat::Value(-12.0), AnimatableFloat::Value(0.0)],
+                    clip_child: Some(ClipConfig {
+                        left_softness: SafeF32::ZERO,
+                        right_softness: unsafe { SafeF32::new_unchecked(12.0) },
+                        top_softness: SafeF32::ZERO,
+                        bottom_softness: SafeF32::ZERO,
+                    }),
+                    ..Default::default()
+                });
+                let ct_text = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_size_adjustment: [1.0, 1.0],
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            content: if self.items.is_empty() {
+                                ""
+                            } else {
+                                self.items[0].as_str()
+                            }
+                            .into(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+                        offset: [4.0, 0.0],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_down_arrow = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
+                    relative_offset_adjustment: [1.0, 0.5],
+                    size: [
+                        AnimatableFloat::Value(SharedResources::DOWN_ARROW.width),
+                        AnimatableFloat::Value(SharedResources::DOWN_ARROW.height),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::ColorTint(
+                        AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        CompositeTexture {
+                            id: shared_res.down_arrow_tex,
+                            r#type: TextureType::Mask,
+                            mapping: TextureMappingMode::Stretch,
+                            slice_borders: [0.0; 4],
+                        },
+                    ),
+                    ..Default::default()
+                });
+                ctx.composite_tree.add_child(ct_text_clip, ct_text);
+                ctx.composite_tree.add_child(ct_root, ct_text_clip);
+                ctx.composite_tree.add_child(ct_root, ct_down_arrow);
+
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: offset.x,
+                    top: offset.y,
+                    left_adjustment_factor: relative_offset[0],
+                    top_adjustment_factor: relative_offset[1],
+                    width: size.width,
+                    height: size.height,
+                    ..Default::default()
+                });
+
+                let eh = Rc::new_cyclic(|w| EventHandler {
+                    this_weakref: w.clone(),
+                    ct_root,
+                    ct_text,
+                    ct_down_arrow,
+                    ht_root,
+                    items: self.items.clone(),
+                    current_selected: core::cell::Cell::new(0),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+                ctx.composite_tree.add_child(parent.ct_root(), eh.ct_root);
+                ctx.ht_manager.add_child(parent.ht_root(), eh.ht_root);
+
+                self.entity = Some(eh);
+            }
+        }
+    }
+
+    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(e) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(e.ct_root);
+        ctx.mount_context.ht_manager.free_all(e.ht_root);
     }
 }
 

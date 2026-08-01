@@ -1,4 +1,5 @@
 use crate::{
+    SystemLink,
     rendering::{
         composite::{
             AnimatableColor, AnimatableFloat, CompositeRect, CompositeRectScaleFactor,
@@ -8,6 +9,7 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{MountTarget, RenderContext, TeardownContext, ViewElementSize, ViewPlacement},
+    utils::{LogicalUnit, Size},
 };
 
 pub struct StaticTextView {
@@ -53,6 +55,20 @@ impl StaticTextView {
 
     pub fn set_vertical_alignment(&mut self, alignment: CompositeRectTextVerticalAlignment) {
         self.vertical_alignment = alignment;
+    }
+
+    pub fn compute_size_without_render(&self, system_link: &SystemLink) -> Size<LogicalUnit> {
+        match self.placement.size {
+            ViewElementSize::Fixed(s) => s,
+            ViewElementSize::Automatic => TextLayout::new_single(
+                &self.content,
+                self.font,
+                system_link.font_set(),
+                CompositeRectTextHorizontalAlignment::Start,
+                None,
+            )
+            .size(),
+        }
     }
 
     pub fn render(&mut self, ctx: &mut RenderContext, target: &(impl MountTarget + ?Sized)) {

@@ -2438,6 +2438,8 @@ impl NumericInputViewBackingStore for UIKitPreviewNumericInputValueStore {
     }
 }
 
+crate::perf_section!(PANE_INIT_UIKIT_PREVIEW = "PaneInitialize.UIKitPreview");
+
 pub struct UIKitPreviewPanePresenter {
     kf_group: KeyboardFocusGroupRef,
     scroll_container: ScrollContainer,
@@ -2465,6 +2467,8 @@ impl UIKitPreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("UIKitPreview");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
+        crate::perf_scope!(PANE_INIT_UIKIT_PREVIEW);
+
         // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
 
@@ -2478,19 +2482,6 @@ impl UIKitPreviewPanePresenter {
 
         let mut ytop = 8.0;
         let mut content_width = 8.0f32;
-        let mut label = StaticTextView::new(
-            "Simple Buttons + Alert Dialog".into(),
-            ViewPlacement {
-                location: ViewLocation {
-                    parent_anchor: [0.0, 0.0],
-                    anchor: [0.0, 0.0],
-                    offset: Point::new_logical(8.0, ytop),
-                },
-                size: ViewElementSize::Automatic,
-            },
-        );
-        label.render(&mut ctx.make_render_context(), &scroll_container);
-        ytop += 16.0;
 
         struct AlertButtonEventHandler(String);
         impl SimpleButtonEventHandler for AlertButtonEventHandler {
@@ -2503,15 +2494,19 @@ impl UIKitPreviewPanePresenter {
             }
         }
 
+        let mut label = StaticTextView::new(
+            "Simple Buttons + Alert Dialog".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        ytop += label.compute_size_without_render(ctx.system_link).height;
         let mut test_alert_btn = SimpleButtonView::new(
             ctx,
             "Test Alert".into(),
             ViewPlacement {
-                location: ViewLocation {
-                    parent_anchor: [0.0, 0.0],
-                    anchor: [0.0, 0.0],
-                    offset: Point::new_logical(16.0, ytop),
-                },
+                location: ViewLocation::new_left_top(16.0, ytop),
                 size: ViewElementSize::Automatic,
             },
             Some(Box::new(AlertButtonEventHandler(
@@ -2522,38 +2517,28 @@ impl UIKitPreviewPanePresenter {
             ctx,
             "Test Alert 2".into(),
             ViewPlacement {
-                location: ViewLocation {
-                    parent_anchor: [0.0, 0.0],
-                    anchor: [0.0, 0.0],
-                    offset: Point::new_logical(88.0, ytop),
-                }, size: ViewElementSize::Fixed(Size::new_logical(96.0, 24.0))
+                location: ViewLocation::new_left_top(88.0, ytop),
+                size: ViewElementSize::Fixed(Size::new_logical(96.0, 24.0))
             },
             Some(Box::new(AlertButtonEventHandler("とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ".into()))),
         );
+        ytop += 24.0;
 
+        label.render(&mut ctx.make_render_context(), &scroll_container);
         test_alert_btn.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
         test_alert_btn2.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
 
-        ytop += 24.0;
         ytop += 8.0;
 
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Text Input(Single Line)".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
-        ytop += 16.0;
-
+        let mut label = StaticTextView::new(
+            "Text Input(Single Line)".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.render(&mut ctx.make_render_context(), &scroll_container);
+        ytop += label.compute_size_without_render(ctx.system_link).height;
         let text_input_view = TextInputView::new(
             ctx,
             Rect::from_lt_size(
@@ -2567,7 +2552,6 @@ impl UIKitPreviewPanePresenter {
         //     view_init_ctx.keyboard_focus_registry,
         // );
         ytop += 24.0;
-
         let text_input_view2 = TextInputView::new(
             ctx,
             Rect::from_lt_size(
@@ -2581,25 +2565,18 @@ impl UIKitPreviewPanePresenter {
         //     view_init_ctx.keyboard_focus_registry,
         // );
         ytop += 24.0;
+
         ytop += 8.0;
 
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Text Input(Multiline)".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
-        ytop += 16.0;
-
+        let mut label = StaticTextView::new(
+            "Text Input (Multiline)".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.render(&mut ctx.make_render_context(), &scroll_container);
+        ytop += label.compute_size_without_render(ctx.system_link).height;
         let ml_text_kf_token = ctx.keyboard_focus_registry.acquire_token();
         let ml_text_editor_view = uikit::MultilineTextInputView::new(
             ctx,
@@ -2613,28 +2590,21 @@ impl UIKitPreviewPanePresenter {
         );
         ml_text_editor_view.mount(ctx, &scroll_container);
         ytop += 100.0;
-        ytop += 8.0;
 
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Color Picker(Standalone)".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
-        ytop += 16.0;
+        ytop += 8.0;
 
         let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
             color: Cell::new(0xffffffff),
         });
+        let mut label = StaticTextView::new(
+            "Color Picker(Standalone)".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.render(&mut ctx.make_render_context(), &scroll_container);
+        ytop += label.compute_size_without_render(ctx.system_link).height;
         let color_picker = ColorPickerView::new(
             ctx,
             Point::new_logical(16.0, ytop),
@@ -2642,29 +2612,18 @@ impl UIKitPreviewPanePresenter {
         );
         color_picker.mount(ctx, &scroll_container);
         ytop += 128.0 + 32.0 + 16.0 + 20.0;
+
         ytop += 8.0;
 
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Color Picker(Button Style)".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
-        let label_width = TextLayout::measure_visual_width(
-            "Color Picker(Button Style)",
-            FontID::UIDefault,
-            ctx.system_link.font_set(),
+        let mut label = StaticTextView::new(
+            "Color Picker(Button Style)".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
         );
-
+        label.render(&mut ctx.make_render_context(), &scroll_container);
+        let label_width = label.compute_size_without_render(ctx.system_link).width;
         let editable_color_button = EditableColorButtonView::new(
             ctx,
             Rect::from_lt_size(
@@ -2677,29 +2636,17 @@ impl UIKitPreviewPanePresenter {
         ytop += 20.0;
         content_width = content_width.max(label_width + 16.0 + 64.0 + 8.0);
 
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Numeric Input".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
-        let label_width = TextLayout::measure_visual_width(
-            "Numeric Input",
-            FontID::UIDefault,
-            ctx.system_link.font_set(),
-        );
-
         let numeric_input_view_backing_store =
             Rc::new(UIKitPreviewNumericInputValueStore(Cell::new(0)));
+        let mut label = StaticTextView::new(
+            "Numeric Input".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.render(&mut ctx.make_render_context(), &scroll_container);
+        let label_width = label.compute_size_without_render(ctx.system_link).width;
         let numeric_input_view = NumericInputView::new(
             ctx,
             Rect::from_lt_size(
@@ -2716,64 +2663,45 @@ impl UIKitPreviewPanePresenter {
         // );
         ytop += 20.0;
 
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(8.0),
-                AnimatableFloat::Value(ytop + 4.0),
-            ],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Dropdown".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
-        let label_width = TextLayout::measure_visual_width(
-            "Dropdown",
-            FontID::UIDefault,
-            ctx.system_link.font_set(),
+        let mut label = StaticTextView::new(
+            "Dropdown".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop + 4.0),
+                size: ViewElementSize::Automatic,
+            },
         );
-
-        let dropdown_box = uikit::dropdown_box::View::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(label_width + 16.0, ytop),
-                Size::new_logical(128.0, 24.0),
-            ),
+        label.render(&mut ctx.make_render_context(), &scroll_container);
+        let label_width = label.compute_size_without_render(ctx.system_link).width;
+        let mut dropdown_box = uikit::dropdown_box::View::new(
+            ViewPlacement {
+                location: ViewLocation::new_left_top(label_width + 16.0, ytop),
+                size: ViewElementSize::Fixed(Size::new_logical(128.0, 24.0)),
+            },
             vec![
                 "DropdownBox Item 1".into(),
                 "DropdownBox Item 2".into(),
                 "DropdownBox Item 3 too long version".into(),
             ],
         );
-        dropdown_box.mount(ctx, &scroll_container);
+        dropdown_box.render(&mut ctx.make_render_context(), &scroll_container);
         ytop += 28.0;
 
-        let toggle_button = uikit::ToggleButtonView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(8.0, ytop),
-                Size::new_logical(128.0, 24.0),
-            ),
+        let mut toggle_button = uikit::ToggleButtonView::new(
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
             "Toggle / Checkbox".into(),
         );
-        toggle_button.mount(ctx, &scroll_container);
+        toggle_button.render(&mut ctx.make_render_context(), &scroll_container);
 
-        let checkbox = uikit::CheckboxView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(144.0, ytop + 4.0),
-                Size::new_logical(16.0, 16.0),
-            ),
-        );
-        checkbox.mount(ctx, &scroll_container);
+        let mut checkbox = uikit::CheckboxView::new(ViewPlacement {
+            location: ViewLocation::new_left_top(144.0, ytop + 4.0),
+            size: ViewElementSize::Automatic,
+        });
+        checkbox.render(&mut ctx.make_render_context(), &scroll_container);
         ytop += 24.0;
+
         ytop += 8.0;
 
         let label = ctx.composite_tree.create(CompositeRect {
@@ -3482,14 +3410,11 @@ impl InspectorPanePresenter {
             local_scale_z_input_view.mount(ctx, &items_container_view);
 
             let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
-            let render_checkbox = CheckboxView::new(
-                ctx,
-                Rect::from_lt_size(
-                    Point::new_logical(8.0, render_section_top),
-                    Size::new_logical(20.0, 20.0),
-                ),
-            );
-            render_checkbox.mount(ctx, &items_container_view);
+            let mut render_checkbox = CheckboxView::new(ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, render_section_top),
+                size: ViewElementSize::Automatic,
+            });
+            render_checkbox.render(&mut ctx.make_render_context(), &items_container_view);
             let mut section_label = StaticTextView::new(
                 "Render".into(),
                 ViewPlacement {
@@ -3516,12 +3441,15 @@ impl InspectorPanePresenter {
             );
             label.set_font(FontID::UIFormLiftedLabel);
             label.render(&mut ctx.make_render_context(), &items_container_view);
-            let shape_selector = uikit::dropdown_box::View::new(
-                ctx,
-                Rect::from_lt_size(
-                    Point::new_logical(8.0, render_section_top + 24.0 + 12.0),
-                    Size::new_logical(128.0, 24.0),
-                ),
+            let mut shape_selector = uikit::dropdown_box::View::new(
+                ViewPlacement {
+                    location: ViewLocation {
+                        parent_anchor: [0.0, 0.0],
+                        anchor: [0.0, 0.0],
+                        offset: Point::new_logical(8.0, render_section_top + 24.0 + 12.0),
+                    },
+                    size: ViewElementSize::Automatic,
+                },
                 vec![
                     "Cube".into(),
                     "Sphere".into(),
@@ -3529,7 +3457,7 @@ impl InspectorPanePresenter {
                     "Capsule".into(),
                 ],
             );
-            shape_selector.mount(ctx, &items_container_view);
+            shape_selector.render(&mut ctx.make_render_context(), &items_container_view);
 
             items_container_view.set_content_size(
                 Size::new_logical(128.0 + 16.0, render_section_top + 24.0 + 12.0 + 24.0),
@@ -6121,6 +6049,7 @@ async fn run<'sys>(
                         keyboard_focus_registry: &mut keyboard_focus_registry,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
                     },
                 ) {
                     composite_tree

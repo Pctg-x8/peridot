@@ -32,6 +32,7 @@ pub struct RenderContext<'env, 'h> {
     pub keyboard_focus_registry: &'env mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
     pub system_link: &'env SystemLink<'env>,
+    pub main_thread_texture_id_issuer: &'env mut MainThreadTextureIDIssuer,
 }
 impl<'h> RenderContext<'_, 'h> {
     pub const fn make_mount_context<'env>(&'env mut self) -> MountContext<'env, 'h> {
@@ -89,6 +90,7 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
             current_sec: self.mount_context.current_sec,
             system_link: self.system_link,
+            main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
         }
     }
 
@@ -217,6 +219,22 @@ pub struct ViewLocation {
     pub parent_anchor: [f32; 2],
     pub anchor: [f32; 2],
     pub offset: Point<LogicalUnit>,
+}
+impl ViewLocation {
+    pub const fn new_left_top(x: f32, y: f32) -> Self {
+        Self {
+            parent_anchor: [0.0, 0.0],
+            anchor: [0.0, 0.0],
+            offset: Point::new_logical(x, y),
+        }
+    }
+
+    pub const fn compute(&self, size: &Size<LogicalUnit>) -> Point<LogicalUnit> {
+        Point::new_logical(
+            self.offset.x - size.width * self.anchor[0],
+            self.offset.y - size.height * self.anchor[1],
+        )
+    }
 }
 
 pub enum ViewElementSize {
