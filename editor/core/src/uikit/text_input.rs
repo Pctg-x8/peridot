@@ -1773,21 +1773,20 @@ impl TextInputView {
         }
     }
 
-    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+    pub fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+        parent: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    ) {
         if !self.first_rendered {
             ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+            ctx.keyboard_focus_registry
+                .join_group(keyboard_focus_group, self.eh.token);
         }
 
         self.first_rendered = true;
         self.eh.raw.borrow_mut().render(ctx, parent);
-    }
-
-    pub fn set_keyboard_focus_group(
-        &self,
-        group: KeyboardFocusGroupRef,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
-        keyboard_focus_registry.join_group(group, self.eh.token);
     }
 }
 
@@ -1953,10 +1952,17 @@ impl NumericInputView {
         );
     }
 
-    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+    pub fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+        parent: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    ) {
         if !self.first_rendered {
             // first render
             ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+            ctx.keyboard_focus_registry
+                .join_group(keyboard_focus_group, self.eh.token);
         }
 
         self.first_rendered = true;
@@ -1966,14 +1972,6 @@ impl NumericInputView {
     #[inline(always)]
     pub fn id(&self) -> ViewIdentifier {
         self.eh.id
-    }
-
-    pub fn set_keyboard_focus_group(
-        &self,
-        group: KeyboardFocusGroupRef,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
-        keyboard_focus_registry.join_group(group, self.eh.token);
     }
 }
 

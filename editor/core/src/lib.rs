@@ -2549,7 +2549,6 @@ impl UIKitPreviewPanePresenter {
                 size: ViewElementSize::Automatic,
             },
         );
-        label.render(&mut ctx.make_render_context(), &scroll_container);
         ytop += label.compute_size_without_render(ctx.system_link).height;
         let mut text_input_view = TextInputView::new(
             ctx,
@@ -2558,11 +2557,6 @@ impl UIKitPreviewPanePresenter {
                 Size::new_logical(128.0, 20.0),
             ),
         );
-        text_input_view.render(&mut ctx.make_render_context(), &scroll_container);
-        // text_input_view.set_keyboard_focus_group(
-        //     main_window.keyboard_focus_group(),
-        //     view_init_ctx.keyboard_focus_registry,
-        // );
         ytop += 24.0;
         let mut text_input_view2 = TextInputView::new(
             ctx,
@@ -2571,12 +2565,11 @@ impl UIKitPreviewPanePresenter {
                 Size::new_logical(128.0, 20.0),
             ),
         );
-        text_input_view2.render(&mut ctx.make_render_context(), &scroll_container);
-        // text_input_view2.set_keyboard_focus_group(
-        //     main_window.keyboard_focus_group(),
-        //     view_init_ctx.keyboard_focus_registry,
-        // );
         ytop += 24.0;
+
+        label.render(&mut ctx.make_render_context(), &scroll_container);
+        text_input_view.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
+        text_input_view2.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
 
         ytop += 8.0;
 
@@ -2668,11 +2661,7 @@ impl UIKitPreviewPanePresenter {
             Rc::downgrade(&numeric_input_view_backing_store),
         );
         numeric_input_view.post_init(ctx);
-        numeric_input_view.render(&mut ctx.make_render_context(), &scroll_container);
-        // numeric_input_view.set_keyboard_focus_group(
-        //     main_window.keyboard_focus_group(),
-        //     view_init_ctx.keyboard_focus_registry,
-        // );
+        numeric_input_view.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
         ytop += 20.0;
 
         let mut label = StaticTextView::new(
@@ -3256,6 +3245,9 @@ impl InspectorPanePresenter {
     const ID: &str = internal_pane_identifier!("Inspector");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
+        // TODO: PaneのKeyboardFocusGroupどうするか
+        let kf_group = ctx.keyboard_focus_registry.acquire_group();
+
         let root_container_view = ScrollContainer::new(
             ctx,
             Rect::from_lt_size(
@@ -3319,8 +3311,6 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_position_x_input_view
-                .render(&mut ctx.make_render_context(), &items_container_view);
             let mut local_position_y_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3329,8 +3319,6 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_position_y_input_view
-                .render(&mut ctx.make_render_context(), &items_container_view);
             let mut local_position_z_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3339,8 +3327,21 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_position_z_input_view
-                .render(&mut ctx.make_render_context(), &items_container_view);
+            local_position_x_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
+            local_position_y_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
+            local_position_z_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
 
             let mut label = StaticTextView::new(
                 "ROTATION".into(),
@@ -3363,8 +3364,6 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_rotation_x_input_view
-                .render(&mut ctx.make_render_context(), &items_container_view);
             let mut local_rotation_y_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3373,8 +3372,6 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_rotation_y_input_view
-                .render(&mut ctx.make_render_context(), &items_container_view);
             let mut local_rotation_z_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3383,8 +3380,21 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_rotation_z_input_view
-                .render(&mut ctx.make_render_context(), &items_container_view);
+            local_rotation_x_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
+            local_rotation_y_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
+            local_rotation_z_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
 
             let mut label = StaticTextView::new(
                 "SCALE".into(),
@@ -3407,7 +3417,6 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_scale_x_input_view.render(&mut ctx.make_render_context(), &items_container_view);
             let mut local_scale_y_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3416,7 +3425,6 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_scale_y_input_view.render(&mut ctx.make_render_context(), &items_container_view);
             let mut local_scale_z_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3425,7 +3433,21 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_scale_z_input_view.render(&mut ctx.make_render_context(), &items_container_view);
+            local_scale_x_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
+            local_scale_y_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
+            local_scale_z_input_view.render(
+                &mut ctx.make_render_context(),
+                &items_container_view,
+                kf_group,
+            );
 
             let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
             let mut render_checkbox = CheckboxView::new(ViewPlacement {
