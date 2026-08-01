@@ -1516,14 +1516,14 @@ impl ColorPickerView {
             current_light: Cell::new(1.0),
             current_saturation: Cell::new(0.0),
             current_alpha: Cell::new(1.0),
-            hex_text_input_view: ColorPickerHexTextInputView::new(
+            hex_text_input_view: RefCell::new(ColorPickerHexTextInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(32.0, 128.0 + 32.0 + 16.0),
                     Size::new_logical(128.0 - 32.0, 20.0),
                 ),
                 thisref,
-            ),
+            )),
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
         ctx.ht_manager.set_action_handler(ht_sat_light_box, &eh);
@@ -1533,7 +1533,9 @@ impl ColorPickerView {
             let v = e.value();
 
             eh.set_by_color(v, ctx.composite_tree);
-            eh.hex_text_input_view.set_value(v, ctx.system_link);
+            eh.hex_text_input_view
+                .borrow()
+                .set_value(v, ctx.system_link);
         }
 
         Self {
@@ -1551,8 +1553,7 @@ impl ColorPickerView {
         }
 
         self.first_rendered = true;
-        // これだけ遅延させる必要がある（ScreenPositionInterestsどうしようか......）
-        self.eh.hex_text_input_view.render(
+        self.eh.hex_text_input_view.borrow_mut().render(
             ctx,
             &uikit::RawMountTarget {
                 ht_root: self.eh.ht_root,
@@ -1584,7 +1585,7 @@ struct ColorPickerEventHandler {
     current_light: Cell<f32>,
     current_saturation: Cell<f32>,
     current_alpha: Cell<f32>,
-    hex_text_input_view: ColorPickerHexTextInputView,
+    hex_text_input_view: RefCell<ColorPickerHexTextInputView>,
 }
 impl HitTestTreeActionHandler for ColorPickerEventHandler {
     fn hittest(&self, target: HitTestTreeRef, args: &HitTestArgs) -> bool {
@@ -1904,7 +1905,7 @@ impl ColorPickerEventHandler {
             (self.current_alpha.get() * 255.0) as _,
         );
 
-        self.hex_text_input_view.set_value(rgba, syslink);
+        self.hex_text_input_view.borrow().set_value(rgba, syslink);
 
         composite_tree.set_gradient(
             self.alpha_slider_content_gradient,
@@ -1998,6 +1999,7 @@ const fn gen_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
 
 struct ColorPickerHexTextInputView {
     eh: Rc<ColorPickerHexTextInputEventHandler>,
+    raw: uikit::RawTextInputView,
 }
 impl ColorPickerHexTextInputView {
     pub fn new(
@@ -2016,8 +2018,8 @@ impl ColorPickerHexTextInputView {
             view_id,
         );
         let eh = Rc::new(ColorPickerHexTextInputEventHandler {
+            base: raw.entity().clone(),
             value: Cell::new(0),
-            raw: RefCell::new(raw),
             id: view_id,
             token: kf_token,
             parent_view_handler: parent_view_handler.clone(),
@@ -2025,11 +2027,11 @@ impl ColorPickerHexTextInputView {
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.view_registry.set_event_handler(eh.id, &eh);
 
-        Self { eh }
+        Self { eh, raw }
     }
 
-    pub fn render(&self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
-        self.eh.raw.borrow_mut().render(ctx, parent);
+    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        self.raw.render(ctx, parent);
     }
 
     pub fn set_keyboard_focus_group(
@@ -2042,17 +2044,16 @@ impl ColorPickerHexTextInputView {
 
     fn set_value(&self, value: u32, syslink: &SystemLink) {
         self.eh.value.set(value);
-        self.eh
-            .raw
-            .borrow()
+        self.raw
+            .entity()
             .set_content_lazy(ColorPickerHexTextInputEventHandler::fmt(value));
         syslink.dispatch_event(Event::UpdateView { id: self.eh.id });
     }
 }
 
 struct ColorPickerHexTextInputEventHandler {
+    base: Rc<uikit::RawTextInputViewEventHandler>,
     value: Cell<u32>,
-    raw: RefCell<uikit::RawTextInputView>,
     id: ViewIdentifier,
     token: FocusTargetToken,
     parent_view_handler: std::rc::Weak<ColorPickerEventHandler>,
@@ -2060,20 +2061,20 @@ struct ColorPickerHexTextInputEventHandler {
 impl ViewEventHandler for ColorPickerHexTextInputEventHandler {
     #[inline(always)]
     fn update(&self, context: &mut ViewUpdateContext) {
-        self.raw.borrow().fwd_view_update(context);
+        self.base.fwd_view_update(context);
     }
 }
 impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.borrow().set_focus_lazy(context.ht_manager);
+        self.base.set_focus_lazy(context.ht_manager);
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.id });
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
-        self.raw.borrow().release_focus_lazy(context.ht_manager);
+        self.base.release_focus_lazy(context.ht_manager);
         self.confirm_direct_input(context.system_link, context.composite_tree);
     }
 
@@ -2090,12 +2091,12 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
             return;
         }
 
-        self.raw.borrow().fwd_keydown(context, code, modifier);
+        self.base.fwd_keydown(context, code, modifier);
     }
 
     #[inline(always)]
     fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
-        self.raw.borrow().fwd_char(context, ch);
+        self.base.fwd_char(context, ch);
     }
 
     #[inline(always)]
@@ -2106,8 +2107,7 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
         new_committed_string: Option<&str>,
         new_preedit_string: Option<&str>,
     ) {
-        self.raw
-            .borrow()
+        self.base
             .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
     }
 }
@@ -2173,11 +2173,11 @@ impl ColorPickerHexTextInputEventHandler {
 
     fn confirm_direct_input<E>(&self, syslink: &SystemLink, composite_tree: &mut CompositeTree<E>) {
         let current_value = self.value.get();
-        let new_value = Self::parse(&self.raw.borrow().content()).unwrap_or(current_value);
+        let new_value = Self::parse(&self.base.content()).unwrap_or(current_value);
         self.value.set(new_value);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.borrow().set_content_lazy(Self::fmt(new_value));
+        self.base.set_content_lazy(Self::fmt(new_value));
         syslink.dispatch_event(Event::UpdateView { id: self.id });
 
         if current_value != new_value {
@@ -2193,9 +2193,7 @@ impl ColorPickerHexTextInputEventHandler {
     }
 
     fn cancel_direct_input(&self, syslink: &SystemLink) {
-        self.raw
-            .borrow()
-            .set_content_lazy(Self::fmt(self.value.get()));
+        self.base.set_content_lazy(Self::fmt(self.value.get()));
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 }
@@ -2660,7 +2658,7 @@ impl UIKitPreviewPanePresenter {
             ),
             Rc::downgrade(&numeric_input_view_backing_store),
         );
-        numeric_input_view.post_init(ctx);
+        // numeric_input_view.post_init(ctx);
         numeric_input_view.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
         ytop += 20.0;
 
@@ -3327,21 +3325,6 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_position_x_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
-            local_position_y_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
-            local_position_z_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
 
             let mut label = StaticTextView::new(
                 "ROTATION".into(),
@@ -3379,21 +3362,6 @@ impl InspectorPanePresenter {
                     Size::new_logical(32.0, 16.0),
                 ),
                 eh.clone(),
-            );
-            local_rotation_x_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
-            local_rotation_y_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
-            local_rotation_z_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
             );
 
             let mut label = StaticTextView::new(
@@ -3433,28 +3401,12 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_scale_x_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
-            local_scale_y_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
-            local_scale_z_input_view.render(
-                &mut ctx.make_render_context(),
-                &items_container_view,
-                kf_group,
-            );
 
             let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
             let mut render_checkbox = CheckboxView::new(ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, render_section_top),
                 size: ViewElementSize::Automatic,
             });
-            render_checkbox.render(&mut ctx.make_render_context(), &items_container_view);
             let mut section_label = StaticTextView::new(
                 "Render".into(),
                 ViewPlacement {
@@ -3497,7 +3449,6 @@ impl InspectorPanePresenter {
                     "Capsule".into(),
                 ],
             );
-            shape_selector.render(&mut ctx.make_render_context(), &items_container_view);
 
             items_container_view.set_content_size(
                 Size::new_logical(128.0 + 16.0, render_section_top + 24.0 + 12.0 + 24.0),
@@ -3512,7 +3463,18 @@ impl InspectorPanePresenter {
                 ct_selected_object_label,
                 ct_selected_object_name_label,
                 items_container_view,
-                numeric_input_views: vec![
+                numeric_input_view_ids: vec![
+                    local_position_x_input_view.id(),
+                    local_position_y_input_view.id(),
+                    local_position_z_input_view.id(),
+                    local_rotation_x_input_view.id(),
+                    local_rotation_y_input_view.id(),
+                    local_rotation_z_input_view.id(),
+                    local_scale_x_input_view.id(),
+                    local_scale_y_input_view.id(),
+                    local_scale_z_input_view.id(),
+                ],
+                numeric_input_views: RefCell::new(vec![
                     local_position_x_input_view,
                     local_position_y_input_view,
                     local_position_z_input_view,
@@ -3522,13 +3484,28 @@ impl InspectorPanePresenter {
                     local_scale_x_input_view,
                     local_scale_y_input_view,
                     local_scale_z_input_view,
-                ],
-                checkboxes: vec![render_checkbox],
-                dropdowns: vec![shape_selector],
+                ]),
+                checkboxes: RefCell::new(vec![render_checkbox]),
+                dropdowns: RefCell::new(vec![shape_selector]),
+                keyboard_focus_group: kf_group,
             }
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
+
+        for x in eh.numeric_input_views.borrow_mut().iter_mut() {
+            x.render(
+                &mut ctx.make_render_context(),
+                &eh.items_container_view,
+                kf_group,
+            );
+        }
+        for x in eh.checkboxes.borrow_mut().iter_mut() {
+            x.render(&mut ctx.make_render_context(), &eh.items_container_view);
+        }
+        for x in eh.dropdowns.borrow_mut().iter_mut() {
+            x.render(&mut ctx.make_render_context(), &eh.items_container_view);
+        }
 
         ctx.composite_tree.add_child(
             eh.root_container_view.ct_root(),
@@ -3544,9 +3521,9 @@ impl InspectorPanePresenter {
             ctx.mount_context.ht_manager,
         );
 
-        for x in eh.numeric_input_views.iter() {
-            x.post_init(ctx);
-        }
+        // for x in eh.numeric_input_views.iter() {
+        //     x.post_init(ctx);
+        // }
 
         Self { eh }
     }
@@ -3597,9 +3574,11 @@ struct InspectorPaneEventHandler {
     ct_selected_object_label: CompositeTreeRef,
     ct_selected_object_name_label: CompositeTreeRef,
     items_container_view: ScrollContainer,
-    numeric_input_views: Vec<NumericInputView>,
-    checkboxes: Vec<CheckboxView>,
-    dropdowns: Vec<uikit::dropdown_box::View>,
+    numeric_input_views: RefCell<Vec<NumericInputView>>,
+    numeric_input_view_ids: Vec<ViewIdentifier>,
+    checkboxes: RefCell<Vec<CheckboxView>>,
+    dropdowns: RefCell<Vec<uikit::dropdown_box::View>>,
+    keyboard_focus_group: KeyboardFocusGroupRef,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandler {
     fn accept_feedback<'a, 'h>(
@@ -3682,13 +3661,15 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandle
                             .mount(&mut context.view_init_context, &self.root_container_view);
                     }
 
-                    for x in self.numeric_input_views.iter() {
-                        x.revalidate(
-                            &context.application,
-                            context.view_init_context.mount_context.composite_tree,
-                            context.view_init_context.system_link,
-                            context.view_init_context.mount_context.ht_manager,
-                            context.view_init_context.current_sec,
+                    for x in self.numeric_input_views.borrow().iter() {
+                        x.revalidate();
+                    }
+
+                    for x in self.numeric_input_views.borrow_mut().iter_mut() {
+                        x.render(
+                            &mut context.view_init_context.make_render_context(),
+                            &self.items_container_view,
+                            self.keyboard_focus_group,
                         );
                     }
                 }
@@ -3740,31 +3721,31 @@ impl NumericInputViewBackingStore for InspectorPaneEventHandler {
             return "-".into();
         };
 
-        if requester == self.numeric_input_views[0].id() {
+        if requester == self.numeric_input_view_ids[0] {
             // pos x
             format!("{:.3}", application.object(selected).local_position.0)
-        } else if requester == self.numeric_input_views[1].id() {
+        } else if requester == self.numeric_input_view_ids[1] {
             // pos y
             format!("{:.3}", application.object(selected).local_position.1)
-        } else if requester == self.numeric_input_views[2].id() {
+        } else if requester == self.numeric_input_view_ids[2] {
             // pos z
             format!("{:.3}", application.object(selected).local_position.2)
-        } else if requester == self.numeric_input_views[3].id() {
+        } else if requester == self.numeric_input_view_ids[3] {
             // rotate x
             format!("{:.3}", application.object(selected).local_rotation_euler.0)
-        } else if requester == self.numeric_input_views[4].id() {
+        } else if requester == self.numeric_input_view_ids[4] {
             // rotate y
             format!("{:.3}", application.object(selected).local_rotation_euler.1)
-        } else if requester == self.numeric_input_views[5].id() {
+        } else if requester == self.numeric_input_view_ids[5] {
             // rotate z
             format!("{:.3}", application.object(selected).local_rotation_euler.2)
-        } else if requester == self.numeric_input_views[6].id() {
+        } else if requester == self.numeric_input_view_ids[6] {
             // scale x
             format!("{:.3}", application.object(selected).local_scale.0)
-        } else if requester == self.numeric_input_views[7].id() {
+        } else if requester == self.numeric_input_view_ids[7] {
             // scale y
             format!("{:.3}", application.object(selected).local_scale.1)
-        } else if requester == self.numeric_input_views[8].id() {
+        } else if requester == self.numeric_input_view_ids[8] {
             // scale z
             format!("{:.3}", application.object(selected).local_scale.2)
         } else {
@@ -3778,31 +3759,31 @@ impl NumericInputViewBackingStore for InspectorPaneEventHandler {
             return;
         };
 
-        if sender == self.numeric_input_views[0].id() {
+        if sender == self.numeric_input_view_ids[0] {
             // pos x
             application.object_modify_data(selected, |o| o.local_position.0 += delta * 0.1);
-        } else if sender == self.numeric_input_views[1].id() {
+        } else if sender == self.numeric_input_view_ids[1] {
             // pos y
             application.object_modify_data(selected, |o| o.local_position.1 += delta * 0.1);
-        } else if sender == self.numeric_input_views[2].id() {
+        } else if sender == self.numeric_input_view_ids[2] {
             // pos z
             application.object_modify_data(selected, |o| o.local_position.2 += delta * 0.1);
-        } else if sender == self.numeric_input_views[3].id() {
+        } else if sender == self.numeric_input_view_ids[3] {
             // rotate x
             application.object_modify_data(selected, |o| o.local_rotation_euler.0 += delta);
-        } else if sender == self.numeric_input_views[4].id() {
+        } else if sender == self.numeric_input_view_ids[4] {
             // rotate y
             application.object_modify_data(selected, |o| o.local_rotation_euler.1 += delta);
-        } else if sender == self.numeric_input_views[5].id() {
+        } else if sender == self.numeric_input_view_ids[5] {
             // rotate z
             application.object_modify_data(selected, |o| o.local_rotation_euler.2 += delta);
-        } else if sender == self.numeric_input_views[6].id() {
+        } else if sender == self.numeric_input_view_ids[6] {
             // scale x
             application.object_modify_data(selected, |o| o.local_scale.0 += delta * 0.1);
-        } else if sender == self.numeric_input_views[7].id() {
+        } else if sender == self.numeric_input_view_ids[7] {
             // scale y
             application.object_modify_data(selected, |o| o.local_scale.1 += delta * 0.1);
-        } else if sender == self.numeric_input_views[8].id() {
+        } else if sender == self.numeric_input_view_ids[8] {
             // scale z
             application.object_modify_data(selected, |o| o.local_scale.2 += delta * 0.1);
         }
@@ -3819,63 +3800,63 @@ impl NumericInputViewBackingStore for InspectorPaneEventHandler {
             return;
         };
 
-        if sender == self.numeric_input_views[0].id() {
+        if sender == self.numeric_input_view_ids[0] {
             // pos x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_position.0 = v);
-        } else if sender == self.numeric_input_views[1].id() {
+        } else if sender == self.numeric_input_view_ids[1] {
             // pos y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_position.1 = v);
-        } else if sender == self.numeric_input_views[2].id() {
+        } else if sender == self.numeric_input_view_ids[2] {
             // pos z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_position.2 = v);
-        } else if sender == self.numeric_input_views[3].id() {
+        } else if sender == self.numeric_input_view_ids[3] {
             // rotate x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_rotation_euler.0 = v);
-        } else if sender == self.numeric_input_views[4].id() {
+        } else if sender == self.numeric_input_view_ids[4] {
             // rotate y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_rotation_euler.1 = v);
-        } else if sender == self.numeric_input_views[5].id() {
+        } else if sender == self.numeric_input_view_ids[5] {
             // rotate z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_rotation_euler.2 = v);
-        } else if sender == self.numeric_input_views[6].id() {
+        } else if sender == self.numeric_input_view_ids[6] {
             // scale x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_scale.0 = v);
-        } else if sender == self.numeric_input_views[7].id() {
+        } else if sender == self.numeric_input_view_ids[7] {
             // scale y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
             application.object_modify_data(selected, |o| o.local_scale.1 = v);
-        } else if sender == self.numeric_input_views[8].id() {
+        } else if sender == self.numeric_input_view_ids[8] {
             // scale z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
@@ -6087,9 +6068,11 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         ht_manager: &mut ht_manager,
                         keyboard_focus_registry: &mut keyboard_focus_registry,
+                        view_registry: &mut view_registry,
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
                     },
                 ) {
                     composite_tree

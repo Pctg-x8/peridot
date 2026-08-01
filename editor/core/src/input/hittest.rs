@@ -161,6 +161,26 @@ impl<'h> HitTestTreeManager<'h> {
         self.data[r.0].action_handler = Some(std::rc::Rc::downgrade(h) as _);
     }
 
+    #[inline]
+    pub fn replace_action_handler(
+        &mut self,
+        r: HitTestTreeRef,
+        h: &std::rc::Rc<impl HitTestTreeActionHandler + 'h>,
+    ) -> Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>> {
+        self.data[r.0]
+            .action_handler
+            .replace(std::rc::Rc::downgrade(h) as _)
+    }
+
+    #[inline]
+    pub fn replace_action_handler_weak(
+        &mut self,
+        r: HitTestTreeRef,
+        h: std::rc::Weak<impl HitTestTreeActionHandler + 'h>,
+    ) -> Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>> {
+        self.data[r.0].action_handler.replace(h as _)
+    }
+
     #[cfg(windows)]
     #[inline]
     pub fn set_native_text_deferrable_event_handler(

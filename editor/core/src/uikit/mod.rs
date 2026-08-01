@@ -30,9 +30,11 @@ pub struct RenderContext<'env, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub ht_manager: &'env mut HitTestTreeManager<'h>,
     pub keyboard_focus_registry: &'env mut KeyboardFocusTokenRegistry,
+    pub view_registry: &'env mut ViewRegistry,
     pub current_sec: f32,
     pub system_link: &'env SystemLink<'env>,
     pub main_thread_texture_id_issuer: &'env mut MainThreadTextureIDIssuer,
+    pub application: &'env Application,
 }
 impl<'h> RenderContext<'_, 'h> {
     pub const fn make_mount_context<'env>(&'env mut self) -> MountContext<'env, 'h> {
@@ -88,9 +90,11 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             composite_tree: &mut self.mount_context.composite_tree,
             ht_manager: &mut self.mount_context.ht_manager,
             keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
+            view_registry: &mut self.view_registry,
             current_sec: self.mount_context.current_sec,
             system_link: self.system_link,
             main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
+            application: self.application,
         }
     }
 
@@ -512,7 +516,7 @@ pub use self::menu::{
 mod text_input;
 pub use self::text_input::{
     MultilineTextInputView, NumericInputView, NumericInputViewBackingStore, RawTextInputView,
-    RawTextInputViewCreateFlags, TextInputView,
+    RawTextInputViewCreateFlags, RawTextInputViewEventHandler, TextInputView,
 };
 
 mod scroll;
